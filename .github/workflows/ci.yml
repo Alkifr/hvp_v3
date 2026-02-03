@@ -9,6 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Prisma validate/generate требует наличия DATABASE_URL, но реальная БД для CI build не нужна
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hvp_ci?schema=public
+      JWT_SECRET: ci_jwt_secret
     steps:
       - name: Checkout
         uses: actions/checkout@v4

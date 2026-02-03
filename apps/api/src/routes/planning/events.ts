@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { EventAuditAction, EventStatus, PlanningLevel } from "@prisma/client";
+import { EventAuditAction, EventStatus, PlanningLevel, Prisma } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
@@ -291,7 +291,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
           // конфликты с существующими резервами
           const rs = reservationsByStand.get(resolvedStand.standId) ?? [];
-          const conflict = rs.find((x) => overlaps(startAt, endAt, x.startAt, x.endAt));
+          const conflict = rs.find((x: any) => overlaps(startAt, endAt, x.startAt, x.endAt));
           if (conflict) {
             throw new Error(
               `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${conflict.event.aircraft.tailNumber})`
@@ -373,7 +373,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         const eventType = eventTypeByKey.get(eventKey)!;
         const hangar = hangarStr ? hangarByKey.get(hangarStr.toLowerCase()) ?? null : null;
 
-        await app.prisma.$transaction(async (tx) => {
+        await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
           const created = await tx.maintenanceEvent.create({
             data: {
               level: PlanningLevel.OPERATIONAL,

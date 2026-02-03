@@ -43,9 +43,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         app.clearAuthCookie(reply, req);
         return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
       }
-      const roles = user.roles.map((ur) => ur.role.code);
+      type UserRoleJoin = { role: { code: string; permissions: Array<{ permission: { code: string } }> } };
+      const roles = user.roles.map((ur: UserRoleJoin) => ur.role.code);
       const permissions = Array.from(
-        new Set(user.roles.flatMap((ur) => ur.role.permissions.map((rp) => rp.permission.code)))
+        new Set(
+          user.roles.flatMap((ur: UserRoleJoin) =>
+            ur.role.permissions.map((rp: { permission: { code: string } }) => rp.permission.code)
+          )
+        )
       );
 
       return {
