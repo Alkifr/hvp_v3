@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
@@ -61,14 +61,12 @@ export function EventResourcesPanel(props: { eventId: string }) {
   const [actualPeople, setActualPeople] = useState(1);
 
   // синхронизация дефолтов после загрузки справочников (простая)
-  useMemo(() => {
+  useEffect(() => {
     if (!planShiftId && defaultShiftId) setPlanShiftId(defaultShiftId);
     if (!planSkillId && defaultSkillId) setPlanSkillId(defaultSkillId);
     if (!actualShiftId && defaultShiftId) setActualShiftId(defaultShiftId);
     if (!actualSkillId && defaultSkillId) setActualSkillId(defaultSkillId);
-    return null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultShiftId, defaultSkillId]);
+  }, [planShiftId, planSkillId, actualShiftId, actualSkillId, defaultShiftId, defaultSkillId]);
 
   const addPlanM = useMutation({
     mutationFn: () =>

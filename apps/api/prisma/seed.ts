@@ -255,6 +255,7 @@ async function main() {
     update: { name: "Ночная", startMin: 20 * 60, endMin: 8 * 60, isActive: true },
     create: { code: "NIGHT", name: "Ночная", startMin: 20 * 60, endMin: 8 * 60, isActive: true }
   });
+  void shiftNight;
 
   const skillMech = await prisma.skill.upsert({
     where: { code: "MECH" },

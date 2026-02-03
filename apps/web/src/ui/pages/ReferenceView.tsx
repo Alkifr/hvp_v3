@@ -20,17 +20,6 @@ type RefKind =
 
 type Operator = { id: string; code: string; name: string; isActive: boolean };
 type AircraftType = { id: string; icaoType?: string | null; name: string; manufacturer?: string | null; isActive: boolean };
-type Aircraft = {
-  id: string;
-  tailNumber: string;
-  serialNumber?: string | null;
-  operatorId: string;
-  typeId: string;
-  isActive: boolean;
-  operator?: Operator;
-  type?: AircraftType;
-};
-type EventType = { id: string; code: string; name: string; color?: string | null; isActive: boolean };
 type Hangar = { id: string; code: string; name: string; isActive: boolean };
 type Layout = {
   id: string;
@@ -42,12 +31,7 @@ type Layout = {
   heightMeters?: number | null;
   isActive: boolean;
 };
-type Stand = { id: string; layoutId: string; code: string; name: string; x: number; y: number; w: number; h: number; rotate: number; isActive: boolean };
 type Skill = { id: string; code: string; name: string; isActive: boolean };
-type Person = { id: string; code?: string | null; name: string; isActive: boolean; skills?: Array<{ skill: Skill; level?: number | null }> };
-type Shift = { id: string; code: string; name: string; startMin: number; endMin: number; isActive: boolean };
-type Material = { id: string; code: string; name: string; uom: string; isActive: boolean };
-type Warehouse = { id: string; code: string; name: string; isActive: boolean };
 
 function TextInput(props: { value: string; onChange: (v: string) => void; placeholder?: string; style?: React.CSSProperties }) {
   return <input value={props.value} placeholder={props.placeholder} onChange={(e) => props.onChange(e.target.value)} style={props.style} />;

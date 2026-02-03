@@ -30,7 +30,7 @@ function getJwtSecret() {
   return (process.env.JWT_SECRET ?? "").trim() || "dev_insecure_jwt_secret_change_me";
 }
 
-function cookieOptions(req: FastifyRequest) {
+function cookieOptions(_req: FastifyRequest) {
   const isProd = process.env.NODE_ENV === "production";
   // В dev можно по http://localhost
   return {

@@ -264,28 +264,6 @@ export function GanttView() {
     filterAircraftId
   ]);
 
-  const [newAircraftId, setNewAircraftId] = useState("");
-  const [newEventTypeId, setNewEventTypeId] = useState("");
-  const [newLevel, setNewLevel] = useState<"STRATEGIC" | "OPERATIONAL">("OPERATIONAL");
-  const [newStart, setNewStart] = useState(() => dayjs().add(1, "day").format("YYYY-MM-DD"));
-  const [newEnd, setNewEnd] = useState(() => dayjs().add(3, "day").format("YYYY-MM-DD"));
-  const [newTitle, setNewTitle] = useState("ТО");
-
-  const createM = useMutation({
-    mutationFn: () =>
-      apiPost<EventRow>("/api/events", {
-        level: newLevel,
-        title: newTitle,
-        aircraftId: newAircraftId,
-        eventTypeId: newEventTypeId,
-        startAt: dayjs(newStart).startOf("day").toISOString(),
-        endAt: dayjs(newEnd).endOf("day").toISOString()
-      }),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString(), filterAircraftTypeId, filterAircraftId] });
-    }
-  });
-
   const events = q.data ?? [];
   const dayWidth = 24; // px per day
   const canvasWidth = days * dayWidth;
