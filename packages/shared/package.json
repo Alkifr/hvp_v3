@@ -1,0 +1,10 @@
+{
+  "name": "@hangar/shared",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "zod": "^4.1.5"
+  }
+}
+

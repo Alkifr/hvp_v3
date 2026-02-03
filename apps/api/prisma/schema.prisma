@@ -1,0 +1,521 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PlanningLevel {
+  STRATEGIC
+  OPERATIONAL
+}
+
+enum EventStatus {
+  DRAFT
+  PLANNED
+  CONFIRMED
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum EventAuditAction {
+  CREATE
+  UPDATE
+  RESERVE
+  UNRESERVE
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  ADJUST
+}
+
+model Shift {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  // минуты от полуночи (локальные)
+  startMin  Int
+  endMin    Int
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  planLines  EventWorkPlanLine[]
+  actualLines EventWorkActualLine[]
+  timeEntries TimeEntry[]
+
+  @@index([isActive])
+}
+
+model Person {
+  id        String   @id @default(uuid())
+  code      String?  @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  skills        PersonSkill[]
+  timeEntries   TimeEntry[]
+  unavailability PersonUnavailability[]
+
+  @@index([isActive])
+}
+
+model Skill {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  people     PersonSkill[]
+  planLines  EventWorkPlanLine[]
+  actualLines EventWorkActualLine[]
+  timeEntries TimeEntry[]
+
+  @@index([isActive])
+}
+
+model PersonSkill {
+  personId  String
+  skillId   String
+  level     Int?
+  validFrom DateTime?
+  validTo   DateTime?
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+  skill  Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([personId, skillId])
+  @@index([skillId])
+}
+
+model PersonUnavailability {
+  id        String   @id @default(uuid())
+  personId  String
+  startAt   DateTime
+  endAt     DateTime
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([personId, startAt, endAt])
+}
+
+model EventWorkPlanLine {
+  id            String   @id @default(uuid())
+  eventId       String
+  date          DateTime // начало суток (UTC) для планирования по дням
+  shiftId       String
+  skillId       String
+  // потребность: сколько людей нужно на смену по квалификации
+  plannedHeadcount Int?
+  plannedMinutes Int
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  shift Shift            @relation(fields: [shiftId], references: [id])
+  skill Skill            @relation(fields: [skillId], references: [id])
+
+  @@index([eventId, date])
+  @@index([skillId])
+  @@index([shiftId])
+  @@unique([eventId, date, shiftId, skillId])
+}
+
+model EventWorkActualLine {
+  id              String   @id @default(uuid())
+  eventId         String
+  date            DateTime // начало суток (UTC)
+  shiftId         String
+  skillId         String
+  actualHeadcount Int
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  shift Shift            @relation(fields: [shiftId], references: [id])
+  skill Skill            @relation(fields: [skillId], references: [id])
+
+  @@index([eventId, date])
+  @@index([skillId])
+  @@index([shiftId])
+  @@unique([eventId, date, shiftId, skillId])
+}
+
+model TimeEntry {
+  id        String   @id @default(uuid())
+  eventId   String
+  personId  String
+  skillId   String
+  shiftId   String?
+  startAt   DateTime
+  endAt     DateTime
+  minutes   Int
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event  MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  person Person           @relation(fields: [personId], references: [id])
+  skill  Skill            @relation(fields: [skillId], references: [id])
+  shift  Shift?           @relation(fields: [shiftId], references: [id])
+
+  @@index([eventId, startAt])
+  @@index([personId, startAt])
+  @@index([skillId])
+}
+
+model Warehouse {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  movements    StockMovement[]
+  reservations MaterialReservation[]
+  issues       MaterialIssue[]
+
+  @@index([isActive])
+}
+
+model Material {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  uom       String   // например "EA", "KG"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  movements    StockMovement[]
+  reservations MaterialReservation[]
+  issues       MaterialIssue[]
+
+  @@index([isActive])
+}
+
+model StockMovement {
+  id          String            @id @default(uuid())
+  materialId  String
+  warehouseId String
+  type        StockMovementType
+  qty         Float
+  eventId     String?
+  notes       String?
+  createdAt   DateTime          @default(now())
+
+  material  Material @relation(fields: [materialId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  event     MaintenanceEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  @@index([warehouseId, materialId, createdAt])
+  @@index([eventId])
+}
+
+model MaterialReservation {
+  id          String   @id @default(uuid())
+  eventId     String
+  materialId  String
+  warehouseId String
+  qtyReserved Float
+  needByDate  DateTime
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event     MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  material  Material         @relation(fields: [materialId], references: [id])
+  warehouse Warehouse        @relation(fields: [warehouseId], references: [id])
+
+  @@index([eventId, needByDate])
+  @@index([warehouseId, materialId])
+  @@unique([eventId, materialId, warehouseId, needByDate])
+}
+
+model MaterialIssue {
+  id          String   @id @default(uuid())
+  eventId     String
+  materialId  String
+  warehouseId String
+  qtyIssued   Float
+  issuedAt    DateTime
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event     MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  material  Material         @relation(fields: [materialId], references: [id])
+  warehouse Warehouse        @relation(fields: [warehouseId], references: [id])
+
+  @@index([eventId, issuedAt])
+  @@index([warehouseId, materialId])
+}
+
+model User {
+  id                 String   @id @default(uuid())
+  email              String   @unique
+  displayName        String?
+  passwordHash       String
+  isActive           Boolean  @default(true)
+  mustChangePassword Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  roles UserRole[]
+
+  @@index([isActive])
+}
+
+model Role {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  isSystem  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roles RolePermission[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model Operator {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  aircraft Aircraft[]
+}
+
+model AircraftType {
+  id          String   @id @default(uuid())
+  icaoType    String?  @unique
+  name        String
+  manufacturer String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  aircraft Aircraft[]
+}
+
+model Aircraft {
+  id           String      @id @default(uuid())
+  tailNumber   String      @unique
+  serialNumber String?
+  operatorId   String
+  typeId       String
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  operator Operator    @relation(fields: [operatorId], references: [id])
+  type     AircraftType @relation(fields: [typeId], references: [id])
+
+  events MaintenanceEvent[]
+
+  @@index([operatorId])
+  @@index([typeId])
+}
+
+model EventType {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  color     String?  // hex, например #3b82f6
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events MaintenanceEvent[]
+}
+
+model Hangar {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  layouts HangarLayout[]
+  events  MaintenanceEvent[]
+}
+
+model HangarLayout {
+  id          String   @id @default(uuid())
+  hangarId    String
+  code        String
+  name        String
+  description String?
+  // Геометрия площади (для базовой визуализации)
+  widthMeters  Float?
+  heightMeters Float?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  hangar Hangar @relation(fields: [hangarId], references: [id])
+  stands HangarStand[]
+
+  reservations StandReservation[]
+  events       MaintenanceEvent[]
+
+  @@unique([hangarId, code])
+  @@index([hangarId])
+}
+
+model HangarStand {
+  id        String   @id @default(uuid())
+  layoutId  String
+  code      String
+  name      String
+
+  // Прямоугольник места в координатах "метры" (простой SVG план)
+  x      Float
+  y      Float
+  w      Float
+  h      Float
+  rotate Float @default(0)
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  layout HangarLayout @relation(fields: [layoutId], references: [id])
+  reservations StandReservation[]
+
+  @@unique([layoutId, code])
+  @@index([layoutId])
+}
+
+model MaintenanceEvent {
+  id            String        @id @default(uuid())
+  level         PlanningLevel
+  status        EventStatus   @default(PLANNED)
+  title         String
+
+  aircraftId    String
+  eventTypeId   String
+
+  startAt       DateTime
+  endAt         DateTime
+
+  // Опционально можно заранее закрепить в ангаре/варианте (даже без конкретного места)
+  hangarId      String?
+  layoutId      String?
+
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  aircraft  Aircraft  @relation(fields: [aircraftId], references: [id])
+  eventType EventType @relation(fields: [eventTypeId], references: [id])
+
+  hangar Hangar? @relation(fields: [hangarId], references: [id])
+  layout HangarLayout? @relation(fields: [layoutId], references: [id])
+
+  reservation StandReservation?
+  auditTrail  MaintenanceEventAudit[]
+
+  workPlanLines        EventWorkPlanLine[]
+  workActualLines      EventWorkActualLine[]
+  timeEntries          TimeEntry[]
+  materialReservations MaterialReservation[]
+  materialIssues       MaterialIssue[]
+  stockMovements       StockMovement[]
+
+  @@index([aircraftId])
+  @@index([eventTypeId])
+  @@index([startAt, endAt])
+  @@index([hangarId])
+  @@index([layoutId])
+}
+
+model MaintenanceEventAudit {
+  id        String           @id @default(uuid())
+  eventId   String
+  action    EventAuditAction
+  actor     String           @default("browser")
+  reason    String?
+  // хранит diff вида { field: { from: any, to: any } }
+  changes   Json?
+  createdAt DateTime         @default(now())
+
+  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt])
+}
+
+model StandReservation {
+  id        String   @id @default(uuid())
+
+  // Резервирование может быть привязано к событию (обычно да)
+  eventId   String   @unique
+  layoutId  String
+  standId   String
+
+  // Диапазон резерва (может совпадать с event.startAt/endAt или отличаться)
+  startAt   DateTime
+  endAt     DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event  MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  layout HangarLayout     @relation(fields: [layoutId], references: [id])
+  stand  HangarStand      @relation(fields: [standId], references: [id])
+
+  @@index([layoutId])
+  @@index([standId, startAt, endAt])
+}
+

@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    container_name: hangar_planning_db
+    environment:
+      POSTGRES_DB: hangar_planning
+      POSTGRES_USER: hangar
+      POSTGRES_PASSWORD: hangar
+    ports:
+      - "5432:5432"
+    volumes:
+      - hangar_planning_pgdata:/var/lib/postgresql/data
+
+volumes:
+  hangar_planning_pgdata:

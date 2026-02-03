@@ -1,0 +1,41 @@
+# Node / npm
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+.turbo/
+
+# Vite
+.vite/
+
+# Prisma
+.prisma/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+apps/api/.env
+apps/api/.env.*
+!apps/api/.env.example
+
+# Logs
+*.log
+
+# OS / editors
+.DS_Store
+Thumbs.db
+
+# VS Code / Cursor
+.vscode/
+.cursor/
+
+# Python venv (если случайно используется в системе)
+venv/
+.venv/
+
