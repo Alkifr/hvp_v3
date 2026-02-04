@@ -51,7 +51,7 @@ async function tryImportDemoSnapshot(changeReason: string) {
 
   // палитра (уникальна по operatorId+aircraftTypeId)
   for (const p of data.palettes ?? []) {
-    await prisma.aircraftTypePalette.upsert({
+    await (prisma as any).aircraftTypePalette.upsert({
       where: { operatorId_aircraftTypeId: { operatorId: p.operatorId, aircraftTypeId: p.aircraftTypeId } },
       update: { color: p.color, isActive: p.isActive ?? true },
       create: p
@@ -85,7 +85,7 @@ async function tryImportDemoSnapshot(changeReason: string) {
     });
   }
 
-  await upsertById(data.tows ?? [], prisma.eventTow);
+  await upsertById(data.tows ?? [], (prisma as any).eventTow);
   await upsertById(data.personUnavailability ?? [], prisma.personUnavailability);
 
   // уникальные строки ресурсов по композитным ключам
@@ -133,15 +133,12 @@ async function tryImportDemoSnapshot(changeReason: string) {
   // Чтобы избежать дубликатов, upsert по id.
   await upsertById(data.audits ?? [], prisma.maintenanceEventAudit);
 
-  // eslint-disable-next-line no-console
   console.log(`Imported demo snapshot from ${demoPath} (reason: ${changeReason})`);
   return { imported: true as const, path: demoPath };
 }
 
 async function main() {
-  // eslint-disable-next-line no-console
   console.log("Seeding…");
-  // eslint-disable-next-line no-console
   console.log("DATABASE_URL:", process.env.DATABASE_URL);
 
   // --- RBAC/Users ---
@@ -220,7 +217,6 @@ async function main() {
   const adminName = env("ADMIN_NAME") || "Администратор";
 
   if (!env("ADMIN_EMAIL") || !env("ADMIN_PASSWORD")) {
-    // eslint-disable-next-line no-console
     console.warn(
       "ADMIN_EMAIL/ADMIN_PASSWORD не заданы — создан demo-админ admin@local.dev / admin (mustChangePassword=true)."
     );
@@ -500,7 +496,6 @@ async function main() {
     material: await prisma.material.count()
   };
 
-  // eslint-disable-next-line no-console
   console.table(counts);
 }
 
@@ -509,7 +504,6 @@ main()
     await prisma.$disconnect();
   })
   .catch(async (e) => {
-    // eslint-disable-next-line no-console
     console.error(e);
     await prisma.$disconnect();
     process.exit(1);

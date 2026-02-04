@@ -760,7 +760,7 @@ export function GanttView() {
   );
 
   const [pendingDnd, setPendingDnd] = useState<(DndMoveRequest | DndPlaceRequest) | null>(null);
-  const [draggingEventId, setDraggingEventId] = useState<string | null>(null);
+  const [, setDraggingEventId] = useState<string | null>(null);
   const [dndHoverKey, setDndHoverKey] = useState<string | null>(null);
   const [dndHoverBarIds, setDndHoverBarIds] = useState<string[]>([]);
   const [dndHoverIntent, setDndHoverIntent] = useState<"move" | "bump" | null>(null);
@@ -790,15 +790,6 @@ export function GanttView() {
   useEffect(() => {
     ptrTargetRef.current = ptrTarget;
   }, [ptrTarget]);
-
-  const requestDndMoveWithReason = (p: DndMoveRequest) => {
-    if (!dndActive) return;
-    setPendingDnd(p);
-    setPendingSave("dndMove");
-    setDndNotice(null);
-    setChangeReason("");
-    setConfirmOpen(true);
-  };
 
   useEffect(() => {
     if (!dndActive) {

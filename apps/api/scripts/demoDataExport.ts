@@ -47,9 +47,7 @@ async function main() {
 
   await fs.writeFile(outPath, JSON.stringify(data, null, 2) + "\n", "utf8");
 
-  // eslint-disable-next-line no-console
   console.log(`Demo data exported to ${outPath}`);
-  // eslint-disable-next-line no-console
   console.table({
     operators: data.operators.length,
     aircraftTypes: data.aircraftTypes.length,
@@ -84,7 +82,6 @@ main()
     await prisma.$disconnect();
   })
   .catch(async (e) => {
-    // eslint-disable-next-line no-console
     console.error(e);
     await prisma.$disconnect();
     process.exit(1);
