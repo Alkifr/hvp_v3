@@ -8,6 +8,7 @@ type RefKind =
   | "operators"
   | "aircraft-types"
   | "aircraft"
+  | "aircraft-type-palette"
   | "event-types"
   | "hangars"
   | "layouts"
@@ -229,6 +230,10 @@ export function ReferenceView() {
       setFSerialNumber("");
       setAircraftImportOperatorId(operatorsQ.data?.[0]?.id ?? "");
       setAircraftImportTypeId(aircraftTypesQ.data?.[0]?.id ?? "");
+    } else if (k === "aircraft-type-palette") {
+      setFOperatorId(operatorsQ.data?.[0]?.id ?? "");
+      setFTypeId(aircraftTypesQ.data?.[0]?.id ?? "");
+      setFColor("#f59e0b");
     } else if (k === "event-types") {
       setFCode("NEW_EVENT");
       setFName("Событие");
@@ -281,7 +286,7 @@ export function ReferenceView() {
     setFTailNumber(String(row.tailNumber ?? ""));
     setFSerialNumber(String(row.serialNumber ?? ""));
     setFOperatorId(String(row.operatorId ?? ""));
-    setFTypeId(String(row.typeId ?? ""));
+    setFTypeId(String(row.typeId ?? row.aircraftTypeId ?? ""));
     setFColor(String(row.color ?? "#3b82f6"));
     setFHangarId(String(row.hangarId ?? ""));
     setFLayoutId(String(row.layoutId ?? ""));
@@ -316,6 +321,13 @@ export function ReferenceView() {
         serialNumber: fSerialNumber.trim() ? fSerialNumber.trim() : undefined,
         operatorId: fOperatorId,
         typeId: fTypeId,
+        isActive: fIsActive
+      };
+    if (kind === "aircraft-type-palette")
+      return {
+        operatorId: fOperatorId,
+        aircraftTypeId: fTypeId,
+        color: fColor.trim(),
         isActive: fIsActive
       };
     if (kind === "skills") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
@@ -364,6 +376,7 @@ export function ReferenceView() {
           <option value="operators">Операторы</option>
           <option value="aircraft-types">Типы ВС</option>
           <option value="aircraft">Бортовые номера</option>
+          <option value="aircraft-type-palette">Палитра типов ВС (оператор + тип)</option>
           <option value="event-types">События</option>
           <option value="hangars">Ангары</option>
           <option value="layouts">Варианты расстановки</option>
@@ -544,6 +557,8 @@ export function ReferenceView() {
                   ? "Тип ВС"
                   : kind === "aircraft"
                     ? "Борт"
+                    : kind === "aircraft-type-palette"
+                      ? "Палитра типов ВС"
                     : kind === "skills"
                       ? "Квалификация"
                       : kind === "persons"
@@ -599,7 +614,7 @@ export function ReferenceView() {
               </label>
             ) : null}
 
-            {kind !== "aircraft" && kind !== "persons" ? (
+            {kind !== "aircraft" && kind !== "persons" && kind !== "aircraft-type-palette" ? (
               <label style={{ display: "grid", gap: 6 }}>
                 <span className="muted">Название</span>
                 <TextInput value={fName} onChange={setFName} style={{ width: 320 }} />
@@ -627,7 +642,7 @@ export function ReferenceView() {
               </>
             ) : null}
 
-            {kind === "aircraft" ? (
+            {kind === "aircraft" || kind === "aircraft-type-palette" ? (
               <>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span className="muted">Оператор</span>
@@ -649,10 +664,12 @@ export function ReferenceView() {
                     ))}
                   </select>
                 </label>
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">Зав. №</span>
-                  <TextInput value={fSerialNumber} onChange={setFSerialNumber} style={{ width: 220 }} />
-                </label>
+                {kind === "aircraft" ? (
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span className="muted">Зав. №</span>
+                    <TextInput value={fSerialNumber} onChange={setFSerialNumber} style={{ width: 220 }} />
+                  </label>
+                ) : null}
               </>
             ) : null}
 
@@ -663,10 +680,13 @@ export function ReferenceView() {
               </label>
             ) : null}
 
-            {kind === "event-types" ? (
+            {kind === "event-types" || kind === "aircraft-type-palette" ? (
               <label style={{ display: "grid", gap: 6 }}>
                 <span className="muted">Цвет</span>
-                <input type="color" value={fColor} onChange={(e) => setFColor(e.target.value)} />
+                <div className="row" style={{ gap: 8 }}>
+                  <input type="color" value={fColor} onChange={(e) => setFColor(e.target.value)} />
+                  <TextInput value={fColor} onChange={setFColor} style={{ width: 140 }} />
+                </div>
               </label>
             ) : null}
 
@@ -834,11 +854,27 @@ export function ReferenceView() {
                 </td>
                 <td>
                   <div>
-                    <strong>{row.name ?? row.tailNumber ?? "—"}</strong>{" "}
+                    <strong>
+                      {kind === "aircraft-type-palette"
+                        ? `${row.operator?.name ?? "Оператор"} • ${row.aircraftType?.icaoType ? `${row.aircraftType.icaoType} • ` : ""}${row.aircraftType?.name ?? "Тип ВС"}`
+                        : row.name ?? row.tailNumber ?? "—"}
+                    </strong>{" "}
                     {row.isActive === false ? <span className="muted">(неактивен)</span> : null}
                   </div>
                   {row.operator?.name ? <div className="muted">Оператор: {row.operator.name}</div> : null}
                   {row.type?.name ? <div className="muted">Тип ВС: {row.type.icaoType ? `${row.type.icaoType} • ` : ""}{row.type.name}</div> : null}
+                  {row.aircraftType?.name ? (
+                    <div className="muted">
+                      Тип ВС: {row.aircraftType.icaoType ? `${row.aircraftType.icaoType} • ` : ""}
+                      {row.aircraftType.name}
+                    </div>
+                  ) : null}
+                  {row.color ? (
+                    <div className="muted row" style={{ gap: 8 }}>
+                      <span style={{ width: 14, height: 14, borderRadius: 4, background: String(row.color), border: "1px solid rgba(148,163,184,0.6)" }} />
+                      {String(row.color)}
+                    </div>
+                  ) : null}
                   {row.hangarId ? <div className="muted">hangarId: {row.hangarId}</div> : null}
                   {row.layoutId ? <div className="muted">layoutId: {row.layoutId}</div> : null}
                 </td>

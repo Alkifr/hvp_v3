@@ -11,6 +11,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
+    "demo:export": "tsx scripts/demoDataExport.ts",
     "db:counts": "tsx scripts/dbCounts.ts"
   },
   "dependencies": {

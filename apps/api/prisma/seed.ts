@@ -1,10 +1,141 @@
 import { PrismaClient, PlanningLevel, EventStatus } from "@prisma/client";
 import argon2 from "argon2";
+import fs from "node:fs/promises";
+import path from "node:path";
+import dotenv from "dotenv";
 
 const prisma = new PrismaClient();
 
+// .env лежит в корне репо, а seed запускается из apps/api
+dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
+
 function env(name: string) {
   return (process.env[name] ?? "").trim();
+}
+
+function omit<T extends Record<string, any>, K extends keyof T>(obj: T, keys: K[]): Omit<T, K> {
+  const out: any = { ...obj };
+  for (const k of keys) delete out[k as any];
+  return out;
+}
+
+async function tryImportDemoSnapshot(changeReason: string) {
+  const demoPath = path.resolve(process.cwd(), "prisma/demo-data.json");
+  try {
+    await fs.access(demoPath);
+  } catch {
+    return { imported: false as const, path: demoPath };
+  }
+
+  const raw = await fs.readFile(demoPath, "utf8");
+  const data = JSON.parse(raw) as any;
+
+  const upsertById = async (items: any[], delegate: any) => {
+    for (const it of items ?? []) {
+      await delegate.upsert({
+        where: { id: it.id },
+        update: omit(it, ["id"]),
+        create: it
+      });
+    }
+  };
+
+  // --- справочники ---
+  await upsertById(data.operators ?? [], prisma.operator);
+  await upsertById(data.aircraftTypes ?? [], prisma.aircraftType);
+  await upsertById(data.eventTypes ?? [], prisma.eventType);
+  await upsertById(data.hangars ?? [], prisma.hangar);
+  await upsertById(data.layouts ?? [], prisma.hangarLayout);
+  await upsertById(data.stands ?? [], prisma.hangarStand);
+  await upsertById(data.aircraft ?? [], prisma.aircraft);
+
+  // палитра (уникальна по operatorId+aircraftTypeId)
+  for (const p of data.palettes ?? []) {
+    await prisma.aircraftTypePalette.upsert({
+      where: { operatorId_aircraftTypeId: { operatorId: p.operatorId, aircraftTypeId: p.aircraftTypeId } },
+      update: { color: p.color, isActive: p.isActive ?? true },
+      create: p
+    });
+  }
+
+  // --- workforce / склад ---
+  await upsertById(data.shifts ?? [], prisma.shift);
+  await upsertById(data.skills ?? [], prisma.skill);
+  await upsertById(data.persons ?? [], prisma.person);
+  await upsertById(data.warehouses ?? [], prisma.warehouse);
+  await upsertById(data.materials ?? [], prisma.material);
+
+  // m2m
+  for (const ps of data.personSkills ?? []) {
+    await prisma.personSkill.upsert({
+      where: { personId_skillId: { personId: ps.personId, skillId: ps.skillId } },
+      update: { level: ps.level ?? null, validFrom: ps.validFrom ?? null, validTo: ps.validTo ?? null },
+      create: ps
+    });
+  }
+
+  // --- события / резервы ---
+  await upsertById(data.events ?? [], prisma.maintenanceEvent);
+
+  for (const r of data.reservations ?? []) {
+    await prisma.standReservation.upsert({
+      where: { eventId: r.eventId },
+      update: omit(r, ["id"]),
+      create: r
+    });
+  }
+
+  await upsertById(data.tows ?? [], prisma.eventTow);
+  await upsertById(data.personUnavailability ?? [], prisma.personUnavailability);
+
+  // уникальные строки ресурсов по композитным ключам
+  for (const l of data.workPlanLines ?? []) {
+    await prisma.eventWorkPlanLine.upsert({
+      where: {
+        eventId_date_shiftId_skillId: { eventId: l.eventId, date: new Date(l.date), shiftId: l.shiftId, skillId: l.skillId }
+      },
+      update: { plannedHeadcount: l.plannedHeadcount ?? null, plannedMinutes: l.plannedMinutes, notes: l.notes ?? null },
+      create: { ...l, date: new Date(l.date) }
+    });
+  }
+  for (const l of data.workActualLines ?? []) {
+    await prisma.eventWorkActualLine.upsert({
+      where: {
+        eventId_date_shiftId_skillId: { eventId: l.eventId, date: new Date(l.date), shiftId: l.shiftId, skillId: l.skillId }
+      },
+      update: { actualHeadcount: l.actualHeadcount, notes: l.notes ?? null },
+      create: { ...l, date: new Date(l.date) }
+    });
+  }
+  await upsertById(data.timeEntries ?? [], prisma.timeEntry);
+
+  // складские операции (id-шники)
+  await upsertById(data.stockMovements ?? [], prisma.stockMovement);
+
+  // резервы материалов (композитный уникальный)
+  for (const mr of data.materialReservations ?? []) {
+    await prisma.materialReservation.upsert({
+      where: {
+        eventId_materialId_warehouseId_needByDate: {
+          eventId: mr.eventId,
+          materialId: mr.materialId,
+          warehouseId: mr.warehouseId,
+          needByDate: new Date(mr.needByDate)
+        }
+      },
+      update: { qtyReserved: mr.qtyReserved, notes: mr.notes ?? null },
+      create: { ...mr, needByDate: new Date(mr.needByDate) }
+    });
+  }
+  await upsertById(data.materialIssues ?? [], prisma.materialIssue);
+
+  // аудит (id-шники). Не обязателен для работы, но полезен для демо.
+  // Чтобы избежать дубликатов, upsert по id.
+  await upsertById(data.audits ?? [], prisma.maintenanceEventAudit);
+
+  // eslint-disable-next-line no-console
+  console.log(`Imported demo snapshot from ${demoPath} (reason: ${changeReason})`);
+  return { imported: true as const, path: demoPath };
 }
 
 async function main() {
@@ -344,6 +475,10 @@ async function main() {
     update: { qtyReserved: 2, notes: "План" },
     create: { eventId: event.id, materialId: matFilter.id, warehouseId: wh.id, qtyReserved: 2, needByDate: start, notes: "План" }
   });
+
+  // Если рядом лежит snapshot демо-данных, импортируем его поверх "минимального" seed
+  // (нужно для развертываний в другом месте с теми же данными, что в вашей текущей БД).
+  await tryImportDemoSnapshot("seed:demo-snapshot");
 
   const counts = {
     users: await prisma.user.count(),

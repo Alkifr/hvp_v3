@@ -7,6 +7,7 @@ import { eventTypesRoutes } from "./event-types.js";
 import { hangarsRoutes } from "./hangars.js";
 import { layoutsRoutes } from "./layouts.js";
 import { standsRoutes } from "./stands.js";
+import { aircraftTypePaletteRoutes } from "./aircraft-type-palette.js";
 import { skillsRoutes } from "./skills.js";
 import { personsRoutes } from "./persons.js";
 import { shiftsRoutes } from "./shifts.js";
@@ -17,6 +18,7 @@ export const referenceRoutes: FastifyPluginAsync = async (app) => {
   await app.register(operatorsRoutes, { prefix: "/operators" });
   await app.register(aircraftTypesRoutes, { prefix: "/aircraft-types" });
   await app.register(aircraftRoutes, { prefix: "/aircraft" });
+  await app.register(aircraftTypePaletteRoutes, { prefix: "/aircraft-type-palette" });
   await app.register(eventTypesRoutes, { prefix: "/event-types" });
   await app.register(hangarsRoutes, { prefix: "/hangars" });
   await app.register(layoutsRoutes, { prefix: "/layouts" });

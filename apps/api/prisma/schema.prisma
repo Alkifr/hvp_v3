@@ -333,7 +333,8 @@ model Operator {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  aircraft Aircraft[]
+  aircraft  Aircraft[]
+  palettes  AircraftTypePalette[]
 }
 
 model AircraftType {
@@ -345,7 +346,28 @@ model AircraftType {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  aircraft Aircraft[]
+  aircraft  Aircraft[]
+  palettes  AircraftTypePalette[]
+}
+
+// Палитра: цвет для связки "оператор + тип ВС"
+model AircraftTypePalette {
+  id             String   @id @default(uuid())
+  operatorId     String
+  aircraftTypeId String
+  // hex, например #f59e0b
+  color          String
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  operator    Operator    @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  aircraftType AircraftType @relation(fields: [aircraftTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([operatorId, aircraftTypeId])
+  @@index([operatorId])
+  @@index([aircraftTypeId])
+  @@index([isActive])
 }
 
 model Aircraft {
@@ -466,6 +488,7 @@ model MaintenanceEvent {
 
   reservation StandReservation?
   auditTrail  MaintenanceEventAudit[]
+  towSegments EventTow[]
 
   workPlanLines        EventWorkPlanLine[]
   workActualLines      EventWorkActualLine[]
@@ -479,6 +502,20 @@ model MaintenanceEvent {
   @@index([startAt, endAt])
   @@index([hangarId])
   @@index([layoutId])
+}
+
+// Буксировки (закатка/выкатка) как интервалы внутри события (могут быть несколько раз)
+model EventTow {
+  id        String   @id @default(uuid())
+  eventId   String
+  startAt   DateTime
+  endAt     DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, startAt])
 }
 
 model MaintenanceEventAudit {

@@ -116,54 +116,108 @@ textarea {
 
 .ganttGrid {
   position: relative;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 14px;
   background: white;
+  /* отдельный stacking context, чтобы sticky/z-index работали стабильно */
+  isolation: isolate;
 }
 
-.ganttHeader {
+.ganttHeaderRow {
   position: sticky;
   top: 0;
   background: white;
-  z-index: 2;
+  z-index: 5;
   border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+  display: flex;
+  align-items: stretch;
 }
 
-.ganttRow {
-  display: grid;
-  grid-template-columns: 220px 1fr;
+.ganttHeaderRow > .ganttLabel {
+  width: 220px;
+  flex: 0 0 220px;
+  background: #fff;
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+  position: relative;
+  z-index: 10;
+}
+
+.ganttBody {
+  display: flex;
   align-items: stretch;
-  border-bottom: none;
+}
+
+.ganttLeftCol {
+  width: 220px;
+  flex: 0 0 220px;
+  background: #fff;
+  position: relative;
+  z-index: 10;
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.ganttRightCol {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.ganttHeaderRightViewport {
+  /* делаем реально скроллируемым, но без скроллбаров:
+     так sync scrollLeft работает стабильно во всех Chromium */
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  scrollbar-width: none; /* Firefox */
+  pointer-events: none; /* пользователь не скроллит хедер вручную */
+}
+
+.ganttHeaderRightViewport::-webkit-scrollbar {
+  display: none;
+}
+
+.ganttRightScroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+}
+
+.ganttRightInner {
+  position: relative;
 }
 
 .ganttLabel {
   padding: 10px 12px;
-  border-right: 1px solid rgba(148, 163, 184, 0.2);
+  border-right: none; /* разделитель теперь на колонке слева */
   border-bottom: none;
   box-shadow: inset 0 -1px 0 rgba(148, 163, 184, 0.2);
   font-size: 13px;
   background: #fff;
-  position: sticky;
-  left: 0;
-  z-index: 3;
+  height: 44px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
-.ganttHeader .ganttLabel {
-  z-index: 4;
+.ganttHeaderRow .ganttLabel {
   box-shadow: none;
 }
 
 .ganttCanvas {
   position: relative;
-  min-width: 900px;
+  min-width: 0;
   height: auto;
   min-height: 44px;
   border-bottom: none;
   box-shadow: inset 0 -1px 0 rgba(148, 163, 184, 0.2);
 }
 
-.ganttHeader .ganttCanvas {
+.ganttHeaderRow .ganttCanvas {
   box-shadow: none;
 }
 

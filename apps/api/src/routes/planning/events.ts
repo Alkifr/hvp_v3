@@ -72,10 +72,83 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         eventType: true,
         hangar: true,
         layout: true,
-        reservation: { include: { stand: true } }
+        reservation: { include: { stand: true } },
+        towSegments: { orderBy: [{ startAt: "asc" }] }
       },
       orderBy: [{ startAt: "asc" }]
     });
+  });
+
+  // --- Буксировки (интервалы) ---
+  app.get("/:id/tows", async (req) => {
+    assertPermission(req, "events:read");
+    const eventId = zUuid.parse((req.params as any).id);
+    return await app.prisma.eventTow.findMany({
+      where: { eventId },
+      orderBy: [{ startAt: "asc" }]
+    });
+  });
+
+  app.post("/:id/tows", async (req) => {
+    assertPermission(req, "events:write");
+    const eventId = zUuid.parse((req.params as any).id);
+    const body = z
+      .object({
+        startAt: zDateTime,
+        endAt: zDateTime,
+        changeReason: z.string().trim().min(1).max(1000).optional()
+      })
+      .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .parse(req.body);
+
+    const ev = await app.prisma.maintenanceEvent.findUniqueOrThrow({ where: { id: eventId } });
+    if (body.startAt < ev.startAt || body.endAt > ev.endAt) {
+      throw app.httpErrors.badRequest("Tow interval must be within event startAt/endAt");
+    }
+
+    const created = await app.prisma.eventTow.create({
+      data: { eventId, startAt: body.startAt, endAt: body.endAt }
+    });
+
+    await app.prisma.maintenanceEventAudit.create({
+      data: {
+        eventId,
+        action: EventAuditAction.UPDATE,
+        actor: getActor(req),
+        reason: body.changeReason ?? "Буксировка",
+        changes: {
+          tow: { add: { id: created.id, startAt: created.startAt.toISOString(), endAt: created.endAt.toISOString() } }
+        }
+      }
+    });
+
+    return created;
+  });
+
+  app.delete("/:id/tows/:towId", async (req) => {
+    assertPermission(req, "events:write");
+    const eventId = zUuid.parse((req.params as any).id);
+    const towId = zUuid.parse((req.params as any).towId);
+    const query = z
+      .object({
+        changeReason: z.string().trim().min(1).max(1000).optional()
+      })
+      .parse((req.query ?? {}) as any);
+
+    const existing = await app.prisma.eventTow.findFirst({ where: { id: towId, eventId } });
+    if (!existing) return { ok: true, deleted: 0 };
+
+    await app.prisma.eventTow.delete({ where: { id: towId } });
+    await app.prisma.maintenanceEventAudit.create({
+      data: {
+        eventId,
+        action: EventAuditAction.UPDATE,
+        actor: getActor(req),
+        reason: query.changeReason ?? "Буксировка",
+        changes: { tow: { delete: { id: towId } } }
+      }
+    });
+    return { ok: true, deleted: 1 };
   });
 
   // Импорт событий из Excel/CSV (UI парсит файл и отправляет строки в JSON).
