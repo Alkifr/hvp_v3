@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  url      = env("DATABASE_CLOUD_URL")
 }
 
 enum PlanningLevel {
@@ -32,6 +32,12 @@ enum StockMovementType {
   IN
   OUT
   ADJUST
+}
+
+// Узкий/широкий фюзеляж — для подбора варианта расстановки под типы ВС
+enum BodyType {
+  NARROW_BODY   // узкий (A320, B737, …)
+  WIDE_BODY     // широкий (A330, B777, …)
 }
 
 model Shift {
@@ -338,13 +344,14 @@ model Operator {
 }
 
 model AircraftType {
-  id          String   @id @default(uuid())
-  icaoType    String?  @unique
+  id          String    @id @default(uuid())
+  icaoType    String?   @unique
   name        String
   manufacturer String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  bodyType    BodyType? // узкий/широкий фюзеляж — для подбора варианта расстановки
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   aircraft  Aircraft[]
   palettes  AircraftTypePalette[]
@@ -422,6 +429,8 @@ model HangarLayout {
   // Геометрия площади (для базовой визуализации)
   widthMeters  Float?
   heightMeters Float?
+  // Препятствия на плане: массив { type: "rect", x, y, w, h } в метрах (колонны, стены и т.д.)
+  obstacles    Json?
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -437,10 +446,12 @@ model HangarLayout {
 }
 
 model HangarStand {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   layoutId  String
   code      String
   name      String
+  // Какое ВС может стоять на этом месте (null = любое)
+  bodyType  BodyType?
 
   // Прямоугольник места в координатах "метры" (простой SVG план)
   x      Float
@@ -466,8 +477,11 @@ model MaintenanceEvent {
   status        EventStatus   @default(PLANNED)
   title         String
 
-  aircraftId    String
+  aircraftId    String?       // null при виртуальном борте (массовое планирование)
   eventTypeId   String
+
+  // Виртуальный борт: заполняется при массовом планировании; при закрытии события создаётся Aircraft и сюда записывается aircraftId
+  virtualAircraft Json?      // { operatorId, aircraftTypeId, label }
 
   startAt       DateTime
   endAt         DateTime
@@ -480,7 +494,7 @@ model MaintenanceEvent {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  aircraft  Aircraft  @relation(fields: [aircraftId], references: [id])
+  aircraft  Aircraft? @relation(fields: [aircraftId], references: [id])
   eventType EventType @relation(fields: [eventTypeId], references: [id])
 
   hangar Hangar? @relation(fields: [hangarId], references: [id])

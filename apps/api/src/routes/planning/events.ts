@@ -12,6 +12,14 @@ function getActor(req: any) {
   return String(h["x-actor"] ?? h["x-user"] ?? "browser").slice(0, 80);
 }
 
+/** Подпись борта для сообщений (реальный или виртуальный) */
+function eventAircraftLabel(event: { aircraft?: { tailNumber: string } | null; virtualAircraft?: unknown } | null): string {
+  if (!event) return "—";
+  if (event.aircraft?.tailNumber) return event.aircraft.tailNumber;
+  const v = event.virtualAircraft as { label?: string } | null | undefined;
+  return (v?.label ?? "—") as string;
+}
+
 function diffEvent(before: any, after: any) {
   const fields = [
     "title",
@@ -23,7 +31,8 @@ function diffEvent(before: any, after: any) {
     "endAt",
     "hangarId",
     "layoutId",
-    "notes"
+    "notes",
+    "virtualAircraft"
   ] as const;
 
   const changes: Record<string, { from: any; to: any }> = {};
@@ -367,7 +376,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           const conflict = rs.find((x: any) => overlaps(startAt, endAt, x.startAt, x.endAt));
           if (conflict) {
             throw new Error(
-              `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${conflict.event.aircraft.tailNumber})`
+              `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`
             );
           }
 
@@ -501,7 +510,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             });
             if (conflict) {
               throw new Error(
-                `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${conflict.event.aircraft.tailNumber})`
+                `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`
               );
             }
 
@@ -527,6 +536,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     return result;
   });
 
+  const zVirtualAircraft = z.object({
+    operatorId: zUuid,
+    aircraftTypeId: zUuid,
+    label: z.string().trim().min(1).max(100)
+  });
+
   app.post("/", async (req) => {
     assertPermission(req, "events:write");
     const body = z
@@ -534,7 +549,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         level: z.nativeEnum(PlanningLevel),
         status: z.nativeEnum(EventStatus).optional(),
         title: z.string().trim().min(1).max(300),
-        aircraftId: zUuid,
+        aircraftId: zUuid.optional(),
+        virtualAircraft: zVirtualAircraft.optional(),
         eventTypeId: zUuid,
         startAt: zDateTime,
         endAt: zDateTime,
@@ -544,10 +560,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: "aircraftId or virtualAircraft required" })
       .parse(req.body);
 
     const { changeReason, ...data } = body;
-    const created = await app.prisma.maintenanceEvent.create({ data });
+    const created = await app.prisma.maintenanceEvent.create({
+      data: {
+        ...data,
+        aircraftId: data.aircraftId ?? (data.virtualAircraft ? null : undefined),
+        virtualAircraft: data.virtualAircraft ? (data.virtualAircraft as object) : undefined
+      }
+    });
 
     await app.prisma.maintenanceEventAudit.create({
       data: {
@@ -593,13 +616,31 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.body);
 
-    // если меняем время — обновим связанный резерв (если он есть и совпадал)
     const existing = await app.prisma.maintenanceEvent.findUniqueOrThrow({
       where: { id },
       include: { reservation: true }
     });
 
     const { changeReason, ...patch } = body;
+    const nextStatus = body.status ?? existing.status;
+    let patchData = { ...patch } as Record<string, unknown>;
+
+    // При закрытии события (DONE/CONFIRMED) с виртуальным бортом — создаём Aircraft и привязываем
+    const virtualAircraft = existing.virtualAircraft as { operatorId: string; aircraftTypeId: string; label: string } | null;
+    if (
+      virtualAircraft &&
+      (nextStatus === EventStatus.DONE || nextStatus === EventStatus.CONFIRMED) &&
+      !existing.aircraftId
+    ) {
+      const aircraft = await app.prisma.aircraft.create({
+        data: {
+          tailNumber: virtualAircraft.label,
+          operatorId: virtualAircraft.operatorId,
+          typeId: virtualAircraft.aircraftTypeId
+        }
+      });
+      patchData = { ...patchData, aircraftId: aircraft.id, virtualAircraft: Prisma.JsonNull };
+    }
 
     const nextStart = body.startAt ?? existing.startAt;
     const nextEnd = body.endAt ?? existing.endAt;
@@ -609,12 +650,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     const updated = await app.prisma.maintenanceEvent.update({
       where: { id },
-      data: patch
+      data: patchData
     });
 
     if (existing.reservation) {
-      // аккуратно: пока предполагаем что резерв следует времени события.
-      // Позже можно сделать флаг "lockReservationTimes".
       const conflict = await app.prisma.standReservation.findFirst({
         where: {
           standId: existing.reservation.standId,
@@ -628,7 +667,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
       if (conflict) {
         throw app.httpErrors.conflict(
-          `Место уже занято в этот период: ${conflict.event.title} (${conflict.event.aircraft.tailNumber})`
+          `Место уже занято в этот период: ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`
         );
       }
 

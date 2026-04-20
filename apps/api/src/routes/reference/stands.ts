@@ -4,6 +4,8 @@ import { z } from "zod";
 import { zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 
+const zBodyType = z.enum(["NARROW_BODY", "WIDE_BODY"]).optional().nullable();
+
 export const standsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
     assertPermission(req as any, "ref:read");
@@ -21,6 +23,7 @@ export const standsRoutes: FastifyPluginAsync = async (app) => {
         layoutId: zUuid,
         code: z.string().trim().min(1).max(32),
         name: z.string().trim().min(1).max(200),
+        bodyType: zBodyType,
         x: z.number(),
         y: z.number(),
         w: z.number().positive(),
@@ -40,6 +43,7 @@ export const standsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         code: z.string().trim().min(1).max(32).optional(),
         name: z.string().trim().min(1).max(200).optional(),
+        bodyType: zBodyType,
         x: z.number().optional(),
         y: z.number().optional(),
         w: z.number().positive().optional(),

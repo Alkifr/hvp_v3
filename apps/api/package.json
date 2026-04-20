@@ -10,9 +10,11 @@
     "lint": "eslint .",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
     "demo:export": "tsx scripts/demoDataExport.ts",
-    "db:counts": "tsx scripts/dbCounts.ts"
+    "db:counts": "tsx scripts/dbCounts.ts",
+    "db:clone:cloud": "tsx scripts/cloneToCloud.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

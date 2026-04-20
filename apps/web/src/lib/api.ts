@@ -3,7 +3,7 @@ async function readError(res: Response): Promise<string> {
   try {
     const j = JSON.parse(text);
     if (j?.error === "DB_NOT_CONNECTED") {
-      return `Нет соединения с БД (проверьте DATABASE_URL). ${j?.detail ?? ""}`.trim();
+      return `Нет соединения с БД (проверьте DATABASE_CLOUD_URL). ${j?.detail ?? ""}`.trim();
     }
     if (j?.message) return String(j.message);
     return text;

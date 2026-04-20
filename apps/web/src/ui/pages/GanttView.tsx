@@ -6,10 +6,25 @@ import utc from "dayjs/plugin/utc";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { authMe } from "../auth/authApi";
 import { EventResourcesPanel } from "../components/EventResourcesPanel";
+import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 
 dayjs.extend(utc);
 
 const GANTT_UI_LS_KEY = "hangarPlanning:ganttUi:v1";
+
+const FIELD_LABEL: Record<string, string> = {
+  title: "Название",
+  level: "Уровень",
+  status: "Статус",
+  aircraftId: "Борт",
+  eventTypeId: "Тип события",
+  startAtLocal: "Начало",
+  endAtLocal: "Окончание",
+  notes: "Примечание",
+  hangarId: "Ангар",
+  layoutId: "Вариант размещения",
+  standId: "Место"
+};
 
 function safeReadGanttUi(): any | null {
   try {
@@ -38,20 +53,25 @@ type EventRow = {
   endAt: string;
   level: "STRATEGIC" | "OPERATIONAL";
   status: string;
-  aircraft: {
+  aircraft?: {
     id?: string;
     tailNumber: string;
     operatorId?: string | null;
     typeId?: string | null;
     operator?: { id: string; code?: string | null; name: string } | null;
     type?: { id: string; icaoType?: string | null; name: string } | null;
-  };
+  } | null;
+  virtualAircraft?: { operatorId?: string; aircraftTypeId?: string; label?: string } | null;
   eventType: { id?: string; name: string; color?: string | null };
   hangar?: { id?: string; name: string } | null;
   layout?: { id?: string; name: string; hangarId?: string } | null;
   reservation?: { stand?: { id?: string; code: string } | null } | null;
   towSegments?: Array<{ id: string; startAt: string; endAt: string }>;
 };
+
+function eventAircraftLabel(ev: EventRow): string {
+  return ev.aircraft?.tailNumber ?? ev.virtualAircraft?.label ?? "—";
+}
 
 type Aircraft = {
   id: string;
@@ -64,7 +84,7 @@ type Aircraft = {
 type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
 type EventType = { id: string; code: string; name: string; color?: string | null };
 type Hangar = { id: string; name: string };
-type Layout = { id: string; name: string; hangarId: string; code?: string };
+type Layout = { id: string; name: string; hangarId: string; code?: string; capacitySummary?: string };
 type Stand = { id: string; layoutId: string; code: string; name: string; isActive?: boolean };
 type AircraftTypePaletteRow = { id: string; operatorId: string; aircraftTypeId: string; color: string; isActive: boolean };
 type DndStand = Stand & { hangarId: string; hangarName: string; layoutName: string };
@@ -125,9 +145,26 @@ function calcBarXW(params: {
   const visible = r - x;
   if (!(visible > 0)) return null;
 
-  // минимальная ширина для кликабельности, но без "вылета" за канвас
-  const w = clamp(Math.max(6, visible), 6, params.canvasWidth - x);
+  // минимальная ширина для кликабельности, но без "вылета" за канвас;
+  // на очень мелком зуме допускаем меньший минимум, чтобы не раздувать короткие события.
+  const minBar = params.dayWidth < 2 ? 3 : 6;
+  // визуальный зазор 1 px между примыкающими полосами, чтобы соседние события
+  // не сливались (актуально на мелком зуме, где события могут идти встык).
+  const desired = Math.max(minBar, visible > minBar ? visible - 1 : visible);
+  const w = clamp(desired, minBar, Math.max(minBar, params.canvasWidth - x));
   return { x, w, leftRaw, rightRaw };
+}
+
+/** Подбор внутренних отступов .bar в зависимости от фактической ширины. */
+function barPaddingStyle(w: number): React.CSSProperties {
+  if (w < 12) return { padding: 0 };
+  if (w < 36) return { paddingLeft: 2, paddingRight: 2 };
+  return {};
+}
+
+/** Показывать ли подпись внутри полосы. На узких — только нативный title (tooltip). */
+function canShowBarTitle(w: number) {
+  return w >= 36;
 }
 
 function renderTowBreaks(params: {
@@ -174,6 +211,28 @@ function renderTowBreaks(params: {
     );
   }
   return out.length ? out : null;
+}
+
+// Образец бара статуса для легенды — использует тот же barVisualStyle,
+// что и фактический рендер событий, поэтому легенда всегда синхронна с UI.
+function LegendStatus(props: { status: string; baseColor: string; label: string }) {
+  const visual = barVisualStyle(props.status, props.baseColor);
+  return (
+    <span className="ganttLegendItem">
+      <span
+        className="legendBar legendBarSample"
+        aria-hidden="true"
+        style={{
+          ...visual,
+          width: 56,
+          height: 16,
+          borderRadius: 6,
+          boxSizing: "border-box"
+        }}
+      />
+      <span>{props.label}</span>
+    </span>
+  );
 }
 
 function formatRowLabel(ev: EventRow) {
@@ -268,8 +327,8 @@ function hashToIndex(s: string, mod: number) {
 }
 
 function aircraftTypeMarkColor(ev: EventRow, palette?: Map<string, string>) {
-  const opId = ev.aircraft.operatorId ?? ev.aircraft.operator?.id ?? "";
-  const typeId = ev.aircraft.typeId ?? ev.aircraft.type?.id ?? "";
+  const opId = ev.aircraft?.operatorId ?? ev.aircraft?.operator?.id ?? ev.virtualAircraft?.operatorId ?? "";
+  const typeId = ev.aircraft?.typeId ?? ev.aircraft?.type?.id ?? ev.virtualAircraft?.aircraftTypeId ?? "";
   const key = `${opId}|${typeId}`;
   if (!opId && !typeId) return "rgba(15, 23, 42, 0.22)";
   const fromRef = palette?.get(key);
@@ -313,6 +372,113 @@ function packOverlapsIntoLanes(events: EventRow[]): PlacedEvent[][] {
   return lanes.map((l) => l.items);
 }
 
+type ZoomLevel = "hour" | "day" | "week" | "month" | "quarter" | "year";
+
+const ZOOM_ORDER: ZoomLevel[] = ["hour", "day", "week", "month", "quarter", "year"];
+
+const ZOOM_LABEL: Record<ZoomLevel, string> = {
+  hour: "час",
+  day: "сутки",
+  week: "неделя",
+  month: "месяц",
+  quarter: "квартал",
+  year: "год"
+};
+
+// ширина "одного дня" в пикселях на разных уровнях зума.
+// умный зум: чем крупнее группировка, тем меньше px приходится на 1 день,
+// и тем короче общая горизонтальная полоса при том же диапазоне дат.
+const ZOOM_PX_PER_DAY: Record<ZoomLevel, number> = {
+  hour: 360,     // 15 px / час
+  day: 24,
+  week: 10,      // ~70 px / неделя
+  month: 3,      // ~90 px / месяц
+  quarter: 1.1,  // ~100 px / квартал
+  year: 0.4      // ~146 px / год
+};
+
+type GanttTick = { at: dayjs.Dayjs; minorLabel: string; majorLabel: string | null };
+
+function labelsFor(d: dayjs.Dayjs, zoom: ZoomLevel): { minorLabel: string; majorKey: string; majorLabel: string } {
+  switch (zoom) {
+    case "hour":
+      return { minorLabel: d.format("HH"), majorKey: d.format("YYYY-MM-DD"), majorLabel: d.format("DD MMM YYYY") };
+    case "day":
+      return { minorLabel: d.format("D"), majorKey: d.format("YYYY-MM"), majorLabel: d.format("MMM YYYY") };
+    case "week": {
+      const end = d.add(6, "day");
+      return {
+        minorLabel: `${d.format("D")}–${end.format("D MMM")}`,
+        majorKey: d.format("YYYY-MM"),
+        majorLabel: d.format("MMM YYYY")
+      };
+    }
+    case "month":
+      return { minorLabel: d.format("MMM"), majorKey: d.format("YYYY"), majorLabel: d.format("YYYY") };
+    case "quarter": {
+      const q = Math.floor(d.month() / 3) + 1;
+      return { minorLabel: `Q${q}`, majorKey: d.format("YYYY"), majorLabel: d.format("YYYY") };
+    }
+    case "year":
+      return { minorLabel: d.format("YYYY"), majorKey: "", majorLabel: "" };
+  }
+}
+
+function buildGanttTicks(from: dayjs.Dayjs, to: dayjs.Dayjs, zoom: ZoomLevel): GanttTick[] {
+  const startOfUnit = (d: dayjs.Dayjs): dayjs.Dayjs => {
+    switch (zoom) {
+      case "hour":
+        return d.startOf("hour");
+      case "day":
+        return d.startOf("day");
+      case "week":
+        return d.startOf("week");
+      case "month":
+        return d.startOf("month");
+      case "quarter":
+        return d.startOf("month").subtract(d.month() % 3, "month");
+      case "year":
+        return d.startOf("year");
+    }
+  };
+
+  const out: GanttTick[] = [];
+  let cur = startOfUnit(from);
+  let lastMajorKey = "";
+  const HARD_LIMIT = 5000;
+
+  for (let i = 0; i < HARD_LIMIT && cur.valueOf() < to.valueOf(); i++) {
+    const { minorLabel, majorKey, majorLabel } = labelsFor(cur, zoom);
+    out.push({
+      at: cur,
+      minorLabel,
+      majorLabel: majorKey !== "" && majorKey !== lastMajorKey ? majorLabel : null
+    });
+    lastMajorKey = majorKey;
+    switch (zoom) {
+      case "hour":
+        cur = cur.add(1, "hour");
+        break;
+      case "day":
+        cur = cur.add(1, "day");
+        break;
+      case "week":
+        cur = cur.add(1, "week");
+        break;
+      case "month":
+        cur = cur.add(1, "month");
+        break;
+      case "quarter":
+        cur = cur.add(3, "month");
+        break;
+      case "year":
+        cur = cur.add(1, "year");
+        break;
+    }
+  }
+  return out;
+}
+
 function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: number }) {
   const today = dayjs.utc().startOf("day");
   if (today.valueOf() < props.from.valueOf() || today.valueOf() >= props.to.valueOf()) return null;
@@ -335,24 +501,36 @@ function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: num
   );
 }
 
-function Drawer(props: { open: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
+function Drawer(props: {
+  open: boolean;
+  title: string;
+  subtitle?: React.ReactNode;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
   if (!props.open) return null;
   return (
-    <div
-      className="drawerBackdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
-      }}
-    >
-      <div className="drawer">
-        <div className="row" style={{ marginBottom: 12 }}>
-          <strong>{props.title}</strong>
-          <span style={{ flex: "1 1 auto" }} />
-          <button className="btn" onClick={props.onClose}>
-            Закрыть
+    <div className="drawerBackdrop">
+      <div className="drawer drawerV2" role="dialog" aria-modal="true" aria-label={props.title}>
+        <header className="drawerHeader">
+          <div className="drawerHeaderText">
+            <div className="drawerTitle">{props.title}</div>
+            {props.subtitle ? <div className="drawerSubtitle">{props.subtitle}</div> : null}
+          </div>
+          <button
+            className="drawerCloseBtn"
+            onClick={props.onClose}
+            aria-label="Закрыть"
+            title="Закрыть"
+            type="button"
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <path d="M5 5l10 10M15 5L5 15" />
+            </svg>
+            <span className="drawerCloseBtnLabel">Закрыть</span>
           </button>
-        </div>
-        {props.children}
+        </header>
+        <div className="drawerBody">{props.children}</div>
       </div>
     </div>
   );
@@ -394,9 +572,23 @@ export function GanttView() {
   }, [from, to]);
 
   const [groupMode, setGroupMode] = useState<GroupMode>(() => (savedUi?.groupMode === "HANGAR_STAND" ? "HANGAR_STAND" : "AIRCRAFT"));
+  const [zoom, setZoom] = useState<ZoomLevel>(() => {
+    const z = savedUi?.zoom;
+    return (ZOOM_ORDER as string[]).includes(String(z)) ? (z as ZoomLevel) : "day";
+  });
 
-  const [filterAircraftTypeId, setFilterAircraftTypeId] = useState<string>(() => String(savedUi?.filterAircraftTypeId ?? ""));
-  const [filterAircraftId, setFilterAircraftId] = useState<string>(() => String(savedUi?.filterAircraftId ?? ""));
+  const [filterAircraftTypeIds, setFilterAircraftTypeIds] = useState<string[]>(() => {
+    const arr = savedUi?.filterAircraftTypeIds;
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    const one = savedUi?.filterAircraftTypeId;
+    return one ? [String(one)] : [];
+  });
+  const [filterAircraftIds, setFilterAircraftIds] = useState<string[]>(() => {
+    const arr = savedUi?.filterAircraftIds;
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    const one = savedUi?.filterAircraftId;
+    return one ? [String(one)] : [];
+  });
 
   const aircraftTypesQ = useQuery({
     queryKey: ["ref", "aircraft-types"],
@@ -404,14 +596,12 @@ export function GanttView() {
   });
 
   const q = useQuery({
-    queryKey: ["events", from.toISOString(), to.toISOString(), filterAircraftTypeId, filterAircraftId],
+    queryKey: ["events", from.toISOString(), to.toISOString()],
     queryFn: () =>
       apiGet<EventRow[]>(
-        `/api/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}${
-          filterAircraftTypeId ? `&aircraftTypeId=${encodeURIComponent(filterAircraftTypeId)}` : ""
-        }${filterAircraftId ? `&aircraftId=${encodeURIComponent(filterAircraftId)}` : ""}`
+        `/api/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`
       ),
-    // чтобы полосы не "пропадали" на время refetch при больших диапазонах
+    // фильтры типа ВС / борта / ангара применяются на клиенте, т.к. поддерживается мультиселект
     placeholderData: (prev) => prev ?? []
   });
 
@@ -435,6 +625,33 @@ export function GanttView() {
     return m;
   }, [aircraftPaletteQ.data]);
 
+  // Реальные записи палитры «оператор × тип ВС» для легенды:
+  // берём цвета из aircraftPaletteMap, подписи (оператор + тип) собираем из
+  // справочников aircraftQ / aircraftTypesQ
+  const legendPaletteEntries = useMemo(() => {
+    const opNameById = new Map<string, string>();
+    for (const a of aircraftQ.data ?? []) {
+      if (a.operator?.id && !opNameById.has(a.operator.id)) {
+        opNameById.set(a.operator.id, a.operator.name);
+      }
+    }
+    const typeById = new Map<string, AircraftTypeRef>();
+    for (const t of aircraftTypesQ.data ?? []) typeById.set(t.id, t);
+    const out: Array<{ key: string; color: string; operator: string; type: string }> = [];
+    for (const [key, color] of aircraftPaletteMap) {
+      const [opId = "", typeId = ""] = key.split("|");
+      const t = typeById.get(typeId);
+      out.push({
+        key,
+        color,
+        operator: opNameById.get(opId) || "—",
+        type: t ? (t.icaoType ? `${t.icaoType} • ${t.name}` : t.name) : "—"
+      });
+    }
+    out.sort((a, b) => `${a.operator} ${a.type}`.localeCompare(`${b.operator} ${b.type}`, "ru"));
+    return out;
+  }, [aircraftPaletteMap, aircraftQ.data, aircraftTypesQ.data]);
+
   const eventTypesQ = useQuery({
     queryKey: ["ref", "event-types"],
     queryFn: () => apiGet<EventType[]>("/api/ref/event-types")
@@ -447,16 +664,22 @@ export function GanttView() {
 
   // В режиме HANGAR_STAND: либо все ангары, либо один выбранный.
   // Важно: строки не строим заранее — только по событиям в диапазоне (без "пустых" строк).
-  const [selectedHangarId, setSelectedHangarId] = useState<string>(() => String(savedUi?.selectedHangarId ?? "ALL"));
+  const [selectedHangarIds, setSelectedHangarIds] = useState<string[]>(() => {
+    const arr = savedUi?.selectedHangarIds;
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    const legacy = savedUi?.selectedHangarId;
+    if (legacy && legacy !== "ALL") return [String(legacy)];
+    return [];
+  });
   const [dndEnabled, setDndEnabled] = useState<boolean>(() => Boolean(savedUi?.dndEnabled ?? false));
 
   const resetFilters = () => {
     const rf = dayjs().add(-20, "day").format("YYYY-MM-DD");
     const rt = dayjs().add(30, "day").format("YYYY-MM-DD");
 
-    setFilterAircraftTypeId("");
-    setFilterAircraftId("");
-    setSelectedHangarId("ALL");
+    setFilterAircraftTypeIds([]);
+    setFilterAircraftIds([]);
+    setSelectedHangarIds([]);
 
     setRangeFromInput(rf);
     setRangeToInput(rt);
@@ -468,11 +691,14 @@ export function GanttView() {
   const dndActive = dndEnabled && canDnd && groupMode === "HANGAR_STAND";
 
   const dndStandsQ = useQuery({
-    queryKey: ["ref", "dnd-stands", selectedHangarId],
+    queryKey: ["ref", "dnd-stands", selectedHangarIds.slice().sort().join(",")],
     enabled: dndActive,
     queryFn: async () => {
+      // если выбран ровно один ангар — тянем стоянки по нему; иначе всё, а фильтрацию делаем клиентом
       const layouts = await apiGet<Layout[]>(
-        selectedHangarId === "ALL" ? "/api/ref/layouts" : `/api/ref/layouts?hangarId=${encodeURIComponent(selectedHangarId)}`
+        selectedHangarIds.length === 1
+          ? `/api/ref/layouts?hangarId=${encodeURIComponent(selectedHangarIds[0]!)}`
+          : "/api/ref/layouts"
       );
       const standsPerLayout = await Promise.all(
         layouts.map((l) => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(l.id)}`))
@@ -511,10 +737,11 @@ export function GanttView() {
       rangeFromInput,
       rangeToInput,
       groupMode,
-      selectedHangarId,
-      filterAircraftTypeId,
-      filterAircraftId,
-      dndEnabled
+      selectedHangarIds,
+      filterAircraftTypeIds,
+      filterAircraftIds,
+      dndEnabled,
+      zoom
     });
   }, [
     rangeFromApplied,
@@ -522,15 +749,17 @@ export function GanttView() {
     rangeFromInput,
     rangeToInput,
     groupMode,
-    selectedHangarId,
-    filterAircraftTypeId,
-    filterAircraftId,
-    dndEnabled
+    selectedHangarIds,
+    filterAircraftTypeIds,
+    filterAircraftIds,
+    dndEnabled,
+    zoom
   ]);
 
   const events = q.data ?? [];
-  const dayWidth = 24; // px per day
-  const canvasWidth = days * dayWidth;
+  const dayWidth = ZOOM_PX_PER_DAY[zoom];
+  const canvasWidth = Math.max(1, Math.round(days * dayWidth));
+  const ticks = useMemo(() => buildGanttTicks(from, to, zoom), [from, to, zoom]);
 
   useEffect(() => {
     // при изменении диапазона/ширины синхронизируем заголовок с текущим scrollLeft тела
@@ -551,6 +780,20 @@ export function GanttView() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState<EditorDraft | null>(null);
   const [original, setOriginal] = useState<EditorDraft | null>(null);
+  // режим копирования: когда включён, клик по событию открывает редактор с предзаполненной
+  // копией, а сохранение создаёт НОВОЕ событие (draft.id остаётся пустым)
+  const [copySelectMode, setCopySelectMode] = useState(false);
+  const [copyFromTitle, setCopyFromTitle] = useState<string | null>(null);
+
+  // ESC — отмена режима выбора копирования
+  useEffect(() => {
+    if (!copySelectMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCopySelectMode(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [copySelectMode]);
 
   const selectedAircraft = useMemo(() => {
     const id = draft?.aircraftId ?? "";
@@ -582,6 +825,7 @@ export function GanttView() {
     setDraft(d);
     setOriginal(d);
     setChangeReason("");
+    setCopyFromTitle(null);
     setEditorOpen(true);
   };
 
@@ -593,7 +837,7 @@ export function GanttView() {
       title: ev.title,
       level: ev.level,
       status: (ev.status as any) ?? "PLANNED",
-      aircraftId: (ev.aircraft as any)?.id ?? "",
+      aircraftId: (ev.aircraft as any)?.id ?? (ev as any).aircraftId ?? "",
       eventTypeId: (ev.eventType as any)?.id ?? (ev as any)?.eventTypeId ?? "",
       startAtLocal,
       endAtLocal,
@@ -605,7 +849,42 @@ export function GanttView() {
     setDraft(d);
     setOriginal(d);
     setChangeReason("");
+    setCopyFromTitle(null);
     setEditorOpen(true);
+  };
+
+  // Открыть редактор в режиме копирования выбранного события:
+  // все данные переносятся, id НЕ копируется (draft.id = undefined),
+  // статус сбрасывается в PLANNED, к названию добавляется « (копия)»
+  const openEditorForCopy = (ev: EventRow) => {
+    const startAtLocal = dayjs(ev.startAt).format("YYYY-MM-DDTHH:mm");
+    const endAtLocal = dayjs(ev.endAt).format("YYYY-MM-DDTHH:mm");
+    const d: EditorDraft = {
+      title: `${ev.title} (копия)`,
+      level: ev.level,
+      status: "PLANNED",
+      aircraftId: (ev.aircraft as any)?.id ?? (ev as any).aircraftId ?? "",
+      eventTypeId: (ev.eventType as any)?.id ?? (ev as any)?.eventTypeId ?? "",
+      startAtLocal,
+      endAtLocal,
+      notes: (ev as any)?.notes ?? "",
+      hangarId: (ev.hangar as any)?.id ?? "",
+      layoutId: (ev.layout as any)?.id ?? "",
+      standId: (ev.reservation?.stand as any)?.id ?? ""
+    };
+    setDraft(d);
+    setOriginal(d);
+    setChangeReason("");
+    setCopyFromTitle(ev.title);
+    setCopySelectMode(false);
+    setEditorOpen(true);
+  };
+
+  // Унифицированный выбор события: в обычном режиме — редактирование,
+  // в режиме копирования — открытие мастера копии.
+  const pickEvent = (ev: EventRow) => {
+    if (copySelectMode) openEditorForCopy(ev);
+    else openEditorForExisting(ev);
   };
 
   const layoutsForEditorQ = useQuery({
@@ -704,12 +983,21 @@ export function GanttView() {
       const updated = await apiPatch<EventRow>(`/api/events/${draft.id}`, payload);
       return updated;
     },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString(), filterAircraftTypeId, filterAircraftId] });
-      setOriginal(draft);
+    onSuccess: (data) => {
+      // сначала мгновенно закрываем подтверждение и актуализируем состояние,
+      // чтобы у пользователя была быстрая обратная связь.
+      const createdId = !draft?.id && (data as any)?.id ? String((data as any).id) : null;
+      const nextDraft = createdId && draft ? { ...draft, id: createdId } : draft;
+      if (createdId && nextDraft) setDraft(nextDraft);
+      if (nextDraft) setOriginal(nextDraft);
       setConfirmOpen(false);
       setPendingSave(null);
       setChangeReason("");
+      setCopyFromTitle(null);
+      // инвалидируем фоном — не блокируем UI ожиданием рефетча
+      void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
+      const histId = nextDraft?.id;
+      if (histId) void qc.invalidateQueries({ queryKey: ["event-history", histId] });
     }
   });
 
@@ -723,13 +1011,13 @@ export function GanttView() {
         changeReason: changeReason.trim()
       });
     },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString(), filterAircraftTypeId, filterAircraftId] });
-      await qc.invalidateQueries({ queryKey: ["event-history", draft?.id ?? ""] });
+    onSuccess: () => {
       setOriginal(draft);
       setConfirmOpen(false);
       setPendingSave(null);
       setChangeReason("");
+      void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
+      if (draft?.id) void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
     }
   });
 
@@ -738,11 +1026,11 @@ export function GanttView() {
       if (!draft?.id) throw new Error("Нет события");
       return await apiDelete(`/api/reservations/by-event/${draft.id}`);
     },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString(), filterAircraftTypeId, filterAircraftId] });
-      await qc.invalidateQueries({ queryKey: ["event-history", draft?.id ?? ""] });
+    onSuccess: () => {
       setDraft((d) => (d ? { ...d, standId: "" } : d));
       setOriginal((o) => (o ? { ...o, standId: "" } : o));
+      void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
+      if (draft?.id) void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
     }
   });
 
@@ -993,14 +1281,16 @@ export function GanttView() {
         changeReason: changeReason.trim()
       });
     },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString(), filterAircraftTypeId, filterAircraftId] });
-      await qc.invalidateQueries({ queryKey: ["event-tows", draft?.id ?? ""] });
-      await qc.invalidateQueries({ queryKey: ["event-history", draft?.id ?? ""] });
+    onSuccess: () => {
       setConfirmOpen(false);
       setPendingSave(null);
       setPendingTow(null);
       setChangeReason("");
+      void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
+      if (draft?.id) {
+        void qc.invalidateQueries({ queryKey: ["event-tows", draft.id] });
+        void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
+      }
     }
   });
 
@@ -1011,14 +1301,16 @@ export function GanttView() {
       const cr = encodeURIComponent(changeReason.trim());
       return await apiDelete(`/api/events/${draft.id}/tows/${pendingTow.towId}?changeReason=${cr}`);
     },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString(), filterAircraftTypeId, filterAircraftId] });
-      await qc.invalidateQueries({ queryKey: ["event-tows", draft?.id ?? ""] });
-      await qc.invalidateQueries({ queryKey: ["event-history", draft?.id ?? ""] });
+    onSuccess: () => {
       setConfirmOpen(false);
       setPendingSave(null);
       setPendingTow(null);
       setChangeReason("");
+      void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
+      if (draft?.id) {
+        void qc.invalidateQueries({ queryKey: ["event-tows", draft.id] });
+        void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
+      }
     }
   });
 
@@ -1033,12 +1325,7 @@ export function GanttView() {
         changeReason: changeReason.trim()
       });
     },
-    onSuccess: async (res: any) => {
-      await qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString(), filterAircraftTypeId, filterAircraftId] });
-      if (draft?.id) await qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
-      for (const id of res?.bumpedEventIds ?? []) {
-        await qc.invalidateQueries({ queryKey: ["event-history", String(id)] });
-      }
+    onSuccess: (res: any) => {
       setConfirmOpen(false);
       setPendingSave(null);
       setPendingDnd(null);
@@ -1049,6 +1336,11 @@ export function GanttView() {
       const bumped = (res?.bumpedEventIds ?? []).length;
       setDndNotice(bumped ? `Перенос выполнен. Вытеснено событий: ${bumped}.` : "Перенос выполнен.");
       setChangeReason("");
+      void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
+      if (draft?.id) void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
+      for (const id of res?.bumpedEventIds ?? []) {
+        void qc.invalidateQueries({ queryKey: ["event-history", String(id)] });
+      }
     }
   });
 
@@ -1072,13 +1364,28 @@ export function GanttView() {
     const getStandCode = (e: EventRow) => (e.reservation?.stand as any)?.code ?? "";
 
     const inSelected = (e: EventRow) => {
-      if (selectedHangarId === "ALL") return true;
+      if (selectedHangarIds.length === 0) return true;
       const hid = getHangarId(e);
       const isUnassigned = !hid && !e.reservation?.stand;
-      return hid === selectedHangarId || isUnassigned;
+      return selectedHangarIds.includes(hid) || isUnassigned;
     };
 
-    const visible = events.filter(inSelected);
+    const byTypeFilter = (e: EventRow) => {
+      if (filterAircraftTypeIds.length === 0) return true;
+      const tid =
+        (e.aircraft as any)?.typeId ??
+        (e.aircraft as any)?.type?.id ??
+        (e.virtualAircraft as any)?.aircraftTypeId ??
+        "";
+      return filterAircraftTypeIds.includes(String(tid));
+    };
+    const byAircraftFilter = (e: EventRow) => {
+      if (filterAircraftIds.length === 0) return true;
+      const aid = (e.aircraft as any)?.id ?? (e as any).aircraftId ?? "";
+      return filterAircraftIds.includes(String(aid));
+    };
+
+    const visible = events.filter((e) => inSelected(e) && byTypeFilter(e) && byAircraftFilter(e));
 
     const unassigned = visible.filter((e) => !getHangarId(e) && !e.reservation?.stand);
 
@@ -1178,7 +1485,7 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, selectedHangarId, events, dndActive, dndStandsQ.data, dndStandById]);
+  }, [groupMode, selectedHangarIds, filterAircraftTypeIds, filterAircraftIds, events, dndActive, dndStandsQ.data, dndStandById]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -1186,220 +1493,361 @@ export function GanttView() {
   }, [hangarStandRows]);
 
   const visibleEvents = useMemo(() => {
-    if (selectedHangarId === "ALL") return events;
     const getHangarId = (e: EventRow) => (e.hangar as any)?.id ?? (e.layout as any)?.hangarId ?? "";
-    // оставим "без ангара/места" даже при выборе ангара (как и в режиме Ангар/место)
     return events.filter((e) => {
       const hid = getHangarId(e);
       const isUnassigned = !hid;
-      return hid === selectedHangarId || isUnassigned;
+      const okHangar =
+        selectedHangarIds.length === 0 || selectedHangarIds.includes(hid) || isUnassigned;
+      const tid =
+        (e.aircraft as any)?.typeId ??
+        (e.aircraft as any)?.type?.id ??
+        (e.virtualAircraft as any)?.aircraftTypeId ??
+        "";
+      const okType = filterAircraftTypeIds.length === 0 || filterAircraftTypeIds.includes(String(tid));
+      const aid = (e.aircraft as any)?.id ?? (e as any).aircraftId ?? "";
+      const okAcft = filterAircraftIds.length === 0 || filterAircraftIds.includes(String(aid));
+      return okHangar && okType && okAcft;
     });
-  }, [events, selectedHangarId]);
+  }, [events, selectedHangarIds, filterAircraftTypeIds, filterAircraftIds]);
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <div className="card" style={{ display: "grid", gap: 10 }}>
-        <div className="row">
-          <strong>План (диаграмма Гантта)</strong>
-          <span className="muted">
-            Период: {dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – {dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}
-          </span>
-          <span style={{ flex: "1 1 auto" }} />
-          <button className="btn btnPrimary" onClick={openEditorForNew}>
-            Создать событие
-          </button>
+      <div className="card ganttPanel">
+        <div className="ganttPanelHeader">
+          <div className="ganttPanelTitle">
+            <strong>План (диаграмма Гантта)</strong>
+            <span className="muted ganttPanelPeriod">
+              {dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – {dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}
+              <span className="ganttPanelDot" aria-hidden="true">·</span>
+              {ZOOM_LABEL[zoom]}
+              <span className="ganttPanelDot" aria-hidden="true">·</span>
+              {groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}
+            </span>
+          </div>
+          <div className="ganttPanelActions">
+            <button className="btn" onClick={resetFilters} title="Очистить фильтры и сбросить период">
+              Сбросить
+            </button>
+            <button
+              type="button"
+              className={`btn${copySelectMode ? " btnCopyActive" : ""}`}
+              onClick={() => setCopySelectMode((v) => !v)}
+              title={
+                copySelectMode
+                  ? "Нажмите на событие в диаграмме. Esc — отмена."
+                  : "Выбрать существующее событие и создать его копию"
+              }
+              aria-pressed={copySelectMode}
+            >
+              <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: 6, verticalAlign: "-2px" }}>
+                <rect x="3" y="3" width="10" height="12" rx="2" />
+                <path d="M7 17h8a2 2 0 0 0 2-2V7" />
+              </svg>
+              {copySelectMode ? "Отменить копирование" : "Скопировать событие"}
+            </button>
+            <button className="btn btnPrimary" onClick={openEditorForNew}>
+              Создать событие
+            </button>
+          </div>
         </div>
 
-        <div className="row" style={{ alignItems: "flex-end" }}>
-          <label className="row">
-            <span className="muted">группировка</span>
-            <select value={groupMode} onChange={(e) => setGroupMode(e.target.value as GroupMode)}>
-              <option value="AIRCRAFT">Борт / событие</option>
-              <option value="HANGAR_STAND">Ангар / место</option>
-            </select>
-          </label>
-
-          <label className="row">
-            <span className="muted">ангар</span>
-            <select value={selectedHangarId} onChange={(e) => setSelectedHangarId(e.target.value)}>
-              <option value="ALL">все</option>
-              {(hangarsQ.data ?? []).map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="row" title={canDnd ? "Режим перетаскивания событий по стоянкам" : "Доступно только ADMIN/PLANNER"}>
-            <span className="muted">drag&drop</span>
-            <input
-              type="checkbox"
-              checked={dndEnabled}
-              onChange={(e) => {
-                const v = e.target.checked;
-                setDndEnabled(v);
-                // чтобы пользователю не казалось, что "ничего не произошло"
-                if (v && groupMode !== "HANGAR_STAND") setGroupMode("HANGAR_STAND");
-              }}
-              disabled={!canDnd}
-            />
-          </label>
-
-          <label className="row">
-            <span className="muted">тип ВС</span>
-            <select
-              value={filterAircraftTypeId}
-              onChange={(e) => {
-                setFilterAircraftTypeId(e.target.value);
-                setFilterAircraftId("");
-              }}
-              style={{ minWidth: 240 }}
-            >
-              <option value="">все</option>
-              {(aircraftTypesQ.data ?? []).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.icaoType ? `${t.icaoType} • ${t.name}` : t.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="row">
-            <span className="muted">борт</span>
-            <select value={filterAircraftId} onChange={(e) => setFilterAircraftId(e.target.value)} style={{ minWidth: 190 }}>
-              <option value="">все</option>
-              {(aircraftQ.data ?? [])
-                .filter((a: any) => (!filterAircraftTypeId ? true : String(a.typeId ?? "") === filterAircraftTypeId))
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.tailNumber}
+        <div className="ganttToolbar">
+          <div className="ganttToolbarGroup">
+            <span className="tgLabel">Вид</span>
+            <label className="tgField" title="Как группировать строки">
+              <span className="tgFieldLabel">Группировка</span>
+              <select value={groupMode} onChange={(e) => setGroupMode(e.target.value as GroupMode)}>
+                <option value="AIRCRAFT">Борт / событие</option>
+                <option value="HANGAR_STAND">Ангар / место</option>
+              </select>
+            </label>
+            <label className="tgField" title="Укрупнённый / детализированный зум шкалы">
+              <span className="tgFieldLabel">Зум</span>
+              <select value={zoom} onChange={(e) => setZoom(e.target.value as ZoomLevel)}>
+                {ZOOM_ORDER.map((z) => (
+                  <option key={z} value={z}>
+                    {ZOOM_LABEL[z]}
                   </option>
                 ))}
-            </select>
-          </label>
-
-          <label className="row">
-            <span className="muted">c</span>
-            <input
-              type="date"
-              value={rangeFromInput}
-              onChange={(e) => {
-                const v = e.target.value;
-                setRangeFromInput(v);
-                if (!isValidDateInput(v)) return;
-                if (dayjs(v).isAfter(dayjs(rangeToApplied))) {
-                  setRangeToInput(v);
-                  setRangeToApplied(v);
-                }
-                setRangeFromApplied(v);
-                setRangeError(null);
+              </select>
+            </label>
+            <button
+              type="button"
+              className={`tgLockBtn${dndEnabled ? " tgLockBtnActive" : ""}${!canDnd ? " tgLockBtnDisabled" : ""}`}
+              aria-pressed={dndEnabled}
+              aria-label={dndEnabled ? "Drag&Drop включён" : "Drag&Drop выключен"}
+              title={
+                !canDnd
+                  ? "Drag&Drop доступен только ADMIN / PLANNER"
+                  : dndEnabled
+                  ? "Drag&Drop включён — нажмите, чтобы заблокировать перетаскивание"
+                  : "Перетаскивание заблокировано — нажмите, чтобы включить Drag&Drop"
+              }
+              disabled={!canDnd}
+              onClick={() => {
+                if (!canDnd) return;
+                const v = !dndEnabled;
+                setDndEnabled(v);
+                if (v && groupMode !== "HANGAR_STAND") setGroupMode("HANGAR_STAND");
               }}
-              style={{ width: 180 }}
-            />
-          </label>
+            >
+              {dndEnabled ? (
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="4" y="10" width="12" height="8" rx="2" />
+                  <path d="M7 10V7a3 3 0 0 1 6 0" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="4" y="10" width="12" height="8" rx="2" />
+                  <path d="M7 10V7a3 3 0 0 1 6 0v3" />
+                </svg>
+              )}
+            </button>
+          </div>
 
-          <label className="row">
-            <span className="muted">по</span>
-            <input
-              type="date"
-              value={rangeToInput}
-              onChange={(e) => {
-                const v = e.target.value;
-                setRangeToInput(v);
-                if (!isValidDateInput(v)) return;
-                if (dayjs(v).isBefore(dayjs(rangeFromApplied))) {
+          <div className="ganttToolbarGroup">
+            <span className="tgLabel">Фильтры</span>
+            <label className="tgField">
+              <span className="tgFieldLabel">Ангар</span>
+              <MultiSelectDropdown
+                options={(hangarsQ.data ?? []).map((h) => ({ id: h.id, label: h.name }))}
+                value={selectedHangarIds}
+                onChange={setSelectedHangarIds}
+                placeholder="все"
+                width={200}
+                maxHeight={260}
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Тип ВС</span>
+              <MultiSelectDropdown
+                options={(aircraftTypesQ.data ?? []).map((t) => ({
+                  id: t.id,
+                  label: t.icaoType ? `${t.icaoType} • ${t.name}` : t.name
+                }))}
+                value={filterAircraftTypeIds}
+                onChange={(next) => {
+                  setFilterAircraftTypeIds(next);
+                  if (next.length > 0 && filterAircraftIds.length > 0) {
+                    const allowed = new Set(
+                      (aircraftQ.data ?? [])
+                        .filter((a: any) => next.includes(String(a.typeId ?? "")))
+                        .map((a) => String(a.id))
+                    );
+                    const pruned = filterAircraftIds.filter((id) => allowed.has(String(id)));
+                    if (pruned.length !== filterAircraftIds.length) setFilterAircraftIds(pruned);
+                  }
+                }}
+                placeholder="все"
+                width={240}
+                maxHeight={320}
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Борт</span>
+              <MultiSelectDropdown
+                options={(aircraftQ.data ?? [])
+                  .filter((a: any) =>
+                    filterAircraftTypeIds.length === 0
+                      ? true
+                      : filterAircraftTypeIds.includes(String(a.typeId ?? ""))
+                  )
+                  .map((a: any) => ({ id: a.id, label: a.tailNumber }))}
+                value={filterAircraftIds}
+                onChange={setFilterAircraftIds}
+                placeholder="все"
+                width={200}
+                maxHeight={320}
+              />
+            </label>
+          </div>
+
+          <div className="ganttToolbarGroup">
+            <span className="tgLabel">Период</span>
+            <label className="tgField">
+              <span className="tgFieldLabel">c</span>
+              <input
+                type="date"
+                value={rangeFromInput}
+                onChange={(e) => {
+                  const v = e.target.value;
                   setRangeFromInput(v);
+                  if (!isValidDateInput(v)) return;
+                  if (dayjs(v).isAfter(dayjs(rangeToApplied))) {
+                    setRangeToInput(v);
+                    setRangeToApplied(v);
+                  }
                   setRangeFromApplied(v);
-                }
-                setRangeToApplied(v);
-                setRangeError(null);
-              }}
-              style={{ width: 180 }}
-            />
-          </label>
-
-          <button className="btn" onClick={resetFilters} title="Очистить фильтры и сбросить период">
-            Сбросить фильтры
-          </button>
+                  setRangeError(null);
+                }}
+                style={{ width: 150 }}
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">по</span>
+              <input
+                type="date"
+                value={rangeToInput}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setRangeToInput(v);
+                  if (!isValidDateInput(v)) return;
+                  if (dayjs(v).isBefore(dayjs(rangeFromApplied))) {
+                    setRangeFromInput(v);
+                    setRangeFromApplied(v);
+                  }
+                  setRangeToApplied(v);
+                  setRangeError(null);
+                }}
+                style={{ width: 150 }}
+              />
+            </label>
+            <div className="tgPresets" role="group" aria-label="Быстрый выбор периода">
+              {[
+                { label: "7 дн", days: 7 },
+                { label: "30 дн", days: 30 },
+                { label: "3 мес", days: 90 },
+                { label: "Год", days: 365 }
+              ].map((p) => (
+                <button
+                  key={p.label}
+                  className="btn btnGhost"
+                  type="button"
+                  onClick={() => {
+                    const rf = dayjs().format("YYYY-MM-DD");
+                    const rt = dayjs().add(p.days, "day").format("YYYY-MM-DD");
+                    setRangeFromInput(rf);
+                    setRangeToInput(rt);
+                    setRangeFromApplied(rf);
+                    setRangeToApplied(rt);
+                    setRangeError(null);
+                  }}
+                  title={`${p.label} от сегодняшнего дня`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {dndEnabled && !dndActive ? (
-          <div className="muted" style={{ marginTop: 2 }}>
-            Drag&Drop активируется только в режиме группировки <strong>«Ангар / место»</strong>. Переключаю автоматически при включении.
-          </div>
-        ) : null}
-        {/* Убрали текстовую подсказку "перенос/вытеснение", чтобы не было прыжка UI во время DnD */}
-        {dndNotice ? (
-          <div className="muted" style={{ marginTop: 2 }}>
-            {dndNotice}
-          </div>
-        ) : null}
-
-        {rangeError ? (
-          <div className="error" style={{ marginTop: 2 }}>
-            {rangeError}
-          </div>
-        ) : null}
-        {q.isFetching ? (
-          <div className="muted" style={{ marginTop: 2 }}>
-            Загрузка…
-          </div>
-        ) : null}
-        {q.error ? (
-          <div className="error" style={{ marginTop: 2 }}>
-            {String(q.error.message || q.error)}
+        {copySelectMode || (dndEnabled && !dndActive) || dndNotice || rangeError || q.isFetching || q.error ? (
+          <div className="ganttNotices">
+            {copySelectMode ? (
+              <span className="gpChip gpChipCopy">
+                Режим копирования: выберите событие на диаграмме. <kbd>Esc</kbd> — отмена.
+              </span>
+            ) : null}
+            {q.isFetching ? <span className="gpChip gpChipInfo">Загрузка…</span> : null}
+            {dndEnabled && !dndActive ? (
+              <span className="gpChip">
+                Drag&amp;Drop активен только в режиме «Ангар / место» — будет включён автоматически.
+              </span>
+            ) : null}
+            {dndNotice ? <span className="gpChip">{dndNotice}</span> : null}
+            {rangeError ? <span className="gpChip gpChipError">{rangeError}</span> : null}
+            {q.error ? <span className="gpChip gpChipError">{String((q.error as any).message || q.error)}</span> : null}
           </div>
         ) : null}
 
-        <div className="row" style={{ gap: 14 }}>
-          <span className="muted">Легенда:</span>
-          <span className="row">
-            <span
-              className="legendBar"
-              style={{ background: "#f59e0b", border: "1px solid rgba(15, 23, 42, 0.22)" }}
-            />
-            цвет — тип ВС (оператор+тип)
-          </span>
-          <span className="row">
-            <span className="legendBar" style={{ background: "#f59e0b", border: "2px dashed rgba(15, 23, 42, 0.35)", opacity: 0.78 }} />
-            черновик/запланировано (рамка)
-          </span>
-          <span className="row">
-            <span className="legendBar" style={{ background: "#f59e0b", border: "1px solid rgba(15, 23, 42, 0.22)" }} />
-            подтверждено/в работе
-          </span>
-          <span className="row">
-            <span className="legendBar" style={{ background: "#f59e0b", border: "2px solid rgba(34, 197, 94, 0.95)" }} />
-            завершено
-          </span>
-          <span className="row">
-            <span className="legendBar" style={{ background: "rgba(148, 163, 184, 0.85)", border: "1px solid rgba(100, 116, 139, 0.9)" }} />
-            отменено
-          </span>
-          <span className="row">
-            <span className="legendBar" style={{ background: "rgba(220, 38, 38, 0.35)", borderRadius: 2, width: 10 }} />
-            сегодня
-          </span>
-          <span className="row">
-            <span className="legendBar" style={{ background: "rgba(239, 68, 68, 0.95)", border: "2px solid rgba(255,255,255,0.9)" }} />
-            буксировка (разрыв)
-          </span>
-          <span className="row">
-            <span
-              className="legendBar"
-              style={{
-                backgroundColor: "rgba(220, 38, 38, 0.30)",
-                backgroundImage:
-                  "repeating-linear-gradient(135deg, rgba(220,38,38,0.55) 0px, rgba(220,38,38,0.55) 6px, rgba(220,38,38,0) 6px, rgba(220,38,38,0) 12px)"
-              }}
-            />
-            нахлёст по месту/ангару
-          </span>
-        </div>
+        <details className="ganttLegendDetails">
+          <summary>Легенда</summary>
+          <div className="ganttLegendBody">
+            <div className="legendSection">
+              <div className="legendSectionTitle">Статусы событий</div>
+              <div className="legendSectionGrid">
+                <LegendStatus status="PLANNED" baseColor="#94a3b8" label="Черновик / Запланировано" />
+                <LegendStatus status="CONFIRMED" baseColor="#94a3b8" label="Подтверждено / В работе" />
+                <LegendStatus status="DONE" baseColor="#94a3b8" label="Завершено" />
+                <LegendStatus status="CANCELLED" baseColor="#94a3b8" label="Отменено" />
+              </div>
+              <div className="legendHint muted">
+                Заливка выше — нейтральный серый для наглядности. Реальный цвет бара определяется правилом «оператор × тип ВС» (см. ниже).
+              </div>
+            </div>
+
+            <div className="legendSection">
+              <div className="legendSectionTitle">Индикаторы</div>
+              <div className="legendSectionGrid">
+                <span className="ganttLegendItem">
+                  <span className="legendOverlayBox" aria-hidden="true">
+                    <span style={{ background: "#94a3b8", border: "1px solid rgba(15, 23, 42, 0.22)" }} />
+                    <span
+                      style={{
+                        backgroundColor: "rgba(220, 38, 38, 0.30)",
+                        backgroundImage:
+                          "repeating-linear-gradient(135deg, rgba(220,38,38,0.55) 0px, rgba(220,38,38,0.55) 6px, rgba(220,38,38,0) 6px, rgba(220,38,38,0) 12px)"
+                      }}
+                    />
+                  </span>
+                  Нахлёст по месту / ангару
+                </span>
+                <span className="ganttLegendItem">
+                  <span
+                    className="legendBar"
+                    style={{
+                      background: "rgba(239, 68, 68, 0.95)",
+                      borderLeft: "2px solid rgba(255,255,255,0.9)",
+                      borderRight: "2px solid rgba(255,255,255,0.9)",
+                      borderTop: "none",
+                      borderBottom: "none"
+                    }}
+                  />
+                  Буксировка (разрыв внутри события)
+                </span>
+                <span className="ganttLegendItem">
+                  <span
+                    className="legendBar"
+                    style={{ background: "rgba(220, 38, 38, 0.35)", width: 4, borderRadius: 2 }}
+                  />
+                  Линия «сегодня»
+                </span>
+              </div>
+            </div>
+
+            <div className="legendSection">
+              <div className="legendSectionTitle">
+                Цвет бара — оператор × тип ВС
+                <span className="muted legendSectionMeta">
+                  {legendPaletteEntries.length > 0
+                    ? `${legendPaletteEntries.length} записей в палитре`
+                    : "палитра не настроена — используется запасная"}
+                </span>
+              </div>
+              {legendPaletteEntries.length > 0 ? (
+                <div className="legendPalette">
+                  {legendPaletteEntries.slice(0, 24).map((p) => (
+                    <span className="legendPaletteItem" key={p.key} title={`${p.operator} × ${p.type}`}>
+                      <span className="legendPaletteSwatch" style={{ background: p.color }} />
+                      <span className="legendPaletteLabel">
+                        <span className="legendPaletteOperator">{p.operator}</span>
+                        <span className="legendPaletteType">{p.type}</span>
+                      </span>
+                    </span>
+                  ))}
+                  {legendPaletteEntries.length > 24 ? (
+                    <span className="legendPaletteMore muted">и ещё {legendPaletteEntries.length - 24}…</span>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="legendPalette">
+                  {AIRCRAFT_MARK_PALETTE.map((c, i) => (
+                    <span className="legendPaletteItem" key={i} title={c}>
+                      <span className="legendPaletteSwatch" style={{ background: c }} />
+                    </span>
+                  ))}
+                  <span className="legendHint muted">
+                    Настроить соответствие оператора и типа ВС можно в Справочниках → Палитра ВС.
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </details>
       </div>
 
-      <div className="ganttGrid">
+      <div className={`ganttGrid${copySelectMode ? " ganttPickMode" : ""}`}>
         <div className="ganttHeaderRow">
           <div className="ganttLabel">
             <strong>{groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}</strong>
@@ -1407,26 +1855,51 @@ export function GanttView() {
           <div className="ganttHeaderRightViewport" ref={headerViewportRef}>
             <div className="ganttCanvas" style={{ width: canvasWidth, height: 44 }}>
               <TodayLine from={from} to={to} canvasWidth={canvasWidth} />
-              <div style={{ position: "absolute", inset: 0, display: "flex" }}>
-                {Array.from({ length: days }).map((_, i) => {
-                  const d = from.add(i, "day");
-                  const isMonthStart = d.date() === 1;
-                  const showYear = i === 0 || isMonthStart;
+              <div style={{ position: "absolute", inset: 0 }}>
+                {ticks.map((t, i) => {
+                  const nextAt = ticks[i + 1]?.at ?? to;
+                  const leftRaw = t.at.diff(from, "day", true) * dayWidth;
+                  const rightRaw = nextAt.diff(from, "day", true) * dayWidth;
+                  const left = Math.max(0, leftRaw);
+                  const width = Math.max(1, rightRaw - left);
+                  const isMajor = t.majorLabel != null;
                   return (
                     <div
                       key={i}
                       style={{
-                        width: dayWidth,
+                        position: "absolute",
+                        left,
+                        width,
+                        top: 0,
+                        bottom: 0,
                         borderRight: "1px solid rgba(148,163,184,0.18)",
-                        background: isMonthStart ? "rgba(37,99,235,0.06)" : "transparent",
-                        padding: "2px 4px"
+                        background: isMajor ? "rgba(37,99,235,0.06)" : "transparent",
+                        padding: "2px 4px",
+                        overflow: "hidden",
+                        boxSizing: "border-box"
                       }}
-                      title={d.format("DD.MM.YYYY")}
+                      title={t.majorLabel ? `${t.majorLabel} • ${t.minorLabel}` : t.minorLabel}
                     >
-                      <div className="ganttDayCell">
-                        <div className="ganttDayYear">{showYear ? d.format("YYYY") : ""}</div>
-                        <div className="ganttDayMonth">{isMonthStart ? d.format("MMM") : ""}</div>
-                        <div className="ganttDayNum">{d.format("D")}</div>
+                      <div
+                        style={{
+                          fontSize: 10,
+                          lineHeight: "12px",
+                          color: "#334155",
+                          whiteSpace: "nowrap",
+                          visibility: isMajor ? "visible" : "hidden"
+                        }}
+                      >
+                        {t.majorLabel ?? "·"}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          lineHeight: "14px",
+                          color: "#64748b",
+                          whiteSpace: "nowrap"
+                        }}
+                      >
+                        {t.minorLabel}
                       </div>
                     </div>
                   );
@@ -1442,7 +1915,7 @@ export function GanttView() {
               ? visibleEvents.map((ev) => (
                   <div className="ganttLabel" key={ev.id}>
                     <div>
-                      <strong>{ev.aircraft.tailNumber}</strong> <span className="muted">({ev.level})</span>
+                      <strong>{eventAircraftLabel(ev)}</strong> <span className="muted">({ev.level})</span>
                     </div>
                     <div className="muted" style={{ fontSize: 12 }}>
                       {formatRowLabel(ev) || ev.title}
@@ -1479,15 +1952,18 @@ export function GanttView() {
                           left: x,
                           width: w,
                           cursor: "pointer",
-                          ...visual
+                          ...visual,
+                          ...barPaddingStyle(w)
                         }}
-                        onClick={() => openEditorForExisting(ev)}
+                        onClick={() => pickEvent(ev)}
                         title={`${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format(
                           "DD.MM.YYYY HH:mm"
-                        )}\nНажмите, чтобы редактировать`}
+                        )}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
                       >
                         {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
-                        <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>{ev.title}</span>
+                        {canShowBarTitle(w) ? (
+                          <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>{ev.title}</span>
+                        ) : null}
                       </div>
                         </div>
                       );
@@ -1581,6 +2057,7 @@ export function GanttView() {
                                 width: w,
                                 cursor: dndActive ? "grab" : "pointer",
                                 ...visual,
+                                ...barPaddingStyle(w),
                                 outline:
                                   dndActive && dndHoverBarIds.includes(ev.id) && dndHoverIntent === "bump"
                                     ? "2px solid rgba(239, 68, 68, 0.95)"
@@ -1626,11 +2103,11 @@ export function GanttView() {
                               onClick={() => {
                                 // В режиме DnD клик не должен открывать карточку
                                 if (dndActive) return;
-                                openEditorForExisting(ev);
+                                pickEvent(ev);
                               }}
-                              title={`${ev.aircraft.tailNumber} • ${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(
+                              title={`${eventAircraftLabel(ev)} • ${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(
                                 ev.endAt
-                              ).format("DD.MM.YYYY HH:mm")}\nНажмите, чтобы редактировать`}
+                              ).format("DD.MM.YYYY HH:mm")}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
                             >
                               {/* Ручки ресайза (чтобы "по краям" работало стабильно) */}
                               {dndActive ? (
@@ -1717,9 +2194,11 @@ export function GanttView() {
                               ) : null}
                               {overlapOverlay}
                               {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
-                              <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
-                                {ev.aircraft.tailNumber} • {ev.title}
-                              </span>
+                              {canShowBarTitle(w) ? (
+                                <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
+                                  {eventAircraftLabel(ev)} • {ev.title}
+                                </span>
+                              ) : null}
                             </div>
                           );
                         })}
@@ -1744,288 +2223,439 @@ export function GanttView() {
 
       <Drawer
         open={editorOpen}
-        title={draft?.id ? "Редактирование события" : "Новое событие"}
-        onClose={() => setEditorOpen(false)}
+        title={draft?.id ? "Редактирование события" : copyFromTitle ? "Копия события" : "Новое событие"}
+        onClose={() => {
+          setEditorOpen(false);
+          setCopyFromTitle(null);
+        }}
       >
         {!draft ? (
           <div className="muted">Нет данных формы.</div>
         ) : (
-          <div style={{ display: "grid", gap: 10 }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span className="muted">Название</span>
-              <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
-            </label>
-
-            <div className="row" style={{ alignItems: "flex-end" }}>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span className="muted">Уровень</span>
-                <select value={draft.level} onChange={(e) => setDraft({ ...draft, level: e.target.value as any })}>
-                  <option value="OPERATIONAL">Оперативный</option>
-                  <option value="STRATEGIC">Стратегический</option>
-                </select>
-              </label>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span className="muted">Статус</span>
-                <select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}>
-                  <option value="DRAFT">Черновик</option>
-                  <option value="PLANNED">Запланировано</option>
-                  <option value="CONFIRMED">Подтверждено</option>
-                  <option value="IN_PROGRESS">В работе</option>
-                  <option value="DONE">Завершено</option>
-                  <option value="CANCELLED">Отменено</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="row" style={{ alignItems: "flex-end" }}>
-              <label style={{ display: "grid", gap: 6, flex: "1 1 auto" }}>
-                <span className="muted">Борт</span>
-                <select value={draft.aircraftId} onChange={(e) => setDraft({ ...draft, aircraftId: e.target.value })}>
-                  <option value="">— выберите —</option>
-                  {(aircraftQ.data ?? []).map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.tailNumber}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: "grid", gap: 6, flex: "1 1 auto" }}>
-                <span className="muted">Тип события</span>
-                <select value={draft.eventTypeId} onChange={(e) => setDraft({ ...draft, eventTypeId: e.target.value })}>
-                  <option value="">— выберите —</option>
-                  {(eventTypesQ.data ?? []).map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            {draft.aircraftId ? (
-              <div className="row" style={{ alignItems: "flex-end" }}>
-                <label style={{ display: "grid", gap: 6, flex: "1 1 auto" }}>
-                  <span className="muted">Оператор</span>
-                  <input value={selectedAircraft?.operator?.name ?? "—"} readOnly />
-                </label>
-                <label style={{ display: "grid", gap: 6, flex: "1 1 auto" }}>
-                  <span className="muted">Тип ВС</span>
-                  <input
-                    value={
-                      selectedAircraft?.type
-                        ? `${selectedAircraft.type.icaoType ? `${selectedAircraft.type.icaoType} • ` : ""}${selectedAircraft.type.name}`
-                        : "—"
-                    }
-                    readOnly
-                  />
-                </label>
+          <div className="evEditor">
+            {copyFromTitle ? (
+              <div className="copyNotice" role="alert">
+                <span className="copyNoticeDot" aria-hidden="true" />
+                <div>
+                  <strong>Режим копирования.</strong> Сохранение создаст <strong>новое событие</strong> на
+                  основе «{copyFromTitle}». При необходимости измените дату, статус и параметры.
+                </div>
               </div>
             ) : null}
 
-            <div className="row" style={{ alignItems: "flex-end" }}>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span className="muted">Начало (дата+время)</span>
-                <input
-                  type="datetime-local"
-                  value={draft.startAtLocal}
-                  onChange={(e) => setDraft({ ...draft, startAtLocal: e.target.value })}
-                  style={{ width: 220 }}
-                />
-              </label>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span className="muted">Окончание (дата+время)</span>
-                <input
-                  type="datetime-local"
-                  value={draft.endAtLocal}
-                  onChange={(e) => setDraft({ ...draft, endAtLocal: e.target.value })}
-                  style={{ width: 220 }}
-                />
-              </label>
-            </div>
-
-            <div style={{ borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 10 }}>
-              <div className="row" style={{ marginBottom: 8 }}>
-                <strong>Ангар / место</strong>
-                <span className="muted">Резервирование места делается отдельно (после сохранения события).</span>
+            <section className="evCard">
+              <header className="evCardHeader">
+                <div className="evCardTitle">Основная информация</div>
+                <div className="evCardHint">Название, уровень планирования, статус и связь с бортом.</div>
+              </header>
+              <div className="evCardBody">
+                <div className="evForm">
+                  <label className="evField evFieldWide">
+                    <span className="evFieldLabel">Название</span>
+                    <input
+                      className="evInput"
+                      value={draft.title}
+                      onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                      placeholder="Например: Техобслуживание А320"
+                    />
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">Уровень</span>
+                    <select
+                      className="evInput"
+                      value={draft.level}
+                      onChange={(e) => setDraft({ ...draft, level: e.target.value as any })}
+                    >
+                      <option value="OPERATIONAL">Оперативный</option>
+                      <option value="STRATEGIC">Стратегический</option>
+                    </select>
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">Статус</span>
+                    <select
+                      className="evInput"
+                      value={draft.status}
+                      onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
+                    >
+                      <option value="DRAFT">Черновик</option>
+                      <option value="PLANNED">Запланировано</option>
+                      <option value="CONFIRMED">Подтверждено</option>
+                      <option value="IN_PROGRESS">В работе</option>
+                      <option value="DONE">Завершено</option>
+                      <option value="CANCELLED">Отменено</option>
+                    </select>
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">Борт</span>
+                    <select
+                      className="evInput"
+                      value={draft.aircraftId}
+                      onChange={(e) => setDraft({ ...draft, aircraftId: e.target.value })}
+                    >
+                      <option value="">— выберите —</option>
+                      {(aircraftQ.data ?? []).map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.tailNumber}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">Тип события</span>
+                    <select
+                      className="evInput"
+                      value={draft.eventTypeId}
+                      onChange={(e) => setDraft({ ...draft, eventTypeId: e.target.value })}
+                    >
+                      <option value="">— выберите —</option>
+                      {(eventTypesQ.data ?? []).map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {draft.aircraftId ? (
+                    <>
+                      <label className="evField">
+                        <span className="evFieldLabel">Оператор</span>
+                        <input
+                          className="evInput evInputReadonly"
+                          value={selectedAircraft?.operator?.name ?? "—"}
+                          readOnly
+                        />
+                      </label>
+                      <label className="evField">
+                        <span className="evFieldLabel">Тип ВС</span>
+                        <input
+                          className="evInput evInputReadonly"
+                          value={
+                            selectedAircraft?.type
+                              ? `${selectedAircraft.type.icaoType ? `${selectedAircraft.type.icaoType} • ` : ""}${selectedAircraft.type.name}`
+                              : "—"
+                          }
+                          readOnly
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                </div>
               </div>
+            </section>
 
-              <div className="row" style={{ alignItems: "flex-end" }}>
-                <label style={{ display: "grid", gap: 6, flex: "1 1 auto" }}>
-                  <span className="muted">Ангар</span>
-                  <select
-                    value={draft.hangarId}
-                    onChange={(e) => setDraft({ ...draft, hangarId: e.target.value, layoutId: "", standId: "" })}
-                  >
-                    <option value="">— не задан —</option>
-                    {(hangarsQ.data ?? []).map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label style={{ display: "grid", gap: 6, flex: "1 1 auto" }}>
-                  <span className="muted">Вариант</span>
-                  <select
-                    value={draft.layoutId}
-                    onChange={(e) => setDraft({ ...draft, layoutId: e.target.value, standId: "" })}
-                    disabled={!draft.hangarId}
-                  >
-                    <option value="">— не задан —</option>
-                    {(layoutsForEditorQ.data ?? []).map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+            <section className="evCard">
+              <header className="evCardHeader">
+                <div className="evCardTitle">Период</div>
+                <div className="evCardHint">Время начала и окончания события (локальное время).</div>
+              </header>
+              <div className="evCardBody">
+                <div className="evForm">
+                  <label className="evField">
+                    <span className="evFieldLabel">Начало</span>
+                    <input
+                      className="evInput"
+                      type="datetime-local"
+                      value={draft.startAtLocal}
+                      onChange={(e) => setDraft({ ...draft, startAtLocal: e.target.value })}
+                    />
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">Окончание</span>
+                    <input
+                      className="evInput"
+                      type="datetime-local"
+                      value={draft.endAtLocal}
+                      onChange={(e) => setDraft({ ...draft, endAtLocal: e.target.value })}
+                    />
+                  </label>
+                </div>
               </div>
+            </section>
 
-              <div className="row" style={{ alignItems: "flex-end", marginTop: 8 }}>
-                <label style={{ display: "grid", gap: 6, flex: "1 1 auto" }}>
-                  <span className="muted">Место</span>
-                  <select
-                    value={draft.standId}
-                    onChange={(e) => setDraft({ ...draft, standId: e.target.value })}
-                    disabled={!draft.layoutId}
+            <section className="evCard">
+              <header className="evCardHeader">
+                <div className="evCardTitle">Ангар и место</div>
+                <div className="evCardHint">
+                  Резервирование места выполняется отдельной операцией — кнопкой «Назначить место».
+                </div>
+              </header>
+              <div className="evCardBody">
+                <div className="evForm">
+                  <label className="evField">
+                    <span className="evFieldLabel">Ангар</span>
+                    <select
+                      className="evInput"
+                      value={draft.hangarId}
+                      onChange={(e) => setDraft({ ...draft, hangarId: e.target.value, layoutId: "", standId: "" })}
+                    >
+                      <option value="">— не задан —</option>
+                      {(hangarsQ.data ?? []).map((h) => (
+                        <option key={h.id} value={h.id}>
+                          {h.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">Вариант размещения</span>
+                    <select
+                      className="evInput"
+                      value={draft.layoutId}
+                      onChange={(e) => setDraft({ ...draft, layoutId: e.target.value, standId: "" })}
+                      disabled={!draft.hangarId}
+                    >
+                      <option value="">— не задан —</option>
+                      {(layoutsForEditorQ.data ?? []).map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                          {l.capacitySummary ? ` — ${l.capacitySummary}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="evField evFieldWide">
+                    <span className="evFieldLabel">Место</span>
+                    <select
+                      className="evInput"
+                      value={draft.standId}
+                      onChange={(e) => setDraft({ ...draft, standId: e.target.value })}
+                      disabled={!draft.layoutId}
+                    >
+                      <option value="">— не выбрано —</option>
+                      {(standsForEditorQ.data ?? []).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.code} • {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="evInlineActions">
+                  <button
+                    className="btn"
+                    onClick={() => unreserveM.mutate()}
+                    disabled={!draft.id || !draft.standId || unreserveM.isPending}
                   >
-                    <option value="">— не выбрано —</option>
-                    {(standsForEditorQ.data ?? []).map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.code} • {s.name}
-                      </option>
+                    Снять резерв
+                  </button>
+                  <button
+                    className="btn btnPrimary"
+                    onClick={() => requestSaveWithReason("reserve")}
+                    disabled={!draft.id || reserveM.isPending}
+                  >
+                    Назначить место
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="evCard">
+              <header className="evCardHeader">
+                <div className="evCardTitle">Буксировки</div>
+                <div className="evCardHint">Закатка и выкатка — можно указать несколько интервалов внутри события.</div>
+              </header>
+              <div className="evCardBody">
+                {!draft.id ? (
+                  <div className="muted">Сначала сохраните событие, затем можно добавлять буксировки.</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <div className="evForm">
+                      <label className="evField">
+                        <span className="evFieldLabel">Начало буксировки</span>
+                        <input
+                          className="evInput"
+                          type="datetime-local"
+                          value={towStartLocal}
+                          onChange={(e) => setTowStartLocal(e.target.value)}
+                        />
+                      </label>
+                      <label className="evField">
+                        <span className="evFieldLabel">Окончание буксировки</span>
+                        <input
+                          className="evInput"
+                          type="datetime-local"
+                          value={towEndLocal}
+                          onChange={(e) => setTowEndLocal(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <div className="evInlineActions">
+                      <button
+                        className="btn btnPrimary"
+                        onClick={() => requestTowAddWithReason()}
+                        disabled={addTowM.isPending}
+                      >
+                        Добавить интервал
+                      </button>
+                      {addTowM.error ? (
+                        <span className="error">{String((addTowM.error as any)?.message ?? addTowM.error)}</span>
+                      ) : null}
+                    </div>
+
+                    <div className="evTowList">
+                      {(towsQ.data ?? []).length === 0 ? (
+                        <div className="muted">Буксировок пока нет.</div>
+                      ) : (
+                        (towsQ.data ?? []).map((t) => (
+                          <div key={t.id} className="evTowItem">
+                            <div>
+                              <strong>{dayjs(t.startAt).format("DD.MM.YYYY HH:mm")}</strong> –{" "}
+                              <strong>{dayjs(t.endAt).format("DD.MM.YYYY HH:mm")}</strong>
+                            </div>
+                            <button
+                              className="btn"
+                              onClick={() => requestTowDeleteWithReason(t.id)}
+                              disabled={delTowM.isPending}
+                            >
+                              Удалить
+                            </button>
+                          </div>
+                        ))
+                      )}
+                      {towsQ.isFetching ? <div className="muted">обновление…</div> : null}
+                      {towsQ.error ? (
+                        <div className="error">{String((towsQ.error as any)?.message ?? towsQ.error)}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="evCard">
+              <header className="evCardHeader">
+                <div className="evCardTitle">Примечание</div>
+                <div className="evCardHint">Комментарий к событию для команды.</div>
+              </header>
+              <div className="evCardBody">
+                <textarea
+                  className="evInput evTextarea"
+                  rows={4}
+                  value={draft.notes}
+                  onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+                  placeholder="Опишите контекст, особенности, внешние согласования…"
+                />
+              </div>
+            </section>
+
+            {draft.id ? (
+              <details className="evCard evCardDetails">
+                <summary className="evCardHeader evCardSummary">
+                  <div>
+                    <div className="evCardTitle">Ресурсы и факт</div>
+                    <div className="evCardHint">
+                      Планирование ресурсов, исполнителей и фактические показатели.
+                    </div>
+                  </div>
+                  <span className="evCardChevron" aria-hidden="true" />
+                </summary>
+                <div className="evCardBody">
+                  <EventResourcesPanel eventId={draft.id} />
+                </div>
+              </details>
+            ) : null}
+
+            <details className="evCard evCardDetails">
+              <summary className="evCardHeader evCardSummary">
+                <div>
+                  <div className="evCardTitle">
+                    История изменений{" "}
+                    {draft.id && (historyQ.data ?? []).length > 0 ? (
+                      <span className="evCardBadge">{(historyQ.data ?? []).length}</span>
+                    ) : null}
+                  </div>
+                  <div className="evCardHint">
+                    {!draft.id
+                      ? "Будет доступна после сохранения события."
+                      : historyQ.isFetching
+                        ? "обновление…"
+                        : "Все правки события с автором и причиной."}
+                  </div>
+                </div>
+                <span className="evCardChevron" aria-hidden="true" />
+              </summary>
+              <div className="evCardBody">
+                {!draft.id ? (
+                  <div className="muted">История появится после сохранения события.</div>
+                ) : historyQ.error ? (
+                  <div className="error">{String(historyQ.error.message || historyQ.error)}</div>
+                ) : (historyQ.data ?? []).length === 0 ? (
+                  <div className="muted">История пока пустая.</div>
+                ) : (
+                  <div className="evHistoryList">
+                    {(historyQ.data ?? []).map((h) => (
+                      <div key={h.id} className="evHistoryItem">
+                        <div className="evHistoryHead">
+                          <strong>{h.action}</strong>
+                          <span className="muted">{dayjs(h.createdAt).format("DD.MM.YYYY HH:mm")}</span>
+                          <span className="muted">• {h.actor}</span>
+                        </div>
+                        {h.reason ? (
+                          <div className="evHistoryReason">
+                            <strong>Причина:</strong> {h.reason}
+                          </div>
+                        ) : null}
+                        {h.changes ? (
+                          <pre className="evHistoryChanges">{JSON.stringify(h.changes, null, 2)}</pre>
+                        ) : null}
+                      </div>
                     ))}
-                  </select>
-                </label>
+                  </div>
+                )}
+              </div>
+            </details>
+
+            <footer className="evFooter">
+              <div className="evFooterInfo">
+                {saveEventM.error || reserveM.error || unreserveM.error ? (
+                  <span className="error">
+                    {String((saveEventM.error ?? reserveM.error ?? unreserveM.error)?.message ?? "")}
+                  </span>
+                ) : saveEventM.isPending ? (
+                  <span className="muted">Сохраняем…</span>
+                ) : saveEventM.isSuccess && computeDraftDiff(original, draft).length === 0 ? (
+                  <span className="muted">Сохранено.</span>
+                ) : draft.id && computeDraftDiff(original, draft).length === 0 ? (
+                  <span className="muted">Нет несохранённых изменений.</span>
+                ) : draft.id ? (
+                  <span className="muted">
+                    Несохранённых изменений: {computeDraftDiff(original, draft).length}
+                  </span>
+                ) : (
+                  <span className="muted">Новое событие будет создано после сохранения.</span>
+                )}
+              </div>
+              <div className="evFooterActions">
                 <button
                   className="btn"
-                  onClick={() => unreserveM.mutate()}
-                  disabled={!draft.id || !draft.standId || unreserveM.isPending}
+                  onClick={() => {
+                    setEditorOpen(false);
+                    setCopyFromTitle(null);
+                  }}
+                  type="button"
                 >
-                  Снять резерв
+                  Отмена
                 </button>
                 <button
                   className="btn btnPrimary"
-                  onClick={() => requestSaveWithReason("reserve")}
-                  disabled={!draft.id || reserveM.isPending}
+                  onClick={() => {
+                    if (!draft.id) {
+                      // новое событие — сохраняем без подтверждения
+                      saveEventM.mutate();
+                    } else {
+                      requestSaveWithReason("event");
+                    }
+                  }}
+                  disabled={
+                    saveEventM.isPending ||
+                    (!!draft.id && computeDraftDiff(original, draft).length === 0)
+                  }
+                  type="button"
                 >
-                  Назначить место
+                  {draft.id ? "Сохранить изменения" : copyFromTitle ? "Создать копию" : "Создать событие"}
                 </button>
               </div>
-            </div>
-
-            <div style={{ borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 10 }}>
-              <div className="row" style={{ marginBottom: 8 }}>
-                <strong>Буксировки (закатка/выкатка)</strong>
-                <span className="muted">Можно добавить несколько интервалов внутри события.</span>
-              </div>
-
-              {!draft.id ? (
-                <div className="muted">Сначала сохраните событие, затем можно добавлять буксировки.</div>
-              ) : (
-                <div style={{ display: "grid", gap: 10 }}>
-                  <div className="row" style={{ alignItems: "flex-end" }}>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <span className="muted">Начало буксировки</span>
-                      <input type="datetime-local" value={towStartLocal} onChange={(e) => setTowStartLocal(e.target.value)} style={{ width: 220 }} />
-                    </label>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <span className="muted">Окончание буксировки</span>
-                      <input type="datetime-local" value={towEndLocal} onChange={(e) => setTowEndLocal(e.target.value)} style={{ width: 220 }} />
-                    </label>
-                    <button className="btn btnPrimary" onClick={() => requestTowAddWithReason()} disabled={addTowM.isPending}>
-                      Добавить
-                    </button>
-                    {addTowM.error ? <span className="error">{String((addTowM.error as any)?.message ?? addTowM.error)}</span> : null}
-                  </div>
-
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {(towsQ.data ?? []).length === 0 ? (
-                      <div className="muted">Буксировок пока нет.</div>
-                    ) : (
-                      (towsQ.data ?? []).map((t) => (
-                        <div
-                          key={t.id}
-                          className="row"
-                          style={{
-                            justifyContent: "space-between",
-                            border: "1px solid rgba(148,163,184,0.35)",
-                            borderRadius: 12,
-                            padding: "8px 10px"
-                          }}
-                        >
-                          <div>
-                            <strong>{dayjs(t.startAt).format("DD.MM.YYYY HH:mm")}</strong> –{" "}
-                            <strong>{dayjs(t.endAt).format("DD.MM.YYYY HH:mm")}</strong>
-                          </div>
-                          <button className="btn" onClick={() => requestTowDeleteWithReason(t.id)} disabled={delTowM.isPending}>
-                            Удалить
-                          </button>
-                        </div>
-                      ))
-                    )}
-                    {towsQ.isFetching ? <div className="muted">обновление…</div> : null}
-                    {towsQ.error ? <div className="error">{String((towsQ.error as any)?.message ?? towsQ.error)}</div> : null}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <label style={{ display: "grid", gap: 6 }}>
-              <span className="muted">Примечание</span>
-              <textarea
-                rows={4}
-                value={draft.notes}
-                onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-                style={{ width: "100%" }}
-              />
-            </label>
-
-            <div style={{ borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 10 }}>
-              {!draft.id ? (
-                <div className="muted">Сначала сохраните событие — затем можно планировать ресурсы и вносить факт.</div>
-              ) : (
-                <EventResourcesPanel eventId={draft.id} />
-              )}
-            </div>
-
-            <div className="row" style={{ marginTop: 6 }}>
-              <button className="btn btnPrimary" onClick={() => requestSaveWithReason("event")} disabled={saveEventM.isPending}>
-                Сохранить событие
-              </button>
-              {saveEventM.error || reserveM.error || unreserveM.error ? (
-                <span className="error">
-                  {String((saveEventM.error ?? reserveM.error ?? unreserveM.error)?.message ?? "")}
-                </span>
-              ) : null}
-              {saveEventM.isSuccess ? <span className="muted">Сохранено.</span> : null}
-            </div>
-
-            <div style={{ borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 10 }}>
-              <div className="row" style={{ marginBottom: 8 }}>
-                <strong>История изменений</strong>
-                {historyQ.isFetching ? <span className="muted">обновление…</span> : null}
-              </div>
-              {historyQ.error ? <div className="error">{String(historyQ.error.message || historyQ.error)}</div> : null}
-              {(historyQ.data ?? []).length === 0 ? <div className="muted">История пока пустая.</div> : null}
-              <div style={{ display: "grid", gap: 8 }}>
-                {(historyQ.data ?? []).map((h) => (
-                  <div key={h.id} style={{ border: "1px solid rgba(148,163,184,0.35)", borderRadius: 12, padding: 10 }}>
-                    <div className="row">
-                      <strong>{h.action}</strong>
-                      <span className="muted">{dayjs(h.createdAt).format("DD.MM.YYYY HH:mm")}</span>
-                      <span className="muted">• {h.actor}</span>
-                    </div>
-                    {h.reason ? <div style={{ marginTop: 6 }}><strong>Причина:</strong> {h.reason}</div> : null}
-                    {h.changes ? (
-                      <div className="muted" style={{ marginTop: 6, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                        {JSON.stringify(h.changes)}
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
+            </footer>
           </div>
         )}
       </Drawer>
@@ -2033,40 +2663,114 @@ export function GanttView() {
       <Drawer
         open={confirmOpen}
         title="Подтверждение изменения"
+        subtitle="Укажите причину — она попадёт в историю события."
         onClose={() => setConfirmOpen(false)}
       >
-        <div style={{ display: "grid", gap: 10 }}>
-          <div className="muted">Перед сохранением опишите, что изменилось и почему (перенос, причина, комментарий).</div>
-          <textarea rows={4} value={changeReason} onChange={(e) => setChangeReason(e.target.value)} />
-          <div>
-            <strong>Изменения:</strong>
-            <div className="muted" style={{ fontFamily: "ui-monospace, monospace", fontSize: 12, marginTop: 6 }}>
-              {JSON.stringify(computeDraftDiff(original, draft))}
+        <div className="evConfirm">
+          <label className="evField">
+            <span className="evFieldLabel">Причина изменения</span>
+            <textarea
+              className="evInput evTextarea"
+              rows={3}
+              value={changeReason}
+              onChange={(e) => setChangeReason(e.target.value)}
+              placeholder="Например: перенос по запросу оператора, уточнение сроков…"
+              autoFocus
+            />
+          </label>
+
+          {(() => {
+            const diffs =
+              pendingSave === "event" || pendingSave === "reserve"
+                ? computeDraftDiff(original, draft)
+                : [];
+            if (diffs.length === 0) return null;
+            return (
+              <div className="evDiff">
+                <div className="evDiffTitle">Изменения</div>
+                <div className="evDiffList">
+                  {diffs.map((d) => (
+                    <div key={d.field} className="evDiffItem">
+                      <span className="evDiffField">{FIELD_LABEL[d.field] ?? d.field}</span>
+                      <span className="evDiffValues">
+                        <span className="evDiffFrom">{String(d.from || "—")}</span>
+                        <span className="evDiffArrow" aria-hidden="true">→</span>
+                        <span className="evDiffTo">{String(d.to || "—")}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {pendingSave === "towAdd" && pendingTow?.kind === "add" ? (
+            <div className="evDiff">
+              <div className="evDiffTitle">Новая буксировка</div>
+              <div className="muted">
+                {dayjs(pendingTow.startAt).format("DD.MM.YYYY HH:mm")} — {dayjs(pendingTow.endAt).format("DD.MM.YYYY HH:mm")}
+              </div>
             </div>
-          </div>
-          <div className="row">
-            <button
-              className="btn btnPrimary"
-              disabled={!changeReason.trim()}
-              onClick={() => {
-                if (pendingSave === "event") saveEventM.mutate();
-                if (pendingSave === "reserve") reserveM.mutate();
-                if (pendingSave === "towAdd") addTowM.mutate();
-                if (pendingSave === "towDel") delTowM.mutate();
-                if (pendingSave === "dndMove") dndMoveM.mutate();
-              }}
-            >
-              Сохранить
-            </button>
-            <button className="btn" onClick={() => setConfirmOpen(false)}>
-              Отмена
-            </button>
-            {saveEventM.error || reserveM.error || addTowM.error || delTowM.error || dndMoveM.error ? (
-              <span className="error">
-                {String((saveEventM.error ?? reserveM.error ?? addTowM.error ?? delTowM.error ?? dndMoveM.error as any)?.message ?? "")}
-              </span>
-            ) : null}
-          </div>
+          ) : null}
+          {pendingSave === "towDel" ? (
+            <div className="evDiff">
+              <div className="evDiffTitle">Удаление буксировки</div>
+              <div className="muted">Выбранный интервал будет удалён.</div>
+            </div>
+          ) : null}
+          {pendingSave === "dndMove" ? (
+            <div className="evDiff">
+              <div className="evDiffTitle">Перенос события</div>
+              <div className="muted">Размещение/время будут изменены согласно предпросмотру.</div>
+            </div>
+          ) : null}
+
+          <footer className="evFooter">
+            <div className="evFooterInfo">
+              {saveEventM.error || reserveM.error || addTowM.error || delTowM.error || dndMoveM.error ? (
+                <span className="error">
+                  {String(
+                    (saveEventM.error ?? reserveM.error ?? addTowM.error ?? delTowM.error ?? (dndMoveM.error as any))
+                      ?.message ?? ""
+                  )}
+                </span>
+              ) : saveEventM.isPending ||
+                reserveM.isPending ||
+                addTowM.isPending ||
+                delTowM.isPending ||
+                dndMoveM.isPending ? (
+                <span className="muted">Сохраняем…</span>
+              ) : (
+                <span className="muted">Причина обязательна.</span>
+              )}
+            </div>
+            <div className="evFooterActions">
+              <button className="btn" onClick={() => setConfirmOpen(false)} type="button">
+                Отмена
+              </button>
+              <button
+                className="btn btnPrimary"
+                disabled={
+                  !changeReason.trim() ||
+                  saveEventM.isPending ||
+                  reserveM.isPending ||
+                  addTowM.isPending ||
+                  delTowM.isPending ||
+                  dndMoveM.isPending
+                }
+                onClick={() => {
+                  if (pendingSave === "event") saveEventM.mutate();
+                  if (pendingSave === "reserve") reserveM.mutate();
+                  if (pendingSave === "towAdd") addTowM.mutate();
+                  if (pendingSave === "towDel") delTowM.mutate();
+                  if (pendingSave === "dndMove") dndMoveM.mutate();
+                }}
+                type="button"
+              >
+                Подтвердить и сохранить
+              </button>
+            </div>
+          </footer>
         </div>
       </Drawer>
     </div>

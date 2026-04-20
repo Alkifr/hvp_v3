@@ -1,9 +1,13 @@
 import { PrismaClient } from "@prisma/client";
+import dotenv from "dotenv";
+import path from "node:path";
+
+dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
 
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("DATABASE_URL:", process.env.DATABASE_URL);
+  console.log("DATABASE_CLOUD_URL:", process.env.DATABASE_CLOUD_URL);
 
   const counts = {
     operator: await prisma.operator.count(),

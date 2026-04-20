@@ -84,7 +84,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
     if (conflict) {
       throw app.httpErrors.conflict(
-        `Место уже занято: ${conflict.event.title} (${conflict.event.aircraft.tailNumber})`
+        `Место уже занято: ${conflict.event.title} (${conflict.event.aircraft?.tailNumber ?? (conflict.event as any).virtualAircraft?.label ?? "—"})`
       );
     }
 
@@ -221,7 +221,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
       if (conflicts.length > 0 && !bump) {
         throw app.httpErrors.conflict(
-          `Место уже занято: ${conflicts[0]!.event.title} (${conflicts[0]!.event.aircraft.tailNumber})`
+          `Место уже занято: ${conflicts[0]!.event.title} (${conflicts[0]!.event.aircraft?.tailNumber ?? (conflicts[0]!.event as any).virtualAircraft?.label ?? "—"})`
         );
       }
 
@@ -380,7 +380,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
       if (conflicts.length > 0 && !bump) {
         throw app.httpErrors.conflict(
-          `Место уже занято: ${conflicts[0]!.event.title} (${conflicts[0]!.event.aircraft.tailNumber})`
+          `Место уже занято: ${conflicts[0]!.event.title} (${conflicts[0]!.event.aircraft?.tailNumber ?? (conflicts[0]!.event as any).virtualAircraft?.label ?? "—"})`
         );
       }
 

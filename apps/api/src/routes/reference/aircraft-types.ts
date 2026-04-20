@@ -4,6 +4,8 @@ import { z } from "zod";
 import { zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 
+const zBodyType = z.enum(["NARROW_BODY", "WIDE_BODY"]).optional().nullable();
+
 export const aircraftTypesRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
     assertPermission(req as any, "ref:read");
@@ -19,6 +21,7 @@ export const aircraftTypesRoutes: FastifyPluginAsync = async (app) => {
         icaoType: z.string().trim().min(2).max(8).optional(),
         name: z.string().trim().min(1).max(200),
         manufacturer: z.string().trim().min(1).max(200).optional(),
+        bodyType: zBodyType,
         isActive: z.boolean().optional()
       })
       .parse(req.body);
@@ -34,6 +37,7 @@ export const aircraftTypesRoutes: FastifyPluginAsync = async (app) => {
         icaoType: z.string().trim().min(2).max(8).nullable().optional(),
         name: z.string().trim().min(1).max(200).optional(),
         manufacturer: z.string().trim().min(1).max(200).nullable().optional(),
+        bodyType: zBodyType,
         isActive: z.boolean().optional()
       })
       .parse(req.body);

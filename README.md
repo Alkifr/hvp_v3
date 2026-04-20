@@ -20,7 +20,7 @@
 docker compose up -d
 ```
 
-Если Docker Desktop не установлен/не запущен, можно использовать локальный PostgreSQL и просто прописать правильный `DATABASE_URL` в `.env` и `apps/api/.env`.
+Если Docker Desktop не установлен/не запущен, можно использовать локальный PostgreSQL и просто прописать правильный `DATABASE_URL` (локальная БД-источник) и `DATABASE_CLOUD_URL` (основная облачная БД) в `.env`.
 
 2) Скопировать переменные окружения:
 
@@ -35,11 +35,11 @@ copy apps\api\.env.example apps\api\.env
 npm install
 ```
 
-4) Применить миграции и сид (нужна доступная БД):
+4) Применить миграции и сид в основную БД (`DATABASE_CLOUD_URL`):
 
 ```bash
 cd apps/api
-npm run prisma:migrate -- --name init
+npm run prisma:migrate:deploy
 npm run prisma:seed
 cd ../..
 ```
@@ -54,35 +54,37 @@ npm run dev
 
 В репозитории хранится файл `apps/api/prisma/demo-data.json` — это **снимок данных** (справочники, события, резервы, ресурсы и т.д.) из вашей БД `hangar_planning`, чтобы можно было быстро поднять демонстрационный стенд с теми же данными.
 
-- **Обновить снимок из текущей БД**:
+- **Перенести данные из локальной БД (`DATABASE_URL`) в облачную (`DATABASE_CLOUD_URL`)**:
 
 ```bash
-npm run demo:export -w apps/api
+npm run db:clone:cloud -w apps/api
 ```
 
 - **Импорт на новом окружении**:
-  - выполните миграции
-  - затем запустите seed
+  - выполните миграции в `DATABASE_CLOUD_URL`
+  - затем перенесите данные командой выше или запустите seed
 
 ```bash
 cd apps/api
-npm run prisma:migrate -- --name init
+npm run prisma:migrate:deploy
 npm run prisma:seed
 cd ../..
 ```
 
-Seed сначала создаёт базовые роли/права/демо‑админа, а затем (если найден `demo-data.json`) **импортирует снимок поверх минимального набора**.
+Приложение и Prisma используют `DATABASE_CLOUD_URL` как основной datasource. `DATABASE_URL` можно оставить как локальную БД-источник для разовых переносов в облако.
 
 ## Важные замечания по окружению (Windows)
 
 - **Docker**: `docker compose up -d` требует установленный и запущенный Docker Desktop.
-- **PostgreSQL без Docker**: создайте БД `hangar_planning`, пользователя/пароль или используйте свои — и обновите `DATABASE_URL`.
+- **PostgreSQL без Docker**: создайте локальную БД `hangar_planning`, обновите `DATABASE_URL`, а строку облачной БД храните в `DATABASE_CLOUD_URL`.
 
 ## Скрипты
 
 - `npm run dev` — поднять API+Web
 - `npm run build` — production build
 - `npm run lint` — линт
+- `npm run prisma:migrate:deploy -w apps/api` — применить миграции в `DATABASE_CLOUD_URL`
+- `npm run db:clone:cloud -w apps/api` — перенести все данные из `DATABASE_URL` в `DATABASE_CLOUD_URL`
 
 ## Публикация на GitHub
 

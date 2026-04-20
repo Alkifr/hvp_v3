@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
+import { authMe } from "../auth/authApi";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 
 type RefKind =
@@ -19,6 +20,85 @@ type RefKind =
   | "materials"
   | "warehouses";
 
+type RefGroup = { label: string; items: Array<{ kind: RefKind; title: string; hint?: string }> };
+
+const REF_GROUPS: RefGroup[] = [
+  {
+    label: "Авиация",
+    items: [
+      { kind: "operators", title: "Операторы" },
+      { kind: "aircraft-types", title: "Типы ВС" },
+      { kind: "aircraft", title: "Бортовые номера" },
+      { kind: "aircraft-type-palette", title: "Палитра ВС", hint: "оператор × тип" }
+    ]
+  },
+  {
+    label: "Инфраструктура",
+    items: [
+      { kind: "hangars", title: "Ангары" },
+      { kind: "layouts", title: "Варианты расстановки" },
+      { kind: "stands", title: "Места (стоянки)" }
+    ]
+  },
+  {
+    label: "События",
+    items: [{ kind: "event-types", title: "Типы событий" }]
+  },
+  {
+    label: "Персонал",
+    items: [
+      { kind: "skills", title: "Квалификации" },
+      { kind: "persons", title: "Сотрудники" },
+      { kind: "shifts", title: "Смены" }
+    ]
+  },
+  {
+    label: "Снабжение",
+    items: [
+      { kind: "materials", title: "Материалы" },
+      { kind: "warehouses", title: "Склады" }
+    ]
+  }
+];
+
+const REF_TITLE: Record<RefKind, string> = Object.fromEntries(
+  REF_GROUPS.flatMap((g) => g.items.map((i) => [i.kind, i.title]))
+) as Record<RefKind, string>;
+
+const REF_SINGULAR: Record<RefKind, string> = {
+  operators: "Оператор",
+  "aircraft-types": "Тип ВС",
+  aircraft: "Борт",
+  "aircraft-type-palette": "Правило палитры",
+  "event-types": "Тип события",
+  hangars: "Ангар",
+  layouts: "Вариант расстановки",
+  stands: "Место (стоянка)",
+  skills: "Квалификация",
+  persons: "Сотрудник",
+  shifts: "Смена",
+  materials: "Материал",
+  warehouses: "Склад"
+};
+
+function formatMinutesOfDay(v: unknown): string {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  const hh = Math.floor(n / 60)
+    .toString()
+    .padStart(2, "0");
+  const mm = Math.floor(n % 60)
+    .toString()
+    .padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function bodyTypeLabel(v: unknown): string | null {
+  if (v === "NARROW_BODY") return "Узкий";
+  if (v === "WIDE_BODY") return "Широкий";
+  return null;
+}
+
 type Operator = { id: string; code: string; name: string; isActive: boolean };
 type AircraftType = { id: string; icaoType?: string | null; name: string; manufacturer?: string | null; isActive: boolean };
 type Hangar = { id: string; code: string; name: string; isActive: boolean };
@@ -30,6 +110,7 @@ type Layout = {
   description?: string | null;
   widthMeters?: number | null;
   heightMeters?: number | null;
+  capacitySummary?: string;
   isActive: boolean;
 };
 type Skill = { id: string; code: string; name: string; isActive: boolean };
@@ -61,7 +142,13 @@ function BoolToggle(props: { value: boolean; onChange: (v: boolean) => void }) {
 
 export function ReferenceView() {
   const [kind, setKind] = useState<RefKind>("operators");
+  const [search, setSearch] = useState<string>("");
   const qc = useQueryClient();
+
+  const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0, staleTime: 60_000 });
+  const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
+  const isAdmin = Boolean(me?.roles?.includes("ADMIN"));
+  const canWrite = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"));
 
   const url = useMemo(() => `/api/ref/${kind}`, [kind]);
 
@@ -187,6 +274,7 @@ export function ReferenceView() {
   const [fW, setFW] = useState(18);
   const [fH, setFH] = useState(10);
   const [fRotate, setFRotate] = useState(0);
+  const [fBodyType, setFBodyType] = useState<string>("");
   const [fStartMin, setFStartMin] = useState(8 * 60);
   const [fEndMin, setFEndMin] = useState(20 * 60);
   const [fUom, setFUom] = useState("EA");
@@ -217,6 +305,7 @@ export function ReferenceView() {
     setFEndMin(20 * 60);
     setFUom("EA");
     setFPersonSkillIds([]);
+    setFBodyType("");
 
     if (k === "operators") {
       setFCode("NEW");
@@ -283,6 +372,7 @@ export function ReferenceView() {
     setFName(String(row.name ?? ""));
     setFIcaoType(String(row.icaoType ?? ""));
     setFManufacturer(String(row.manufacturer ?? ""));
+    setFBodyType(String(row.bodyType ?? ""));
     setFTailNumber(String(row.tailNumber ?? ""));
     setFSerialNumber(String(row.serialNumber ?? ""));
     setFOperatorId(String(row.operatorId ?? ""));
@@ -298,6 +388,7 @@ export function ReferenceView() {
     setFW(Number(row.w ?? 18));
     setFH(Number(row.h ?? 10));
     setFRotate(Number(row.rotate ?? 0));
+    setFBodyType(String(row.bodyType ?? ""));
     setFStartMin(Number(row.startMin ?? 8 * 60));
     setFEndMin(Number(row.endMin ?? 20 * 60));
     setFUom(String(row.uom ?? "EA"));
@@ -313,6 +404,7 @@ export function ReferenceView() {
         icaoType: fIcaoType.trim() ? fIcaoType.trim() : undefined,
         name: fName.trim(),
         manufacturer: fManufacturer.trim() ? fManufacturer.trim() : undefined,
+        bodyType: fBodyType === "NARROW_BODY" || fBodyType === "WIDE_BODY" ? fBodyType : null,
         isActive: fIsActive
       };
     if (kind === "aircraft")
@@ -358,6 +450,7 @@ export function ReferenceView() {
         layoutId: fLayoutId,
         code: fCode.trim(),
         name: fName.trim(),
+        bodyType: fBodyType === "NARROW_BODY" || fBodyType === "WIDE_BODY" ? fBodyType : null,
         x: fX,
         y: fY,
         w: fW,
@@ -368,76 +461,153 @@ export function ReferenceView() {
     return {};
   };
 
+  // Фильтрация списка по строке поиска
+  const filteredRows = useMemo(() => {
+    const rows = listQ.data ?? [];
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((row: any) => {
+      const fields = [
+        row.name,
+        row.code,
+        row.icaoType,
+        row.tailNumber,
+        row.serialNumber,
+        row.operator?.name,
+        row.type?.name,
+        row.type?.icaoType,
+        row.aircraftType?.name,
+        row.aircraftType?.icaoType,
+        row.color,
+        row.manufacturer,
+        row.description
+      ];
+      return fields.some((f) => f != null && String(f).toLowerCase().includes(q));
+    });
+  }, [listQ.data, search]);
+
+  const totalCount = listQ.data?.length ?? 0;
+
   return (
-    <div className="card" style={{ display: "grid", gap: 12 }}>
-      <div className="row">
-        <strong>Справочник</strong>
-        <select value={kind} onChange={(e) => setKind(e.target.value as RefKind)}>
-          <option value="operators">Операторы</option>
-          <option value="aircraft-types">Типы ВС</option>
-          <option value="aircraft">Бортовые номера</option>
-          <option value="aircraft-type-palette">Палитра типов ВС (оператор + тип)</option>
-          <option value="event-types">События</option>
-          <option value="hangars">Ангары</option>
-          <option value="layouts">Варианты расстановки</option>
-          <option value="stands">Места (стоянки)</option>
-          <option value="skills">Квалификации</option>
-          <option value="persons">Персонал</option>
-          <option value="shifts">Смены</option>
-          <option value="materials">Материалы</option>
-          <option value="warehouses">Склады</option>
-        </select>
-        <span style={{ flex: "1 1 auto" }} />
-        {kind === "layouts" ? (
-          <label className="row">
-            <span className="muted">Ангар</span>
-            <select value={filterHangarId} onChange={(e) => setFilterHangarId(e.target.value)}>
-              <option value="">все</option>
-              {(hangarsQ.data ?? []).map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        {kind === "stands" ? (
-          <>
-            <label className="row">
-              <span className="muted">Ангар</span>
-              <select value={filterHangarId} onChange={(e) => setFilterHangarId(e.target.value)}>
-                <option value="">все</option>
-                {(hangarsQ.data ?? []).map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {h.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="row">
-              <span className="muted">Вариант</span>
-              <select value={filterLayoutId} onChange={(e) => setFilterLayoutId(e.target.value)}>
-                <option value="">все</option>
-                {(layoutsForStandsQ.data ?? []).map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </>
-        ) : null}
+    <div className="refPage">
+      <aside className="refSidebar card">
+        <div className="refSidebarHeader">
+          <strong>Справочники</strong>
+          <span className="muted refSidebarHint">Выберите категорию</span>
+        </div>
+        <div className="refGroups">
+          {REF_GROUPS.map((group) => (
+            <div className="refGroup" key={group.label}>
+              <div className="refGroupLabel">{group.label}</div>
+              <div className="refGroupItems">
+                {group.items.map((it) => {
+                  const active = it.kind === kind;
+                  return (
+                    <button
+                      key={it.kind}
+                      type="button"
+                      className={`refNavItem${active ? " refNavItemActive" : ""}`}
+                      onClick={() => {
+                        setKind(it.kind);
+                        setSearch("");
+                        setMode(null);
+                      }}
+                      aria-current={active ? "page" : undefined}
+                    >
+                      <span className="refNavItemTitle">{it.title}</span>
+                      {it.hint ? <span className="refNavItemHint muted">{it.hint}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </aside>
 
-        <button className="btn btnPrimary" onClick={openCreate}>
-          Добавить
-        </button>
-      </div>
+      <div className="refMain">
+        <div className="card refHeader">
+          <div className="refHeaderTitle">
+            <div className="refHeaderCrumb muted">Справочники</div>
+            <div className="refHeaderName">
+              <strong>{REF_TITLE[kind]}</strong>
+              <span className="refHeaderCount muted">
+                {totalCount > 0 ? `· ${totalCount}` : listQ.isFetching ? "· загрузка…" : ""}
+              </span>
+            </div>
+          </div>
+          <div className="refHeaderActions">
+            <div className="refSearch">
+              <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                <circle cx="9" cy="9" r="6" />
+                <path d="m14 14 4 4" />
+              </svg>
+              <input
+                type="search"
+                placeholder="Поиск по названию, коду, оператору…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {search ? (
+                <button className="refSearchClear" type="button" onClick={() => setSearch("")} aria-label="Очистить">
+                  ×
+                </button>
+              ) : null}
+            </div>
+            {kind === "layouts" ? (
+              <label className="refHeaderFilter">
+                <span className="muted">Ангар</span>
+                <select value={filterHangarId} onChange={(e) => setFilterHangarId(e.target.value)}>
+                  <option value="">все</option>
+                  {(hangarsQ.data ?? []).map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {kind === "stands" ? (
+              <>
+                <label className="refHeaderFilter">
+                  <span className="muted">Ангар</span>
+                  <select value={filterHangarId} onChange={(e) => setFilterHangarId(e.target.value)}>
+                    <option value="">все</option>
+                    {(hangarsQ.data ?? []).map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="refHeaderFilter">
+                  <span className="muted">Вариант</span>
+                  <select value={filterLayoutId} onChange={(e) => setFilterLayoutId(e.target.value)}>
+                    <option value="">все</option>
+                    {(layoutsForStandsQ.data ?? []).map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : null}
+            {canWrite ? (
+              <button className="btn btnPrimary" onClick={openCreate}>
+                + Добавить
+              </button>
+            ) : null}
+          </div>
+        </div>
 
-      {kind === "aircraft" ? (
-        <div style={{ display: "grid", gap: 10, borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 12 }}>
-          <div className="row">
-            <strong>Импорт бортовых номеров из CSV</strong>
-            <span className="muted">Берём 1-й столбец; разделитель: запятая/точка с запятой/таб.</span>
+      {kind === "aircraft" && canWrite ? (
+        <div className="card refSection">
+          <div className="refSectionHeader">
+            <div>
+              <strong>Импорт бортовых номеров из CSV</strong>
+              <div className="muted refSectionHint">Берём 1-й столбец; разделитель: запятая/точка с запятой/таб.</div>
+            </div>
           </div>
           <div className="row" style={{ alignItems: "flex-end" }}>
             <label style={{ display: "grid", gap: 6 }}>
@@ -529,17 +699,18 @@ export function ReferenceView() {
             </div>
           ) : null}
           {aircraftImportResult ? (
-            <div style={{ border: "1px solid rgba(148,163,184,0.35)", borderRadius: 12, padding: 10 }}>
+            <div className="refImportResult">
               <div className="row">
                 <strong>Результат</strong>
-                <span className="muted">создано: {aircraftImportResult.created ?? 0}</span>
-                <span className="muted">пропущено (дубли/уже есть): {aircraftImportResult.duplicatesOrExisting ?? 0}</span>
-                <span className="muted">невалидных: {(aircraftImportResult.invalid ?? []).length}</span>
+                <span className="gpChip gpChipInfo">создано: {aircraftImportResult.created ?? 0}</span>
+                <span className="gpChip">пропущено: {aircraftImportResult.duplicatesOrExisting ?? 0}</span>
+                <span className="gpChip gpChipError">невалидных: {(aircraftImportResult.invalid ?? []).length}</span>
               </div>
-              {(aircraftImportResult.invalid ?? []).length ? (
-                <div className="muted" style={{ marginTop: 6, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                  invalid: {JSON.stringify(aircraftImportResult.invalid)}
-                </div>
+              {isAdmin && (aircraftImportResult.invalid ?? []).length ? (
+                <details className="refImportInvalid">
+                  <summary>Подробности по невалидным строкам</summary>
+                  <pre>{JSON.stringify(aircraftImportResult.invalid, null, 2)}</pre>
+                </details>
               ) : null}
             </div>
           ) : null}
@@ -547,43 +718,18 @@ export function ReferenceView() {
       ) : null}
 
       {mode ? (
-        <div style={{ display: "grid", gap: 10, borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 12 }}>
-          <div className="row">
-            <strong>{mode === "create" ? "Создание" : "Редактирование"}</strong>
-            <span className="muted">
-              {kind === "operators"
-                ? "Оператор"
-                : kind === "aircraft-types"
-                  ? "Тип ВС"
-                  : kind === "aircraft"
-                    ? "Борт"
-                    : kind === "aircraft-type-palette"
-                      ? "Палитра типов ВС"
-                    : kind === "skills"
-                      ? "Квалификация"
-                      : kind === "persons"
-                        ? "Сотрудник"
-                        : kind === "shifts"
-                          ? "Смена"
-                          : kind === "materials"
-                            ? "Материал"
-                            : kind === "warehouses"
-                              ? "Склад"
-                    : kind === "event-types"
-                      ? "Тип события"
-                      : kind === "hangars"
-                        ? "Ангар"
-                        : kind === "layouts"
-                          ? "Вариант"
-                          : "Место"}
-            </span>
-            <span style={{ flex: "1 1 auto" }} />
+        <div className="card refSection">
+          <div className="refSectionHeader">
+            <div>
+              <strong>{mode === "create" ? "Создание" : "Редактирование"}</strong>
+              <div className="muted refSectionHint">{REF_SINGULAR[kind]}</div>
+            </div>
             <button className="btn" onClick={() => setMode(null)}>
               Закрыть
             </button>
           </div>
 
-          <div className="row" style={{ alignItems: "flex-end" }}>
+          <div className="refForm">
             {kind === "operators" ||
             kind === "event-types" ||
             kind === "hangars" ||
@@ -679,6 +825,16 @@ export function ReferenceView() {
                 <TextInput value={fManufacturer} onChange={setFManufacturer} style={{ width: 240 }} />
               </label>
             ) : null}
+            {kind === "aircraft-types" ? (
+              <label style={{ display: "grid", gap: 6 }}>
+                <span className="muted">Тип фюзеляжа</span>
+                <select value={fBodyType} onChange={(e) => setFBodyType(e.target.value)} style={{ width: 220 }}>
+                  <option value="">— любой —</option>
+                  <option value="NARROW_BODY">Узкий (A320, B737…)</option>
+                  <option value="WIDE_BODY">Широкий (A330, B777…)</option>
+                </select>
+              </label>
+            ) : null}
 
             {kind === "event-types" || kind === "aircraft-type-palette" ? (
               <label style={{ display: "grid", gap: 6 }}>
@@ -693,12 +849,18 @@ export function ReferenceView() {
             {kind === "shifts" ? (
               <>
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">startMin</span>
+                  <span className="muted">Начало смены</span>
                   <NumberInput value={fStartMin} onChange={setFStartMin} step={15} style={{ width: 140 }} />
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    мин. от 00:00 · {formatMinutesOfDay(fStartMin)}
+                  </span>
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">endMin</span>
+                  <span className="muted">Окончание смены</span>
                   <NumberInput value={fEndMin} onChange={setFEndMin} step={15} style={{ width: 140 }} />
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    мин. от 00:00 · {formatMinutesOfDay(fEndMin)}
+                  </span>
                 </label>
               </>
             ) : null}
@@ -741,12 +903,21 @@ export function ReferenceView() {
               <>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span className="muted">Вариант</span>
-                  <select value={fLayoutId} onChange={(e) => setFLayoutId(e.target.value)} style={{ width: 240 }}>
+                  <select value={fLayoutId} onChange={(e) => setFLayoutId(e.target.value)} style={{ width: 280 }}>
                     {(layoutsForStandsQ.data ?? []).map((l) => (
                       <option key={l.id} value={l.id}>
                         {l.name}
+                        {(l as any).capacitySummary ? ` (${(l as any).capacitySummary})` : ""}
                       </option>
                     ))}
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Тип фюзеляжа (места)</span>
+                  <select value={fBodyType} onChange={(e) => setFBodyType(e.target.value)} style={{ width: 220 }}>
+                    <option value="">— любой —</option>
+                    <option value="NARROW_BODY">Узкий</option>
+                    <option value="WIDE_BODY">Широкий</option>
                   </select>
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
@@ -754,23 +925,23 @@ export function ReferenceView() {
                   <TextInput value={fName} onChange={setFName} style={{ width: 240 }} />
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">x</span>
+                  <span className="muted">X (м)</span>
                   <NumberInput value={fX} onChange={setFX} step={0.5} style={{ width: 90 }} />
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">y</span>
+                  <span className="muted">Y (м)</span>
                   <NumberInput value={fY} onChange={setFY} step={0.5} style={{ width: 90 }} />
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">w</span>
+                  <span className="muted">Ширина (м)</span>
                   <NumberInput value={fW} onChange={setFW} step={0.5} style={{ width: 90 }} />
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">h</span>
+                  <span className="muted">Высота (м)</span>
                   <NumberInput value={fH} onChange={setFH} step={0.5} style={{ width: 90 }} />
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">rot</span>
+                  <span className="muted">Поворот (°)</span>
                   <NumberInput value={fRotate} onChange={setFRotate} step={1} style={{ width: 90 }} />
                 </label>
               </>
@@ -829,79 +1000,198 @@ export function ReferenceView() {
         </div>
       ) : null}
 
-      <div style={{ display: "grid", gap: 8 }}>
-        <div className="row">
-          <strong>Список</strong>
-          {listQ.isFetching ? <span className="muted">обновление…</span> : null}
-        </div>
-        {listQ.error ? <div className="error">{String(listQ.error.message || listQ.error)}</div> : null}
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ width: 220 }}>id / code</th>
-              <th>основные поля</th>
-              <th style={{ width: 190 }}>действия</th>
-              <th>прочее</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(listQ.data ?? []).map((row) => (
-              <tr key={row.id}>
-                <td>
-                  <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{row.id}</div>
-                  {row.code ? <div className="muted">{row.code}</div> : null}
-                  {row.icaoType ? <div className="muted">{row.icaoType}</div> : null}
-                </td>
-                <td>
-                  <div>
-                    <strong>
-                      {kind === "aircraft-type-palette"
-                        ? `${row.operator?.name ?? "Оператор"} • ${row.aircraftType?.icaoType ? `${row.aircraftType.icaoType} • ` : ""}${row.aircraftType?.name ?? "Тип ВС"}`
-                        : row.name ?? row.tailNumber ?? "—"}
-                    </strong>{" "}
-                    {row.isActive === false ? <span className="muted">(неактивен)</span> : null}
-                  </div>
-                  {row.operator?.name ? <div className="muted">Оператор: {row.operator.name}</div> : null}
-                  {row.type?.name ? <div className="muted">Тип ВС: {row.type.icaoType ? `${row.type.icaoType} • ` : ""}{row.type.name}</div> : null}
-                  {row.aircraftType?.name ? (
-                    <div className="muted">
-                      Тип ВС: {row.aircraftType.icaoType ? `${row.aircraftType.icaoType} • ` : ""}
-                      {row.aircraftType.name}
-                    </div>
-                  ) : null}
-                  {row.color ? (
-                    <div className="muted row" style={{ gap: 8 }}>
-                      <span style={{ width: 14, height: 14, borderRadius: 4, background: String(row.color), border: "1px solid rgba(148,163,184,0.6)" }} />
-                      {String(row.color)}
-                    </div>
-                  ) : null}
-                  {row.hangarId ? <div className="muted">hangarId: {row.hangarId}</div> : null}
-                  {row.layoutId ? <div className="muted">layoutId: {row.layoutId}</div> : null}
-                </td>
-                <td>
-                  <div className="row" style={{ gap: 8 }}>
-                    <button className="btn" onClick={() => openEdit(row)}>
-                      Изменить
-                    </button>
-                    <button
-                      className="btn"
-                      onClick={() => {
-                        if (confirm("Удалить запись?")) deleteM.mutate(row.id);
-                      }}
-                      disabled={deleteM.isPending}
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                  {deleteM.error ? <div className="error">{String(deleteM.error.message || deleteM.error)}</div> : null}
-                </td>
-                <td className="muted" style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-                  {JSON.stringify(row)}
-                </td>
+      <div className="card refList">
+        {listQ.error ? (
+          <div className="error" style={{ marginBottom: 8 }}>
+            {String(listQ.error.message || listQ.error)}
+          </div>
+        ) : null}
+        {(listQ.data ?? []).length === 0 && !listQ.isFetching ? (
+          <div className="refEmpty">
+            <div className="refEmptyTitle">
+              {search ? "Ничего не найдено" : "Записей пока нет"}
+            </div>
+            <div className="muted">
+              {search
+                ? "Попробуйте изменить запрос или очистить поиск."
+                : canWrite
+                  ? "Нажмите «Добавить», чтобы создать первую запись."
+                  : "Обратитесь к администратору для наполнения справочника."}
+            </div>
+          </div>
+        ) : (
+          <table className="table refTable">
+            <thead>
+              <tr>
+                <th>Название</th>
+                <th>Код / идентификация</th>
+                <th>Связи и параметры</th>
+                <th>Статус</th>
+                {isAdmin ? <th className="refTechColumn">Технические</th> : null}
+                <th className="refActionsColumn">Действия</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filteredRows.map((row: any) => {
+                const displayName =
+                  kind === "aircraft-type-palette"
+                    ? `${row.operator?.name ?? "Оператор"} × ${row.aircraftType?.icaoType ? `${row.aircraftType.icaoType} • ` : ""}${row.aircraftType?.name ?? "Тип ВС"}`
+                    : row.name ?? row.tailNumber ?? "—";
+                const idCodeLines: string[] = [];
+                if (row.code) idCodeLines.push(String(row.code));
+                if (row.icaoType) idCodeLines.push(`ICAO ${row.icaoType}`);
+                if (row.tailNumber && kind !== "aircraft") idCodeLines.push(String(row.tailNumber));
+                if (row.serialNumber) idCodeLines.push(`S/N ${row.serialNumber}`);
+                const bodyLabel = bodyTypeLabel(row.bodyType);
+
+                return (
+                  <tr key={row.id}>
+                    <td>
+                      <div className="refCellTitle">
+                        {row.color ? (
+                          <span
+                            className="refRowSwatch"
+                            style={{ background: String(row.color) }}
+                            title={String(row.color)}
+                          />
+                        ) : null}
+                        <strong>{displayName}</strong>
+                      </div>
+                      {row.description ? (
+                        <div className="muted refCellHint">{row.description}</div>
+                      ) : null}
+                    </td>
+                    <td>
+                      {idCodeLines.length > 0 ? (
+                        <div className="refCellLines">
+                          {idCodeLines.map((s, i) => (
+                            <span className="refCellLine" key={i}>
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="refLinks">
+                        {row.operator?.name ? (
+                          <span className="refLink">Оператор: <strong>{row.operator.name}</strong></span>
+                        ) : null}
+                        {row.type?.name ? (
+                          <span className="refLink">
+                            Тип ВС: <strong>{row.type.icaoType ? `${row.type.icaoType} • ` : ""}{row.type.name}</strong>
+                          </span>
+                        ) : null}
+                        {row.aircraftType?.name ? (
+                          <span className="refLink">
+                            Тип ВС: <strong>{row.aircraftType.icaoType ? `${row.aircraftType.icaoType} • ` : ""}{row.aircraftType.name}</strong>
+                          </span>
+                        ) : null}
+                        {row.manufacturer ? (
+                          <span className="refLink">Производитель: <strong>{row.manufacturer}</strong></span>
+                        ) : null}
+                        {row.hangar?.name ? (
+                          <span className="refLink">Ангар: <strong>{row.hangar.name}</strong></span>
+                        ) : null}
+                        {row.layout?.name ? (
+                          <span className="refLink">Вариант: <strong>{row.layout.name}</strong></span>
+                        ) : null}
+                        {(row as any).capacitySummary ? (
+                          <span className="refLink">Вместимость: <strong>{(row as any).capacitySummary}</strong></span>
+                        ) : null}
+                        {bodyLabel ? (
+                          <span className="refLink">Фюзеляж: <strong>{bodyLabel}</strong></span>
+                        ) : null}
+                        {row.uom ? <span className="refLink">Ед. изм.: <strong>{row.uom}</strong></span> : null}
+                        {kind === "shifts" && row.startMin != null && row.endMin != null ? (
+                          <span className="refLink">
+                            Смена: <strong>{formatMinutesOfDay(row.startMin)} – {formatMinutesOfDay(row.endMin)}</strong>
+                          </span>
+                        ) : null}
+                        {Array.isArray(row.skills) && row.skills.length > 0 ? (
+                          <span className="refLink">
+                            Квалификации:{" "}
+                            <strong>
+                              {row.skills
+                                .map((s: any) => s.skill?.code || s.skill?.name || s.skillId)
+                                .filter(Boolean)
+                                .join(", ")}
+                            </strong>
+                          </span>
+                        ) : null}
+                        {(row as any).widthMeters != null && (row as any).heightMeters != null ? (
+                          <span className="refLink">
+                            Размер: <strong>{(row as any).widthMeters} × {(row as any).heightMeters} м</strong>
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      {row.isActive === false ? (
+                        <span className="refStatus refStatusInactive">Неактивен</span>
+                      ) : (
+                        <span className="refStatus refStatusActive">Активен</span>
+                      )}
+                    </td>
+                    {isAdmin ? (
+                      <td className="refTechColumn">
+                        <details className="refTechDetails">
+                          <summary title="Технические данные записи">ID / JSON</summary>
+                          <div className="refTechBody">
+                            <div className="refTechId" title="ID записи">
+                              <span className="muted">id:</span>{" "}
+                              <code>{row.id}</code>
+                            </div>
+                            {row.hangarId ? (
+                              <div className="refTechId">
+                                <span className="muted">hangarId:</span> <code>{row.hangarId}</code>
+                              </div>
+                            ) : null}
+                            {row.layoutId ? (
+                              <div className="refTechId">
+                                <span className="muted">layoutId:</span> <code>{row.layoutId}</code>
+                              </div>
+                            ) : null}
+                            <pre className="refTechJson">{JSON.stringify(row, null, 2)}</pre>
+                          </div>
+                        </details>
+                      </td>
+                    ) : null}
+                    <td className="refActionsColumn">
+                      <div className="refRowActions">
+                        {canWrite ? (
+                          <>
+                            <button className="btn btnGhost" onClick={() => openEdit(row)} title="Редактировать">
+                              Изменить
+                            </button>
+                            <button
+                              className="btn btnGhost refBtnDanger"
+                              onClick={() => {
+                                if (confirm("Удалить запись?")) deleteM.mutate(row.id);
+                              }}
+                              disabled={deleteM.isPending}
+                              title="Удалить запись"
+                            >
+                              Удалить
+                            </button>
+                          </>
+                        ) : (
+                          <span className="muted">только просмотр</span>
+                        )}
+                      </div>
+                      {deleteM.error ? (
+                        <div className="error refCellHint">{String(deleteM.error.message || deleteM.error)}</div>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
       </div>
     </div>
   );
