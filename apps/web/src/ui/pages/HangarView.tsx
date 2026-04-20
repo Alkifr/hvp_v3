@@ -223,7 +223,7 @@ export function HangarView() {
     setSelectedEventId(null);
   };
 
-  const handleStandClick = (layoutId: string, standId: string, hangarId: string) => {
+  const handleStandClick = (layoutId: string, standId: string, _hangarId: string) => {
     if (mode !== "planning") return;
     if (!selectedEventId) return;
     setDraft((prev) => {
