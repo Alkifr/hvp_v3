@@ -59,7 +59,10 @@ function overlapMinutes(rStart: number, rEnd: number, periodStart: number, perio
   return Math.max(0, end - start) / (60 * 1000);
 }
 
-function eventAircraftLabel(ev: EventRow): string {
+function eventAircraftLabel(ev: {
+  aircraft?: { tailNumber: string } | null;
+  virtualAircraft?: { label?: string } | null;
+}): string {
   return ev.aircraft?.tailNumber ?? ev.virtualAircraft?.label ?? "—";
 }
 
