@@ -5,6 +5,15 @@ import { EventAuditAction, EventStatus, PlanningLevel } from "@prisma/client";
 
 import { zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
+
+function assertCanWrite(req: any) {
+  if (!canWriteInContext(req)) {
+    const err: any = new Error("SANDBOX_READ_ONLY");
+    err.statusCode = 403;
+    throw err;
+  }
+}
 
 function getActor(req: any) {
   const auth = req.auth as { email?: string } | undefined;
@@ -41,6 +50,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post("/", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
 
     const body = z
       .object({
@@ -103,6 +113,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       })(),
       app.prisma.standReservation.findMany({
         where: {
+          ...sandboxFilter(req),
           startAt: { lt: windowEnd },
           endAt: { gt: body.startFrom },
           event: { status: { not: EventStatus.CANCELLED } }
@@ -223,6 +234,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       operatorId: body.operatorId,
       aircraftTypeId: body.aircraftTypeId
     };
+    const sbId = sandboxIdFor(req);
 
     const result = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const created: Array<{
@@ -251,6 +263,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               level: PlanningLevel.OPERATIONAL,
               status: EventStatus.PLANNED,
               title,
+              sandboxId: sbId,
               eventTypeId: body.eventTypeId,
               startAt,
               endAt,
@@ -260,11 +273,12 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             }
           });
           await tx.standReservation.create({
-            data: { eventId: ev.id, layoutId: p.layoutId, standId: p.standId, startAt, endAt }
+            data: { eventId: ev.id, sandboxId: sbId, layoutId: p.layoutId, standId: p.standId, startAt, endAt }
           });
           await tx.maintenanceEventAudit.create({
             data: {
               eventId: ev.id,
+              sandboxId: sbId,
               action: EventAuditAction.CREATE,
               actor: getActor(req),
               reason: "Массовое планирование",
@@ -290,6 +304,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               level: PlanningLevel.OPERATIONAL,
               status: EventStatus.DRAFT,
               title,
+              sandboxId: sbId,
               eventTypeId: body.eventTypeId,
               startAt,
               endAt,
@@ -301,6 +316,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           await tx.maintenanceEventAudit.create({
             data: {
               eventId: ev.id,
+              sandboxId: sbId,
               action: EventAuditAction.CREATE,
               actor: getActor(req),
               reason: "Массовое планирование (черновик — не поместилось в период)",

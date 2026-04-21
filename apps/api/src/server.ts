@@ -4,6 +4,8 @@ import Fastify from "fastify";
 
 import { prismaPlugin } from "./plugins/prisma.js";
 import { authPlugin } from "./plugins/auth.js";
+import { sandboxPlugin } from "./plugins/sandbox.js";
+import { sandboxRoutes } from "./routes/sandboxes.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { referenceRoutes } from "./routes/reference/index.js";
@@ -24,6 +26,7 @@ export async function buildServer() {
   await app.register(sensible);
   await app.register(prismaPlugin);
   await app.register(authPlugin);
+  await app.register(sandboxPlugin);
 
   await app.register(healthRoutes, { prefix: "/health" });
   await app.register(authRoutes, { prefix: "/api/auth" });
@@ -31,6 +34,7 @@ export async function buildServer() {
   await app.register(planningRoutes, { prefix: "/api" });
   await app.register(resourcesRoutes, { prefix: "/api/resources" });
   await app.register(adminRoutes, { prefix: "/api/admin" });
+  await app.register(sandboxRoutes, { prefix: "/api/sandboxes" });
 
   return app;
 }

@@ -45,3 +45,53 @@ export async function authChangePassword(oldPassword: string, newPassword: strin
   return data;
 }
 
+export type MyActivityItem = {
+  id: string;
+  action: "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE";
+  reason: string | null;
+  changes: any;
+  createdAt: string;
+  eventId: string;
+  event: {
+    id: string;
+    title: string;
+    startAt: string;
+    endAt: string;
+    tailNumber: string | null;
+  } | null;
+};
+
+export type MyActivityResponse = {
+  ok: true;
+  total: number;
+  limit: number;
+  offset: number;
+  byAction: Record<"CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE", number>;
+  items: MyActivityItem[];
+};
+
+export async function authMyActivity(params: {
+  limit?: number;
+  offset?: number;
+  action?: "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE";
+  q?: string;
+} = {}): Promise<MyActivityResponse> {
+  const u = new URLSearchParams();
+  if (params.limit != null) u.set("limit", String(params.limit));
+  if (params.offset != null) u.set("offset", String(params.offset));
+  if (params.action) u.set("action", params.action);
+  if (params.q) u.set("q", params.q);
+  const res = await fetch(`/api/auth/me/activity?${u.toString()}`, { credentials: "include" });
+  if (!res.ok) {
+    return {
+      ok: true,
+      total: 0,
+      limit: params.limit ?? 50,
+      offset: params.offset ?? 0,
+      byAction: { CREATE: 0, UPDATE: 0, RESERVE: 0, UNRESERVE: 0 },
+      items: []
+    };
+  }
+  return (await res.json()) as MyActivityResponse;
+}
+

@@ -4,6 +4,15 @@ import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
+
+function assertCanWrite(req: any) {
+  if (!canWriteInContext(req)) {
+    const err: any = new Error("SANDBOX_READ_ONLY");
+    err.statusCode = 403;
+    throw err;
+  }
+}
 
 function getActor(req: any) {
   const auth = req.auth as { email?: string } | undefined;
@@ -29,6 +38,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
     return await app.prisma.standReservation.findMany({
       where: {
+        ...sandboxFilter(req),
         layoutId: query.layoutId,
         startAt: { lt: to },
         endAt: { gt: from },
@@ -45,6 +55,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
   // Создать/заменить резерв под событие (самое частое действие в UI)
   app.put("/by-event/:eventId", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const eventId = zUuid.parse((req.params as any).eventId);
     const body = z
       .object({
@@ -56,9 +67,10 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.body);
 
-    const event = await app.prisma.maintenanceEvent.findUniqueOrThrow({
-      where: { id: eventId }
+    const event = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) }
     });
+    if (!event) throw app.httpErrors.notFound("Event not found");
 
     const existingReservation = await app.prisma.standReservation.findUnique({
       where: { eventId }
@@ -73,6 +85,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     // Проверка конфликтов: любое пересечение по времени на том же месте
     const conflict = await app.prisma.standReservation.findFirst({
       where: {
+        ...sandboxFilter(req),
         standId: body.standId,
         eventId: { not: eventId },
         startAt: { lt: endAt },
@@ -94,6 +107,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     });
 
     // Upsert по уникальному eventId
+    const sbId = sandboxIdFor(req);
     const reservation = await app.prisma.standReservation.upsert({
       where: { eventId },
       update: {
@@ -104,6 +118,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       },
       create: {
         eventId,
+        sandboxId: sbId,
         layoutId: body.layoutId,
         standId: body.standId,
         startAt,
@@ -131,6 +146,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     await app.prisma.maintenanceEventAudit.create({
       data: {
         eventId,
+        sandboxId: sbId,
         action: EventAuditAction.RESERVE,
         actor: getActor(req),
         reason: body.changeReason ?? (existingReservation ? null : "Первичное назначение места"),
@@ -162,6 +178,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
   // Доступно только ролям ADMIN/PLANNER + permission events:write.
   app.post("/dnd-move", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const roles = ((req as any).auth?.roles ?? []) as string[];
     if (!roles.includes("ADMIN") && !roles.includes("PLANNER")) {
       const err: any = new Error("FORBIDDEN");
@@ -181,12 +198,14 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       .parse(req.body);
 
     const bump = Boolean(body.bumpOnConflict);
+    const sbId = sandboxIdFor(req);
 
     const moved = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const event = await tx.maintenanceEvent.findUniqueOrThrow({
-        where: { id: body.eventId },
+      const event = await tx.maintenanceEvent.findFirst({
+        where: { id: body.eventId, sandboxId: sbId },
         include: { reservation: true, aircraft: true }
       });
+      if (!event) throw app.httpErrors.notFound("Event not found");
 
       const layout = await tx.hangarLayout.findUniqueOrThrow({
         where: { id: body.layoutId },
@@ -199,6 +218,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       const conflicts = body.bumpedEventId
         ? await tx.standReservation.findMany({
             where: {
+              sandboxId: sbId,
               standId: body.standId,
               eventId: body.bumpedEventId,
               startAt: { lt: endAt },
@@ -209,6 +229,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           })
         : await tx.standReservation.findMany({
             where: {
+              sandboxId: sbId,
               standId: body.standId,
               eventId: { not: body.eventId },
               startAt: { lt: endAt },
@@ -244,6 +265,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           await tx.maintenanceEventAudit.create({
             data: {
               eventId: bumpedEventId,
+              sandboxId: sbId,
               action: EventAuditAction.UPDATE,
               actor: getActor(req),
               reason: body.changeReason,
@@ -274,7 +296,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       const reservation = await tx.standReservation.upsert({
         where: { eventId: body.eventId },
         update: { layoutId: body.layoutId, standId: body.standId, startAt, endAt },
-        create: { eventId: body.eventId, layoutId: body.layoutId, standId: body.standId, startAt, endAt }
+        create: { eventId: body.eventId, sandboxId: sbId, layoutId: body.layoutId, standId: body.standId, startAt, endAt }
       });
 
       await tx.maintenanceEvent.update({
@@ -285,6 +307,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       await tx.maintenanceEventAudit.create({
         data: {
           eventId: body.eventId,
+          sandboxId: sbId,
           action: EventAuditAction.RESERVE,
           actor: getActor(req),
           reason: body.changeReason,
@@ -320,6 +343,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
   // Доступно только ролям ADMIN/PLANNER + permission events:write.
   app.post("/dnd-place", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const roles = ((req as any).auth?.roles ?? []) as string[];
     if (!roles.includes("ADMIN") && !roles.includes("PLANNER")) {
       const err: any = new Error("FORBIDDEN");
@@ -342,12 +366,14 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       .parse(req.body);
 
     const bump = Boolean(body.bumpOnConflict);
+    const sbId = sandboxIdFor(req);
 
     const moved = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const event = await tx.maintenanceEvent.findUniqueOrThrow({
-        where: { id: body.eventId },
+      const event = await tx.maintenanceEvent.findFirst({
+        where: { id: body.eventId, sandboxId: sbId },
         include: { reservation: true, aircraft: true }
       });
+      if (!event) throw app.httpErrors.notFound("Event not found");
 
       const layout = await tx.hangarLayout.findUniqueOrThrow({
         where: { id: body.layoutId },
@@ -358,6 +384,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       const conflicts = body.bumpedEventId
         ? await tx.standReservation.findMany({
             where: {
+              sandboxId: sbId,
               standId: body.standId,
               eventId: body.bumpedEventId,
               startAt: { lt: body.endAt },
@@ -368,6 +395,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           })
         : await tx.standReservation.findMany({
             where: {
+              sandboxId: sbId,
               standId: body.standId,
               eventId: { not: body.eventId },
               startAt: { lt: body.endAt },
@@ -399,6 +427,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           await tx.maintenanceEventAudit.create({
             data: {
               eventId: bumpedEventId,
+              sandboxId: sbId,
               action: EventAuditAction.UPDATE,
               actor: getActor(req),
               reason: body.changeReason,
@@ -441,12 +470,13 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       const reservation = await tx.standReservation.upsert({
         where: { eventId: body.eventId },
         update: { layoutId: body.layoutId, standId: body.standId, startAt: body.startAt, endAt: body.endAt },
-        create: { eventId: body.eventId, layoutId: body.layoutId, standId: body.standId, startAt: body.startAt, endAt: body.endAt }
+        create: { eventId: body.eventId, sandboxId: sbId, layoutId: body.layoutId, standId: body.standId, startAt: body.startAt, endAt: body.endAt }
       });
 
       await tx.maintenanceEventAudit.create({
         data: {
           eventId: body.eventId,
+          sandboxId: sbId,
           action: EventAuditAction.UPDATE,
           actor: getActor(req),
           reason: body.changeReason,
@@ -477,7 +507,13 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/by-event/:eventId", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const eventId = zUuid.parse((req.params as any).eventId);
+    const event = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) },
+      select: { id: true }
+    });
+    if (!event) throw app.httpErrors.notFound("Event not found");
     const existing = await app.prisma.standReservation.findUnique({ where: { eventId } });
     if (!existing) {
       // идемпотентность: если резерва нет — считаем, что "уже снято"
@@ -489,6 +525,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     await app.prisma.maintenanceEventAudit.create({
       data: {
         eventId,
+        sandboxId: sandboxIdFor(req),
         action: EventAuditAction.UNRESERVE,
         actor: getActor(req),
         reason: "Снятие резерва",

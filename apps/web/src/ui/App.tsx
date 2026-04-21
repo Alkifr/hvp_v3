@@ -10,9 +10,11 @@ import { ReferenceView } from "./pages/ReferenceView";
 import { LoginView } from "./pages/LoginView";
 import { ProfileView } from "./pages/ProfileView";
 import { AdminView } from "./pages/AdminView";
+import { SandboxesView } from "./pages/SandboxesView";
+import { SandboxSwitcher, useActiveSandbox } from "./components/SandboxSwitcher";
 import { authMe } from "./auth/authApi";
 
-type Page = "gantt" | "hangar" | "import" | "mass" | "ref" | "profile" | "admin";
+type Page = "gantt" | "hangar" | "import" | "mass" | "ref" | "profile" | "admin" | "sandboxes";
 
 function NavIcon(props: { active: boolean; onClick: () => void; label: string; icon: ReactNode }) {
   return (
@@ -82,6 +84,13 @@ const ICONS = {
       <path d="M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6l8-3z" />
       <path d="M9.5 12.5l2 2 3.5-4" />
     </svg>
+  ),
+  sandboxes: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7l9-4 9 4-9 4-9-4z" />
+      <path d="M3 7v10l9 4 9-4V7" />
+      <path d="M3 12l9 4 9-4" />
+    </svg>
   )
 } as const;
 
@@ -97,7 +106,16 @@ export function App() {
 
   const initial = useMemo<Page>(() => {
     const hash = (location.hash || "").replace("#", "");
-    if (hash === "hangar" || hash === "ref" || hash === "gantt" || hash === "import" || hash === "mass" || hash === "profile" || hash === "admin")
+    if (
+      hash === "hangar" ||
+      hash === "ref" ||
+      hash === "gantt" ||
+      hash === "import" ||
+      hash === "mass" ||
+      hash === "profile" ||
+      hash === "admin" ||
+      hash === "sandboxes"
+    )
       return hash;
     return "gantt";
   }, []);
@@ -125,8 +143,25 @@ export function App() {
   const canRef = permissions.includes("ref:read");
   const canAdmin = permissions.includes("admin:users") || permissions.includes("admin:roles");
 
+  return <AppShell me={me} permissions={permissions} page={page} setPage={setPage} canEvents={canEvents} canWrite={canWrite} canRef={canRef} canAdmin={canAdmin} />;
+}
+
+function AppShell(props: {
+  me: any;
+  permissions: string[];
+  page: Page;
+  setPage: (p: Page) => void;
+  canEvents: boolean;
+  canWrite: boolean;
+  canRef: boolean;
+  canAdmin: boolean;
+}) {
+  const { me, permissions, page, setPage, canEvents, canWrite, canRef, canAdmin } = props;
+  const { active: activeSandbox } = useActiveSandbox();
+  const inSandbox = Boolean(activeSandbox);
+
   return (
-    <div className="appShell">
+    <div className={inSandbox ? "appShell appShellSandbox" : "appShell"}>
       <aside className="nav">
         <div className="navBrand" title="Hangar Planning" aria-label="Hangar Planning">
           HP
@@ -150,6 +185,8 @@ export function App() {
           {canRef ? (
             <NavIcon active={page === "ref"} onClick={() => setPage("ref")} label="Справочники" icon={ICONS.ref} />
           ) : null}
+
+          <NavIcon active={page === "sandboxes"} onClick={() => setPage("sandboxes")} label="Песочницы" icon={ICONS.sandboxes} />
         </div>
 
         <div className="navGroup navGroupBottom">
@@ -161,6 +198,24 @@ export function App() {
       </aside>
 
       <main className="content">
+        <div className="topbar">
+          {inSandbox ? (
+            <div className="topbarSandboxBanner" title={activeSandbox?.description ?? ""}>
+              <span className="topbarSandboxDot" aria-hidden="true" />
+              <span>Вы работаете в песочнице</span>
+              <b>{activeSandbox?.name}</b>
+              <span className="muted">· изменения изолированы от рабочего контура</span>
+            </div>
+          ) : (
+            <div className="topbarProdBanner">
+              <span className="topbarProdDot" aria-hidden="true" />
+              <span>Рабочий контур</span>
+            </div>
+          )}
+          <div className="topbarSpacer" />
+          <SandboxSwitcher onManage={() => setPage("sandboxes")} />
+        </div>
+
         {page === "gantt" && <GanttView />}
         {page === "hangar" && <HangarView />}
         {page === "import" && <EventImportView />}
@@ -168,6 +223,7 @@ export function App() {
         {page === "ref" && <ReferenceView />}
         {page === "profile" && <ProfileView me={me} />}
         {page === "admin" && <AdminView permissions={permissions} />}
+        {page === "sandboxes" && <SandboxesView />}
       </main>
     </div>
   );

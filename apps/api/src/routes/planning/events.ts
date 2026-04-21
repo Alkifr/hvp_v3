@@ -4,6 +4,15 @@ import { EventAuditAction, EventStatus, PlanningLevel, Prisma } from "@prisma/cl
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
+
+function assertCanWrite(req: any) {
+  if (!canWriteInContext(req)) {
+    const err: any = new Error("SANDBOX_READ_ONLY");
+    err.statusCode = 403;
+    throw err;
+  }
+}
 
 function getActor(req: any) {
   const auth = req.auth as { email?: string } | undefined;
@@ -67,6 +76,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     return await app.prisma.maintenanceEvent.findMany({
       where: {
+        ...sandboxFilter(req),
         ...(query.level ? { level: query.level } : {}),
         ...(query.hangarId ? { hangarId: query.hangarId } : {}),
         ...(query.layoutId ? { layoutId: query.layoutId } : {}),
@@ -93,13 +103,14 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     assertPermission(req, "events:read");
     const eventId = zUuid.parse((req.params as any).id);
     return await app.prisma.eventTow.findMany({
-      where: { eventId },
+      where: { eventId, ...sandboxFilter(req) },
       orderBy: [{ startAt: "asc" }]
     });
   });
 
   app.post("/:id/tows", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const eventId = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -110,18 +121,23 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
       .parse(req.body);
 
-    const ev = await app.prisma.maintenanceEvent.findUniqueOrThrow({ where: { id: eventId } });
+    const ev = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) }
+    });
+    if (!ev) throw app.httpErrors.notFound("Event not found");
     if (body.startAt < ev.startAt || body.endAt > ev.endAt) {
       throw app.httpErrors.badRequest("Tow interval must be within event startAt/endAt");
     }
 
+    const sbId = sandboxIdFor(req);
     const created = await app.prisma.eventTow.create({
-      data: { eventId, startAt: body.startAt, endAt: body.endAt }
+      data: { eventId, startAt: body.startAt, endAt: body.endAt, sandboxId: sbId }
     });
 
     await app.prisma.maintenanceEventAudit.create({
       data: {
         eventId,
+        sandboxId: sbId,
         action: EventAuditAction.UPDATE,
         actor: getActor(req),
         reason: body.changeReason ?? "Буксировка",
@@ -136,6 +152,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/:id/tows/:towId", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const eventId = zUuid.parse((req.params as any).id);
     const towId = zUuid.parse((req.params as any).towId);
     const query = z
@@ -144,13 +161,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse((req.query ?? {}) as any);
 
-    const existing = await app.prisma.eventTow.findFirst({ where: { id: towId, eventId } });
+    const existing = await app.prisma.eventTow.findFirst({
+      where: { id: towId, eventId, ...sandboxFilter(req) }
+    });
     if (!existing) return { ok: true, deleted: 0 };
 
     await app.prisma.eventTow.delete({ where: { id: towId } });
     await app.prisma.maintenanceEventAudit.create({
       data: {
         eventId,
+        sandboxId: sandboxIdFor(req),
         action: EventAuditAction.UPDATE,
         actor: getActor(req),
         reason: query.changeReason ?? "Буксировка",
@@ -164,6 +184,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   // Поддерживает dryRun=true для "предпросмотра" без создания.
   app.post("/import", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
 
     const body = z
       .object({
@@ -284,6 +305,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       candidateStandIds.size > 0 && Number.isFinite(minStart.valueOf()) && Number.isFinite(maxEnd.valueOf()) && maxEnd > minStart
         ? await app.prisma.standReservation.findMany({
             where: {
+              ...sandboxFilter(req),
               standId: { in: Array.from(candidateStandIds) },
               startAt: { lt: maxEnd },
               endAt: { gt: minStart },
@@ -455,6 +477,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         const eventType = eventTypeByKey.get(eventKey)!;
         const hangar = hangarStr ? hangarByKey.get(hangarStr.toLowerCase()) ?? null : null;
 
+        const sbId = sandboxIdFor(req);
         await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
           const created = await tx.maintenanceEvent.create({
             data: {
@@ -465,13 +488,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               eventTypeId: eventType.id,
               startAt,
               endAt,
-              hangarId: hangar?.id ?? null
+              hangarId: hangar?.id ?? null,
+              sandboxId: sbId
             }
           });
 
           await tx.maintenanceEventAudit.create({
             data: {
               eventId: created.id,
+              sandboxId: sbId,
               action: EventAuditAction.CREATE,
               actor: getActor(req),
               reason: "Импорт из Excel",
@@ -501,6 +526,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             // Повторно проверим конфликт на случай параллельных изменений (дешево: standId + диапазон)
             const conflict = await tx.standReservation.findFirst({
               where: {
+                sandboxId: sbId,
                 standId: stand.id,
                 startAt: { lt: endAt },
                 endAt: { gt: startAt },
@@ -515,7 +541,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             }
 
             await tx.standReservation.create({
-              data: { eventId: created.id, layoutId: stand.layoutId, standId: stand.id, startAt, endAt }
+              data: { eventId: created.id, layoutId: stand.layoutId, standId: stand.id, startAt, endAt, sandboxId: sbId }
             });
 
             await tx.maintenanceEvent.update({
@@ -544,6 +570,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const body = z
       .object({
         level: z.nativeEnum(PlanningLevel),
@@ -564,9 +591,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .parse(req.body);
 
     const { changeReason, ...data } = body;
+    const sbId = sandboxIdFor(req);
     const created = await app.prisma.maintenanceEvent.create({
       data: {
         ...data,
+        sandboxId: sbId,
         aircraftId: data.aircraftId ?? (data.virtualAircraft ? null : undefined),
         virtualAircraft: data.virtualAircraft ? (data.virtualAircraft as object) : undefined
       }
@@ -575,6 +604,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     await app.prisma.maintenanceEventAudit.create({
       data: {
         eventId: created.id,
+        sandboxId: sbId,
         action: EventAuditAction.CREATE,
         actor: getActor(req),
         reason: changeReason ?? "Создание события",
@@ -599,6 +629,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch("/:id", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -616,10 +647,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.body);
 
-    const existing = await app.prisma.maintenanceEvent.findUniqueOrThrow({
-      where: { id },
+    const existing = await app.prisma.maintenanceEvent.findFirst({
+      where: { id, ...sandboxFilter(req) },
       include: { reservation: true }
     });
+    if (!existing) throw app.httpErrors.notFound("Event not found");
 
     const { changeReason, ...patch } = body;
     const nextStatus = body.status ?? existing.status;
@@ -656,6 +688,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     if (existing.reservation) {
       const conflict = await app.prisma.standReservation.findFirst({
         where: {
+          ...sandboxFilter(req),
           standId: existing.reservation.standId,
           eventId: { not: id },
           startAt: { lt: nextEnd },
@@ -687,6 +720,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       await app.prisma.maintenanceEventAudit.create({
         data: {
           eventId: id,
+          sandboxId: sandboxIdFor(req),
           action: EventAuditAction.UPDATE,
           actor: getActor(req),
           reason: changeReason ?? null,
@@ -701,14 +735,20 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/:id/history", async (req) => {
     const id = zUuid.parse((req.params as any).id);
     return await app.prisma.maintenanceEventAudit.findMany({
-      where: { eventId: id },
+      where: { eventId: id, ...sandboxFilter(req) },
       orderBy: { createdAt: "desc" }
     });
   });
 
   app.delete("/:id", async (req) => {
     assertPermission(req, "events:write");
+    assertCanWrite(req);
     const id = zUuid.parse((req.params as any).id);
+    const existing = await app.prisma.maintenanceEvent.findFirst({
+      where: { id, ...sandboxFilter(req) },
+      select: { id: true }
+    });
+    if (!existing) throw app.httpErrors.notFound("Event not found");
     await app.prisma.maintenanceEvent.delete({ where: { id } });
     return { ok: true };
   });

@@ -40,6 +40,13 @@ enum BodyType {
   WIDE_BODY     // широкий (A330, B777, …)
 }
 
+// Роль пользователя в песочнице плана
+enum SandboxMemberRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
 model Shift {
   id        String   @id @default(uuid())
   code      String   @unique
@@ -120,6 +127,8 @@ model PersonUnavailability {
 model EventWorkPlanLine {
   id            String   @id @default(uuid())
   eventId       String
+  // контекст планирования: null = рабочий контур, иначе — песочница
+  sandboxId     String?
   date          DateTime // начало суток (UTC) для планирования по дням
   shiftId       String
   skillId       String
@@ -130,19 +139,22 @@ model EventWorkPlanLine {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  shift Shift            @relation(fields: [shiftId], references: [id])
-  skill Skill            @relation(fields: [skillId], references: [id])
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  shift   Shift            @relation(fields: [shiftId], references: [id])
+  skill   Skill            @relation(fields: [skillId], references: [id])
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([eventId, date])
   @@index([skillId])
   @@index([shiftId])
+  @@index([sandboxId])
   @@unique([eventId, date, shiftId, skillId])
 }
 
 model EventWorkActualLine {
   id              String   @id @default(uuid())
   eventId         String
+  sandboxId       String?
   date            DateTime // начало суток (UTC)
   shiftId         String
   skillId         String
@@ -151,19 +163,22 @@ model EventWorkActualLine {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  shift Shift            @relation(fields: [shiftId], references: [id])
-  skill Skill            @relation(fields: [skillId], references: [id])
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  shift   Shift            @relation(fields: [shiftId], references: [id])
+  skill   Skill            @relation(fields: [skillId], references: [id])
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([eventId, date])
   @@index([skillId])
   @@index([shiftId])
+  @@index([sandboxId])
   @@unique([eventId, date, shiftId, skillId])
 }
 
 model TimeEntry {
   id        String   @id @default(uuid())
   eventId   String
+  sandboxId String?
   personId  String
   skillId   String
   shiftId   String?
@@ -174,14 +189,16 @@ model TimeEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  event  MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  person Person           @relation(fields: [personId], references: [id])
-  skill  Skill            @relation(fields: [skillId], references: [id])
-  shift  Shift?           @relation(fields: [shiftId], references: [id])
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  person  Person           @relation(fields: [personId], references: [id])
+  skill   Skill            @relation(fields: [skillId], references: [id])
+  shift   Shift?           @relation(fields: [shiftId], references: [id])
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([eventId, startAt])
   @@index([personId, startAt])
   @@index([skillId])
+  @@index([sandboxId])
 }
 
 model Warehouse {
@@ -222,20 +239,24 @@ model StockMovement {
   type        StockMovementType
   qty         Float
   eventId     String?
+  sandboxId   String?
   notes       String?
   createdAt   DateTime          @default(now())
 
-  material  Material @relation(fields: [materialId], references: [id])
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
-  event     MaintenanceEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  material  Material           @relation(fields: [materialId], references: [id])
+  warehouse Warehouse          @relation(fields: [warehouseId], references: [id])
+  event     MaintenanceEvent?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  sandbox   Sandbox?           @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([warehouseId, materialId, createdAt])
   @@index([eventId])
+  @@index([sandboxId])
 }
 
 model MaterialReservation {
   id          String   @id @default(uuid())
   eventId     String
+  sandboxId   String?
   materialId  String
   warehouseId String
   qtyReserved Float
@@ -247,15 +268,18 @@ model MaterialReservation {
   event     MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
   material  Material         @relation(fields: [materialId], references: [id])
   warehouse Warehouse        @relation(fields: [warehouseId], references: [id])
+  sandbox   Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([eventId, needByDate])
   @@index([warehouseId, materialId])
+  @@index([sandboxId])
   @@unique([eventId, materialId, warehouseId, needByDate])
 }
 
 model MaterialIssue {
   id          String   @id @default(uuid())
   eventId     String
+  sandboxId   String?
   materialId  String
   warehouseId String
   qtyIssued   Float
@@ -267,9 +291,11 @@ model MaterialIssue {
   event     MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
   material  Material         @relation(fields: [materialId], references: [id])
   warehouse Warehouse        @relation(fields: [warehouseId], references: [id])
+  sandbox   Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([eventId, issuedAt])
   @@index([warehouseId, materialId])
+  @@index([sandboxId])
 }
 
 model User {
@@ -284,7 +310,49 @@ model User {
 
   roles UserRole[]
 
+  ownedSandboxes     Sandbox[]       @relation("SandboxOwner")
+  sandboxMemberships SandboxMember[]
+
   @@index([isActive])
+}
+
+// Песочница плана: именованное изолированное пространство для «игры» с планом
+model Sandbox {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  ownerId     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner   User            @relation("SandboxOwner", fields: [ownerId], references: [id])
+  members SandboxMember[]
+
+  events            MaintenanceEvent[]
+  reservations      StandReservation[]
+  towSegments       EventTow[]
+  auditTrail        MaintenanceEventAudit[]
+  workPlanLines     EventWorkPlanLine[]
+  workActualLines   EventWorkActualLine[]
+  timeEntries       TimeEntry[]
+  materialReservations MaterialReservation[]
+  materialIssues    MaterialIssue[]
+  stockMovements    StockMovement[]
+
+  @@index([ownerId])
+}
+
+model SandboxMember {
+  sandboxId String
+  userId    String
+  role      SandboxMemberRole @default(EDITOR)
+  addedAt   DateTime          @default(now())
+
+  sandbox Sandbox @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([sandboxId, userId])
+  @@index([userId])
 }
 
 model Role {
@@ -477,6 +545,9 @@ model MaintenanceEvent {
   status        EventStatus   @default(PLANNED)
   title         String
 
+  // контекст планирования: null = рабочий контур, иначе — песочница
+  sandboxId     String?
+
   aircraftId    String?       // null при виртуальном борте (массовое планирование)
   eventTypeId   String
 
@@ -497,8 +568,9 @@ model MaintenanceEvent {
   aircraft  Aircraft? @relation(fields: [aircraftId], references: [id])
   eventType EventType @relation(fields: [eventTypeId], references: [id])
 
-  hangar Hangar? @relation(fields: [hangarId], references: [id])
-  layout HangarLayout? @relation(fields: [layoutId], references: [id])
+  hangar  Hangar?       @relation(fields: [hangarId], references: [id])
+  layout  HangarLayout? @relation(fields: [layoutId], references: [id])
+  sandbox Sandbox?      @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   reservation StandReservation?
   auditTrail  MaintenanceEventAudit[]
@@ -516,25 +588,30 @@ model MaintenanceEvent {
   @@index([startAt, endAt])
   @@index([hangarId])
   @@index([layoutId])
+  @@index([sandboxId])
 }
 
 // Буксировки (закатка/выкатка) как интервалы внутри события (могут быть несколько раз)
 model EventTow {
   id        String   @id @default(uuid())
   eventId   String
+  sandboxId String?
   startAt   DateTime
   endAt     DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([eventId, startAt])
+  @@index([sandboxId])
 }
 
 model MaintenanceEventAudit {
   id        String           @id @default(uuid())
   eventId   String
+  sandboxId String?
   action    EventAuditAction
   actor     String           @default("browser")
   reason    String?
@@ -542,9 +619,11 @@ model MaintenanceEventAudit {
   changes   Json?
   createdAt DateTime         @default(now())
 
-  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([eventId, createdAt])
+  @@index([sandboxId])
 }
 
 model StandReservation {
@@ -552,6 +631,7 @@ model StandReservation {
 
   // Резервирование может быть привязано к событию (обычно да)
   eventId   String   @unique
+  sandboxId String?
   layoutId  String
   standId   String
 
@@ -562,11 +642,13 @@ model StandReservation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  event  MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  layout HangarLayout     @relation(fields: [layoutId], references: [id])
-  stand  HangarStand      @relation(fields: [standId], references: [id])
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  layout  HangarLayout     @relation(fields: [layoutId], references: [id])
+  stand   HangarStand      @relation(fields: [standId], references: [id])
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([layoutId])
   @@index([standId, startAt, endAt])
+  @@index([sandboxId])
 }
 

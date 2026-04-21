@@ -3,6 +3,15 @@ import { z } from "zod";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
+
+function assertCanWrite(req: any) {
+  if (!canWriteInContext(req)) {
+    const err: any = new Error("SANDBOX_READ_ONLY");
+    err.statusCode = 403;
+    throw err;
+  }
+}
 
 function toUtcDayStart(v: string | Date) {
   const d = v instanceof Date ? v : new Date(v);
@@ -15,7 +24,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
     assertPermission(req as any, "resources:read");
     const eventId = zUuid.parse((req.params as any).eventId);
     return await app.prisma.eventWorkPlanLine.findMany({
-      where: { eventId },
+      where: { eventId, ...sandboxFilter(req as any) },
       include: { skill: true, shift: true },
       orderBy: [{ date: "asc" }, { shift: { code: "asc" } }, { skill: { code: "asc" } }]
     });
@@ -23,6 +32,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/:eventId/plan", async (req) => {
     assertPermission(req as any, "resources:plan");
+    assertCanWrite(req);
     const eventId = zUuid.parse((req.params as any).eventId);
     const body = z
       .object({
@@ -39,6 +49,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
     return await app.prisma.eventWorkPlanLine.create({
       data: {
         eventId,
+        sandboxId: sandboxIdFor(req as any),
         date,
         shiftId: body.shiftId,
         skillId: body.skillId,
@@ -51,7 +62,13 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/plan/:id", async (req) => {
     assertPermission(req as any, "resources:plan");
+    assertCanWrite(req);
     const id = zUuid.parse((req.params as any).id);
+    const line = await app.prisma.eventWorkPlanLine.findFirst({
+      where: { id, ...sandboxFilter(req as any) },
+      select: { id: true }
+    });
+    if (!line) throw app.httpErrors.notFound("Plan line not found");
     await app.prisma.eventWorkPlanLine.delete({ where: { id } });
     return { ok: true };
   });
@@ -61,7 +78,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
     assertPermission(req as any, "resources:read");
     const eventId = zUuid.parse((req.params as any).eventId);
     return await app.prisma.eventWorkActualLine.findMany({
-      where: { eventId },
+      where: { eventId, ...sandboxFilter(req as any) },
       include: { skill: true, shift: true },
       orderBy: [{ date: "asc" }, { shift: { code: "asc" } }, { skill: { code: "asc" } }]
     });
@@ -69,6 +86,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/:eventId/actual", async (req) => {
     assertPermission(req as any, "resources:actual");
+    assertCanWrite(req);
     const eventId = zUuid.parse((req.params as any).eventId);
     const body = z
       .object({
@@ -85,6 +103,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
     return await app.prisma.eventWorkActualLine.create({
       data: {
         eventId,
+        sandboxId: sandboxIdFor(req as any),
         skillId: body.skillId,
         shiftId: body.shiftId,
         date,
@@ -96,7 +115,13 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/actual/:id", async (req) => {
     assertPermission(req as any, "resources:actual");
+    assertCanWrite(req);
     const id = zUuid.parse((req.params as any).id);
+    const line = await app.prisma.eventWorkActualLine.findFirst({
+      where: { id, ...sandboxFilter(req as any) },
+      select: { id: true }
+    });
+    if (!line) throw app.httpErrors.notFound("Actual line not found");
     await app.prisma.eventWorkActualLine.delete({ where: { id } });
     return { ok: true };
   });
@@ -107,8 +132,8 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
     const eventId = zUuid.parse((req.params as any).eventId);
 
     const [plan, actual] = await Promise.all([
-      app.prisma.eventWorkPlanLine.findMany({ where: { eventId }, include: { skill: true, shift: true } }),
-      app.prisma.eventWorkActualLine.findMany({ where: { eventId }, include: { skill: true, shift: true } })
+      app.prisma.eventWorkPlanLine.findMany({ where: { eventId, ...sandboxFilter(req as any) }, include: { skill: true, shift: true } }),
+      app.prisma.eventWorkActualLine.findMany({ where: { eventId, ...sandboxFilter(req as any) }, include: { skill: true, shift: true } })
     ]);
 
     return { ok: true, plan, actual };
