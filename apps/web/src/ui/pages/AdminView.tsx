@@ -76,6 +76,11 @@ export function AdminView(props: { permissions: string[] }) {
     () => roles.map((r) => ({ id: r.id, label: `${r.code} • ${r.name}` })),
     [roles]
   );
+  const roleByCode = useMemo(() => new Map(roles.map((r) => [r.code, r])), [roles]);
+  const pickInviteRole = (code: "PLANNER" | "VIEWER") => {
+    const role = roleByCode.get(code);
+    if (role) setURoleIds([role.id]);
+  };
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -95,7 +100,21 @@ export function AdminView(props: { permissions: string[] }) {
           </div>
           {usersQ.error ? <div className="error">{String(usersQ.error.message || usersQ.error)}</div> : null}
 
-          <div style={{ borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 10 }}>
+          <div className="adminInviteBox">
+            <div>
+              <strong>Пригласить пользователя</strong>
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                Создайте учётную запись с временным паролем. При первом входе пользователь обязан сменить пароль.
+              </div>
+            </div>
+            <div className="adminQuickRoles">
+              <button type="button" className="btn" onClick={() => pickInviteRole("PLANNER")}>
+                Планировщик
+              </button>
+              <button type="button" className="btn" onClick={() => pickInviteRole("VIEWER")}>
+                Просмотрщик
+              </button>
+            </div>
             <div className="row" style={{ alignItems: "flex-end" }}>
               <label style={{ display: "grid", gap: 6 }}>
                 <span className="muted">Email</span>
@@ -106,7 +125,7 @@ export function AdminView(props: { permissions: string[] }) {
                 <input value={uName} onChange={(e) => setUName(e.target.value)} style={{ width: 220 }} />
               </label>
               <label style={{ display: "grid", gap: 6 }}>
-                <span className="muted">Пароль (min 8)</span>
+                <span className="muted">Временный пароль (min 8)</span>
                 <input type="password" value={uPass} onChange={(e) => setUPass(e.target.value)} style={{ width: 220 }} />
               </label>
               <label style={{ display: "grid", gap: 6 }}>
@@ -114,7 +133,7 @@ export function AdminView(props: { permissions: string[] }) {
                 <MultiSelectDropdown options={roleOptions} value={uRoleIds} onChange={setURoleIds} width={260} maxHeight={220} />
               </label>
               <button className="btn btnPrimary" disabled={!uEmail || uPass.length < 8 || createUserM.isPending} onClick={() => createUserM.mutate()}>
-                Создать
+                Пригласить
               </button>
             </div>
             {createUserM.error ? <div className="error" style={{ marginTop: 8 }}>{String(createUserM.error.message || createUserM.error)}</div> : null}
@@ -189,10 +208,18 @@ export function AdminView(props: { permissions: string[] }) {
     const roleIds = props.u.roles.map((x) => x.role.id);
     const [selRoles, setSelRoles] = useState<string[]>(roleIds);
     const [isActive, setIsActive] = useState(props.u.isActive);
+    const [tempPassword, setTempPassword] = useState("");
 
     const saveM = useMutation({
       mutationFn: () => apiPatch<User>(`/api/admin/users/${props.u.id}`, { roleIds: selRoles, isActive }),
       onSuccess: async () => {
+        await qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      }
+    });
+    const resetM = useMutation({
+      mutationFn: () => apiPost<{ ok: true }>(`/api/admin/users/${props.u.id}/reset-password`, { newPassword: tempPassword }),
+      onSuccess: async () => {
+        setTempPassword("");
         await qc.invalidateQueries({ queryKey: ["admin", "users"] });
       }
     });
@@ -202,25 +229,44 @@ export function AdminView(props: { permissions: string[] }) {
         <td>{props.u.email}</td>
         <td>{props.u.displayName ?? "—"}</td>
         <td className="muted">{props.u.roles.map((x) => x.role.code).join(", ") || "—"}</td>
-        <td>{props.u.isActive ? "активен" : "выключен"}</td>
         <td>
-          <div className="row" style={{ gap: 8 }}>
-            <label className="row" style={{ gap: 6 }}>
-              <span className="muted">активен</span>
-              <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
-            </label>
-            <MultiSelectDropdown
-              options={props.roles.map((r) => ({ id: r.id, label: `${r.code} • ${r.name}` }))}
-              value={selRoles}
-              onChange={setSelRoles}
-              width={240}
-              maxHeight={240}
-            />
-            <button className="btn" onClick={() => saveM.mutate()} disabled={saveM.isPending}>
-              Сохранить
-            </button>
+          {props.u.isActive ? "активен" : "выключен"}
+          {props.u.mustChangePassword ? <div className="muted" style={{ fontSize: 12 }}>нужна смена пароля</div> : null}
+        </td>
+        <td>
+          <div className="adminUserActions">
+            <div className="row" style={{ gap: 8 }}>
+              <label className="row" style={{ gap: 6 }}>
+                <span className="muted">активен</span>
+                <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+              </label>
+              <MultiSelectDropdown
+                options={props.roles.map((r) => ({ id: r.id, label: `${r.code} • ${r.name}` }))}
+                value={selRoles}
+                onChange={setSelRoles}
+                width={240}
+                maxHeight={240}
+              />
+              <button className="btn" onClick={() => saveM.mutate()} disabled={saveM.isPending}>
+                Сохранить
+              </button>
+            </div>
+            <div className="row" style={{ gap: 8 }}>
+              <input
+                type="password"
+                placeholder="Новый временный пароль"
+                value={tempPassword}
+                onChange={(e) => setTempPassword(e.target.value)}
+                style={{ width: 220 }}
+              />
+              <button className="btn" onClick={() => resetM.mutate()} disabled={tempPassword.length < 8 || resetM.isPending}>
+                Выдать временный пароль
+              </button>
+            </div>
           </div>
           {saveM.error ? <div className="error">{String(saveM.error.message || saveM.error)}</div> : null}
+          {resetM.error ? <div className="error">{String(resetM.error.message || resetM.error)}</div> : null}
+          {resetM.isSuccess ? <div className="muted" style={{ fontSize: 12 }}>Временный пароль выдан. Пользователь сменит его при входе.</div> : null}
         </td>
       </tr>
     );

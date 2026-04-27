@@ -91,9 +91,6 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/change-password", async (req, reply) => {
-    // Требует авторизации
-    if (!req.auth) return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
-
     const body = z
       .object({
         oldPassword: z.string().min(1).max(200),
@@ -101,7 +98,23 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.body);
 
-    const user = await app.prisma.user.findUniqueOrThrow({ where: { id: req.auth.id } });
+    let user: { id: string; passwordHash: string; isActive: boolean } | null = null;
+    try {
+      const decoded = await req.jwtVerify<{ sub: string }>();
+      user = await app.prisma.user.findUnique({
+        where: { id: decoded.sub },
+        select: { id: true, passwordHash: true, isActive: true }
+      });
+    } catch {
+      app.clearAuthCookie(reply, req);
+      return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+    }
+
+    if (!user || !user.isActive) {
+      app.clearAuthCookie(reply, req);
+      return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+    }
+
     const ok = await argon2.verify(user.passwordHash, body.oldPassword);
     if (!ok) return reply.code(400).send({ ok: false, error: "OLD_PASSWORD_INVALID" });
 

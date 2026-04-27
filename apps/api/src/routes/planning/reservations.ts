@@ -14,6 +14,14 @@ function assertCanWrite(req: any) {
   }
 }
 
+function assertCanWriteEvent(req: any) {
+  if (req.sandbox) {
+    assertCanWrite(req);
+    return;
+  }
+  assertPermission(req, "events:write");
+}
+
 function getActor(req: any) {
   const auth = req.auth as { email?: string } | undefined;
   if (auth?.email) return String(auth.email).slice(0, 80);
@@ -54,8 +62,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
   // Создать/заменить резерв под событие (самое частое действие в UI)
   app.put("/by-event/:eventId", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const eventId = zUuid.parse((req.params as any).eventId);
     const body = z
       .object({
@@ -177,10 +184,9 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
   // Drag&Drop перенос между стоянками с опциональным "выталкиванием" конфликтующих событий.
   // Доступно только ролям ADMIN/PLANNER + permission events:write.
   app.post("/dnd-move", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const roles = ((req as any).auth?.roles ?? []) as string[];
-    if (!roles.includes("ADMIN") && !roles.includes("PLANNER")) {
+    if (!req.sandbox && !roles.includes("ADMIN") && !roles.includes("PLANNER")) {
       const err: any = new Error("FORBIDDEN");
       err.statusCode = 403;
       throw err;
@@ -342,10 +348,9 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
   // Drag&Drop размещение на стоянке с изменением времени (перемещение по оси времени / resize).
   // Доступно только ролям ADMIN/PLANNER + permission events:write.
   app.post("/dnd-place", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const roles = ((req as any).auth?.roles ?? []) as string[];
-    if (!roles.includes("ADMIN") && !roles.includes("PLANNER")) {
+    if (!req.sandbox && !roles.includes("ADMIN") && !roles.includes("PLANNER")) {
       const err: any = new Error("FORBIDDEN");
       err.statusCode = 403;
       throw err;
@@ -506,8 +511,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/by-event/:eventId", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const eventId = zUuid.parse((req.params as any).eventId);
     const event = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req) },

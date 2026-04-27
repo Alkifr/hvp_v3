@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
 import { apiGet, apiPost } from "../../lib/api";
+import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 type Hangar = { id: string; name: string; code: string };
 type Operator = { id: string; name: string; code: string };
@@ -21,9 +22,22 @@ type MassPreview = {
     hangarId: string;
     layoutId: string;
     standId: string;
+    scheduledBy: "compact" | "sequential" | "fixedCadence";
+    warnings: string[];
+    towBeforeStartAt?: string;
+    towBeforeEndAt?: string;
+    towAfterStartAt?: string;
+    towAfterEndAt?: string;
   }>;
-  unplaced: Array<{ index: number; title: string; label: string }>;
-  summary: { total: number; placed: number; unplaced: number };
+  unplaced: Array<{ index: number; title: string; label: string; intendedStartAt?: string; warnings?: string[] }>;
+  summary: {
+    total: number;
+    placed: number;
+    unplaced: number;
+    createdTowsBefore?: number;
+    createdTowsAfter?: number;
+    draftOnConflict?: boolean;
+  };
 };
 
 type MassResult = {
@@ -42,11 +56,18 @@ type MassResult = {
     layoutId: string | null;
     standId: string | null;
     status: string;
+    towBeforeStartAt?: string;
+    towBeforeEndAt?: string;
+    towAfterStartAt?: string;
+    towAfterEndAt?: string;
   }>;
+  createdTowsBefore?: number;
+  createdTowsAfter?: number;
 };
 
 export function MassPlanView() {
   const qc = useQueryClient();
+  const { active: activeSandbox } = useActiveSandbox();
   const [tatHours, setTatHours] = useState(72);
   const [operatorId, setOperatorId] = useState("");
   const [aircraftTypeId, setAircraftTypeId] = useState("");
@@ -56,6 +77,13 @@ export function MassPlanView() {
   const [endTo, setEndTo] = useState(() => dayjs().add(30, "day").format("YYYY-MM-DD"));
   const [hangarPriority, setHangarPriority] = useState<string[]>([]);
   const [titleTemplate, setTitleTemplate] = useState("");
+  const [scheduleMode, setScheduleMode] = useState<"compact" | "sequential" | "fixedCadence">("compact");
+  const [spacingHours, setSpacingHours] = useState(0);
+  const [cadenceHours, setCadenceHours] = useState(168);
+  const [placementMode, setPlacementMode] = useState<"auto" | "preferredHangars" | "draftOnConflict">("auto");
+  const [towBeforeMinutes, setTowBeforeMinutes] = useState(0);
+  const [towAfterMinutes, setTowAfterMinutes] = useState(0);
+  const [towBlocksStand, setTowBlocksStand] = useState(false);
   const [preview, setPreview] = useState<MassPreview | null>(null);
   const [result, setResult] = useState<MassResult | null>(null);
 
@@ -85,7 +113,14 @@ export function MassPlanView() {
     startFrom: dayjs(startFrom).startOf("day").toISOString(),
     endTo: dayjs(endTo).endOf("day").toISOString(),
     hangarIds: hangarPriority.length > 0 ? hangarPriority : undefined,
-    titleTemplate: titleTemplate.trim() || undefined
+    titleTemplate: titleTemplate.trim() || undefined,
+    scheduleMode,
+    spacingHours: Math.max(0, Number(spacingHours) || 0),
+    cadenceHours: scheduleMode === "fixedCadence" ? Math.max(1, Number(cadenceHours) || 1) : undefined,
+    placementMode,
+    towBeforeMinutes: Math.max(0, Math.min(24 * 60, Number(towBeforeMinutes) || 0)),
+    towAfterMinutes: Math.max(0, Math.min(24 * 60, Number(towAfterMinutes) || 0)),
+    towBlocksStand
   });
 
   const previewM = useMutation({
@@ -105,6 +140,7 @@ export function MassPlanView() {
       setPreview(null);
       await qc.invalidateQueries({ queryKey: ["events"] });
       await qc.invalidateQueries({ queryKey: ["reservations"] });
+      await qc.invalidateQueries({ queryKey: ["sandboxes"] });
     }
   });
 
@@ -134,19 +170,56 @@ export function MassPlanView() {
     setHangarPriority(next);
   };
 
+  const scheduleLabel = (mode: "compact" | "sequential" | "fixedCadence") =>
+    mode === "compact" ? "Компактно" : mode === "sequential" ? "Последовательно" : "Фиксированный шаг";
+
+  const formatRange = (from?: string, to?: string) =>
+    from && to ? `${dayjs(from).format("DD.MM HH:mm")} → ${dayjs(to).format("DD.MM HH:mm")}` : "—";
+
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <div className="card" style={{ display: "grid", gap: 12 }}>
-        <div className="row">
-          <strong>Массовое планирование</strong>
-          <span className="muted">
-            Борта виртуальные (появятся при закрытии события). Укажите период и параметры — сначала предпросмотр, затем перенос в план. Непоместившиеся в период создаются черновиком без ангара/места.
-          </span>
+    <div className="massPage">
+      <section className="massHero">
+        <div className="massHeroText">
+          <div className="massEyebrow">Планирование серий событий</div>
+          <h1>Массовое планирование</h1>
+          <p>
+            Создавайте пачки виртуальных бортов, проверяйте размещение в предпросмотре и переносите результат в текущий контур.
+            Непоместившиеся события будут сохранены черновиками без места.
+          </p>
+        </div>
+        <div className="massHeroStats" aria-label="Текущие параметры">
+          <span><b>{count}</b> событий</span>
+          <span><b>{tatHours}</b> ч TAT</span>
+          <span><b>{scheduleLabel(scheduleMode)}</b></span>
+        </div>
+      </section>
+
+      <div className="massCard">
+        <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>
+          {activeSandbox ? (
+            <>
+              <strong>Режим песочницы:</strong> массовое планирование создаст события только в песочнице
+              {" "}
+              <b>{activeSandbox.name}</b>. Рабочий контур не изменится, а занятость мест проверяется только внутри этой песочницы.
+            </>
+          ) : (
+            <>
+              <strong>Рабочий контур:</strong> массовое планирование создаст события в основном плане.
+            </>
+          )}
         </div>
 
-        <form onSubmit={handlePreview} style={{ display: "grid", gap: 14 }}>
-          <div className="row" style={{ flexWrap: "wrap", gap: 16 }}>
-            <label className="row" style={{ gap: 4 }}>
+        <form onSubmit={handlePreview} className="massForm">
+          <section className="massSection">
+            <div className="massSectionHead">
+              <div>
+                <h2>Основные параметры</h2>
+                <p>Определяют тип события, период планирования и количество создаваемых строк.</p>
+              </div>
+            </div>
+
+            <div className="massFormGrid">
+            <label className="massField">
               <span className="muted">TAT одного события, ч</span>
               <input
                 type="number"
@@ -154,15 +227,13 @@ export function MassPlanView() {
                 max={8760}
                 value={tatHours}
                 onChange={(e) => setTatHours(Number(e.target.value) || 72)}
-                style={{ width: 100 }}
               />
             </label>
-            <label className="row" style={{ gap: 4 }}>
+            <label className="massField">
               <span className="muted">Оператор</span>
               <select
                 value={operatorId}
                 onChange={(e) => { setOperatorId(e.target.value); setPreview(null); setResult(null); }}
-                style={{ minWidth: 180 }}
                 required
               >
                 <option value="">— выберите —</option>
@@ -171,12 +242,11 @@ export function MassPlanView() {
                 ))}
               </select>
             </label>
-            <label className="row" style={{ gap: 4 }}>
+            <label className="massField">
               <span className="muted">Тип ВС</span>
               <select
                 value={aircraftTypeId}
                 onChange={(e) => setAircraftTypeId(e.target.value)}
-                style={{ minWidth: 180 }}
                 required
               >
                 <option value="">— выберите —</option>
@@ -185,12 +255,11 @@ export function MassPlanView() {
                 ))}
               </select>
             </label>
-            <label className="row" style={{ gap: 4 }}>
+            <label className="massField">
               <span className="muted">Вид события</span>
               <select
                 value={eventTypeId}
                 onChange={(e) => setEventTypeId(e.target.value)}
-                style={{ minWidth: 160 }}
                 required
               >
                 <option value="">— выберите —</option>
@@ -199,7 +268,7 @@ export function MassPlanView() {
                 ))}
               </select>
             </label>
-            <label className="row" style={{ gap: 4 }}>
+            <label className="massField">
               <span className="muted">Количество</span>
               <input
                 type="number"
@@ -207,58 +276,150 @@ export function MassPlanView() {
                 max={200}
                 value={count}
                 onChange={(e) => setCount(Number(e.target.value) || 1)}
-                style={{ width: 80 }}
               />
             </label>
-            <label className="row" style={{ gap: 4 }}>
+            <label className="massField">
               <span className="muted">Начало периода</span>
               <input
                 type="date"
                 value={startFrom}
                 onChange={(e) => setStartFrom(e.target.value)}
-                style={{ width: 140 }}
               />
             </label>
-            <label className="row" style={{ gap: 4 }}>
+            <label className="massField">
               <span className="muted">Конец периода</span>
               <input
                 type="date"
                 value={endTo}
                 onChange={(e) => setEndTo(e.target.value)}
-                style={{ width: 140 }}
               />
             </label>
-          </div>
-
-          <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-            <label className="row" style={{ gap: 4 }}>
+            <label className="massField massFieldWide">
               <span className="muted">Шаблон названия (опц., % = номер)</span>
               <input
                 type="text"
                 placeholder="Например: A-check %"
                 value={titleTemplate}
                 onChange={(e) => setTitleTemplate(e.target.value)}
-                style={{ width: 220 }}
               />
             </label>
           </div>
+          </section>
 
-          <div style={{ display: "grid", gap: 8 }}>
-            <span className="muted">Приоритет ангаров (сверху вниз)</span>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <details className="massAdvanced massSection" open>
+            <summary>Расширенные настройки</summary>
+            <div className="massAdvancedGrid">
+              <label className="massField">
+                <span className="muted">Режим расписания</span>
+                <select
+                  value={scheduleMode}
+                  onChange={(e) => {
+                    setScheduleMode(e.target.value as "compact" | "sequential" | "fixedCadence");
+                    setPreview(null);
+                    setResult(null);
+                  }}
+                >
+                  <option value="compact">Компактно: первый свободный слот</option>
+                  <option value="sequential">Последовательно: событие за событием</option>
+                  <option value="fixedCadence">Фиксированный шаг от начала периода</option>
+                </select>
+              </label>
+
+              <label className="massField">
+                <span className="muted">Пауза между событиями, ч</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={8760}
+                  value={spacingHours}
+                  onChange={(e) => setSpacingHours(Number(e.target.value) || 0)}
+                />
+              </label>
+
+              {scheduleMode === "fixedCadence" ? (
+                <label className="massField">
+                  <span className="muted">Фиксированный шаг, ч</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={8760}
+                    value={cadenceHours}
+                    onChange={(e) => setCadenceHours(Number(e.target.value) || 1)}
+                  />
+                </label>
+              ) : null}
+
+              <label className="massField">
+                <span className="muted">Поведение при конфликте</span>
+                <select
+                  value={placementMode}
+                  onChange={(e) => {
+                    setPlacementMode(e.target.value as "auto" | "preferredHangars" | "draftOnConflict");
+                    setPreview(null);
+                    setResult(null);
+                  }}
+                >
+                  <option value="auto">Искать ближайшее свободное место</option>
+                  <option value="preferredHangars">Искать по приоритету ангаров</option>
+                  <option value="draftOnConflict">Создавать черновик, если целевой слот занят</option>
+                </select>
+              </label>
+
+              <label className="massField">
+                <span className="muted">Буксировка до, мин</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={towBeforeMinutes}
+                  onChange={(e) => setTowBeforeMinutes(Number(e.target.value) || 0)}
+                />
+              </label>
+
+              <label className="massField">
+                <span className="muted">Буксировка после, мин</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  value={towAfterMinutes}
+                  onChange={(e) => setTowAfterMinutes(Number(e.target.value) || 0)}
+                />
+              </label>
+
+              <label className="massCheckbox">
+                <input
+                  type="checkbox"
+                  checked={towBlocksStand}
+                  onChange={(e) => setTowBlocksStand(e.target.checked)}
+                />
+                <span>Учитывать буксировки как занятость места</span>
+              </label>
+            </div>
+          </details>
+
+          <section className="massSection">
+            <div className="massSectionHead">
+              <div>
+                <h2>Приоритет ангаров</h2>
+                <p>Если список не задан, система перебирает активные ангары по имени.</p>
+              </div>
+            </div>
+            <div className="massHangarPriority">
               {hangarPriority.map((id, index) => (
-                <span key={id} className="row" style={{ alignItems: "center", gap: 4 }}>
-                  <span style={{ fontWeight: 600 }}>{hangarById.get(id)?.name ?? id}</span>
-                  <button type="button" className="btn" onClick={() => moveHangar(index, -1)} disabled={index === 0}>↑</button>
-                  <button type="button" className="btn" onClick={() => moveHangar(index, 1)} disabled={index === hangarPriority.length - 1}>↓</button>
-                  <button type="button" className="btn" onClick={() => setHangarPriority((p) => p.filter((x) => x !== id))}>✕</button>
+                <span key={id} className="massHangarChip">
+                  <span className="massHangarOrder">{index + 1}</span>
+                  <span>{hangarById.get(id)?.name ?? id}</span>
+                  <button type="button" onClick={() => moveHangar(index, -1)} disabled={index === 0} title="Выше">↑</button>
+                  <button type="button" onClick={() => moveHangar(index, 1)} disabled={index === hangarPriority.length - 1} title="Ниже">↓</button>
+                  <button type="button" onClick={() => setHangarPriority((p) => p.filter((x) => x !== id))} title="Убрать">✕</button>
                 </span>
               ))}
               {availableHangarIds.length > 0 && (
                 <select
+                  className="massHangarSelect"
                   value=""
                   onChange={(e) => { const v = e.target.value; if (v) setHangarPriority((p) => [...p, v]); }}
-                  style={{ width: 180 }}
                 >
                   <option value="">+ ангар</option>
                   {availableHangarIds.map((id) => (
@@ -267,13 +428,13 @@ export function MassPlanView() {
                 </select>
               )}
             </div>
-            {hangarPriority.length === 0 && <span className="muted">Если не задано — по имени ангара.</span>}
-          </div>
+            {hangarPriority.length === 0 && <div className="massEmptyHint">Приоритет не задан. Будет использован порядок по имени ангара.</div>}
+          </section>
 
-          <div className="row" style={{ gap: 8 }}>
+          <div className="massActions">
             <button
               type="submit"
-              className="btn"
+              className="btn btnPrimary"
               disabled={previewM.isPending || !operatorId || !aircraftTypeId || !eventTypeId}
             >
               {previewM.isPending ? "Загрузка…" : "Предпросмотр"}
@@ -286,32 +447,48 @@ export function MassPlanView() {
       </div>
 
       {preview?.ok && preview.dryRun && (
-        <div className="card" style={{ display: "grid", gap: 12 }}>
-          <strong>Предпросмотр</strong>
-          <p className="muted" style={{ margin: 0 }}>
-            Размещено в период: {preview.summary.placed} из {preview.summary.total}.
-            {preview.summary.unplaced > 0 && ` Не поместилось (будут созданы черновиком): ${preview.summary.unplaced}.`}
-          </p>
+        <section className="massCard">
+          <div className="massResultHeader">
+            <div>
+              <h2>Предпросмотр</h2>
+              <p>Проверьте размещение перед созданием событий.</p>
+            </div>
+            <div className="massSummaryChips">
+              <span><b>{preview.summary.placed}</b> размещено</span>
+              <span><b>{preview.summary.unplaced}</b> черновиков</span>
+              <span><b>{(preview.summary.createdTowsBefore ?? 0) + (preview.summary.createdTowsAfter ?? 0)}</b> буксировок</span>
+            </div>
+          </div>
           {preview.placements.length > 0 && (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <div className="massTableWrap">
+              <table className="massTable">
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>Вирт. борт</th>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>Название</th>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>Начало</th>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>Окончание</th>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>Ангар</th>
+                    <th>Вирт. борт</th>
+                    <th>Название</th>
+                    <th>Начало</th>
+                    <th>Окончание</th>
+                    <th>Ангар</th>
+                    <th>Режим</th>
+                    <th>Буксировка до</th>
+                    <th>Буксировка после</th>
+                    <th>Предупреждения</th>
                   </tr>
                 </thead>
                 <tbody>
                   {preview.placements.map((p) => (
                     <tr key={p.index}>
-                      <td style={{ padding: "6px 8px" }}>{p.label}</td>
-                      <td style={{ padding: "6px 8px" }}>{p.title}</td>
-                      <td style={{ padding: "6px 8px" }}>{dayjs(p.startAt).format("DD.MM.YYYY HH:mm")}</td>
-                      <td style={{ padding: "6px 8px" }}>{dayjs(p.endAt).format("DD.MM.YYYY HH:mm")}</td>
-                      <td style={{ padding: "6px 8px" }}>{hangarById.get(p.hangarId)?.name ?? p.hangarId}</td>
+                      <td>{p.label}</td>
+                      <td>{p.title}</td>
+                      <td>{dayjs(p.startAt).format("DD.MM.YYYY HH:mm")}</td>
+                      <td>{dayjs(p.endAt).format("DD.MM.YYYY HH:mm")}</td>
+                      <td>{hangarById.get(p.hangarId)?.name ?? p.hangarId}</td>
+                      <td><span className="massModeBadge">{scheduleLabel(p.scheduledBy)}</span></td>
+                      <td>{formatRange(p.towBeforeStartAt, p.towBeforeEndAt)}</td>
+                      <td>{formatRange(p.towAfterStartAt, p.towAfterEndAt)}</td>
+                      <td>
+                        {p.warnings.length > 0 ? p.warnings.join("; ") : <span className="muted">—</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -319,54 +496,77 @@ export function MassPlanView() {
             </div>
           )}
           {preview.unplaced.length > 0 && (
-            <div>
-              <strong className="muted">Черновик (без места):</strong>{" "}
-              {preview.unplaced.map((u) => u.label).join(", ")}
+            <div className="massDraftBox">
+              <strong>Черновики без места</strong>
+              <div>
+                {preview.unplaced
+                  .map((u) =>
+                    `${u.label}${u.intendedStartAt ? ` (${dayjs(u.intendedStartAt).format("DD.MM HH:mm")})` : ""}${
+                      u.warnings?.length ? ` — ${u.warnings.join("; ")}` : ""
+                    }`
+                  )
+                  .join(", ")}
+              </div>
             </div>
           )}
-          <div className="row">
+          <div className="massActions">
             <button
               type="button"
               className="btn btnPrimary"
               disabled={applyM.isPending || !operatorId || !aircraftTypeId || !eventTypeId}
               onClick={handleApply}
             >
-              {applyM.isPending ? "Создание…" : "Перенести в план"}
+              {applyM.isPending ? "Создание…" : activeSandbox ? "Создать в песочнице" : "Перенести в план"}
             </button>
           </div>
-        </div>
+        </section>
       )}
 
       {result?.ok && !result.dryRun && result.events && result.events.length > 0 && (
-        <div className="card" style={{ display: "grid", gap: 10 }}>
-          <strong>Создано: {result.placed} в плане, {result.unplaced} черновиком</strong>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <section className="massCard">
+          <div className="massResultHeader">
+            <div>
+              <h2>Результат создания</h2>
+              <p>События созданы в текущем контуре.</p>
+            </div>
+            <div className="massSummaryChips">
+              <span><b>{result.placed}</b> в плане</span>
+              <span><b>{result.unplaced}</b> черновиков</span>
+              <span><b>{(result.createdTowsBefore ?? 0) + (result.createdTowsAfter ?? 0)}</b> буксировок</span>
+            </div>
+          </div>
+          <div className="massTableWrap">
+            <table className="massTable">
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", padding: "6px 8px" }}>Борт</th>
-                  <th style={{ textAlign: "left", padding: "6px 8px" }}>Название</th>
-                  <th style={{ textAlign: "left", padding: "6px 8px" }}>Начало</th>
-                  <th style={{ textAlign: "left", padding: "6px 8px" }}>Окончание</th>
-                  <th style={{ textAlign: "left", padding: "6px 8px" }}>Ангар / статус</th>
+                  <th>Борт</th>
+                  <th>Название</th>
+                  <th>Начало</th>
+                  <th>Окончание</th>
+                  <th>Ангар / статус</th>
+                  <th>Буксировки</th>
                 </tr>
               </thead>
               <tbody>
                 {result.events.map((ev) => (
                   <tr key={ev.eventId}>
-                    <td style={{ padding: "6px 8px" }}>{ev.label}</td>
-                    <td style={{ padding: "6px 8px" }}>{ev.title}</td>
-                    <td style={{ padding: "6px 8px" }}>{dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")}</td>
-                    <td style={{ padding: "6px 8px" }}>{dayjs(ev.endAt).format("DD.MM.YYYY HH:mm")}</td>
-                    <td style={{ padding: "6px 8px" }}>
+                    <td>{ev.label}</td>
+                    <td>{ev.title}</td>
+                    <td>{dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")}</td>
+                    <td>{dayjs(ev.endAt).format("DD.MM.YYYY HH:mm")}</td>
+                    <td>
                       {ev.hangarId ? (hangarById.get(ev.hangarId)?.name ?? ev.hangarId) : <span className="muted">Черновик (без места)</span>}
+                    </td>
+                    <td>
+                      <div>{formatRange(ev.towBeforeStartAt, ev.towBeforeEndAt)}</div>
+                      <div>{formatRange(ev.towAfterStartAt, ev.towAfterEndAt)}</div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

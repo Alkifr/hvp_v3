@@ -1,8 +1,12 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
-import { apiGet, apiPut } from "../../lib/api";
+import { apiGet, apiPost, apiPut } from "../../lib/api";
+import { useActiveSandbox } from "../components/SandboxSwitcher";
+
+type BodyType = "NARROW_BODY" | "WIDE_BODY" | null;
+type ViewMode = "range" | "moment";
 
 type Hangar = { id: string; name: string; code: string };
 type Layout = {
@@ -10,480 +14,586 @@ type Layout = {
   name: string;
   code: string;
   hangarId: string;
-  widthMeters?: number | null;
-  heightMeters?: number | null;
   capacitySummary?: string;
 };
-type Stand = {
+type SummaryEvent = {
+  id: string;
+  title: string;
+  status: string;
+  aircraftLabel: string;
+  bodyType: BodyType;
+  eventTypeName: string | null;
+  startAt: string;
+  endAt: string;
+  reservation?: { layoutId: string; standId: string } | null;
+};
+type SummaryStand = {
   id: string;
   code: string;
   name: string;
-  bodyType?: string | null;
+  bodyType: BodyType;
   x: number;
   y: number;
   w: number;
   h: number;
   rotate: number;
+  utilizationPct: number;
+  occupiedAt: SummaryEvent | null;
+  reservations: SummaryEvent[];
 };
-type LayoutDetail = {
-  id: string;
-  widthMeters?: number | null;
-  heightMeters?: number | null;
-  stands: Stand[];
-  obstacles?: Array<{ type: string; x: number; y: number; w: number; h: number }> | null;
+type SummaryHangar = {
+  hangar: Hangar;
+  layout: {
+    id: string;
+    code: string;
+    name: string;
+    description?: string | null;
+    widthMeters?: number | null;
+    heightMeters?: number | null;
+    obstacles?: Array<{ type: string; x: number; y: number; w: number; h: number }> | null;
+    capacityByBodyType: { narrow: number; wide: number; any: number };
+  };
+  utilizationPct: number;
+  occupiedAtCount: number;
+  freeAtCount: number | null;
+  eventCount: number;
+  standCount: number;
+  stands: SummaryStand[];
 };
-type Reservation = {
-  id: string;
-  standId: string;
-  eventId: string;
-  startAt: string;
-  endAt: string;
-  stand: { code: string };
-  event: { id: string; title: string; aircraft: { tailNumber: string }; eventType: { name: string; color?: string | null } };
+type SummaryResponse = {
+  ok: boolean;
+  summary: { events: number; unplaced: number; incompatible: number };
+  hangars: SummaryHangar[];
+  unplaced: SummaryEvent[];
+  incompatible: Array<{ event: SummaryEvent; suitableStandCount: number }>;
 };
-type EventRow = {
-  id: string;
-  title: string;
-  startAt: string;
-  endAt: string;
-  layoutId?: string | null;
-  reservation?: { standId: string; layoutId: string } | null;
-  aircraft?: { tailNumber: string } | null;
-  virtualAircraft?: { label?: string } | null;
-  eventType: { name: string; color?: string | null };
+type AutoFitResponse = {
+  ok: boolean;
+  placements: Array<{
+    event: SummaryEvent;
+    hangarId: string;
+    hangarName: string;
+    layoutId: string;
+    layoutName: string;
+    standId: string;
+    standCode: string;
+  }>;
+  unplaced: Array<{ event: SummaryEvent; reason: string }>;
+  summary: { candidates: number; placed: number; unplaced: number };
 };
 
-function overlapMinutes(rStart: number, rEnd: number, periodStart: number, periodEnd: number): number {
-  const start = Math.max(rStart, periodStart);
-  const end = Math.min(rEnd, periodEnd);
-  return Math.max(0, end - start) / (60 * 1000);
+function bodyTypeLabel(v: BodyType) {
+  if (v === "NARROW_BODY") return "узкий";
+  if (v === "WIDE_BODY") return "широкий";
+  return "любой";
 }
 
-function eventAircraftLabel(ev: {
-  aircraft?: { tailNumber: string } | null;
-  virtualAircraft?: { label?: string } | null;
-}): string {
-  return ev.aircraft?.tailNumber ?? ev.virtualAircraft?.label ?? "—";
+function occupancyColor(pct: number) {
+  if (pct <= 0) return "rgba(34, 197, 94, 0.55)";
+  if (pct < 35) return "rgba(34, 197, 94, 0.75)";
+  if (pct < 65) return "rgba(234, 179, 8, 0.8)";
+  if (pct < 90) return "rgba(249, 115, 22, 0.82)";
+  return "rgba(239, 68, 68, 0.85)";
 }
 
-function fillColorByUtilization(pct: number): string {
-  if (pct <= 0) return "rgba(34,197,94,0.5)";
-  if (pct < 25) return "rgba(34,197,94,0.65)";
-  if (pct < 50) return "rgba(234,179,8,0.7)";
-  if (pct < 75) return "rgba(249,115,22,0.75)";
-  return "rgba(239,68,68,0.8)";
+function overlaps(aStart: string, aEnd: string, bStart: string, bEnd: string) {
+  return dayjs(aStart).valueOf() < dayjs(bEnd).valueOf() && dayjs(aEnd).valueOf() > dayjs(bStart).valueOf();
+}
+
+function standAccepts(stand: SummaryStand, event: SummaryEvent) {
+  return !stand.bodyType || !event.bodyType || stand.bodyType === event.bodyType;
+}
+
+function formatEventPeriod(e: SummaryEvent) {
+  return `${dayjs(e.startAt).format("DD.MM HH:mm")} – ${dayjs(e.endAt).format("DD.MM HH:mm")}`;
+}
+
+function ImportLayoutsPanel(props: { onDone: () => void }) {
+  const [raw, setRaw] = useState("");
+  const importM = useMutation({
+    mutationFn: () => apiPost<{ ok: boolean; hangars: number; layouts: number; stands: number }>("/api/ref/layouts/import", JSON.parse(raw)),
+    onSuccess: () => {
+      setRaw("");
+      props.onDone();
+    }
+  });
+
+  const sample = `{
+  "hangars": [
+    {
+      "code": "SVO-1",
+      "name": "Шереметьево Ангар 1",
+      "layouts": [
+        {
+          "code": "BASE",
+          "name": "Базовая схема",
+          "widthMeters": 80,
+          "heightMeters": 50,
+          "obstacles": [{ "type": "rect", "x": 38, "y": 0, "w": 4, "h": 50 }],
+          "stands": [
+            { "code": "S1", "name": "Место 1", "bodyType": "NARROW_BODY", "x": 5, "y": 8, "w": 20, "h": 12 },
+            { "code": "S2", "name": "Место 2", "bodyType": "WIDE_BODY", "x": 48, "y": 8, "w": 26, "h": 16 }
+          ]
+        }
+      ]
+    }
+  ]
+}`;
+
+  return (
+    <details className="hangarImport">
+      <summary>Импорт реальных схем JSON</summary>
+      <div className="hangarImportBody">
+        <p className="muted">
+          Демо-данные можно заменить пачкой: ангары обновляются по `code`, схемы по `hangar + code`, места по `layout + code`.
+        </p>
+        <textarea
+          className="refInput"
+          rows={8}
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          placeholder={sample}
+        />
+        <div className="row">
+          <button className="btn btnPrimary" type="button" disabled={!raw.trim() || importM.isPending} onClick={() => importM.mutate()}>
+            {importM.isPending ? "Импорт…" : "Импортировать схемы"}
+          </button>
+          <button className="btn" type="button" onClick={() => setRaw(sample)}>
+            Вставить пример
+          </button>
+          {importM.isSuccess ? <span className="muted">Импорт завершён.</span> : null}
+        </div>
+        {importM.error ? <div className="errorMsg">{String((importM.error as any)?.message ?? importM.error)}</div> : null}
+      </div>
+    </details>
+  );
 }
 
 export function HangarView() {
   const qc = useQueryClient();
-  const [mode, setMode] = useState<"as_is" | "planning">("as_is");
+  const { active: activeSandbox } = useActiveSandbox();
+  const [viewMode, setViewMode] = useState<ViewMode>("range");
   const [fromDate, setFromDate] = useState(() => dayjs().format("YYYY-MM-DD"));
   const [toDate, setToDate] = useState(() => dayjs().add(14, "day").format("YYYY-MM-DD"));
+  const [minuteOffset, setMinuteOffset] = useState(12 * 60);
   const [expandedHangarId, setExpandedHangarId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [layoutIdByHangarId, setLayoutIdByHangarId] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<Map<string, { layoutId: string; standId: string }>>(new Map());
+  const [fitResult, setFitResult] = useState<AutoFitResponse | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const from = useMemo(() => dayjs(fromDate).startOf("day").toISOString(), [fromDate]);
-  const to = useMemo(() => dayjs(toDate).endOf("day").toISOString(), [toDate]);
-  const periodStartMs = dayjs(from).valueOf();
-  const periodEndMs = dayjs(to).valueOf();
-  const periodMinutes = Math.max(0, (periodEndMs - periodStartMs) / (60 * 1000));
+  const from = useMemo(() => dayjs(fromDate).startOf("day"), [fromDate]);
+  const to = useMemo(() => dayjs(toDate).endOf("day"), [toDate]);
+  const totalMinutes = Math.max(0, to.diff(from, "minute"));
+  const effectiveMinuteOffset = Math.min(minuteOffset, totalMinutes);
+  const at = useMemo(() => from.add(effectiveMinuteOffset, "minute"), [from, effectiveMinuteOffset]);
 
-  const hangarsQ = useQuery({
-    queryKey: ["ref", "hangars"],
-    queryFn: () => apiGet<Hangar[]>("/api/ref/hangars")
-  });
-  const layoutsAllQ = useQuery({
-    queryKey: ["ref", "layouts", "all"],
-    queryFn: () => apiGet<Layout[]>("/api/ref/layouts")
-  });
+  const hangarsQ = useQuery({ queryKey: ["ref", "hangars"], queryFn: () => apiGet<Hangar[]>("/api/ref/hangars") });
+  const layoutsAllQ = useQuery({ queryKey: ["ref", "layouts", "all"], queryFn: () => apiGet<Layout[]>("/api/ref/layouts") });
 
   const hangars = hangarsQ.data ?? [];
   const layoutsByHangar = useMemo(() => {
     const map: Record<string, Layout[]> = {};
-    for (const l of layoutsAllQ.data ?? []) {
-      if (!map[l.hangarId]) map[l.hangarId] = [];
-      map[l.hangarId].push(l);
+    for (const layout of layoutsAllQ.data ?? []) {
+      if (!map[layout.hangarId]) map[layout.hangarId] = [];
+      map[layout.hangarId]!.push(layout);
     }
-    for (const k of Object.keys(map)) {
-      map[k].sort((a, b) => a.name.localeCompare(b.name, "ru"));
-    }
+    for (const key of Object.keys(map)) map[key]!.sort((a, b) => a.name.localeCompare(b.name, "ru"));
     return map;
   }, [layoutsAllQ.data]);
 
   const layoutIdPerHangar = useMemo(() => {
-    const cur: Record<string, string> = {};
+    const out: Record<string, string> = {};
     for (const h of hangars) {
-      const list = layoutsByHangar[h.id];
+      const list = layoutsByHangar[h.id] ?? [];
       const preferred = layoutIdByHangarId[h.id];
-      if (preferred && list?.some((l) => l.id === preferred)) {
-        cur[h.id] = preferred;
-      } else if (list?.length) {
-        cur[h.id] = list[0].id;
-      }
+      out[h.id] = preferred && list.some((l) => l.id === preferred) ? preferred : list[0]?.id ?? "";
     }
-    return cur;
+    return out;
   }, [hangars, layoutsByHangar, layoutIdByHangarId]);
 
-  const layoutDetailsQueries = useQueries({
-    queries: hangars.map((h) => ({
-      queryKey: ["layout", layoutIdPerHangar[h.id]],
-      queryFn: () => apiGet<LayoutDetail>(`/api/ref/layouts/${layoutIdPerHangar[h.id]}`),
-      enabled: !!layoutIdPerHangar[h.id]
-    }))
-  });
-  const reservationsQueries = useQueries({
-    queries: hangars.map((h) => ({
-      queryKey: ["reservations", layoutIdPerHangar[h.id], from, to],
-      queryFn: () =>
-        apiGet<Reservation[]>(
-          `/api/reservations?layoutId=${encodeURIComponent(layoutIdPerHangar[h.id]!)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-        ),
-      enabled: !!layoutIdPerHangar[h.id]
-    }))
+  const selectedLayoutIds = useMemo(() => Object.values(layoutIdPerHangar).filter(Boolean), [layoutIdPerHangar]);
+  const summaryQ = useQuery({
+    queryKey: ["hangar-planning", "summary", from.toISOString(), to.toISOString(), selectedLayoutIds.join(",")],
+    enabled: selectedLayoutIds.length > 0,
+    queryFn: () => {
+      const params = new URLSearchParams({
+        from: from.toISOString(),
+        to: to.toISOString(),
+        layoutIds: selectedLayoutIds.join(",")
+      });
+      return apiGet<SummaryResponse>(`/api/hangar-planning/summary?${params.toString()}`);
+    },
+    placeholderData: (prev) => prev
   });
 
-  const eventsQ = useQuery({
-    queryKey: ["events", from, to],
-    queryFn: () => apiGet<EventRow[]>(`/api/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
-    enabled: true
-  });
+  const summary = useMemo<SummaryResponse | undefined>(() => {
+    const data = summaryQ.data;
+    if (!data) return data;
+    if (viewMode !== "moment") return data;
 
-  const eventsWithoutPlace = useMemo(() => {
-    const list = eventsQ.data ?? [];
-    return list.filter((e) => !e.layoutId || !e.reservation);
-  }, [eventsQ.data]);
-
-  const utilizationByLayout = useMemo(() => {
-    const result: Record<
-      string,
-      { standPct: Map<string, number>; hangarPct: number; reservations: Reservation[] }
-    > = {};
-    hangars.forEach((h, i) => {
-      const layoutId = layoutIdPerHangar[h.id];
-      if (!layoutId) return;
-      const reservations = reservationsQueries[i]?.data ?? [];
-      const detail = layoutDetailsQueries[i]?.data;
-      const stands = detail?.stands ?? [];
-      const standPct = new Map<string, number>();
-      let totalOccupied = 0;
-      for (const s of stands) {
-        const resOnStand = reservations.filter((r) => r.standId === s.id);
-        let occupied = 0;
-        for (const r of resOnStand) {
-          occupied += overlapMinutes(
-            dayjs(r.startAt).valueOf(),
-            dayjs(r.endAt).valueOf(),
-            periodStartMs,
-            periodEndMs
-          );
-        }
-        const pct = periodMinutes > 0 ? Math.min(100, (occupied / periodMinutes) * 100) : 0;
-        standPct.set(s.id, pct);
-        totalOccupied += occupied;
-      }
-      const hangarPct =
-        stands.length && periodMinutes > 0
-          ? Math.min(100, (totalOccupied / (stands.length * periodMinutes)) * 100)
-          : 0;
-      result[layoutId] = { standPct, hangarPct, reservations };
-    });
-    return result;
-  }, [
-    hangars,
-    layoutIdPerHangar,
-    layoutDetailsQueries,
-    reservationsQueries,
-    periodStartMs,
-    periodEndMs,
-    periodMinutes
-  ]);
+    const atMs = at.valueOf();
+    return {
+      ...data,
+      hangars: data.hangars.map((h) => {
+        let occupiedAtCount = 0;
+        const stands = h.stands.map((s) => {
+          const occupiedAt =
+            s.reservations.find((r) => dayjs(r.startAt).valueOf() <= atMs && dayjs(r.endAt).valueOf() > atMs) ?? null;
+          if (occupiedAt) occupiedAtCount += 1;
+          return { ...s, occupiedAt };
+        });
+        return {
+          ...h,
+          occupiedAtCount,
+          freeAtCount: Math.max(0, h.standCount - occupiedAtCount),
+          stands
+        };
+      })
+    };
+  }, [summaryQ.data, viewMode, at]);
+  const selectedEvent = useMemo(() => {
+    if (!selectedEventId) return null;
+    const all = [...(summary?.unplaced ?? []), ...(summary?.hangars ?? []).flatMap((h) => h.stands.flatMap((s) => s.reservations))];
+    return all.find((e) => e.id === selectedEventId) ?? null;
+  }, [summary, selectedEventId]);
 
   const reserveM = useMutation({
-    mutationFn: (payload: { eventId: string; standId: string; layoutId: string }) =>
+    mutationFn: async (payload: { eventId: string; layoutId: string; standId: string }) =>
       apiPut(`/api/reservations/by-event/${payload.eventId}`, {
+        layoutId: payload.layoutId,
         standId: payload.standId,
-        layoutId: payload.layoutId
+        changeReason: activeSandbox ? "Сценарное размещение в песочнице" : "Сценарное размещение ангара"
       }),
     onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["hangar-planning"] });
+      await qc.invalidateQueries({ queryKey: ["events"] });
       await qc.invalidateQueries({ queryKey: ["reservations"] });
-      await qc.invalidateQueries({ queryKey: ["events", from, to] });
     }
   });
 
-  const handleApplyDraft = async () => {
+  const autoFitM = useMutation({
+    mutationFn: () =>
+      apiPost<AutoFitResponse>("/api/hangar-planning/auto-fit", {
+        from: from.toISOString(),
+        to: to.toISOString(),
+        layouts: hangars
+          .map((h) => ({ hangarId: h.id, layoutId: layoutIdPerHangar[h.id] }))
+          .filter((x) => x.layoutId)
+      }),
+    onSuccess: (res) => {
+      setFitResult(res);
+      const next = new Map(draft);
+      for (const p of res.placements) next.set(p.event.id, { layoutId: p.layoutId, standId: p.standId });
+      setDraft(next);
+      setNotice(`Автоподбор: размещено ${res.summary.placed} из ${res.summary.candidates}.`);
+    }
+  });
+
+  const applyDraft = async () => {
     const entries = Array.from(draft.entries());
-    for (const [eventId, { layoutId, standId }] of entries) {
-      await reserveM.mutateAsync({ eventId, layoutId, standId });
+    for (const [eventId, placement] of entries) {
+      await reserveM.mutateAsync({ eventId, ...placement });
     }
     setDraft(new Map());
     setSelectedEventId(null);
+    setFitResult(null);
+    setNotice(`Применено размещений: ${entries.length}.`);
   };
 
-  const handleCancelDraft = () => {
-    setDraft(new Map());
-    setSelectedEventId(null);
-  };
-
-  const handleStandClick = (layoutId: string, standId: string, _hangarId: string) => {
-    if (mode !== "planning") return;
-    if (!selectedEventId) return;
+  const placeOnStand = (hangar: SummaryHangar, stand: SummaryStand) => {
+    if (!selectedEvent) return;
+    setNotice(null);
+    if (!standAccepts(stand, selectedEvent)) {
+      setNotice(`Место ${stand.code} рассчитано на ${bodyTypeLabel(stand.bodyType)}, событие требует ${bodyTypeLabel(selectedEvent.bodyType)}.`);
+      return;
+    }
+    const conflict = stand.reservations.find((r) => r.id !== selectedEvent.id && overlaps(r.startAt, r.endAt, selectedEvent.startAt, selectedEvent.endAt));
+    if (conflict) {
+      setNotice(`Место ${stand.code} занято: ${conflict.aircraftLabel} • ${conflict.title} (${formatEventPeriod(conflict)}).`);
+      return;
+    }
     setDraft((prev) => {
       const next = new Map(prev);
-      next.set(selectedEventId, { layoutId, standId });
+      next.set(selectedEvent.id, { layoutId: hangar.layout.id, standId: stand.id });
       return next;
     });
   };
 
-  const draftCount = draft.size;
-  const hasDraft = draftCount > 0;
-
-  function renderPlanCard(hangar: Hangar, layoutId: string, compact: boolean) {
-    const idx = hangars.findIndex((x) => x.id === hangar.id);
-    const detail = layoutDetailsQueries[idx]?.data;
-    const reservations = (reservationsQueries[idx]?.data ?? []) as Reservation[];
-    const util = utilizationByLayout[layoutId];
-    const stands = detail?.stands ?? [];
-    const width = detail?.widthMeters ?? 60;
-    const height = detail?.heightMeters ?? 40;
-    const hangarPct = util?.hangarPct ?? 0;
-    const occupancyByStand = (() => {
-      const map = new Map<string, Reservation[]>();
-      for (const r of reservations) {
-        const arr = map.get(r.standId) ?? [];
-        arr.push(r);
-        map.set(r.standId, arr);
-      }
-      return map;
-    })();
-
+  const renderScheme = (hangar: SummaryHangar, compact: boolean) => {
+    const width = hangar.layout.widthMeters ?? 80;
+    const height = hangar.layout.heightMeters ?? 50;
     return (
-      <div key={hangar.id} className="card" style={{ display: "grid", gap: 8 }}>
-        <div className="row" style={{ alignItems: "center" }}>
-          <strong>{hangar.name}</strong>
-          <span className="muted" style={{ fontSize: 12 }}>
-            Загрузка: {hangarPct.toFixed(0)}%
-          </span>
-          <span style={{ flex: "1 1 auto" }} />
-          {layoutsByHangar[hangar.id]?.length > 1 ? (
-            <select
-              value={layoutId}
-              onChange={(e) => setLayoutIdByHangarId((prev) => ({ ...prev, [hangar.id]: e.target.value }))}
-              style={{ width: 160, fontSize: 12 }}
-            >
-              {(layoutsByHangar[hangar.id] ?? []).map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          ) : null}
-        </div>
-        <div
-          style={{
-            background: "#0f172a",
-            borderRadius: 8,
-            overflow: "hidden",
-            maxHeight: compact ? 220 : 400
-          }}
-        >
-          <svg
-            viewBox={`0 0 ${width} ${height}`}
-            style={{ width: "100%", height: compact ? 200 : 380, display: "block" }}
-          >
-            <rect x="0" y="0" width={width} height={height} fill="#0f172a" />
-            <rect x="0.5" y="0.5" width={width - 1} height={height - 1} fill="transparent" stroke="rgba(148,163,184,0.35)" strokeWidth="0.12" />
-            {!compact &&
-              Array.from({ length: Math.ceil(width / 5) + 1 }, (_, i) => i * 5).map((mx) => (
-                <line key={`v${mx}`} x1={mx} y1={0} x2={mx} y2={height} stroke="rgba(148,163,184,0.1)" strokeWidth="0.06" />
-              ))}
-            {!compact &&
-              Array.from({ length: Math.ceil(height / 5) + 1 }, (_, i) => i * 5).map((my) => (
-                <line key={`h${my}`} x1={0} y1={my} x2={width} y2={my} stroke="rgba(148,163,184,0.1)" strokeWidth="0.06" />
-              ))}
-            {(detail as LayoutDetail | undefined)?.obstacles?.map((ob, obIdx) =>
-              ob.type === "rect" ? (
-                <rect
-                  key={obIdx}
-                  x={ob.x}
-                  y={ob.y}
-                  width={ob.w}
-                  height={ob.h}
-                  fill="rgba(71,85,105,0.5)"
-                  stroke="rgba(148,163,184,0.3)"
-                  strokeWidth="0.08"
-                />
-              ) : null
-            )}
-            {stands.map((s) => {
-              const rs = occupancyByStand.get(s.id) ?? [];
-              const pct = util?.standPct.get(s.id) ?? 0;
-              const fill = fillColorByUtilization(pct);
-              const isProposed = mode === "planning" && Array.from(draft.entries()).some(([, v]) => v.layoutId === layoutId && v.standId === s.id);
-              const title = rs.length
-                ? rs
-                    .map(
-                      (r) =>
-                        `${s.code}: ${eventAircraftLabel(r.event)} • ${dayjs(r.startAt).format("DD.MM")}–${dayjs(r.endAt).format("DD.MM")}`
-                    )
-                    .join("\n") + (pct > 0 ? `\nЗагрузка: ${pct.toFixed(0)}%` : "")
-                : `${s.code}: ${pct.toFixed(0)}%`;
-
-              return (
-                <g
-                  key={s.id}
-                  transform={`rotate(${s.rotate} ${s.x + s.w / 2} ${s.y + s.h / 2})`}
-                  style={{ cursor: mode === "planning" && selectedEventId ? "pointer" : "default" }}
-                  onClick={() => handleStandClick(layoutId, s.id, hangar.id)}
-                >
-                  <title>{title}</title>
-                  <rect
-                    x={s.x + 0.08}
-                    y={s.y + 0.08}
-                    width={s.w - 0.16}
-                    height={s.h - 0.16}
-                    rx="0.35"
-                    fill={fill}
-                    stroke={isProposed ? "rgba(59,130,246,0.95)" : "rgba(226,232,240,0.6)"}
-                    strokeWidth={isProposed ? 0.2 : 0.1}
-                    strokeDasharray={isProposed ? "0.4 0.3" : undefined}
-                  />
-                  <text
-                    x={s.x + s.w / 2}
-                    y={s.y + s.h / 2}
-                    fill="white"
-                    fontSize={compact ? 1.8 : 2.2}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    style={{ userSelect: "none", fontWeight: 600 }}
-                  >
-                    {s.code}
-                  </text>
-                  {!compact && pct > 0 ? (
-                    <text
-                      x={s.x + s.w / 2}
-                      y={s.y + s.h / 2 + 1.4}
-                      fill="rgba(226,232,240,0.9)"
-                      fontSize="1.2"
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                    >
-                      {pct.toFixed(0)}%
-                    </text>
-                  ) : null}
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-      </div>
-    );
-  }
-
-  if (expandedHangarId) {
-    const hangar = hangars.find((h) => h.id === expandedHangarId);
-    const layoutId = hangar ? layoutIdPerHangar[hangar.id] : null;
-    if (!hangar || !layoutId) {
-      setExpandedHangarId(null);
-      return null;
-    }
-    return (
-      <div style={{ display: "grid", gap: 12 }}>
-        <div className="row">
-          <button className="btn" onClick={() => setExpandedHangarId(null)}>
-            Назад к обзору
-          </button>
-        </div>
-        {renderPlanCard(hangar, layoutId, false)}
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <div className="card" style={{ display: "grid", gap: 10 }}>
-        <div className="row">
-          <strong>Ангар (схема расстановки)</strong>
-          <span className="muted">Все ангары, загрузка по периоду.</span>
-        </div>
-        <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 12 }}>
-          <label className="row">
-            <span className="muted">с</span>
-            <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} style={{ width: 140 }} />
-          </label>
-          <label className="row">
-            <span className="muted">по</span>
-            <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} style={{ width: 140 }} />
-          </label>
-          <label className="row" style={{ gap: 6 }}>
-            <span className="muted">Режим</span>
-            <select value={mode} onChange={(e) => setMode(e.target.value as "as_is" | "planning")} style={{ width: 160 }}>
-              <option value="as_is">Как есть</option>
-              <option value="planning">Планирование</option>
-            </select>
-          </label>
-          {mode === "planning" && hasDraft ? (
-            <>
-              <button className="btn btnPrimary" onClick={() => handleApplyDraft()} disabled={reserveM.isPending}>
-                Применить ({draftCount})
-              </button>
-              <button className="btn" onClick={handleCancelDraft} disabled={reserveM.isPending}>
-                Отменить
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
-
-      {mode === "planning" ? (
-        <div className="card" style={{ display: "grid", gap: 8 }}>
-          <strong>Планирование</strong>
-          <p className="muted" style={{ margin: 0 }}>
-            Выберите событие и нажмите на место на схеме — назначить или перенести. События без места: {eventsWithoutPlace.length}.
-          </p>
-          <select
-            value={selectedEventId ?? ""}
-            onChange={(e) => setSelectedEventId(e.target.value || null)}
-            style={{ maxWidth: 560 }}
-          >
-            <option value="">— выбрать событие —</option>
-            {(eventsQ.data ?? []).map((e) => (
-              <option key={e.id} value={e.id}>
-                {eventAircraftLabel(e)} • {e.title} • {dayjs(e.startAt).format("DD.MM HH:mm")}–{dayjs(e.endAt).format("DD.MM HH:mm")}
-                {!e.layoutId || !e.reservation ? " (без места)" : ""}
-              </option>
-            ))}
-          </select>
-          {selectedEventId ? (
-            <span className="muted">
-              Выбрано: {eventsQ.data?.find((e) => e.id === selectedEventId) && eventAircraftLabel(eventsQ.data.find((e) => e.id === selectedEventId)!)} •{" "}
-              {eventsQ.data?.find((e) => e.id === selectedEventId)?.title}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-          gap: 12
-        }}
-      >
-        {hangars.map((h) => {
-          const layoutId = layoutIdPerHangar[h.id];
-          if (!layoutId) return null;
+      <svg className="hangarSchemeSvg" viewBox={`0 0 ${width} ${height}`}>
+        <rect x="0" y="0" width={width} height={height} fill="#0f172a" />
+        <rect x="0.5" y="0.5" width={width - 1} height={height - 1} fill="transparent" stroke="rgba(148,163,184,0.35)" strokeWidth="0.12" />
+        {hangar.layout.obstacles?.map((ob, idx) =>
+          ob.type === "rect" ? (
+            <rect key={idx} x={ob.x} y={ob.y} width={ob.w} height={ob.h} fill="rgba(71,85,105,0.65)" stroke="rgba(226,232,240,0.3)" strokeWidth="0.08" />
+          ) : null
+        )}
+        {hangar.stands.map((stand) => {
+          const isDraft = Array.from(draft.values()).some((v) => v.layoutId === hangar.layout.id && v.standId === stand.id);
+          const isBadType = Boolean(selectedEvent && !standAccepts(stand, selectedEvent));
+          const occupied = viewMode === "moment" ? Boolean(stand.occupiedAt) : stand.utilizationPct > 0;
+          const fill = isBadType ? "rgba(100,116,139,0.65)" : viewMode === "moment" ? (occupied ? "rgba(239,68,68,0.82)" : "rgba(34,197,94,0.72)") : occupancyColor(stand.utilizationPct);
+          const title = viewMode === "moment" && stand.occupiedAt
+            ? `${stand.code}: ${stand.occupiedAt.aircraftLabel} • ${stand.occupiedAt.title}`
+            : `${stand.code}: ${viewMode === "moment" ? "свободно" : `${stand.utilizationPct.toFixed(0)}%`}`;
           return (
-            <div key={h.id} onClick={() => setExpandedHangarId(h.id)} style={{ cursor: "pointer" }}>
-              {renderPlanCard(h, layoutId, true)}
-            </div>
+            <g key={stand.id} transform={`rotate(${stand.rotate ?? 0} ${stand.x + stand.w / 2} ${stand.y + stand.h / 2})`} onClick={() => placeOnStand(hangar, stand)} style={{ cursor: selectedEvent ? "pointer" : "default" }}>
+              <title>{title}</title>
+              <rect
+                x={stand.x + 0.08}
+                y={stand.y + 0.08}
+                width={stand.w - 0.16}
+                height={stand.h - 0.16}
+                rx="0.35"
+                fill={fill}
+                stroke={isDraft ? "#60a5fa" : "rgba(226,232,240,0.68)"}
+                strokeWidth={isDraft ? 0.32 : 0.1}
+                strokeDasharray={isDraft ? "0.45 0.25" : undefined}
+              />
+              <text x={stand.x + stand.w / 2} y={stand.y + stand.h / 2} fill="white" fontSize={compact ? 1.7 : 2.2} textAnchor="middle" dominantBaseline="middle" style={{ userSelect: "none", fontWeight: 700 }}>
+                {stand.code}
+              </text>
+              {!compact ? (
+                <text x={stand.x + stand.w / 2} y={stand.y + stand.h / 2 + 1.5} fill="rgba(226,232,240,0.92)" fontSize="1.15" textAnchor="middle" dominantBaseline="middle">
+                  {viewMode === "moment" ? (stand.occupiedAt?.aircraftLabel ?? "free") : `${stand.utilizationPct.toFixed(0)}%`}
+                </text>
+              ) : null}
+            </g>
           );
         })}
-      </div>
-      {hangars.length === 0 && !hangarsQ.isLoading ? (
-        <div className="muted">Нет ангаров. Добавьте в справочниках.</div>
+      </svg>
+    );
+  };
+
+  const renderHangarCard = (hangar: SummaryHangar, expanded: boolean) => {
+    const layouts = layoutsByHangar[hangar.hangar.id] ?? [];
+    const cap = hangar.layout.capacityByBodyType;
+    return (
+      <section key={hangar.hangar.id} className={expanded ? "hangarPlanCard hangarPlanCardExpanded" : "hangarPlanCard"}>
+        <header className="hangarPlanCardHead">
+          <div>
+            <div className="hangarPlanTitle">{hangar.hangar.name}</div>
+            <div className="muted small">
+              {hangar.hangar.code} · {hangar.layout.name} · мест: {hangar.standCount}
+            </div>
+          </div>
+          <div className="hangarLoadBadge">{hangar.utilizationPct.toFixed(0)}%</div>
+        </header>
+        <select
+          className="refInput"
+          value={hangar.layout.id}
+          onChange={(e) => {
+            setLayoutIdByHangarId((prev) => ({ ...prev, [hangar.hangar.id]: e.target.value }));
+            setDraft(new Map());
+            setFitResult(null);
+          }}
+        >
+          {layouts.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}{l.capacitySummary ? ` · ${l.capacitySummary}` : ""}
+            </option>
+          ))}
+        </select>
+        <div className="hangarMetrics">
+          <span>Событий: <b>{hangar.eventCount}</b></span>
+          <span>{viewMode === "moment" ? <>Свободно сейчас: <b>{hangar.freeAtCount ?? "—"}</b></> : <>Мест: <b>{hangar.standCount}</b></>}</span>
+          <span>Узк./шир./люб.: <b>{cap.narrow}/{cap.wide}/{cap.any}</b></span>
+        </div>
+        <div className="hangarSchemeWrap">{renderScheme(hangar, !expanded)}</div>
+      </section>
+    );
+  };
+
+  const expanded = expandedHangarId ? summary?.hangars.find((h) => h.hangar.id === expandedHangarId) ?? null : null;
+  const draftCount = draft.size;
+
+  return (
+    <div className="hangarPlanPage">
+      <section className="hangarHero">
+        <div>
+          <div className="massEyebrow">Сценарное планирование</div>
+          <h1>Ангары и схемы расстановки</h1>
+          <p>
+            Выберите схемы для ангаров, оцените загрузку за период или в конкретный момент и подготовьте размещение
+            событий. {activeSandbox ? <>Активна песочница <b>{activeSandbox.name}</b>.</> : <>Рабочий контур.</>}
+          </p>
+        </div>
+        <div className="hangarHeroStats">
+          <span>Событий: <b>{summary?.summary.events ?? 0}</b></span>
+          <span>Без выбранной схемы/места: <b>{summary?.summary.unplaced ?? 0}</b></span>
+          <span>Не подходят по типу: <b>{summary?.summary.incompatible ?? 0}</b></span>
+        </div>
+      </section>
+
+      <section className="hangarControls">
+        <label className="refLabel">
+          <span>Режим</span>
+          <select className="refInput" value={viewMode} onChange={(e) => setViewMode(e.target.value as ViewMode)}>
+            <option value="range">Диапазон</option>
+            <option value="moment">Момент времени</option>
+          </select>
+        </label>
+        <label className="refLabel">
+          <span>С</span>
+          <input className="refInput" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+        </label>
+        <label className="refLabel">
+          <span>По</span>
+          <input className="refInput" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+        </label>
+        <div className="hangarPresetRow">
+          {[
+            ["сутки", 1],
+            ["неделя", 7],
+            ["месяц", 30],
+            ["квартал", 90],
+            ["год", 365]
+          ].map(([label, days]) => (
+            <button
+              key={String(label)}
+              className="btn btnSmall"
+              type="button"
+              onClick={() => {
+                const start = dayjs();
+                setFromDate(start.format("YYYY-MM-DD"));
+                setToDate(start.add(Number(days) - 1, "day").format("YYYY-MM-DD"));
+                setMinuteOffset(12 * 60);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button className="btn" type="button" onClick={() => autoFitM.mutate()} disabled={!summary || autoFitM.isPending}>
+          {autoFitM.isPending ? "Подбор…" : "Подобрать схемы"}
+        </button>
+        <button className="btn btnPrimary" type="button" onClick={applyDraft} disabled={draftCount === 0 || reserveM.isPending}>
+          Применить draft ({draftCount})
+        </button>
+        <button className="btn" type="button" onClick={() => { setDraft(new Map()); setFitResult(null); }} disabled={draftCount === 0}>
+          Очистить draft
+        </button>
+      </section>
+
+      {viewMode === "moment" ? (
+        <section className="hangarSliderCard">
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <strong>{at.format("DD.MM.YYYY HH:mm")}</strong>
+            <span className="muted">Шаг 30 минут: прибывают и выбывают самолёты на схеме</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, totalMinutes)}
+            step={30}
+            value={effectiveMinuteOffset}
+            onChange={(e) => setMinuteOffset(Number(e.target.value))}
+          />
+        </section>
       ) : null}
+
+      <ImportLayoutsPanel onDone={() => { void qc.invalidateQueries({ queryKey: ["ref"] }); void qc.invalidateQueries({ queryKey: ["hangar-planning"] }); }} />
+
+      {notice ? <div className="contextNotice">{notice}</div> : null}
+      {summaryQ.error ? <div className="errorMsg">{String((summaryQ.error as any)?.message ?? summaryQ.error)}</div> : null}
+      {autoFitM.error ? <div className="errorMsg">{String((autoFitM.error as any)?.message ?? autoFitM.error)}</div> : null}
+
+      <div className="hangarWorkspace">
+        <aside className="hangarSidePanel">
+          <h3>События для размещения</h3>
+          <div className="muted small">Выберите событие, затем место на схеме.</div>
+          <div className="hangarEventList">
+            {(summary?.unplaced ?? []).length === 0 ? <div className="muted">Нет неразмещённых событий.</div> : null}
+            {(summary?.unplaced ?? []).map((event) => (
+              <button
+                key={event.id}
+                className={selectedEventId === event.id ? "hangarEventItem active" : "hangarEventItem"}
+                type="button"
+                onClick={() => setSelectedEventId(event.id)}
+              >
+                <b>{event.aircraftLabel}</b>
+                <span>{event.title}</span>
+                <small>{formatEventPeriod(event)} · {bodyTypeLabel(event.bodyType)}</small>
+              </button>
+            ))}
+          </div>
+
+          {fitResult ? (
+            <div className="hangarFitBox">
+              <div className="hangarFitHead">
+                <b>Предложенные размещения</b>
+                <span>{fitResult.summary.placed}/{fitResult.summary.candidates}</span>
+              </div>
+              {fitResult.placements.length === 0 ? (
+                <div className="muted small">Подходящих свободных мест не найдено.</div>
+              ) : (
+                <div className="hangarFitList">
+                  {fitResult.placements.map((p) => (
+                    <button
+                      key={p.event.id}
+                      className="hangarFitItem"
+                      type="button"
+                      onClick={() => {
+                        setSelectedEventId(p.event.id);
+                        setExpandedHangarId(p.hangarId);
+                      }}
+                      title="Открыть ангар с предложенным местом"
+                    >
+                      <span>
+                        <b>{p.event.aircraftLabel}</b> · {p.event.title}
+                      </span>
+                      <small>
+                        {p.hangarName} · {p.layoutName} · место {p.standCode}
+                      </small>
+                      <small>{formatEventPeriod(p.event)} · {bodyTypeLabel(p.event.bodyType)}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {fitResult.unplaced.length > 0 ? (
+                <details className="hangarFitUnplaced">
+                  <summary>Не размещено: {fitResult.unplaced.length}</summary>
+                  <div className="hangarFitList">
+                    {fitResult.unplaced.map((x) => (
+                      <div key={x.event.id} className="hangarFitMiss">
+                        <b>{x.event.aircraftLabel} · {x.event.title}</b>
+                        <small>{x.reason}</small>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
+        </aside>
+
+        <main className="hangarMainPanel">
+          {expanded ? (
+            <>
+              <button className="btn" type="button" onClick={() => setExpandedHangarId(null)}>Назад к карточкам</button>
+              {renderHangarCard(expanded, true)}
+            </>
+          ) : (
+            <div className="hangarCardsGrid">
+              {(summary?.hangars ?? []).map((h) => (
+                <div key={h.hangar.id} onDoubleClick={() => setExpandedHangarId(h.hangar.id)}>
+                  {renderHangarCard(h, false)}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!summaryQ.isLoading && (summary?.hangars ?? []).length === 0 ? (
+            <div className="sandboxesEmpty">Нет активных схем. Добавьте или импортируйте реальные варианты расстановок.</div>
+          ) : null}
+          {summaryQ.isLoading ? <div className="muted">Загрузка аналитики ангаров…</div> : null}
+        </main>
+      </div>
     </div>
   );
 }

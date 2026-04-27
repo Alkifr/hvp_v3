@@ -289,7 +289,8 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       standCode: string | null;
       startAt: string;
       endAt: string;
-      category: "newOnly" | "conflictSameStand";
+      status: EventStatus;
+      category: "newOnly" | "conflictSameStand" | "cancelled";
       conflicts: Array<{
         prodEventId: string;
         title: string;
@@ -330,7 +331,8 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
         standCode,
         startAt: se.startAt.toISOString(),
         endAt: se.endAt.toISOString(),
-        category: conflicts.length > 0 ? "conflictSameStand" : "newOnly",
+        status: se.status,
+        category: se.status === EventStatus.CANCELLED ? "cancelled" : conflicts.length > 0 ? "conflictSameStand" : "newOnly",
         conflicts
       });
     }
@@ -342,6 +344,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
         total: items.length,
         newOnly: items.filter((i) => i.category === "newOnly").length,
         conflictSameStand: items.filter((i) => i.category === "conflictSameStand").length,
+        cancelled: items.filter((i) => i.category === "cancelled").length,
         prodEventsInRange: prodEvents.length
       },
       items

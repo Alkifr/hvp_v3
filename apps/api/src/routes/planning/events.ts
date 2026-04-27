@@ -14,6 +14,14 @@ function assertCanWrite(req: any) {
   }
 }
 
+function assertCanWriteEvent(req: any) {
+  if (req.sandbox) {
+    assertCanWrite(req);
+    return;
+  }
+  assertPermission(req, "events:write");
+}
+
 function getActor(req: any) {
   const auth = req.auth as { email?: string } | undefined;
   if (auth?.email) return String(auth.email).slice(0, 80);
@@ -109,8 +117,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/:id/tows", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const eventId = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -151,8 +158,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id/tows/:towId", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const eventId = zUuid.parse((req.params as any).id);
     const towId = zUuid.parse((req.params as any).towId);
     const query = z
@@ -183,8 +189,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   // Импорт событий из Excel/CSV (UI парсит файл и отправляет строки в JSON).
   // Поддерживает dryRun=true для "предпросмотра" без создания.
   app.post("/import", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
 
     const body = z
       .object({
@@ -569,8 +574,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const body = z
       .object({
         level: z.nativeEnum(PlanningLevel),
@@ -628,8 +632,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -741,8 +744,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req, "events:write");
-    assertCanWrite(req);
+    assertCanWriteEvent(req);
     const id = zUuid.parse((req.params as any).id);
     const existing = await app.prisma.maintenanceEvent.findFirst({
       where: { id, ...sandboxFilter(req) },

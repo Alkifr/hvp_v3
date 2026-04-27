@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
+import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { authMe } from "../auth/authApi";
 import { EventResourcesPanel } from "../components/EventResourcesPanel";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
+import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 dayjs.extend(utc);
 
@@ -24,6 +26,20 @@ const FIELD_LABEL: Record<string, string> = {
   hangarId: "Ангар",
   layoutId: "Вариант размещения",
   standId: "Место"
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  DRAFT: "Черновик",
+  PLANNED: "Запланировано",
+  CONFIRMED: "Подтверждено",
+  IN_PROGRESS: "В работе",
+  DONE: "Завершено",
+  CANCELLED: "Отменено"
+};
+
+const LEVEL_LABEL: Record<string, string> = {
+  OPERATIONAL: "Оперативный",
+  STRATEGIC: "Стратегический"
 };
 
 function safeReadGanttUi(): any | null {
@@ -71,6 +87,92 @@ type EventRow = {
 
 function eventAircraftLabel(ev: EventRow): string {
   return ev.aircraft?.tailNumber ?? ev.virtualAircraft?.label ?? "—";
+}
+
+function eventOperatorLabel(ev: EventRow, operatorNameById?: Map<string, string>): string {
+  const opId = ev.aircraft?.operatorId ?? ev.aircraft?.operator?.id ?? ev.virtualAircraft?.operatorId ?? "";
+  return ev.aircraft?.operator?.name ?? (opId ? operatorNameById?.get(opId) : undefined) ?? "—";
+}
+
+function eventAircraftTypeLabel(ev: EventRow, aircraftTypeById?: Map<string, AircraftTypeRef>): string {
+  const type = ev.aircraft?.type;
+  if (type) return type.icaoType ? `${type.icaoType} • ${type.name}` : type.name;
+  const typeId = ev.aircraft?.typeId ?? ev.virtualAircraft?.aircraftTypeId ?? "";
+  const fromRef = typeId ? aircraftTypeById?.get(typeId) : null;
+  return fromRef ? (fromRef.icaoType ? `${fromRef.icaoType} • ${fromRef.name}` : fromRef.name) : "—";
+}
+
+function formatExportDate(v: string | Date | null | undefined): string {
+  if (!v) return "—";
+  const d = dayjs(v);
+  return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : "—";
+}
+
+function htmlEscape(v: unknown): string {
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function openPrintableDocument(title: string, bodyHtml: string) {
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.setAttribute("aria-hidden", "true");
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentDocument;
+  const win = iframe.contentWindow;
+  if (!doc || !win) {
+    iframe.remove();
+    alert("Не удалось подготовить документ для печати.");
+    return;
+  }
+
+  doc.open();
+  doc.write(`<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>${htmlEscape(title)}</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; color: #0f172a; margin: 0; }
+    h1 { font-size: 18px; margin: 0 0 6px; }
+    .meta { color: #475569; font-size: 11px; margin-bottom: 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 8.5px; }
+    th, td { border: 1px solid #cbd5e1; padding: 4px 5px; vertical-align: top; }
+    th { background: #f1f5f9; text-align: left; }
+    tr:nth-child(even) td { background: #f8fafc; }
+    .ganttSvg { width: 100%; height: auto; border: 1px solid #cbd5e1; border-radius: 8px; }
+    .hint { color: #64748b; font-size: 10px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+${bodyHtml}
+<script>
+  window.addEventListener("load", () => {
+    setTimeout(() => window.print(), 150);
+  });
+</script>
+</body>
+</html>`);
+  doc.close();
+
+  const cleanup = () => {
+    setTimeout(() => iframe.remove(), 500);
+    window.removeEventListener("focus", cleanup);
+  };
+  win.addEventListener("afterprint", () => iframe.remove(), { once: true });
+  window.addEventListener("focus", cleanup);
 }
 
 type Aircraft = {
@@ -539,8 +641,11 @@ function Drawer(props: {
 export function GanttView() {
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0 });
+  const { active: activeSandbox } = useActiveSandbox();
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
-  const canDnd = Boolean(me?.permissions?.includes("events:write") && (me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER")));
+  const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
+  const canEditEvents = Boolean(me?.permissions?.includes("events:write") || canWriteSandbox);
+  const canDnd = Boolean(canWriteSandbox || (me?.permissions?.includes("events:write") && (me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"))));
 
   const headerViewportRef = useRef<HTMLDivElement | null>(null);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
@@ -588,6 +693,11 @@ export function GanttView() {
     if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
     const one = savedUi?.filterAircraftId;
     return one ? [String(one)] : [];
+  });
+  const [filterEventTypeIds, setFilterEventTypeIds] = useState<string[]>(() => {
+    const arr = savedUi?.filterEventTypeIds;
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    return [];
   });
 
   const aircraftTypesQ = useQuery({
@@ -679,6 +789,7 @@ export function GanttView() {
 
     setFilterAircraftTypeIds([]);
     setFilterAircraftIds([]);
+    setFilterEventTypeIds([]);
     setSelectedHangarIds([]);
 
     setRangeFromInput(rf);
@@ -740,6 +851,7 @@ export function GanttView() {
       selectedHangarIds,
       filterAircraftTypeIds,
       filterAircraftIds,
+      filterEventTypeIds,
       dndEnabled,
       zoom
     });
@@ -752,6 +864,7 @@ export function GanttView() {
     selectedHangarIds,
     filterAircraftTypeIds,
     filterAircraftIds,
+    filterEventTypeIds,
     dndEnabled,
     zoom
   ]);
@@ -962,6 +1075,7 @@ export function GanttView() {
       const endAt = dayjs(draft.endAtLocal).second(0).millisecond(0).toISOString();
       if (dayjs(endAt).valueOf() <= dayjs(startAt).valueOf()) throw new Error("Дата окончания должна быть позже начала");
 
+      const reason = changeReason.trim();
       const payload = {
         level: draft.level,
         status: draft.status,
@@ -973,7 +1087,7 @@ export function GanttView() {
         hangarId: draft.hangarId || null,
         layoutId: draft.layoutId || null,
         notes: draft.notes?.trim() ? draft.notes : null,
-        changeReason: changeReason.trim()
+        ...(reason ? { changeReason: reason } : {})
       };
 
       if (!draft.id) {
@@ -1384,15 +1498,22 @@ export function GanttView() {
       const aid = (e.aircraft as any)?.id ?? (e as any).aircraftId ?? "";
       return filterAircraftIds.includes(String(aid));
     };
+    const byEventTypeFilter = (e: EventRow) => {
+      if (filterEventTypeIds.length === 0) return true;
+      const id = (e.eventType as any)?.id ?? (e as any).eventTypeId ?? "";
+      return filterEventTypeIds.includes(String(id));
+    };
 
-    const visible = events.filter((e) => inSelected(e) && byTypeFilter(e) && byAircraftFilter(e));
+    const visible = events.filter((e) => inSelected(e) && byTypeFilter(e) && byAircraftFilter(e) && byEventTypeFilter(e));
+    const activeVisible = visible.filter((e) => e.status !== "CANCELLED");
+    const cancelledVisible = visible.filter((e) => e.status === "CANCELLED");
 
-    const unassigned = visible.filter((e) => !getHangarId(e) && !e.reservation?.stand);
+    const unassigned = activeVisible.filter((e) => !getHangarId(e) && !e.reservation?.stand);
 
     const noStandByHangar = new Map<string, { hangarId: string; hangarName: string; events: EventRow[] }>();
     const byStandId = new Map<string, { standId: string; layoutId: string; hangarId: string; label: string; events: EventRow[] }>();
 
-    for (const e of visible) {
+    for (const e of activeVisible) {
       const hid = getHangarId(e);
       const hname = getHangarName(e);
 
@@ -1420,7 +1541,7 @@ export function GanttView() {
     type Row = {
       key: string;
       label: string;
-      kind: "unassigned" | "hangarNoStand" | "stand";
+      kind: "unassigned" | "hangarNoStand" | "stand" | "cancelled";
       hangarId?: string;
       layoutId?: string;
       standId?: string;
@@ -1484,15 +1605,27 @@ export function GanttView() {
       }
     }
 
+    if (cancelledVisible.length > 0) {
+      const cancelledLanes = packOverlapsIntoLanes(cancelledVisible);
+      for (let i = 0; i < cancelledLanes.length; i++) {
+        laneRows.push({
+          key: `cancelled:lane:${i}`,
+          label: i === 0 ? "Отменено" : "Отменено (нахлёст)",
+          kind: "cancelled",
+          events: cancelledLanes[i]!
+        });
+      }
+    }
+
     return laneRows;
-  }, [groupMode, selectedHangarIds, filterAircraftTypeIds, filterAircraftIds, events, dndActive, dndStandsQ.data, dndStandById]);
+  }, [groupMode, selectedHangarIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds, events, dndActive, dndStandsQ.data, dndStandById]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
     hangarStandRowsRef.current = hangarStandRows as any[];
   }, [hangarStandRows]);
 
-  const visibleEvents = useMemo(() => {
+  const exportEvents = useMemo(() => {
     const getHangarId = (e: EventRow) => (e.hangar as any)?.id ?? (e.layout as any)?.hangarId ?? "";
     return events.filter((e) => {
       const hid = getHangarId(e);
@@ -1507,16 +1640,232 @@ export function GanttView() {
       const okType = filterAircraftTypeIds.length === 0 || filterAircraftTypeIds.includes(String(tid));
       const aid = (e.aircraft as any)?.id ?? (e as any).aircraftId ?? "";
       const okAcft = filterAircraftIds.length === 0 || filterAircraftIds.includes(String(aid));
-      return okHangar && okType && okAcft;
+      const eventTypeId = (e.eventType as any)?.id ?? (e as any).eventTypeId ?? "";
+      const okEventType = filterEventTypeIds.length === 0 || filterEventTypeIds.includes(String(eventTypeId));
+      return okHangar && okType && okAcft && okEventType;
     });
-  }, [events, selectedHangarIds, filterAircraftTypeIds, filterAircraftIds]);
+  }, [events, selectedHangarIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds]);
+
+  const visibleEvents = useMemo(() => exportEvents.filter((e) => e.status !== "CANCELLED"), [exportEvents]);
+
+  const cancelledAircraftRows = useMemo(() => {
+    if (groupMode !== "AIRCRAFT") return [];
+    const cancelled = exportEvents.filter((e) => e.status === "CANCELLED");
+    return packOverlapsIntoLanes(cancelled).map((events, i) => ({
+      key: `cancelled-aircraft:lane:${i}`,
+      label: i === 0 ? "Отменено" : "Отменено (нахлёст)",
+      subLabel: "Не участвует в рабочем размещении",
+      events
+    }));
+  }, [groupMode, exportEvents]);
+
+  const aircraftRows = useMemo(
+    () => [
+      ...visibleEvents.map((ev) => ({
+        key: ev.id,
+        label: eventAircraftLabel(ev),
+        subLabel: formatRowLabel(ev) || ev.title,
+        events: [{ ev, overlapToMs: null } as PlacedEvent]
+      })),
+      ...cancelledAircraftRows
+    ],
+    [visibleEvents, cancelledAircraftRows]
+  );
+
+  const aircraftTypeById = useMemo(() => {
+    const m = new Map<string, AircraftTypeRef>();
+    for (const t of aircraftTypesQ.data ?? []) m.set(t.id, t);
+    return m;
+  }, [aircraftTypesQ.data]);
+
+  const operatorNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of aircraftQ.data ?? []) {
+      if (a.operator?.id && !m.has(a.operator.id)) m.set(a.operator.id, a.operator.name);
+    }
+    return m;
+  }, [aircraftQ.data]);
+
+  const reportRows = useMemo(() => {
+    return [...exportEvents]
+      .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt) || a.title.localeCompare(b.title, "ru"))
+      .map((ev) => {
+        const start = dayjs(ev.startAt);
+        const end = dayjs(ev.endAt);
+        const durationHours = Math.max(0, end.diff(start, "minute")) / 60;
+        const towSegments = ev.towSegments ?? [];
+        return {
+          "Название": ev.title,
+          "Борт": eventAircraftLabel(ev),
+          "Оператор": eventOperatorLabel(ev, operatorNameById),
+          "Тип ВС": eventAircraftTypeLabel(ev, aircraftTypeById),
+          "Тип события": ev.eventType?.name ?? "—",
+          "Уровень": LEVEL_LABEL[ev.level] ?? ev.level,
+          "Статус": STATUS_LABEL[ev.status] ?? ev.status,
+          "Начало": formatExportDate(ev.startAt),
+          "Окончание": formatExportDate(ev.endAt),
+          "Длительность, часов": Number(durationHours.toFixed(2)),
+          "Длительность, дней": Number((durationHours / 24).toFixed(2)),
+          "Год начала": start.isValid() ? start.format("YYYY") : "—",
+          "Квартал начала": start.isValid() ? `Q${Math.floor(start.month() / 3) + 1}` : "—",
+          "Месяц начала": start.isValid() ? start.format("YYYY-MM") : "—",
+          "Ангар": ev.hangar?.name ?? "—",
+          "Вариант размещения": ev.layout?.name ?? "—",
+          "Место": ev.reservation?.stand?.code ?? "—",
+          "Есть резерв": ev.reservation?.stand ? "Да" : "Нет",
+          "Буксировок": towSegments.length,
+          "Интервалы буксировок": towSegments
+            .map((t) => `${formatExportDate(t.startAt)} – ${formatExportDate(t.endAt)}`)
+            .join("; "),
+          "Примечание": String((ev as any).notes ?? ""),
+          "ID события": ev.id
+        };
+      });
+  }, [exportEvents, aircraftTypeById, operatorNameById]);
+
+  const exportBaseName = `gantt-${rangeFromApplied}-${rangeToApplied}`;
+  const reportMeta = [
+    `Период: ${dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – ${dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}`,
+    `Зум: ${ZOOM_LABEL[zoom]}`,
+    `Группировка: ${groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}`,
+    `Контур: ${activeSandbox ? `песочница «${activeSandbox.name}»` : "рабочий контур"}`,
+    `Событий: ${reportRows.length}`
+  ];
+
+  const exportTableXlsx = () => {
+    if (reportRows.length === 0) return;
+    const ws = XLSX.utils.json_to_sheet(reportRows);
+    ws["!cols"] = Object.keys(reportRows[0] ?? {}).map((key) => ({
+      wch: Math.min(42, Math.max(12, key.length + 4))
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "События");
+    XLSX.writeFile(wb, `${exportBaseName}-events.xlsx`);
+  };
+
+  const exportTablePdf = () => {
+    if (reportRows.length === 0) return;
+    const columns = Object.keys(reportRows[0] ?? {});
+    const header = columns.map((c) => `<th>${htmlEscape(c)}</th>`).join("");
+    const body = reportRows
+      .map((row) => `<tr>${columns.map((c) => `<td>${htmlEscape((row as any)[c])}</td>`).join("")}</tr>`)
+      .join("");
+    openPrintableDocument(
+      "Отчёт по событиям Гантта",
+      `<h1>Отчёт по событиям Гантта</h1>
+       <div class="meta">${reportMeta.map(htmlEscape).join(" · ")}</div>
+       <table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>
+       <div class="hint">Для сохранения выберите в диалоге печати «Сохранить в PDF».</div>`
+    );
+  };
+
+  const exportGanttPdf = () => {
+    const rows = groupMode === "AIRCRAFT" ? aircraftRows : hangarStandRows;
+    const rowsWithEvents = rows.filter((r) => r.events.length > 0);
+    if (rowsWithEvents.length === 0) return;
+
+    const labelW = 210;
+    const chartW = 1180;
+    const rowH = 30;
+    const headerH = 58;
+    const height = headerH + rowsWithEvents.length * rowH + 22;
+    const width = labelW + chartW + 24;
+    const rangeMs = Math.max(1, to.valueOf() - from.valueOf());
+    const xFor = (v: string) => labelW + ((dayjs.utc(v).valueOf() - from.valueOf()) / rangeMs) * chartW;
+    const tickStep = Math.max(1, Math.ceil(ticks.length / 18));
+
+    const grid = ticks
+      .filter((_t, idx) => idx % tickStep === 0)
+      .map((t) => {
+        const x = labelW + ((t.at.valueOf() - from.valueOf()) / rangeMs) * chartW;
+        return `<line x1="${x.toFixed(1)}" y1="36" x2="${x.toFixed(1)}" y2="${height - 14}" stroke="#e2e8f0" />
+          <text x="${(x + 3).toFixed(1)}" y="28" font-size="9" fill="#64748b">${htmlEscape(t.minorLabel)}</text>`;
+      })
+      .join("");
+
+    const rowSvg = rowsWithEvents
+      .map((r, idx) => {
+        const y = headerH + idx * rowH;
+        const bars = r.events
+          .map(({ ev }) => {
+            const x = clamp(xFor(ev.startAt), labelW, labelW + chartW);
+            const right = clamp(xFor(ev.endAt), labelW, labelW + chartW);
+            const w = Math.max(2, right - x);
+            const fill = ev.status === "CANCELLED" ? "#94a3b8" : aircraftTypeMarkColor(ev, aircraftPaletteMap);
+            const stroke = ev.status === "DONE" ? "#16a34a" : ev.status === "CANCELLED" ? "#64748b" : "#0f172a";
+            const label = `${eventAircraftLabel(ev)} · ${ev.title}`;
+            return `<rect x="${x.toFixed(1)}" y="${y + 6}" width="${w.toFixed(1)}" height="18" rx="5" fill="${htmlEscape(fill)}" stroke="${stroke}" stroke-width="1" opacity="${ev.status === "CANCELLED" ? "0.55" : "0.88"}" />
+              ${w > 80 ? `<text x="${(x + 6).toFixed(1)}" y="${y + 19}" font-size="9" fill="#ffffff">${htmlEscape(label.slice(0, 58))}</text>` : ""}`;
+          })
+          .join("");
+        const label = `${(r as any).label ?? "—"}${(r as any).subLabel ? ` · ${(r as any).subLabel}` : ""}`;
+        return `<rect x="0" y="${y}" width="${width}" height="${rowH}" fill="${idx % 2 ? "#f8fafc" : "#ffffff"}" />
+          <text x="10" y="${y + 19}" font-size="10" fill="#0f172a">${htmlEscape(label.slice(0, 42))}</text>
+          <line x1="${labelW}" y1="${y}" x2="${labelW}" y2="${y + rowH}" stroke="#cbd5e1" />
+          ${bars}`;
+      })
+      .join("");
+
+    const svg = `<svg class="ganttSvg" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="${width}" height="${height}" fill="#ffffff" />
+      <text x="10" y="18" font-size="15" font-weight="700" fill="#0f172a">Диаграмма Гантта</text>
+      <text x="10" y="36" font-size="10" fill="#475569">${htmlEscape(reportMeta.join(" · "))}</text>
+      <line x1="${labelW}" y1="36" x2="${labelW + chartW}" y2="36" stroke="#cbd5e1" />
+      ${grid}
+      ${rowSvg}
+    </svg>`;
+
+    openPrintableDocument(
+      "Диаграмма Гантта",
+      `<h1>Диаграмма Гантта</h1>
+       <div class="meta">${reportMeta.map(htmlEscape).join(" · ")}</div>
+       ${svg}
+       <div class="hint">Для сохранения выберите в диалоге печати «Сохранить в PDF».</div>`
+    );
+  };
+
+  const applyRangePreset = (direction: "past" | "future", daysCount: number) => {
+    const today = dayjs();
+    const todayValue = today.format("YYYY-MM-DD");
+    if (direction === "past") {
+      const rf = today.subtract(daysCount, "day").format("YYYY-MM-DD");
+      setRangeFromInput(rf);
+      setRangeFromApplied(rf);
+      if (dayjs(rangeToApplied).isBefore(dayjs(rf))) {
+        setRangeToInput(todayValue);
+        setRangeToApplied(todayValue);
+      }
+    } else {
+      const rt = today.add(daysCount, "day").format("YYYY-MM-DD");
+      setRangeToInput(rt);
+      setRangeToApplied(rt);
+      if (dayjs(rangeFromApplied).isAfter(dayjs(rt))) {
+        setRangeFromInput(todayValue);
+        setRangeFromApplied(todayValue);
+      }
+    }
+    setRangeError(null);
+  };
+
+  const pastRangePresets = [
+    { label: "-7 дн", days: 7 },
+    { label: "-30 дн", days: 30 },
+    { label: "-3 мес", days: 90 },
+    { label: "-год", days: 365 }
+  ];
+  const futureRangePresets = [
+    { label: "+7 дн", days: 7 },
+    { label: "+30 дн", days: 30 },
+    { label: "+3 мес", days: 90 },
+    { label: "+год", days: 365 }
+  ];
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div className="card ganttPanel">
         <div className="ganttPanelHeader">
           <div className="ganttPanelTitle">
-            <strong>План (диаграмма Гантта)</strong>
+            <strong>План</strong>
             <span className="muted ganttPanelPeriod">
               {dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – {dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}
               <span className="ganttPanelDot" aria-hidden="true">·</span>
@@ -1526,33 +1875,107 @@ export function GanttView() {
             </span>
           </div>
           <div className="ganttPanelActions">
-            <button className="btn" onClick={resetFilters} title="Очистить фильтры и сбросить период">
-              Сбросить
+            <button
+              type="button"
+              className="btn ganttIconBtn"
+              onClick={exportTableXlsx}
+              disabled={reportRows.length === 0}
+              title="Скачать плоскую таблицу событий по текущим фильтрам в XLSX"
+              aria-label="Скачать XLSX отчёт"
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M5 2h7l4 4v12H5z" />
+                <path d="M12 2v4h4" />
+                <path d="M7 14l2-4" />
+                <path d="M11 14l-2-4" />
+                <path d="M12.5 14h2.5" />
+                <path d="M12.5 10h2.5" />
+              </svg>
             </button>
             <button
               type="button"
-              className={`btn${copySelectMode ? " btnCopyActive" : ""}`}
-              onClick={() => setCopySelectMode((v) => !v)}
-              title={
-                copySelectMode
-                  ? "Нажмите на событие в диаграмме. Esc — отмена."
-                  : "Выбрать существующее событие и создать его копию"
-              }
-              aria-pressed={copySelectMode}
+              className="btn ganttIconBtn"
+              onClick={exportTablePdf}
+              disabled={reportRows.length === 0}
+              title="Открыть печатную версию плоской таблицы для сохранения в PDF"
+              aria-label="Сохранить табличный отчёт в PDF"
             >
-              <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: 6, verticalAlign: "-2px" }}>
-                <rect x="3" y="3" width="10" height="12" rx="2" />
-                <path d="M7 17h8a2 2 0 0 0 2-2V7" />
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M5 2h7l4 4v12H5z" />
+                <path d="M12 2v4h4" />
+                <path d="M7 10h2a1.5 1.5 0 0 1 0 3H7v-3z" />
+                <path d="M11.5 13v-3h1.2a1.5 1.5 0 0 1 0 3h-1.2z" />
+                <path d="M15 13v-3h2" />
+                <path d="M15 11.5h1.5" />
               </svg>
-              {copySelectMode ? "Отменить копирование" : "Скопировать событие"}
             </button>
-            <button className="btn btnPrimary" onClick={openEditorForNew}>
-              Создать событие
+            <button
+              type="button"
+              className="btn ganttIconBtn"
+              onClick={exportGanttPdf}
+              disabled={reportRows.length === 0}
+              title="Открыть печатную визуализацию диаграммы для сохранения в PDF"
+              aria-label="Сохранить диаграмму Гантта в PDF"
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 3v14h13" />
+                <rect x="6" y="6" width="7" height="2.5" rx="1" />
+                <rect x="9" y="10" width="7" height="2.5" rx="1" />
+                <rect x="6" y="14" width="5" height="2.5" rx="1" />
+              </svg>
             </button>
           </div>
         </div>
 
         <div className="ganttToolbar">
+          <div className="ganttToolbarGroup ganttToolbarActionsGroup">
+            <button
+              className="btn ganttIconBtn"
+              onClick={resetFilters}
+              title="Очистить фильтры и сбросить период"
+              aria-label="Сбросить фильтры и период"
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 10a6 6 0 0 1 10.2-4.3" />
+                <path d="M14 2v4h-4" />
+                <path d="M16 10a6 6 0 0 1-10.2 4.3" />
+                <path d="M6 18v-4h4" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`btn ganttIconBtn${copySelectMode ? " btnCopyActive" : ""}`}
+              onClick={() => setCopySelectMode((v) => !v)}
+              disabled={!canEditEvents}
+              title={
+                !canEditEvents
+                  ? "Просмотрщик может смотреть события, но не создавать копии"
+                  : copySelectMode
+                  ? "Нажмите на событие в диаграмме. Esc — отмена."
+                  : "Выбрать существующее событие и создать его копию"
+              }
+              aria-pressed={copySelectMode}
+              aria-label={copySelectMode ? "Отменить копирование события" : "Скопировать событие"}
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="10" height="12" rx="2" />
+                <path d="M7 17h8a2 2 0 0 0 2-2V7" />
+              </svg>
+            </button>
+            <button
+              className="btn btnPrimary ganttIconBtn"
+              onClick={openEditorForNew}
+              disabled={!canEditEvents}
+              title={!canEditEvents ? "Недостаточно прав для создания события" : undefined}
+              aria-label="Создать событие"
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M10 4v12" />
+                <path d="M4 10h12" />
+              </svg>
+            </button>
+          </div>
+
           <div className="ganttToolbarGroup">
             <span className="tgLabel">Вид</span>
             <label className="tgField" title="Как группировать строки">
@@ -1579,7 +2002,9 @@ export function GanttView() {
               aria-label={dndEnabled ? "Drag&Drop включён" : "Drag&Drop выключен"}
               title={
                 !canDnd
-                  ? "Drag&Drop доступен только ADMIN / PLANNER"
+                  ? activeSandbox
+                    ? "Drag&Drop доступен владельцу или редактору песочницы"
+                    : "Drag&Drop доступен только ADMIN / PLANNER"
                   : dndEnabled
                   ? "Drag&Drop включён — нажмите, чтобы заблокировать перетаскивание"
                   : "Перетаскивание заблокировано — нажмите, чтобы включить Drag&Drop"
@@ -1661,10 +2086,37 @@ export function GanttView() {
                 maxHeight={320}
               />
             </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Тип события</span>
+              <MultiSelectDropdown
+                options={(eventTypesQ.data ?? []).map((t) => ({
+                  id: t.id,
+                  label: t.name
+                }))}
+                value={filterEventTypeIds}
+                onChange={setFilterEventTypeIds}
+                placeholder="все"
+                width={200}
+                maxHeight={260}
+              />
+            </label>
           </div>
 
           <div className="ganttToolbarGroup">
             <span className="tgLabel">Период</span>
+            <div className="tgPresets" role="group" aria-label="Быстрый выбор прошедшего периода">
+              {pastRangePresets.map((p) => (
+                <button
+                  key={p.label}
+                  className="btn btnGhost"
+                  type="button"
+                  onClick={() => applyRangePreset("past", p.days)}
+                  title={`${p.label} до сегодняшнего дня`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
             <label className="tgField">
               <span className="tgFieldLabel">c</span>
               <input
@@ -1703,26 +2155,13 @@ export function GanttView() {
                 style={{ width: 150 }}
               />
             </label>
-            <div className="tgPresets" role="group" aria-label="Быстрый выбор периода">
-              {[
-                { label: "7 дн", days: 7 },
-                { label: "30 дн", days: 30 },
-                { label: "3 мес", days: 90 },
-                { label: "Год", days: 365 }
-              ].map((p) => (
+            <div className="tgPresets tgPresetsFuture" role="group" aria-label="Быстрый выбор будущего периода">
+              {futureRangePresets.map((p) => (
                 <button
                   key={p.label}
                   className="btn btnGhost"
                   type="button"
-                  onClick={() => {
-                    const rf = dayjs().format("YYYY-MM-DD");
-                    const rt = dayjs().add(p.days, "day").format("YYYY-MM-DD");
-                    setRangeFromInput(rf);
-                    setRangeToInput(rt);
-                    setRangeFromApplied(rf);
-                    setRangeToApplied(rt);
-                    setRangeError(null);
-                  }}
+                  onClick={() => applyRangePreset("future", p.days)}
                   title={`${p.label} от сегодняшнего дня`}
                 >
                   {p.label}
@@ -1912,13 +2351,13 @@ export function GanttView() {
         <div className="ganttBody">
           <div className="ganttLeftCol">
             {groupMode === "AIRCRAFT"
-              ? visibleEvents.map((ev) => (
-                  <div className="ganttLabel" key={ev.id}>
+              ? aircraftRows.map((r) => (
+                  <div className="ganttLabel" key={r.key}>
                     <div>
-                      <strong>{eventAircraftLabel(ev)}</strong> <span className="muted">({ev.level})</span>
+                      <strong>{r.label}</strong>
                     </div>
                     <div className="muted" style={{ fontSize: 12 }}>
-                      {formatRowLabel(ev) || ev.title}
+                      {r.subLabel}
                     </div>
                   </div>
                 ))
@@ -1936,38 +2375,42 @@ export function GanttView() {
             <div className="ganttRightScroll" ref={bodyScrollRef} onScroll={onBodyScroll}>
               <div className="ganttRightInner" style={{ width: canvasWidth }}>
                 {groupMode === "AIRCRAFT"
-                  ? visibleEvents.map((ev) => {
-                      const g = calcBarXW({ startAt: ev.startAt, endAt: ev.endAt, from, dayWidth, canvasWidth });
-                      if (!g) return null;
-                      const { x, w } = g;
-                      const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
-                      const visual = barVisualStyle(ev.status, color);
+                  ? aircraftRows.map((r) => (
+                      <div className="ganttCanvas" key={r.key} style={{ width: canvasWidth }}>
+                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} />
+                        {r.events.map((p) => {
+                          const ev = p.ev;
+                          const g = calcBarXW({ startAt: ev.startAt, endAt: ev.endAt, from, dayWidth, canvasWidth });
+                          if (!g) return null;
+                          const { x, w } = g;
+                          const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
+                          const visual = barVisualStyle(ev.status, color);
 
-                      return (
-                        <div className="ganttCanvas" key={ev.id} style={{ width: canvasWidth }}>
-                          <TodayLine from={from} to={to} canvasWidth={canvasWidth} />
-                      <div
-                        className="bar"
-                        style={{
-                          left: x,
-                          width: w,
-                          cursor: "pointer",
-                          ...visual,
-                          ...barPaddingStyle(w)
-                        }}
-                        onClick={() => pickEvent(ev)}
-                        title={`${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format(
-                          "DD.MM.YYYY HH:mm"
-                        )}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
-                      >
-                        {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
-                        {canShowBarTitle(w) ? (
-                          <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>{ev.title}</span>
-                        ) : null}
+                          return (
+                            <div
+                              key={ev.id}
+                              className="bar"
+                              style={{
+                                left: x,
+                                width: w,
+                                cursor: "pointer",
+                                ...visual,
+                                ...barPaddingStyle(w)
+                              }}
+                              onClick={() => pickEvent(ev)}
+                              title={`${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format(
+                                "DD.MM.YYYY HH:mm"
+                              )}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
+                            >
+                              {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
+                              {canShowBarTitle(w) ? (
+                                <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>{ev.title}</span>
+                              ) : null}
+                            </div>
+                          );
+                        })}
                       </div>
-                        </div>
-                      );
-                    })
+                    ))
                   : hangarStandRows.map((r) => (
                       <div
                         className="ganttCanvas"
@@ -2243,6 +2686,14 @@ export function GanttView() {
               </div>
             ) : null}
 
+            {!canEditEvents ? (
+              <div className="contextNotice" role="status">
+                <strong>Режим просмотра.</strong> У вашей роли нет прав на редактирование событий. Карточка доступна
+                только для просмотра.
+              </div>
+            ) : null}
+
+            <fieldset className="evReadonlyFieldset" disabled={!canEditEvents}>
             <section className="evCard">
               <header className="evCardHeader">
                 <div className="evCardTitle">Основная информация</div>
@@ -2537,6 +2988,7 @@ export function GanttView() {
                 />
               </div>
             </section>
+            </fieldset>
 
             {draft.id ? (
               <details className="evCard evCardDetails">
@@ -2647,6 +3099,7 @@ export function GanttView() {
                     }
                   }}
                   disabled={
+                    !canEditEvents ||
                     saveEventM.isPending ||
                     (!!draft.id && computeDraftDiff(original, draft).length === 0)
                   }

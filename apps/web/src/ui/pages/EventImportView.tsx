@@ -3,9 +3,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 
 import { apiPost } from "../../lib/api";
+import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 export function EventImportView() {
   const qc = useQueryClient();
+  const { active: activeSandbox } = useActiveSandbox();
 
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importRows, setImportRows] = useState<any[] | null>(null);
@@ -25,17 +27,44 @@ export function EventImportView() {
       setImportResult(res);
       // обновим все варианты запросов событий
       await qc.invalidateQueries({ queryKey: ["events"] });
+      await qc.invalidateQueries({ queryKey: ["reservations"] });
+      await qc.invalidateQueries({ queryKey: ["sandboxes"] });
     }
   });
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div className="eventImportPage">
+      <section className="massHero">
+        <div className="massHeroText">
+          <div className="massEyebrow">Загрузка данных</div>
+          <h1>Импорт событий</h1>
+          <p>
+            Загружайте события из Excel/CSV, проверяйте сопоставления и конфликты в предпросмотре, затем переносите строки
+            в текущий рабочий контур или активную песочницу.
+          </p>
+        </div>
+        <div className="massHeroStats" aria-label="Параметры импорта">
+          <span><b>{importRows?.length ?? 0}</b> строк</span>
+          <span><b>{activeSandbox ? "Песочница" : "Рабочий контур"}</b></span>
+          <span><b>{importResult ? "Есть предпросмотр" : "Ожидает файл"}</b></span>
+        </div>
+      </section>
+
       <div className="card" style={{ display: "grid", gap: 10 }}>
-        <div className="row">
-          <strong>Импорт событий</strong>
-          <span className="muted">
-            Excel/CSV. Шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt, Hangar, HangarStand
-          </span>
+        <div className="muted">
+          Excel/CSV. Шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt, Hangar, HangarStand
+        </div>
+        <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>
+          {activeSandbox ? (
+            <>
+              <strong>Режим песочницы:</strong> импорт создаст события и резервы только в песочнице <b>{activeSandbox.name}</b>.
+              Конфликты мест проверяются внутри этой песочницы, рабочий контур не изменится.
+            </>
+          ) : (
+            <>
+              <strong>Рабочий контур:</strong> импорт создаст события и резервы в основном плане.
+            </>
+          )}
         </div>
 
         <div className="row" style={{ alignItems: "flex-end" }}>
@@ -92,7 +121,7 @@ export function EventImportView() {
               importM.mutate(importRows);
             }}
           >
-            Импортировать
+            {activeSandbox ? "Импортировать в песочницу" : "Импортировать"}
           </button>
 
           {previewM.error || importM.error ? (
@@ -155,7 +184,9 @@ export function EventImportView() {
             Подсказка: сначала нажмите <strong>«Предпросмотр»</strong> — он покажет ошибки сопоставления/конфликтов, и только потом
             станет доступна кнопка <strong>«Импортировать»</strong>.
           </div>
-          <div>После импорта откройте «План (Гантт)» — события появятся в выбранном диапазоне.</div>
+          <div>
+            После импорта откройте «План» — события появятся в выбранном диапазоне текущего контура.
+          </div>
         </div>
       </div>
     </div>

@@ -17,7 +17,18 @@ export async function authMe(): Promise<MeResponse> {
   return (await res.json()) as MeResponse;
 }
 
-export async function authLogin(email: string, password: string): Promise<{ ok: boolean; mustChangePassword?: boolean; error?: string }> {
+export type AuthLoginResponse = { ok: true; mustChangePassword: boolean } | { ok: false; error: string; message: string };
+export type AuthActionResponse = { ok: true } | { ok: false; error: string; message: string };
+
+function authErrorMessage(error: string): string {
+  if (error === "INVALID_CREDENTIALS") return "Неверный email или пароль";
+  if (error === "UNAUTHORIZED") return "Требуется авторизация";
+  if (error === "OLD_PASSWORD_INVALID") return "Текущий пароль указан неверно";
+  if (error === "CHANGE_PASSWORD_FAILED") return "Не удалось сменить пароль";
+  return error || "Ошибка авторизации";
+}
+
+export async function authLogin(email: string, password: string): Promise<AuthLoginResponse> {
   const res = await fetch("/api/auth/login", {
     method: "POST",
     credentials: "include",
@@ -25,15 +36,18 @@ export async function authLogin(email: string, password: string): Promise<{ ok: 
     body: JSON.stringify({ email, password })
   });
   const data = (await res.json()) as any;
-  if (!res.ok) return { ok: false, error: data?.error ?? "LOGIN_FAILED" };
-  return data;
+  if (!res.ok) {
+    const error = data?.error ?? "LOGIN_FAILED";
+    return { ok: false, error, message: authErrorMessage(error) };
+  }
+  return { ok: true, mustChangePassword: Boolean(data?.mustChangePassword) };
 }
 
 export async function authLogout(): Promise<void> {
   await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
 }
 
-export async function authChangePassword(oldPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
+export async function authChangePassword(oldPassword: string, newPassword: string): Promise<AuthActionResponse> {
   const res = await fetch("/api/auth/change-password", {
     method: "POST",
     credentials: "include",
@@ -41,8 +55,11 @@ export async function authChangePassword(oldPassword: string, newPassword: strin
     body: JSON.stringify({ oldPassword, newPassword })
   });
   const data = (await res.json()) as any;
-  if (!res.ok) return { ok: false, error: data?.error ?? "CHANGE_PASSWORD_FAILED" };
-  return data;
+  if (!res.ok) {
+    const error = data?.error ?? "CHANGE_PASSWORD_FAILED";
+    return { ok: false, error, message: authErrorMessage(error) };
+  }
+  return { ok: true };
 }
 
 export type MyActivityItem = {

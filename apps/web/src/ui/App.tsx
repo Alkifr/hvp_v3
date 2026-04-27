@@ -159,6 +159,8 @@ function AppShell(props: {
   const { me, permissions, page, setPage, canEvents, canWrite, canRef, canAdmin } = props;
   const { active: activeSandbox } = useActiveSandbox();
   const inSandbox = Boolean(activeSandbox);
+  const canWriteInActiveContext =
+    canWrite || activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
 
   return (
     <div className={inSandbox ? "appShell appShellSandbox" : "appShell"}>
@@ -175,7 +177,7 @@ function AppShell(props: {
             </>
           ) : null}
 
-          {canWrite ? (
+          {canWriteInActiveContext ? (
             <>
               <NavIcon active={page === "import"} onClick={() => setPage("import")} label="Импорт событий" icon={ICONS.import} />
               <NavIcon active={page === "mass"} onClick={() => setPage("mass")} label="Массовое планирование" icon={ICONS.mass} />

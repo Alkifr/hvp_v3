@@ -42,6 +42,9 @@ export function SandboxesView() {
   const mine = list.filter((s) => s.isOwner);
   const shared = list.filter((s) => !s.isOwner);
   const visible = tab === "mine" ? mine : shared;
+  const currentShareFor = shareFor ? (list.find((s) => s.id === shareFor.id) ?? shareFor) : null;
+  const currentRenameFor = renameFor ? (list.find((s) => s.id === renameFor.id) ?? renameFor) : null;
+  const currentPromoteFor = promoteFor ? (list.find((s) => s.id === promoteFor.id) ?? promoteFor) : null;
 
   const deleteM = useMutation({
     mutationFn: (id: string) => apiDelete(`/api/sandboxes/${id}`),
@@ -58,19 +61,23 @@ export function SandboxesView() {
 
   return (
     <div className="sandboxesPage">
-      <div className="sandboxesHeader">
-        <div>
-          <h1 className="sandboxesTitle">Песочницы плана</h1>
-          <div className="sandboxesSub muted">
-            Именованные изолированные копии плана для экспериментов и стратегического планирования.
-          </div>
+      <section className="massHero">
+        <div className="massHeroText">
+          <div className="massEyebrow">Сценарное планирование</div>
+          <h1>Песочницы плана</h1>
+          <p>
+            Создавайте изолированные копии плана, проверяйте альтернативные сценарии и переносите готовые изменения
+            обратно в рабочий контур за выбранный период.
+          </p>
         </div>
-        <div className="sandboxesHeaderActions">
+        <div className="massHeroStats" aria-label="Песочницы">
+          <span><b>{mine.length}</b> мои</span>
+          <span><b>{shared.length}</b> доступны</span>
           <button type="button" className="btn btnPrimary" onClick={() => setCreateOpen(true)}>
             + Создать песочницу
           </button>
         </div>
-      </div>
+      </section>
 
       <div className="sandboxesTabs">
         <button
@@ -118,9 +125,9 @@ export function SandboxesView() {
       )}
 
       {createOpen ? <CreateSandboxModal onClose={() => setCreateOpen(false)} /> : null}
-      {shareFor ? <ShareSandboxModal sandbox={shareFor} onClose={() => setShareFor(null)} /> : null}
-      {renameFor ? <RenameSandboxModal sandbox={renameFor} onClose={() => setRenameFor(null)} /> : null}
-      {promoteFor ? <PromoteSandboxModal sandbox={promoteFor} onClose={() => setPromoteFor(null)} /> : null}
+      {currentShareFor ? <ShareSandboxModal sandbox={currentShareFor} onClose={() => setShareFor(null)} /> : null}
+      {currentRenameFor ? <RenameSandboxModal sandbox={currentRenameFor} onClose={() => setRenameFor(null)} /> : null}
+      {currentPromoteFor ? <PromoteSandboxModal sandbox={currentPromoteFor} onClose={() => setPromoteFor(null)} /> : null}
     </div>
   );
 }
@@ -397,14 +404,15 @@ type DiffItem = {
   standCode: string | null;
   startAt: string;
   endAt: string;
-  category: "newOnly" | "conflictSameStand";
+  status: "DRAFT" | "PLANNED" | "CONFIRMED" | "IN_PROGRESS" | "DONE" | "CANCELLED";
+  category: "newOnly" | "conflictSameStand" | "cancelled";
   conflicts: Array<{ prodEventId: string; title: string; aircraftLabel: string; standCode: string | null; startAt: string; endAt: string }>;
 };
 
 type DiffResponse = {
   ok: boolean;
   range: { from: string; to: string };
-  summary: { total: number; newOnly: number; conflictSameStand: number; prodEventsInRange: number };
+  summary: { total: number; newOnly: number; conflictSameStand: number; cancelled: number; prodEventsInRange: number };
   items: DiffItem[];
 };
 
@@ -481,6 +489,7 @@ function PromoteSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; on
             <div className="sandboxPromoteSummary">
               <span className="sandboxPromoteChip new">Новые: {diff.summary.newOnly}</span>
               <span className="sandboxPromoteChip conflict">Конфликт места: {diff.summary.conflictSameStand}</span>
+              <span className="sandboxPromoteChip cancelled">Отменено: {diff.summary.cancelled}</span>
               <span className="sandboxPromoteChip neutral">В проде за период: {diff.summary.prodEventsInRange}</span>
               <span className="sandboxPromoteChip selected">Выбрано: {selectedCount}</span>
             </div>
@@ -503,7 +512,16 @@ function PromoteSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; on
                     <tr><td colSpan={7} className="muted">Нет событий в песочнице за выбранный период</td></tr>
                   ) : null}
                   {diff.items.map((it) => (
-                    <tr key={it.sandboxEventId} className={it.category === "conflictSameStand" ? "rowConflict" : ""}>
+                    <tr
+                      key={it.sandboxEventId}
+                      className={
+                        it.category === "conflictSameStand"
+                          ? "rowConflict"
+                          : it.category === "cancelled"
+                            ? "rowCancelled"
+                            : ""
+                      }
+                    >
                       <td>
                         <input
                           type="checkbox"
@@ -514,11 +532,18 @@ function PromoteSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; on
                       <td>
                         {it.category === "newOnly" ? (
                           <span className="badge ok">новое</span>
+                        ) : it.category === "cancelled" ? (
+                          <span className="badge neutral">отменено</span>
                         ) : (
                           <span className="badge warn">конфликт места</span>
                         )}
                       </td>
-                      <td>{it.title}<div className="muted small">{it.eventTypeName ?? ""}</div></td>
+                      <td>
+                        {it.title}
+                        <div className="muted small">
+                          {it.eventTypeName ?? ""}{it.status === "CANCELLED" ? " · не выбирается автоматически" : ""}
+                        </div>
+                      </td>
                       <td>{it.aircraftLabel}</td>
                       <td>{it.hangarName ?? "—"}{it.standCode ? ` / ${it.standCode}` : ""}</td>
                       <td>{formatDate(it.startAt)}<br />{formatDate(it.endAt)}</td>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { authMe } from "../auth/authApi";
@@ -113,6 +114,24 @@ type Layout = {
   capacitySummary?: string;
   isActive: boolean;
 };
+type LayoutDetail = Layout & {
+  widthMeters?: number | null;
+  heightMeters?: number | null;
+  obstacles?: Array<{ type: string; x: number; y: number; w: number; h: number }> | null;
+  stands: Array<{
+    id: string;
+    code: string;
+    name: string;
+    bodyType?: string | null;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    rotate?: number | null;
+    isActive?: boolean;
+  }>;
+  hangar?: Hangar;
+};
 type Skill = { id: string; code: string; name: string; isActive: boolean };
 
 function TextInput(props: { value: string; onChange: (v: string) => void; placeholder?: string; style?: React.CSSProperties }) {
@@ -137,6 +156,127 @@ function BoolToggle(props: { value: boolean; onChange: (v: boolean) => void }) {
       <input type="checkbox" checked={props.value} onChange={(e) => props.onChange(e.target.checked)} />
       <span className="muted">активен</span>
     </label>
+  );
+}
+
+function refNum(v: unknown, fallback = 0): number {
+  const n = Number(String(v ?? "").replace(",", ".").trim());
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function refStr(v: unknown): string {
+  return String(v ?? "").trim();
+}
+
+function pickCell(row: Record<string, unknown>, keys: string[]): unknown {
+  const normalized = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]));
+  for (const key of keys) {
+    const found = normalized.get(key.toLowerCase());
+    if (found != null && String(found).trim() !== "") return found;
+  }
+  return "";
+}
+
+function normalizeBodyType(v: unknown): "NARROW_BODY" | "WIDE_BODY" | null {
+  const s = refStr(v).toLowerCase();
+  if (!s) return null;
+  if (s.includes("wide") || s.includes("шир")) return "WIDE_BODY";
+  if (s.includes("narrow") || s.includes("узк")) return "NARROW_BODY";
+  return null;
+}
+
+function buildLayoutImportPayload(rows: Array<Record<string, unknown>>) {
+  const hangars = new Map<string, any>();
+  for (const row of rows) {
+    const hangarCode = refStr(pickCell(row, ["hangarCode", "код ангара", "ангар код", "ангар"]));
+    const hangarName = refStr(pickCell(row, ["hangarName", "название ангара", "ангар название"])) || hangarCode;
+    const layoutCode = refStr(pickCell(row, ["layoutCode", "код схемы", "код варианта", "схема код", "вариант код"]));
+    const layoutName = refStr(pickCell(row, ["layoutName", "название схемы", "название варианта", "схема", "вариант"])) || layoutCode;
+    const standCode = refStr(pickCell(row, ["standCode", "код места", "место код", "место"]));
+    if (!hangarCode || !layoutCode || !standCode) continue;
+
+    const hangar = hangars.get(hangarCode) ?? { code: hangarCode, name: hangarName, layouts: new Map<string, any>() };
+    hangars.set(hangarCode, hangar);
+    const layouts = hangar.layouts as Map<string, any>;
+    const layout =
+      layouts.get(layoutCode) ??
+      {
+        code: layoutCode,
+        name: layoutName,
+        description: refStr(pickCell(row, ["description", "описание"])) || undefined,
+        widthMeters: refNum(pickCell(row, ["widthMeters", "ширина ангара", "ширина схемы", "width"]), 80),
+        heightMeters: refNum(pickCell(row, ["heightMeters", "высота ангара", "высота схемы", "height"]), 50),
+        stands: []
+      };
+    layouts.set(layoutCode, layout);
+    layout.stands.push({
+      code: standCode,
+      name: refStr(pickCell(row, ["standName", "название места", "место название"])) || standCode,
+      bodyType: normalizeBodyType(pickCell(row, ["bodyType", "тип фюзеляжа", "фюзеляж"])),
+      x: refNum(pickCell(row, ["x", "X"])),
+      y: refNum(pickCell(row, ["y", "Y"])),
+      w: refNum(pickCell(row, ["w", "ширина места", "standWidth"]), 10),
+      h: refNum(pickCell(row, ["h", "высота места", "standHeight"]), 10),
+      rotate: refNum(pickCell(row, ["rotate", "поворот"]), 0)
+    });
+  }
+  return {
+    hangars: Array.from(hangars.values()).map((h) => ({
+      code: h.code,
+      name: h.name,
+      layouts: Array.from((h.layouts as Map<string, any>).values())
+    }))
+  };
+}
+
+function LayoutSchemePreview(props: { detail?: LayoutDetail | null; selectedStandId?: string }) {
+  const detail = props.detail;
+  if (!detail) return <div className="muted">Выберите вариант расстановки, чтобы увидеть схему.</div>;
+  const width = detail.widthMeters ?? 80;
+  const height = detail.heightMeters ?? 50;
+  return (
+    <div className="refSchemePreview">
+      <div className="refSchemePreviewHead">
+        <div>
+          <strong>{detail.name}</strong>
+          <span className="muted"> · {detail.hangar?.name ?? "ангар"} · {detail.stands.length} мест</span>
+        </div>
+        <span className="muted">{width} × {height} м</span>
+      </div>
+      <div className="refSchemeCanvas">
+        <svg viewBox={`0 0 ${width} ${height}`}>
+          <rect x="0" y="0" width={width} height={height} fill="#0f172a" />
+          <rect x="0.5" y="0.5" width={width - 1} height={height - 1} fill="transparent" stroke="rgba(148,163,184,0.4)" strokeWidth="0.12" />
+          {detail.obstacles?.map((ob, idx) =>
+            ob.type === "rect" ? (
+              <rect key={idx} x={ob.x} y={ob.y} width={ob.w} height={ob.h} fill="rgba(71,85,105,0.65)" stroke="rgba(226,232,240,0.32)" strokeWidth="0.08" />
+            ) : null
+          )}
+          {detail.stands.map((s) => {
+            const selected = s.id === props.selectedStandId;
+            const fill = s.bodyType === "WIDE_BODY" ? "rgba(249,115,22,0.78)" : s.bodyType === "NARROW_BODY" ? "rgba(37,99,235,0.78)" : "rgba(34,197,94,0.72)";
+            return (
+              <g key={s.id} transform={`rotate(${s.rotate ?? 0} ${s.x + s.w / 2} ${s.y + s.h / 2})`}>
+                <title>{s.code} · {s.name} · {bodyTypeLabel(s.bodyType) ?? "Любой"}</title>
+                <rect
+                  x={s.x + 0.08}
+                  y={s.y + 0.08}
+                  width={s.w - 0.16}
+                  height={s.h - 0.16}
+                  rx="0.35"
+                  fill={fill}
+                  stroke={selected ? "#facc15" : "rgba(226,232,240,0.72)"}
+                  strokeWidth={selected ? 0.4 : 0.1}
+                />
+                <text x={s.x + s.w / 2} y={s.y + s.h / 2} fill="white" fontSize="2" textAnchor="middle" dominantBaseline="middle" style={{ userSelect: "none", fontWeight: 700 }}>
+                  {s.code}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
   );
 }
 
@@ -222,6 +362,12 @@ export function ReferenceView() {
   const [aircraftImportOperatorId, setAircraftImportOperatorId] = useState<string>("");
   const [aircraftImportTypeId, setAircraftImportTypeId] = useState<string>("");
   const [aircraftImportResult, setAircraftImportResult] = useState<any>(null);
+  const [layoutImportFile, setLayoutImportFile] = useState<File | null>(null);
+  const [layoutImportRows, setLayoutImportRows] = useState<Array<Record<string, unknown>>>([]);
+  const [layoutImportError, setLayoutImportError] = useState<string | null>(null);
+  const [layoutImportResult, setLayoutImportResult] = useState<any>(null);
+  const [previewLayoutId, setPreviewLayoutId] = useState<string>("");
+  const [previewStandId, setPreviewStandId] = useState<string>("");
 
   const parseTailNumbersFromCsvText = (text: string) => {
     // Минимальный парсер: берём 1-й столбец из строк; разделитель , ; \t
@@ -247,6 +393,18 @@ export function ReferenceView() {
       setAircraftImportResult(res);
       await qc.invalidateQueries({ queryKey: ["ref", "aircraft"] });
       await qc.invalidateQueries({ queryKey: ["ref", "aircraft", filterHangarId, filterLayoutId] });
+    }
+  });
+
+  const layoutImportM = useMutation({
+    mutationFn: async (payload: any) => apiPost("/api/ref/layouts/import", payload),
+    onSuccess: async (res) => {
+      setLayoutImportResult(res);
+      await qc.invalidateQueries({ queryKey: ["ref", "hangars"] });
+      await qc.invalidateQueries({ queryKey: ["ref", "layouts"] });
+      await qc.invalidateQueries({ queryKey: ["ref", "stands"] });
+      await qc.invalidateQueries({ queryKey: ["layout"] });
+      await qc.invalidateQueries({ queryKey: ["hangar-planning"] });
     }
   });
 
@@ -487,6 +645,17 @@ export function ReferenceView() {
   }, [listQ.data, search]);
 
   const totalCount = listQ.data?.length ?? 0;
+  const effectivePreviewLayoutId = useMemo(() => {
+    if (previewLayoutId) return previewLayoutId;
+    if (kind === "layouts") return String(filteredRows[0]?.id ?? "");
+    if (kind === "stands") return filterLayoutId || String(filteredRows[0]?.layoutId ?? "");
+    return "";
+  }, [filteredRows, filterLayoutId, kind, previewLayoutId]);
+  const previewQ = useQuery({
+    queryKey: ["layout", "preview", effectivePreviewLayoutId],
+    queryFn: () => apiGet<LayoutDetail>(`/api/ref/layouts/${effectivePreviewLayoutId}`),
+    enabled: (kind === "layouts" || kind === "stands") && Boolean(effectivePreviewLayoutId)
+  });
 
   return (
     <div className="refPage">
@@ -714,6 +883,102 @@ export function ReferenceView() {
               ) : null}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {(kind === "layouts" || kind === "stands") && canWrite ? (
+        <div className="card refSection">
+          <div className="refSectionHeader">
+            <div>
+              <strong>Импорт схем из Excel / CSV</strong>
+              <div className="muted refSectionHint">
+                Каждая строка — одно место стоянки. Обязательные колонки: hangarCode, layoutCode, standCode, x, y, w, h.
+              </div>
+            </div>
+          </div>
+          <div className="refLayoutImportGrid">
+            <label className="refLabel">
+              <span>Файл Excel / CSV</span>
+              <input
+                className="refInput"
+                type="file"
+                accept=".xlsx,.xls,.csv,text/csv"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  setLayoutImportFile(file);
+                  setLayoutImportRows([]);
+                  setLayoutImportError(null);
+                  setLayoutImportResult(null);
+                  if (!file) return;
+                  try {
+                    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+                    const sheet = wb.Sheets[wb.SheetNames[0]!];
+                    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+                    setLayoutImportRows(rows);
+                  } catch (err: any) {
+                    setLayoutImportError(String(err?.message ?? err));
+                  }
+                }}
+              />
+            </label>
+            <button
+              className="btn btnPrimary"
+              disabled={layoutImportRows.length === 0 || layoutImportM.isPending}
+              onClick={() => {
+                try {
+                  const payload = buildLayoutImportPayload(layoutImportRows);
+                  if (payload.hangars.length === 0) {
+                    throw new Error("Не найдено строк с hangarCode, layoutCode и standCode.");
+                  }
+                  layoutImportM.mutate(payload);
+                } catch (err: any) {
+                  setLayoutImportError(String(err?.message ?? err));
+                }
+              }}
+            >
+              {layoutImportM.isPending ? "Импорт…" : "Импортировать схемы"}
+            </button>
+          </div>
+          <div className="muted small">
+            Рекомендуемые колонки: hangarCode, hangarName, layoutCode, layoutName, widthMeters, heightMeters, standCode,
+            standName, bodyType, x, y, w, h, rotate. Значения bodyType: narrow/узкий или wide/широкий.
+          </div>
+          {layoutImportFile ? (
+            <div className="muted">
+              Файл: <strong>{layoutImportFile.name}</strong> · строк: {layoutImportRows.length}
+            </div>
+          ) : null}
+          {layoutImportRows.length > 0 ? (
+            <div className="refImportPreview">
+              <strong>Предпросмотр первых строк</strong>
+              <pre>{JSON.stringify(layoutImportRows.slice(0, 3), null, 2)}</pre>
+            </div>
+          ) : null}
+          {layoutImportResult ? (
+            <div className="refImportResult">
+              <span className="gpChip gpChipInfo">ангаров: {layoutImportResult.hangars ?? 0}</span>
+              <span className="gpChip">схем: {layoutImportResult.layouts ?? 0}</span>
+              <span className="gpChip">мест: {layoutImportResult.stands ?? 0}</span>
+            </div>
+          ) : null}
+          {layoutImportError || layoutImportM.error ? (
+            <div className="error">{layoutImportError || String((layoutImportM.error as any)?.message ?? layoutImportM.error)}</div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {kind === "layouts" || kind === "stands" ? (
+        <div className="card refSection">
+          <div className="refSectionHeader">
+            <div>
+              <strong>Визуальная схема</strong>
+              <div className="muted refSectionHint">Предпросмотр выбранного варианта расстановки и его мест стоянки.</div>
+            </div>
+            {effectivePreviewLayoutId ? (
+              <span className="muted small">layout: {previewQ.data?.code ?? "…"}</span>
+            ) : null}
+          </div>
+          <LayoutSchemePreview detail={previewQ.data ?? null} selectedStandId={previewStandId} />
         </div>
       ) : null}
 
@@ -1166,6 +1431,18 @@ export function ReferenceView() {
                             <button className="btn btnGhost" onClick={() => openEdit(row)} title="Редактировать">
                               Изменить
                             </button>
+                            {(kind === "layouts" || kind === "stands") ? (
+                              <button
+                                className="btn btnGhost"
+                                onClick={() => {
+                                  setPreviewLayoutId(String(kind === "layouts" ? row.id : row.layoutId ?? ""));
+                                  setPreviewStandId(String(kind === "stands" ? row.id : ""));
+                                }}
+                                title="Показать на схеме"
+                              >
+                                Схема
+                              </button>
+                            ) : null}
                             <button
                               className="btn btnGhost refBtnDanger"
                               onClick={() => {

@@ -15,6 +15,48 @@ function capacitySummaryFromStands(stands: { bodyType: string | null }[]): strin
   return parts.length ? parts.join(", ") : "нет мест";
 }
 
+const zBodyType = z.enum(["NARROW_BODY", "WIDE_BODY"]).optional().nullable();
+
+const zLayoutImport = z.object({
+  hangars: z
+    .array(
+      z.object({
+        code: z.string().trim().min(1).max(32),
+        name: z.string().trim().min(1).max(200),
+        isActive: z.boolean().optional(),
+        layouts: z
+          .array(
+            z.object({
+              code: z.string().trim().min(1).max(32),
+              name: z.string().trim().min(1).max(200),
+              description: z.string().trim().min(1).max(500).optional().nullable(),
+              widthMeters: z.number().positive().optional().nullable(),
+              heightMeters: z.number().positive().optional().nullable(),
+              obstacles: z.any().optional().nullable(),
+              isActive: z.boolean().optional(),
+              stands: z
+                .array(
+                  z.object({
+                    code: z.string().trim().min(1).max(32),
+                    name: z.string().trim().min(1).max(200),
+                    bodyType: zBodyType,
+                    x: z.number(),
+                    y: z.number(),
+                    w: z.number().positive(),
+                    h: z.number().positive(),
+                    rotate: z.number().optional(),
+                    isActive: z.boolean().optional()
+                  })
+                )
+                .default([])
+            })
+          )
+          .default([])
+      })
+    )
+    .min(1)
+});
+
 export const layoutsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
     assertPermission(req as any, "ref:read");
@@ -59,6 +101,88 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
       .parse(req.body);
 
     return await app.prisma.hangarLayout.create({ data: body });
+  });
+
+  app.post("/import", async (req) => {
+    assertPermission(req as any, "ref:write");
+    const body = zLayoutImport.parse(req.body);
+
+    const result = await app.prisma.$transaction(async (tx: any) => {
+      const summary = { hangars: 0, layouts: 0, stands: 0 };
+      for (const h of body.hangars) {
+        const hangar = await tx.hangar.upsert({
+          where: { code: h.code },
+          update: { name: h.name, isActive: h.isActive ?? true },
+          create: { code: h.code, name: h.name, isActive: h.isActive ?? true }
+        });
+        summary.hangars += 1;
+
+        for (const l of h.layouts) {
+          const layout = await tx.hangarLayout.upsert({
+            where: { hangarId_code: { hangarId: hangar.id, code: l.code } },
+            update: {
+              name: l.name,
+              description: l.description ?? null,
+              widthMeters: l.widthMeters ?? null,
+              heightMeters: l.heightMeters ?? null,
+              obstacles: l.obstacles ?? null,
+              isActive: l.isActive ?? true
+            },
+            create: {
+              hangarId: hangar.id,
+              code: l.code,
+              name: l.name,
+              description: l.description ?? null,
+              widthMeters: l.widthMeters ?? null,
+              heightMeters: l.heightMeters ?? null,
+              obstacles: l.obstacles ?? null,
+              isActive: l.isActive ?? true
+            }
+          });
+          summary.layouts += 1;
+
+          const importedCodes = new Set(l.stands.map((s) => s.code));
+          if (importedCodes.size > 0) {
+            await tx.hangarStand.updateMany({
+              where: { layoutId: layout.id, code: { notIn: Array.from(importedCodes) } },
+              data: { isActive: false }
+            });
+          }
+
+          for (const s of l.stands) {
+            await tx.hangarStand.upsert({
+              where: { layoutId_code: { layoutId: layout.id, code: s.code } },
+              update: {
+                name: s.name,
+                bodyType: s.bodyType ?? null,
+                x: s.x,
+                y: s.y,
+                w: s.w,
+                h: s.h,
+                rotate: s.rotate ?? 0,
+                isActive: s.isActive ?? true
+              },
+              create: {
+                layoutId: layout.id,
+                code: s.code,
+                name: s.name,
+                bodyType: s.bodyType ?? null,
+                x: s.x,
+                y: s.y,
+                w: s.w,
+                h: s.h,
+                rotate: s.rotate ?? 0,
+                isActive: s.isActive ?? true
+              }
+            });
+            summary.stands += 1;
+          }
+        }
+      }
+      return summary;
+    });
+
+    return { ok: true, ...result };
   });
 
   app.patch("/:id", async (req) => {

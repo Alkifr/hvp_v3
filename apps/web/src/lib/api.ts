@@ -56,6 +56,7 @@ async function readError(res: Response): Promise<string> {
     if (j?.error === "SANDBOX_NOT_FOUND") return "Песочница не найдена";
     if (j?.error === "SANDBOX_ACCESS_DENIED") return "Нет доступа к песочнице";
     if (j?.error === "SANDBOX_READ_ONLY") return "Нет прав на запись в песочнице";
+    if (j?.error === "FORBIDDEN") return "Недостаточно прав для выполнения операции";
     if (j?.message) return String(j.message);
     return text;
   } catch {
