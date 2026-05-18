@@ -5,6 +5,49 @@ import * as XLSX from "xlsx";
 import { apiPost } from "../../lib/api";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
+type ImportPreviewRow = {
+  rowIndex: number;
+  ok: boolean;
+  title?: string;
+  startAt?: string;
+  endAt?: string;
+  aircraftTail?: string;
+  eventTypeKey?: string;
+  hangar?: string | null;
+  stand?: string | null;
+  warnings?: string[];
+  error?: string;
+};
+
+function normalizeHeaderKey(key: string) {
+  return String(key ?? "").replace(/^\uFEFF/, "").trim();
+}
+
+function normalizeRows(rows: any[]) {
+  return rows.map((row) => {
+    const next: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(row ?? {})) {
+      next[normalizeHeaderKey(k)] = typeof v === "string" ? v.replace(/^\uFEFF/, "").trim() : v;
+    }
+    return next;
+  });
+}
+
+function decodeCsv(buffer: ArrayBuffer) {
+  const utf8 = new TextDecoder("utf-8").decode(buffer);
+  const cp1251 = new TextDecoder("windows-1251").decode(buffer);
+  const replacementCount = (utf8.match(/\uFFFD/g) ?? []).length;
+  const mojibakeCount = (utf8.match(/[ÐÑ][\u0080-\u00BF]/g) ?? []).length;
+  return replacementCount > 0 || mojibakeCount > 1 ? cp1251 : utf8;
+}
+
+function formatImportDate(value?: string) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (!Number.isFinite(d.valueOf())) return value;
+  return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 export function EventImportView() {
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
@@ -13,6 +56,10 @@ export function EventImportView() {
   const [importRows, setImportRows] = useState<any[] | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<any | null>(null);
+
+  const previewRows = ((importResult as any)?.rows ?? []) as ImportPreviewRow[];
+  const resultErrors = (((importResult as any)?.errors ?? []) as Array<{ rowIndex: number; message: string }>);
+  const warningRowsCount = previewRows.filter((row) => row.ok && (row.warnings?.length ?? 0) > 0).length;
 
   const previewM = useMutation({
     mutationFn: (rows: any[]) => apiPost("/api/events/import", { dryRun: true, rows }),
@@ -82,18 +129,18 @@ export function EventImportView() {
                 if (!f) return;
                 try {
                   if (f.name.toLowerCase().endsWith(".csv")) {
-                    const text = await f.text();
+                    const text = decodeCsv(await f.arrayBuffer());
                     const wb = XLSX.read(text, { type: "string" });
                     const ws = wb.Sheets[wb.SheetNames[0] ?? ""];
                     const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
-                    setImportRows(rows);
+                    setImportRows(normalizeRows(rows));
                     return;
                   }
                   const buf = await f.arrayBuffer();
                   const wb = XLSX.read(buf, { type: "array", cellDates: true });
                   const ws = wb.Sheets[wb.SheetNames[0] ?? ""];
                   const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
-                  setImportRows(rows);
+                  setImportRows(normalizeRows(rows));
                 } catch (err: any) {
                   setImportError(String(err?.message ?? err));
                 }
@@ -139,39 +186,90 @@ export function EventImportView() {
         ) : null}
 
         {importResult ? (
-          <div style={{ border: "1px solid rgba(148,163,184,0.35)", borderRadius: 12, padding: 10 }}>
-            <div className="row">
-              <strong>Результат</strong>
+          <div className="eventImportResult">
+            <div className="eventImportResultHead">
+              <strong>Результат проверки</strong>
               {"summary" in (importResult as any) ? (
                 <>
-                  <span className="muted">режим: {(importResult as any).summary?.dryRun ? "предпросмотр" : "импорт"}</span>
-                  <span className="muted">ok: {(importResult as any).summary?.okRows ?? 0}</span>
-                  <span className="muted">ошибок: {(importResult as any).summary?.errorRows ?? 0}</span>
-                  <span className="muted">событий: {(importResult as any).summary?.wouldCreateEvents ?? 0}</span>
-                  <span className="muted">резервов: {(importResult as any).summary?.wouldCreateReservations ?? 0}</span>
+                  <span className="eventImportStat">режим: {(importResult as any).summary?.dryRun ? "предпросмотр" : "импорт"}</span>
+                  <span className="eventImportStat eventImportStatOk">без ошибок: {(importResult as any).summary?.okRows ?? 0}</span>
+                  {warningRowsCount > 0 ? <span className="eventImportStat eventImportStatWarn">предупреждений: {warningRowsCount}</span> : null}
+                  <span className="eventImportStat eventImportStatError">с ошибками: {(importResult as any).summary?.errorRows ?? 0}</span>
+                  <span className="eventImportStat">событий: {(importResult as any).summary?.wouldCreateEvents ?? 0}</span>
+                  <span className="eventImportStat">резервов: {(importResult as any).summary?.wouldCreateReservations ?? 0}</span>
                 </>
               ) : (
                 <>
-                  <span className="muted">событий: {(importResult as any).createdEvents ?? 0}</span>
-                  <span className="muted">резервов: {(importResult as any).createdReservations ?? 0}</span>
-                  <span className="muted">ошибок: {((importResult as any).errors ?? []).length}</span>
+                  <span className="eventImportStat eventImportStatOk">создано событий: {(importResult as any).createdEvents ?? 0}</span>
+                  <span className="eventImportStat">создано резервов: {(importResult as any).createdReservations ?? 0}</span>
+                  <span className="eventImportStat eventImportStatError">ошибок: {resultErrors.length}</span>
                 </>
               )}
             </div>
 
-            {"rows" in (importResult as any) ? (
-              <div
-                className="muted"
-                style={{ marginTop: 6, fontFamily: "ui-monospace, monospace", fontSize: 12, whiteSpace: "pre-wrap" }}
-              >
-                {JSON.stringify(((importResult as any).rows ?? []).slice(0, 40), null, 2)}
+            {previewRows.length ? (
+              <div className="eventImportTableWrap">
+                <table className="table eventImportTable">
+                  <thead>
+                    <tr>
+                      <th>Строка</th>
+                      <th>Статус</th>
+                      <th>Событие</th>
+                      <th>Тип события</th>
+                      <th>Борт</th>
+                      <th>Период</th>
+                      <th>Ангар / место</th>
+                      <th>Комментарий</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewRows.map((row) => {
+                      const hasWarnings = row.ok && (row.warnings?.length ?? 0) > 0;
+                      return (
+                      <tr key={row.rowIndex} className={row.ok ? (hasWarnings ? "eventImportRowWarn" : "eventImportRowOk") : "eventImportRowError"}>
+                        <td>{row.rowIndex}</td>
+                        <td>
+                          <span className={row.ok ? (hasWarnings ? "eventImportBadge eventImportBadgeWarn" : "eventImportBadge eventImportBadgeOk") : "eventImportBadge eventImportBadgeError"}>
+                            {row.ok ? (hasWarnings ? "Предупреждение" : "Готово") : "Ошибка"}
+                          </span>
+                        </td>
+                        <td>{row.title || "—"}</td>
+                        <td>{row.eventTypeKey || "—"}</td>
+                        <td>{row.aircraftTail || "—"}</td>
+                        <td>
+                          {formatImportDate(row.startAt)}
+                          <br />
+                          <span className="muted">до {formatImportDate(row.endAt)}</span>
+                        </td>
+                        <td>
+                          {row.hangar || "—"}
+                          {row.stand ? <span className="muted"> / {row.stand}</span> : null}
+                        </td>
+                        <td className="eventImportMessageCell">
+                          {row.error ? <div className="eventImportErrorText">{row.error}</div> : null}
+                          {row.warnings?.length ? (
+                            <div className="eventImportWarnings">
+                              {row.warnings.map((w, idx) => (
+                                <div key={idx}>{w}</div>
+                              ))}
+                            </div>
+                          ) : row.ok ? (
+                            <span className="muted">Можно импортировать</span>
+                          ) : null}
+                        </td>
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            ) : ((importResult as any).errors ?? []).length ? (
-              <div
-                className="muted"
-                style={{ marginTop: 6, fontFamily: "ui-monospace, monospace", fontSize: 12, whiteSpace: "pre-wrap" }}
-              >
-                {JSON.stringify((((importResult as any).errors ?? []) as any[]).slice(0, 40), null, 2)}
+            ) : resultErrors.length ? (
+              <div className="eventImportErrorsList">
+                {resultErrors.map((err) => (
+                  <div key={`${err.rowIndex}:${err.message}`} className="eventImportErrorText">
+                    Строка {err.rowIndex}: {err.message}
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>

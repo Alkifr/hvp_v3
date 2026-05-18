@@ -268,7 +268,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: null,
           startAt: { lt: to },
           endAt: { gt: from },
-          status: { not: EventStatus.CANCELLED }
+          status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] }
         },
         include: {
           aircraft: { select: { tailNumber: true } },
@@ -332,7 +332,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
         startAt: se.startAt.toISOString(),
         endAt: se.endAt.toISOString(),
         status: se.status,
-        category: se.status === EventStatus.CANCELLED ? "cancelled" : conflicts.length > 0 ? "conflictSameStand" : "newOnly",
+        category: se.status === EventStatus.CANCELLED || se.status === EventStatus.DELETED ? "cancelled" : conflicts.length > 0 ? "conflictSameStand" : "newOnly",
         conflicts
       });
     }
@@ -428,6 +428,10 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
             virtualAircraft: (src.virtualAircraft as Prisma.InputJsonValue | null) ?? Prisma.JsonNull,
             startAt: src.startAt,
             endAt: src.endAt,
+            budgetStartAt: (src as any).budgetStartAt,
+            budgetEndAt: (src as any).budgetEndAt,
+            actualStartAt: (src as any).actualStartAt,
+            actualEndAt: (src as any).actualEndAt,
             hangarId: src.hangarId,
             layoutId: src.layoutId,
             notes: src.notes

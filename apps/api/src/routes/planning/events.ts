@@ -46,6 +46,10 @@ function diffEvent(before: any, after: any) {
     "eventTypeId",
     "startAt",
     "endAt",
+    "budgetStartAt",
+    "budgetEndAt",
+    "actualStartAt",
+    "actualEndAt",
     "hangarId",
     "layoutId",
     "notes",
@@ -85,6 +89,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     return await app.prisma.maintenanceEvent.findMany({
       where: {
         ...sandboxFilter(req),
+        status: { not: EventStatus.DELETED },
         ...(query.level ? { level: query.level } : {}),
         ...(query.hangarId ? { hangarId: query.hangarId } : {}),
         ...(query.layoutId ? { layoutId: query.layoutId } : {}),
@@ -215,11 +220,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     const norm = (s: unknown) =>
       String(s ?? "")
+        .normalize("NFKC")
+        .replace(/^\uFEFF/, "")
+        .replace(/\u00A0/g, " ")
+        .replace(/[‐‑‒–—―−]/g, "-")
         .trim()
         .replace(/^"+|"+$/g, "");
 
-    const upper = (s: unknown) => norm(s).toUpperCase();
-    const lower = (s: unknown) => norm(s).toLowerCase();
+    const key = (s: unknown) => norm(s).toLocaleLowerCase("ru-RU");
+    const upper = (s: unknown) => norm(s).toLocaleUpperCase("ru-RU");
+    const lower = key;
 
     const parseDate = (v: string | number | Date) => {
       if (v instanceof Date) return v;
@@ -242,7 +252,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     for (const r of rows) {
       tailSet.add(upper(r.Aircraft));
-      eventKeySet.add(lower(r.Event_name));
+      eventKeySet.add(key(r.Event_name));
       const hk = lower(r.Hangar);
       if (hk) hangarKeySet.add(hk);
       const sc = upper(r.HangarStand);
@@ -256,18 +266,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     const aircraftByTail = new Map<string, (typeof aircraftAll)[number]>();
-    for (const a of aircraftAll) aircraftByTail.set(String(a.tailNumber).toUpperCase(), a);
+    for (const a of aircraftAll) aircraftByTail.set(upper(a.tailNumber), a);
 
     const eventTypeByKey = new Map<string, (typeof eventTypesAll)[number]>();
     for (const et of eventTypesAll) {
-      eventTypeByKey.set(String(et.name).toLowerCase(), et);
-      eventTypeByKey.set(String(et.code).toLowerCase(), et);
+      eventTypeByKey.set(key(et.name), et);
+      if (et.code) eventTypeByKey.set(key(et.code), et);
     }
 
     const hangarByKey = new Map<string, (typeof hangarsAll)[number]>();
     for (const h of hangarsAll) {
-      hangarByKey.set(String(h.name).toLowerCase(), h);
-      hangarByKey.set(String(h.code).toLowerCase(), h);
+      hangarByKey.set(key(h.name), h);
+      if (h.code) hangarByKey.set(key(h.code), h);
     }
 
     // Стенды: для указанных ангаров тащим все места, затем матчим по коду в памяти
@@ -281,10 +291,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         : [];
     const standsByHangarAndCode = new Map<string, Array<(typeof standAll)[number]>>();
     for (const s of standAll) {
-      const key = `${s.layout.hangarId}|${String(s.code).toUpperCase()}`;
-      const arr = standsByHangarAndCode.get(key) ?? [];
+      const standKey = `${s.layout.hangarId}|${upper(s.code)}`;
+      const arr = standsByHangarAndCode.get(standKey) ?? [];
       arr.push(s);
-      standsByHangarAndCode.set(key, arr);
+      standsByHangarAndCode.set(standKey, arr);
     }
 
     // Подготовим выборку резервов по всем потенциальным стендам в общем диапазоне дат файла
@@ -299,7 +309,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       if (!h) continue;
       const standKey = `${h.id}|${sc}`;
       const stands = standsByHangarAndCode.get(standKey) ?? [];
-      if (stands.length === 1) candidateStandIds.add(stands[0]!.id);
+      for (const s of stands) candidateStandIds.add(s.id);
       const sAt = parseDate(r.startAt);
       const eAt = parseDate(r.endAt);
       if (Number.isFinite(sAt.valueOf()) && sAt < minStart) minStart = sAt;
@@ -314,7 +324,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               standId: { in: Array.from(candidateStandIds) },
               startAt: { lt: maxEnd },
               endAt: { gt: minStart },
-              event: { status: { not: EventStatus.CANCELLED } }
+              event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
             },
             include: { event: { include: { aircraft: true } } }
           })
@@ -328,6 +338,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const overlaps = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) => aStart < bEnd && aEnd > bStart;
+    const existingStandConflict = (standId: string, startAt: Date, endAt: Date) => {
+      const rs = reservationsByStand.get(standId) ?? [];
+      return rs.find((x: any) => overlaps(startAt, endAt, x.startAt, x.endAt));
+    };
+    const chooseFirstAvailableStand = <T extends { id: string }>(stands: T[], startAt: Date, endAt: Date) =>
+      stands.find((s) => !existingStandConflict(s.id, startAt, endAt)) ?? stands[0]!;
 
     const previewRows: Array<{
       rowIndex: number;
@@ -355,7 +371,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       const warnings: string[] = [];
       try {
         const aircraftTail = upper(r.Aircraft);
-        const eventKey = lower(r.Event_name);
+        const eventKey = key(r.Event_name);
         const title = norm(r.Event_Title) || norm(r.Event_name) || "Событие";
         const hangarStr = norm(r.Hangar);
         const standCode = upper(r.HangarStand);
@@ -375,18 +391,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
         // предупреждения по колонкам Operator/AircraftType (если есть)
         const opStr = norm((r as any).Operator);
-        if (opStr && aircraft.operator?.name && opStr.toLowerCase() !== String(aircraft.operator.name).toLowerCase() && opStr.toLowerCase() !== String(aircraft.operator.code ?? "").toLowerCase()) {
+        if (opStr && aircraft.operator?.name && key(opStr) !== key(aircraft.operator.name) && key(opStr) !== key(aircraft.operator.code ?? "")) {
           warnings.push(`Operator не совпадает с бортом: в файле "${opStr}", в справочнике "${aircraft.operator.name}"`);
         }
         const typeStr = norm((r as any).AircraftType);
         if (typeStr && aircraft.type?.name) {
-          const t = typeStr.toLowerCase();
-          const tName = String(aircraft.type.name).toLowerCase();
-          const tIcao = String((aircraft.type as any).icaoType ?? "").toLowerCase();
+          const t = key(typeStr);
+          const tName = key(aircraft.type.name);
+          const tIcao = key((aircraft.type as any).icaoType ?? "");
           if (t !== tName && t !== tIcao) warnings.push(`AircraftType не совпадает с бортом: в файле "${typeStr}", в справочнике "${aircraft.type.name}"`);
         }
 
-        const hangar = hangarStr ? hangarByKey.get(hangarStr.toLowerCase()) ?? null : null;
+        const hangar = hangarStr ? hangarByKey.get(key(hangarStr)) ?? null : null;
         if (hangarStr && !hangar) throw new Error(`Не найден ангар: ${hangarStr}`);
 
         let resolvedStand: { standId: string; layoutId: string } | null = null;
@@ -395,12 +411,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           const key = `${hangar.id}|${standCode}`;
           const stands = standsByHangarAndCode.get(key) ?? [];
           if (stands.length === 0) throw new Error(`Не найдено место ${standCode} в ангаре ${hangar.name}`);
-          if (stands.length > 1) throw new Error(`Место ${standCode} неоднозначно (найдено ${stands.length} вариантов в ангаре ${hangar.name})`);
-          resolvedStand = { standId: stands[0]!.id, layoutId: stands[0]!.layoutId };
+          const selectedStand = chooseFirstAvailableStand(stands, startAt, endAt);
+          if (stands.length > 1) {
+            warnings.push(
+              `Место ${standCode} найдено в ${stands.length} вариантах расстановки ангара ${hangar.name}; выбран первый подходящий вариант.`
+            );
+          }
+          resolvedStand = { standId: selectedStand.id, layoutId: selectedStand.layoutId };
 
           // конфликты с существующими резервами
-          const rs = reservationsByStand.get(resolvedStand.standId) ?? [];
-          const conflict = rs.find((x: any) => overlaps(startAt, endAt, x.startAt, x.endAt));
+          const conflict = existingStandConflict(resolvedStand.standId, startAt, endAt);
           if (conflict) {
             throw new Error(
               `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`
@@ -410,7 +430,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           // конфликты внутри самого файла (если импортируем реально)
           const selfConflict = plannedReservations.find((x) => x.standId === resolvedStand!.standId && overlaps(startAt, endAt, x.startAt, x.endAt));
           if (selfConflict) {
-            throw new Error(`Конфликт внутри файла по месту ${standCode}: пересекается с "${selfConflict.label}"`);
+            warnings.push(`Нахлёст внутри файла по месту ${standCode}: пересекается с "${selfConflict.label}". Событие будет импортировано с нахлёстом.`);
           }
         }
 
@@ -464,6 +484,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       createdReservations: 0,
       errors: [] as Array<{ rowIndex: number; message: string }>
     };
+    const importedEventIds = new Set<string>();
 
     for (let i = 0; i < previewRows.length; i++) {
       if (!previewRows[i]!.ok) continue;
@@ -471,7 +492,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       const rowIndex = previewRows[i]!.rowIndex;
       try {
         const aircraftTail = upper(r.Aircraft);
-        const eventKey = lower(r.Event_name);
+        const eventKey = key(r.Event_name);
         const title = norm(r.Event_Title) || norm(r.Event_name) || "Событие";
         const hangarStr = norm(r.Hangar);
         const standCode = upper(r.HangarStand);
@@ -480,9 +501,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
         const aircraft = aircraftByTail.get(aircraftTail)!;
         const eventType = eventTypeByKey.get(eventKey)!;
-        const hangar = hangarStr ? hangarByKey.get(hangarStr.toLowerCase()) ?? null : null;
+        const hangar = hangarStr ? hangarByKey.get(key(hangarStr)) ?? null : null;
 
         const sbId = sandboxIdFor(req);
+        let createdEventId = "";
         await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
           const created = await tx.maintenanceEvent.create({
             data: {
@@ -497,6 +519,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               sandboxId: sbId
             }
           });
+          createdEventId = created.id;
 
           await tx.maintenanceEventAudit.create({
             data: {
@@ -525,20 +548,21 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             if (!hangar) throw new Error("Указано HangarStand, но не указан/не найден Hangar");
             const key = `${hangar.id}|${standCode}`;
             const stands = standsByHangarAndCode.get(key) ?? [];
-            if (stands.length !== 1) throw new Error(`Место ${standCode} неоднозначно/не найдено для ангара ${hangar.name}`);
-            const stand = stands[0]!;
+            if (stands.length === 0) throw new Error(`Место ${standCode} не найдено для ангара ${hangar.name}`);
+            const stand = chooseFirstAvailableStand(stands, startAt, endAt);
 
             // Повторно проверим конфликт на случай параллельных изменений (дешево: standId + диапазон)
-            const conflict = await tx.standReservation.findFirst({
+            const conflicts = await tx.standReservation.findMany({
               where: {
                 sandboxId: sbId,
                 standId: stand.id,
                 startAt: { lt: endAt },
                 endAt: { gt: startAt },
-                event: { status: { not: EventStatus.CANCELLED } }
+                event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
               },
               include: { event: { include: { aircraft: true } } }
             });
+            const conflict = conflicts.find((r) => !importedEventIds.has(r.eventId));
             if (conflict) {
               throw new Error(
                 `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`
@@ -559,6 +583,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
           result.createdEvents += 1;
         });
+        if (createdEventId) importedEventIds.add(createdEventId);
       } catch (err: any) {
         result.errors.push({ rowIndex, message: String(err?.message ?? err) });
       }
@@ -585,12 +610,24 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         eventTypeId: zUuid,
         startAt: zDateTime,
         endAt: zDateTime,
+        budgetStartAt: zDateTime.nullable().optional(),
+        budgetEndAt: zDateTime.nullable().optional(),
+        actualStartAt: zDateTime.nullable().optional(),
+        actualEndAt: zDateTime.nullable().optional(),
         hangarId: zUuid.optional(),
         layoutId: zUuid.optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: "budget period must have both dates" })
+      .refine((v) => !v.budgetStartAt || !v.budgetEndAt || v.budgetEndAt > v.budgetStartAt, {
+        message: "budgetEndAt must be after budgetStartAt"
+      })
+      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: "actual period must have both dates" })
+      .refine((v) => !v.actualStartAt || !v.actualEndAt || v.actualEndAt > v.actualStartAt, {
+        message: "actualEndAt must be after actualStartAt"
+      })
       .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: "aircraftId or virtualAircraft required" })
       .parse(req.body);
 
@@ -621,6 +658,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             eventTypeId: created.eventTypeId,
             startAt: created.startAt.toISOString(),
             endAt: created.endAt.toISOString(),
+            budgetStartAt: (created as any).budgetStartAt?.toISOString() ?? null,
+            budgetEndAt: (created as any).budgetEndAt?.toISOString() ?? null,
+            actualStartAt: (created as any).actualStartAt?.toISOString() ?? null,
+            actualEndAt: (created as any).actualEndAt?.toISOString() ?? null,
             hangarId: created.hangarId ?? null,
             layoutId: created.layoutId ?? null
           }
@@ -643,6 +684,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         eventTypeId: zUuid.optional(),
         startAt: zDateTime.optional(),
         endAt: zDateTime.optional(),
+        budgetStartAt: zDateTime.nullable().optional(),
+        budgetEndAt: zDateTime.nullable().optional(),
+        actualStartAt: zDateTime.nullable().optional(),
+        actualEndAt: zDateTime.nullable().optional(),
         hangarId: zUuid.nullable().optional(),
         layoutId: zUuid.nullable().optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
@@ -682,6 +727,22 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     if (nextEnd <= nextStart) {
       throw app.httpErrors.badRequest("endAt must be after startAt");
     }
+    const nextBudgetStart = body.budgetStartAt === undefined ? (existing as any).budgetStartAt : body.budgetStartAt;
+    const nextBudgetEnd = body.budgetEndAt === undefined ? (existing as any).budgetEndAt : body.budgetEndAt;
+    if ((nextBudgetStart && !nextBudgetEnd) || (!nextBudgetStart && nextBudgetEnd)) {
+      throw app.httpErrors.badRequest("budget period must have both dates");
+    }
+    if (nextBudgetStart && nextBudgetEnd && nextBudgetEnd <= nextBudgetStart) {
+      throw app.httpErrors.badRequest("budgetEndAt must be after budgetStartAt");
+    }
+    const nextActualStart = body.actualStartAt === undefined ? (existing as any).actualStartAt : body.actualStartAt;
+    const nextActualEnd = body.actualEndAt === undefined ? (existing as any).actualEndAt : body.actualEndAt;
+    if ((nextActualStart && !nextActualEnd) || (!nextActualStart && nextActualEnd)) {
+      throw app.httpErrors.badRequest("actual period must have both dates");
+    }
+    if (nextActualStart && nextActualEnd && nextActualEnd <= nextActualStart) {
+      throw app.httpErrors.badRequest("actualEndAt must be after actualStartAt");
+    }
 
     const updated = await app.prisma.maintenanceEvent.update({
       where: { id },
@@ -696,7 +757,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           eventId: { not: id },
           startAt: { lt: nextEnd },
           endAt: { gt: nextStart },
-          event: { status: { not: EventStatus.CANCELLED } }
+          event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
         },
         include: { event: { include: { aircraft: true } } }
       });

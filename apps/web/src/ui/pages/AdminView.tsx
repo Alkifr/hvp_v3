@@ -14,11 +14,26 @@ type User = {
   mustChangePassword: boolean;
   roles: { role: { id: string; code: string; name: string } }[];
 };
+type EventTypeRef = { id: string; code: string; name: string };
+type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
+type AircraftRef = { id: string; tailNumber: string; type?: AircraftTypeRef | null };
+type CleanupEventItem = {
+  id: string;
+  title: string;
+  status: string;
+  startAt: string;
+  endAt: string;
+  aircraft?: { tailNumber: string; type?: AircraftTypeRef | null } | null;
+  eventType?: { name: string; code?: string | null } | null;
+};
+type CleanupPreview = { ok: true; total: number; items: CleanupEventItem[] };
+type CleanupApplyResult = { ok: true; updated: number };
 
 export function AdminView(props: { permissions: string[] }) {
   const qc = useQueryClient();
   const canUsers = props.permissions.includes("admin:users");
   const canRoles = props.permissions.includes("admin:roles");
+  const canCleanup = props.permissions.includes("admin:cleanup");
 
   const permsQ = useQuery({
     queryKey: ["admin", "permissions"],
@@ -35,12 +50,69 @@ export function AdminView(props: { permissions: string[] }) {
     queryFn: () => apiGet<User[]>("/api/admin/users"),
     enabled: canUsers
   });
+  const cleanupEventTypesQ = useQuery({
+    queryKey: ["ref", "event-types"],
+    queryFn: () => apiGet<EventTypeRef[]>("/api/ref/event-types"),
+    enabled: canCleanup
+  });
+  const cleanupAircraftTypesQ = useQuery({
+    queryKey: ["ref", "aircraft-types"],
+    queryFn: () => apiGet<AircraftTypeRef[]>("/api/ref/aircraft-types"),
+    enabled: canCleanup
+  });
+  const cleanupAircraftQ = useQuery({
+    queryKey: ["ref", "aircraft"],
+    queryFn: () => apiGet<AircraftRef[]>("/api/ref/aircraft"),
+    enabled: canCleanup
+  });
 
   // create user
   const [uEmail, setUEmail] = useState("");
   const [uName, setUName] = useState("");
   const [uPass, setUPass] = useState("");
   const [uRoleIds, setURoleIds] = useState<string[]>([]);
+  const [cleanupEventId, setCleanupEventId] = useState("");
+  const [cleanupEventTypeId, setCleanupEventTypeId] = useState("");
+  const [cleanupAircraftTypeId, setCleanupAircraftTypeId] = useState("");
+  const [cleanupAircraftId, setCleanupAircraftId] = useState("");
+  const [cleanupFrom, setCleanupFrom] = useState("");
+  const [cleanupTo, setCleanupTo] = useState("");
+  const [cleanupConfirmBulk, setCleanupConfirmBulk] = useState(false);
+  const [cleanupPassword, setCleanupPassword] = useState("");
+  const [cleanupReason, setCleanupReason] = useState("");
+  const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null);
+
+  const cleanupPayload = () => ({
+    ...(cleanupEventId.trim() ? { eventId: cleanupEventId.trim() } : {}),
+    ...(cleanupEventTypeId ? { eventTypeId: cleanupEventTypeId } : {}),
+    ...(cleanupAircraftTypeId ? { aircraftTypeId: cleanupAircraftTypeId } : {}),
+    ...(cleanupAircraftId ? { aircraftId: cleanupAircraftId } : {}),
+    ...(cleanupFrom ? { from: new Date(`${cleanupFrom}T00:00:00`).toISOString() } : {}),
+    ...(cleanupTo ? { to: new Date(`${cleanupTo}T23:59:59`).toISOString() } : {}),
+    ...(cleanupConfirmBulk ? { confirmBulk: true } : {})
+  });
+  const cleanupHasFilters = Boolean(cleanupEventId.trim() || cleanupEventTypeId || cleanupAircraftTypeId || cleanupAircraftId || cleanupFrom || cleanupTo);
+
+  const cleanupPreviewM = useMutation({
+    mutationFn: () => apiPost<CleanupPreview>("/api/admin/cleanup/events/preview", cleanupPayload()),
+    onSuccess: (res) => setCleanupPreview(res)
+  });
+  const cleanupApplyM = useMutation({
+    mutationFn: () =>
+      apiPost<CleanupApplyResult>("/api/admin/cleanup/events/apply", {
+        ...cleanupPayload(),
+        password: cleanupPassword,
+        reason: cleanupReason.trim() || undefined
+      }),
+    onSuccess: async () => {
+      setCleanupPassword("");
+      setCleanupPreview(null);
+      await qc.invalidateQueries({ queryKey: ["events"] });
+      await qc.invalidateQueries({ queryKey: ["reservations"] });
+      await qc.invalidateQueries({ queryKey: ["hangar-planning"] });
+      await qc.invalidateQueries({ queryKey: ["sandboxes"] });
+    }
+  });
 
   const createUserM = useMutation({
     mutationFn: () => apiPost<User>("/api/admin/users", { email: uEmail, displayName: uName || undefined, password: uPass, roleIds: uRoleIds }),
@@ -89,8 +161,137 @@ export function AdminView(props: { permissions: string[] }) {
           <strong>Админка</strong>
           <span className="muted">Управление пользователями и ролями/правами.</span>
         </div>
-        {!canUsers && !canRoles ? <div className="error" style={{ marginTop: 10 }}>Нет прав администратора.</div> : null}
+        {!canUsers && !canRoles && !canCleanup ? <div className="error" style={{ marginTop: 10 }}>Нет прав администратора.</div> : null}
       </div>
+
+      {canCleanup ? (
+        <div className="card adminDangerZone">
+          <div className="row">
+            <div>
+              <strong>Очистка рабочего контура</strong>
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                События не удаляются физически, а переводятся в статус «Удалено». Песочницы не затрагиваются.
+              </div>
+            </div>
+            <span className="gpChip gpChipError">только SUPER_ADMIN</span>
+          </div>
+
+          <div className="row" style={{ alignItems: "flex-end" }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">ID события</span>
+              <input value={cleanupEventId} onChange={(e) => { setCleanupEventId(e.target.value); setCleanupPreview(null); }} placeholder="опционально" style={{ width: 240 }} />
+            </label>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">Тип события</span>
+              <select value={cleanupEventTypeId} onChange={(e) => { setCleanupEventTypeId(e.target.value); setCleanupPreview(null); }} style={{ width: 220 }}>
+                <option value="">— любой —</option>
+                {(cleanupEventTypesQ.data ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">Тип ВС</span>
+              <select value={cleanupAircraftTypeId} onChange={(e) => { setCleanupAircraftTypeId(e.target.value); setCleanupPreview(null); }} style={{ width: 240 }}>
+                <option value="">— любой —</option>
+                {(cleanupAircraftTypesQ.data ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>{t.icaoType ? `${t.icaoType} • ${t.name}` : t.name}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">Борт</span>
+              <select value={cleanupAircraftId} onChange={(e) => { setCleanupAircraftId(e.target.value); setCleanupPreview(null); }} style={{ width: 200 }}>
+                <option value="">— любой —</option>
+                {(cleanupAircraftQ.data ?? [])
+                  .filter((a) => !cleanupAircraftTypeId || a.type?.id === cleanupAircraftTypeId)
+                  .map((a) => (
+                    <option key={a.id} value={a.id}>{a.tailNumber}</option>
+                  ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">с</span>
+              <input type="date" value={cleanupFrom} onChange={(e) => { setCleanupFrom(e.target.value); setCleanupPreview(null); }} />
+            </label>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">по</span>
+              <input type="date" value={cleanupTo} onChange={(e) => { setCleanupTo(e.target.value); setCleanupPreview(null); }} />
+            </label>
+            <button className="btn" disabled={!cleanupHasFilters || cleanupPreviewM.isPending} onClick={() => cleanupPreviewM.mutate()}>
+              Предпросмотр
+            </button>
+          </div>
+
+          {!cleanupEventId.trim() && !cleanupFrom && !cleanupTo ? (
+            <label className="row" style={{ gap: 8 }}>
+              <input type="checkbox" checked={cleanupConfirmBulk} onChange={(e) => { setCleanupConfirmBulk(e.target.checked); setCleanupPreview(null); }} />
+              <span className="muted">Разрешить массовую очистку без периода</span>
+            </label>
+          ) : null}
+
+          {cleanupPreviewM.error ? <div className="error">{String(cleanupPreviewM.error.message || cleanupPreviewM.error)}</div> : null}
+          {cleanupApplyM.error ? <div className="error">{String(cleanupApplyM.error.message || cleanupApplyM.error)}</div> : null}
+          {cleanupApplyM.data ? <div className="muted">Переведено в статус «Удалено»: {cleanupApplyM.data.updated}</div> : null}
+
+          {cleanupPreview ? (
+            <div className="adminCleanupPreview">
+              <div className="row">
+                <strong>Найдено событий: {cleanupPreview.total}</strong>
+                <span className="muted">Показаны первые {cleanupPreview.items.length}</span>
+              </div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Событие</th>
+                    <th>Борт</th>
+                    <th>Тип события</th>
+                    <th>Период</th>
+                    <th>Статус</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cleanupPreview.items.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <strong>{item.title}</strong>
+                        <div className="muted" style={{ fontSize: 12 }}>{item.id}</div>
+                      </td>
+                      <td>{item.aircraft?.tailNumber ?? "—"}</td>
+                      <td>{item.eventType?.name ?? "—"}</td>
+                      <td>
+                        {new Date(item.startAt).toLocaleString("ru-RU")}
+                        <div className="muted">до {new Date(item.endAt).toLocaleString("ru-RU")}</div>
+                      </td>
+                      <td>{item.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="row" style={{ alignItems: "flex-end" }}>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Причина</span>
+                  <input value={cleanupReason} onChange={(e) => setCleanupReason(e.target.value)} placeholder="Очистка рабочего контура" style={{ width: 320 }} />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Пароль текущего пользователя</span>
+                  <input type="password" value={cleanupPassword} onChange={(e) => setCleanupPassword(e.target.value)} style={{ width: 260 }} />
+                </label>
+                <button
+                  className="btn btnDanger"
+                  disabled={cleanupPreview.total === 0 || !cleanupPassword || cleanupApplyM.isPending}
+                  onClick={() => {
+                    if (!confirm(`Перевести в статус «Удалено» ${cleanupPreview.total} событий рабочего контура?`)) return;
+                    cleanupApplyM.mutate();
+                  }}
+                >
+                  Перевести в «Удалено»
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {canUsers ? (
         <div className="card" style={{ display: "grid", gap: 10 }}>

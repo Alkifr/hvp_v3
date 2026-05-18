@@ -5,8 +5,8 @@ import { authChangePassword, authLogin } from "../auth/authApi";
 
 export function LoginView() {
   const qc = useQueryClient();
-  const [email, setEmail] = useState("admin@local.dev");
-  const [password, setPassword] = useState("admin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [newPassword2, setNewPassword2] = useState("");
@@ -119,13 +119,6 @@ export function LoginView() {
             {changeError ? <div className="error">{changeError}</div> : null}
           </>
         )}
-
-        <div className="authDemo">
-          <div><b>Демо-доступы после seed:</b></div>
-          <div>Админ: admin@local.dev / admin</div>
-          <div>Планировщик: planner@local.dev / planner123</div>
-          <div>Просмотрщик: viewer@local.dev / viewer123</div>
-        </div>
       </div>
     </div>
   );

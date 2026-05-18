@@ -340,7 +340,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           ...sandboxFilter(req),
           startAt: { lt: windowEnd },
           endAt: { gt: body.startFrom },
-          event: { status: { not: EventStatus.CANCELLED } }
+          event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
         },
         select: {
           standId: true,

@@ -68,6 +68,10 @@ export async function copyPlanToSandbox(
     virtualAircraft: (src.virtualAircraft as Prisma.InputJsonValue | null) ?? Prisma.JsonNull,
     startAt: src.startAt,
     endAt: src.endAt,
+    budgetStartAt: (src as any).budgetStartAt,
+    budgetEndAt: (src as any).budgetEndAt,
+    actualStartAt: (src as any).actualStartAt,
+    actualEndAt: (src as any).actualEndAt,
     hangarId: src.hangarId,
     layoutId: src.layoutId,
     notes: src.notes

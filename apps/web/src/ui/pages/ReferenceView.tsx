@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 
@@ -303,6 +303,17 @@ export function ReferenceView() {
 
   const [filterHangarId, setFilterHangarId] = useState<string>("");
   const [filterLayoutId, setFilterLayoutId] = useState<string>("");
+  const [feedback, setFeedback] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
+
+  const showFeedback = (type: "success" | "error" | "info", message: string) => {
+    setFeedback({ type, message });
+  };
+
+  useEffect(() => {
+    if (!feedback) return;
+    const t = window.setTimeout(() => setFeedback(null), feedback.type === "error" ? 9000 : 5500);
+    return () => window.clearTimeout(t);
+  }, [feedback]);
 
   const listUrl = useMemo(() => {
     if (kind === "layouts" && filterHangarId) return `/api/ref/layouts?hangarId=${encodeURIComponent(filterHangarId)}`;
@@ -330,7 +341,9 @@ export function ReferenceView() {
       if (kind === "stands" || kind === "layouts") {
         await qc.invalidateQueries({ queryKey: ["layout"] });
       }
-    }
+      showFeedback("success", `${REF_SINGULAR[kind]} добавлен(а). Справочник обновлён.`);
+    },
+    onError: (err) => showFeedback("error", `Не удалось добавить запись: ${String((err as any)?.message ?? err)}`)
   });
 
   const updateM = useMutation({
@@ -341,7 +354,9 @@ export function ReferenceView() {
       if (kind === "stands" || kind === "layouts") {
         await qc.invalidateQueries({ queryKey: ["layout"] });
       }
-    }
+      showFeedback("success", `${REF_SINGULAR[kind]} сохранён(а). Изменения применены.`);
+    },
+    onError: (err) => showFeedback("error", `Не удалось сохранить изменения: ${String((err as any)?.message ?? err)}`)
   });
 
   const deleteM = useMutation({
@@ -352,15 +367,15 @@ export function ReferenceView() {
       if (kind === "stands" || kind === "layouts") {
         await qc.invalidateQueries({ queryKey: ["layout"] });
       }
-    }
+      showFeedback("success", `${REF_SINGULAR[kind]} удалён(а). Список обновлён.`);
+    },
+    onError: (err) => showFeedback("error", `Не удалось удалить запись: ${String((err as any)?.message ?? err)}`)
   });
 
   // Импорт CSV для "Бортовые номера"
   const [aircraftCsvFile, setAircraftCsvFile] = useState<File | null>(null);
   const [aircraftCsvText, setAircraftCsvText] = useState<string>("");
   const [aircraftCsvParseError, setAircraftCsvParseError] = useState<string | null>(null);
-  const [aircraftImportOperatorId, setAircraftImportOperatorId] = useState<string>("");
-  const [aircraftImportTypeId, setAircraftImportTypeId] = useState<string>("");
   const [aircraftImportResult, setAircraftImportResult] = useState<any>(null);
   const [layoutImportFile, setLayoutImportFile] = useState<File | null>(null);
   const [layoutImportRows, setLayoutImportRows] = useState<Array<Record<string, unknown>>>([]);
@@ -369,31 +384,83 @@ export function ReferenceView() {
   const [previewLayoutId, setPreviewLayoutId] = useState<string>("");
   const [previewStandId, setPreviewStandId] = useState<string>("");
 
-  const parseTailNumbersFromCsvText = (text: string) => {
-    // Минимальный парсер: берём 1-й столбец из строк; разделитель , ; \t
-    const lines = text.replace(/\r/g, "").split("\n");
-    const out: string[] = [];
-    for (const line of lines) {
-      const raw = line.trim();
-      if (!raw) continue;
-      // пропустим "шапку"
-      const lower = raw.toLowerCase();
-      if (lower.includes("tail") || lower.includes("борт") || lower.includes("tailnumber")) continue;
-      const firstCell = raw.split(/[;,\\t]/)[0] ?? "";
-      const v = firstCell.trim().replace(/^"+|"+$/g, "");
-      if (v) out.push(v);
+  const decodeAircraftCsv = (buffer: ArrayBuffer) => {
+    const utf8 = new TextDecoder("utf-8").decode(buffer);
+    const cp1251 = new TextDecoder("windows-1251").decode(buffer);
+    const replacementCount = (utf8.match(/\uFFFD/g) ?? []).length;
+    const mojibakeCount = (utf8.match(/[ÐÑ][\u0080-\u00BF]/g) ?? []).length;
+    return replacementCount > 0 || mojibakeCount > 1 ? cp1251 : utf8;
+  };
+
+  const parseAircraftCsvRows = (text: string) => {
+    const lines = text.replace(/\r/g, "").split("\n").filter((line) => line.trim());
+    if (lines.length < 2) throw new Error("CSV должен содержать шапку и хотя бы одну строку данных.");
+
+    const headerLine = lines[0] ?? "";
+    const delimiter = [";", "\t", ","].sort((a, b) => headerLine.split(b).length - headerLine.split(a).length)[0] ?? ";";
+    const parseLine = (line: string) => {
+      const cells: string[] = [];
+      let cell = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        const next = line[i + 1];
+        if (ch === '"' && inQuotes && next === '"') {
+          cell += '"';
+          i += 1;
+        } else if (ch === '"') {
+          inQuotes = !inQuotes;
+        } else if (ch === delimiter && !inQuotes) {
+          cells.push(cell.trim().replace(/^"+|"+$/g, ""));
+          cell = "";
+        } else {
+          cell += ch;
+        }
+      }
+      cells.push(cell.trim().replace(/^"+|"+$/g, ""));
+      return cells;
+    };
+
+    const rows = lines.map(parseLine);
+    if (rows.length < 2) throw new Error("CSV должен содержать шапку и хотя бы одну строку данных.");
+
+    const normHeader = (v: unknown) =>
+      String(v ?? "")
+        .replace(/^\uFEFF/, "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_-]+/g, "");
+    const headers = rows[0]!.map(normHeader);
+    const tailIdx = headers.findIndex((h) => ["tailnumber", "aircraft", "boardnumber", "борт", "бортовойномер"].includes(h));
+    const operatorIdx = headers.findIndex((h) => ["operator", "operatorcode", "operatorname", "оператор"].includes(h));
+    const typeIdx = headers.findIndex((h) => ["aircrafttype", "type", "icaotype", "типвс", "тип"].includes(h));
+
+    if (tailIdx < 0 || operatorIdx < 0 || typeIdx < 0) {
+      throw new Error("В CSV нужны колонки: tailNumber, operator, aircraftType.");
     }
-    return out;
+
+    return rows.slice(1).map((row) => ({
+      tailNumber: String(row[tailIdx] ?? "").trim(),
+      operator: String(row[operatorIdx] ?? "").trim(),
+      aircraftType: String(row[typeIdx] ?? "").trim()
+    }));
   };
 
   const aircraftImportM = useMutation({
-    mutationFn: async (payload: { operatorId: string; typeId: string; tailNumbers: string[] }) =>
+    mutationFn: async (payload: { dryRun?: boolean; rows: Array<{ tailNumber: string; operator: string; aircraftType: string }> }) =>
       apiPost("/api/ref/aircraft/import", payload),
     onSuccess: async (res) => {
       setAircraftImportResult(res);
       await qc.invalidateQueries({ queryKey: ["ref", "aircraft"] });
       await qc.invalidateQueries({ queryKey: ["ref", "aircraft", filterHangarId, filterLayoutId] });
-    }
+      const summary = (res as any)?.summary;
+      if (summary?.dryRun) {
+        showFeedback("info", `Предпросмотр готов: ${summary.okRows ?? 0} строк можно импортировать, ошибок: ${summary.errorRows ?? 0}.`);
+      } else {
+        showFeedback("success", `Импорт бортов завершён: создано ${(res as any)?.created ?? 0}, пропущено ${(res as any)?.skipped ?? 0}.`);
+      }
+    },
+    onError: (err) => showFeedback("error", `Импорт бортов не выполнен: ${String((err as any)?.message ?? err)}`)
   });
 
   const layoutImportM = useMutation({
@@ -405,7 +472,9 @@ export function ReferenceView() {
       await qc.invalidateQueries({ queryKey: ["ref", "stands"] });
       await qc.invalidateQueries({ queryKey: ["layout"] });
       await qc.invalidateQueries({ queryKey: ["hangar-planning"] });
-    }
+      showFeedback("success", `Импорт схем завершён: ангаров ${(res as any)?.hangars ?? 0}, схем ${(res as any)?.layouts ?? 0}, мест ${(res as any)?.stands ?? 0}.`);
+    },
+    onError: (err) => showFeedback("error", `Импорт схем не выполнен: ${String((err as any)?.message ?? err)}`)
   });
 
   const [mode, setMode] = useState<"create" | "edit" | null>(null);
@@ -475,8 +544,6 @@ export function ReferenceView() {
     } else if (k === "aircraft") {
       setFTailNumber("RA-XXXXX");
       setFSerialNumber("");
-      setAircraftImportOperatorId(operatorsQ.data?.[0]?.id ?? "");
-      setAircraftImportTypeId(aircraftTypesQ.data?.[0]?.id ?? "");
     } else if (k === "aircraft-type-palette") {
       setFOperatorId(operatorsQ.data?.[0]?.id ?? "");
       setFTypeId(aircraftTypesQ.data?.[0]?.id ?? "");
@@ -656,6 +723,14 @@ export function ReferenceView() {
     queryFn: () => apiGet<LayoutDetail>(`/api/ref/layouts/${effectivePreviewLayoutId}`),
     enabled: (kind === "layouts" || kind === "stands") && Boolean(effectivePreviewLayoutId)
   });
+  const aircraftCsvRows = useMemo(() => {
+    if (!aircraftCsvText) return [];
+    try {
+      return parseAircraftCsvRows(aircraftCsvText);
+    } catch {
+      return [];
+    }
+  }, [aircraftCsvText]);
 
   return (
     <div className="refPage">
@@ -680,6 +755,7 @@ export function ReferenceView() {
                         setKind(it.kind);
                         setSearch("");
                         setMode(null);
+                        setFeedback(null);
                       }}
                       aria-current={active ? "page" : undefined}
                     >
@@ -770,43 +846,39 @@ export function ReferenceView() {
           </div>
         </div>
 
+        {feedback ? (
+          <div className={`refFeedback refFeedback_${feedback.type}`} role={feedback.type === "error" ? "alert" : "status"}>
+            <span>{feedback.message}</span>
+            <button type="button" onClick={() => setFeedback(null)} aria-label="Закрыть уведомление">
+              ×
+            </button>
+          </div>
+        ) : null}
+
       {kind === "aircraft" && canWrite ? (
         <div className="card refSection">
           <div className="refSectionHeader">
             <div>
-              <strong>Импорт бортовых номеров из CSV</strong>
-              <div className="muted refSectionHint">Берём 1-й столбец; разделитель: запятая/точка с запятой/таб.</div>
+              <div className="refSectionTitleWithInfo">
+                <strong>Импорт бортовых номеров из CSV</strong>
+                <span className="refInfoTip">
+                  <button type="button" className="refInfoButton" aria-label="Как подготовить CSV для импорта бортовых номеров">
+                    i
+                  </button>
+                  <span className="refInfoPopover" role="tooltip">
+                    <strong>Как подготовить файл</strong>
+                    <span>Подойдёт CSV/TXT в UTF-8 или Windows-1251.</span>
+                    <span>Разделитель может быть запятая, точка с запятой или табуляция.</span>
+                    <span>Обязательные колонки: tailNumber, operator, aircraftType.</span>
+                    <span>operator ищется по коду или названию оператора.</span>
+                    <span>aircraftType ищется по ICAO-коду или названию типа ВС.</span>
+                  </span>
+                </span>
+              </div>
+              <div className="muted refSectionHint">Формат: tailNumber;operator;aircraftType. Разделитель: запятая/точка с запятой/таб.</div>
             </div>
           </div>
           <div className="row" style={{ alignItems: "flex-end" }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span className="muted">Оператор (для всех строк)</span>
-              <select
-                value={aircraftImportOperatorId || (operatorsQ.data?.[0]?.id ?? "")}
-                onChange={(e) => setAircraftImportOperatorId(e.target.value)}
-                style={{ width: 260 }}
-              >
-                {(operatorsQ.data ?? []).map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span className="muted">Тип ВС (для всех строк)</span>
-              <select
-                value={aircraftImportTypeId || (aircraftTypesQ.data?.[0]?.id ?? "")}
-                onChange={(e) => setAircraftImportTypeId(e.target.value)}
-                style={{ width: 320 }}
-              >
-                {(aircraftTypesQ.data ?? []).map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.icaoType ? `${t.icaoType} • ${t.name}` : t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
             <label style={{ display: "grid", gap: 6 }}>
               <span className="muted">CSV файл</span>
               <input
@@ -820,34 +892,46 @@ export function ReferenceView() {
                   setAircraftCsvText("");
                   if (!f) return;
                   try {
-                    const text = await f.text();
+                    const text = decodeAircraftCsv(await f.arrayBuffer());
                     setAircraftCsvText(text);
                   } catch (err: any) {
-                    setAircraftCsvParseError(String(err?.message ?? err));
+                    const msg = String(err?.message ?? err);
+                    setAircraftCsvParseError(msg);
+                    showFeedback("error", `Не удалось прочитать CSV: ${msg}`);
                   }
                 }}
                 style={{ width: 360 }}
               />
             </label>
             <button
-              className="btn btnPrimary"
-              disabled={
-                aircraftImportM.isPending ||
-                !aircraftCsvText ||
-                !(aircraftImportOperatorId || operatorsQ.data?.[0]?.id) ||
-                !(aircraftImportTypeId || aircraftTypesQ.data?.[0]?.id)
-              }
+              className="btn"
+              disabled={aircraftImportM.isPending || !aircraftCsvText}
               onClick={() => {
                 try {
-                  const tailNumbers = parseTailNumbersFromCsvText(aircraftCsvText);
-                  if (tailNumbers.length === 0) throw new Error("В CSV не найдено ни одного бортового номера.");
-                  aircraftImportM.mutate({
-                    operatorId: aircraftImportOperatorId || (operatorsQ.data?.[0]?.id ?? ""),
-                    typeId: aircraftImportTypeId || (aircraftTypesQ.data?.[0]?.id ?? ""),
-                    tailNumbers
-                  });
+                  const rows = parseAircraftCsvRows(aircraftCsvText);
+                  if (rows.length === 0) throw new Error("В CSV не найдено строк для импорта.");
+                  aircraftImportM.mutate({ dryRun: true, rows });
                 } catch (err: any) {
-                  setAircraftCsvParseError(String(err?.message ?? err));
+                  const msg = String(err?.message ?? err);
+                  setAircraftCsvParseError(msg);
+                  showFeedback("error", msg);
+                }
+              }}
+            >
+              Предпросмотр
+            </button>
+            <button
+              className="btn btnPrimary"
+              disabled={aircraftImportM.isPending || !aircraftCsvText || !((aircraftImportResult as any)?.summary?.okRows > 0)}
+              onClick={() => {
+                try {
+                  const rows = parseAircraftCsvRows(aircraftCsvText);
+                  if (rows.length === 0) throw new Error("В CSV не найдено строк для импорта.");
+                  aircraftImportM.mutate({ rows });
+                } catch (err: any) {
+                  const msg = String(err?.message ?? err);
+                  setAircraftCsvParseError(msg);
+                  showFeedback("error", msg);
                 }
               }}
             >
@@ -861,8 +945,7 @@ export function ReferenceView() {
               Файл: <strong>{aircraftCsvFile.name}</strong>{" "}
               {aircraftCsvText ? (
                 <>
-                  • строк: {aircraftCsvText.replace(/\r/g, "").split("\n").filter((l) => l.trim()).length} • к импорту:{" "}
-                  {parseTailNumbersFromCsvText(aircraftCsvText).length}
+                  • строк данных: {aircraftCsvRows.length}
                 </>
               ) : null}
             </div>
@@ -871,15 +954,44 @@ export function ReferenceView() {
             <div className="refImportResult">
               <div className="row">
                 <strong>Результат</strong>
-                <span className="gpChip gpChipInfo">создано: {aircraftImportResult.created ?? 0}</span>
-                <span className="gpChip">пропущено: {aircraftImportResult.duplicatesOrExisting ?? 0}</span>
-                <span className="gpChip gpChipError">невалидных: {(aircraftImportResult.invalid ?? []).length}</span>
+                <span className="gpChip gpChipInfo">режим: {aircraftImportResult.summary?.dryRun ? "предпросмотр" : "импорт"}</span>
+                <span className="gpChip gpChipInfo">готово: {aircraftImportResult.summary?.okRows ?? 0}</span>
+                <span className="gpChip gpChipError">ошибок: {aircraftImportResult.summary?.errorRows ?? 0}</span>
+                {"created" in aircraftImportResult ? <span className="gpChip">создано: {aircraftImportResult.created ?? 0}</span> : null}
               </div>
-              {isAdmin && (aircraftImportResult.invalid ?? []).length ? (
-                <details className="refImportInvalid">
-                  <summary>Подробности по невалидным строкам</summary>
-                  <pre>{JSON.stringify(aircraftImportResult.invalid, null, 2)}</pre>
-                </details>
+              {(aircraftImportResult.rows ?? []).length ? (
+                <div className="refAircraftImportTableWrap">
+                  <table className="table refAircraftImportTable">
+                    <thead>
+                      <tr>
+                        <th>Строка</th>
+                        <th>Статус</th>
+                        <th>Борт</th>
+                        <th>Оператор</th>
+                        <th>Тип ВС</th>
+                        <th>Комментарий</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(aircraftImportResult.rows ?? []).map((row: any) => (
+                        <tr key={row.rowIndex} className={row.ok ? undefined : "eventImportRowError"}>
+                          <td>{row.rowIndex}</td>
+                          <td>
+                            <span className={row.ok ? "eventImportBadge eventImportBadgeOk" : "eventImportBadge eventImportBadgeError"}>
+                              {row.ok ? "Готово" : "Ошибка"}
+                            </span>
+                          </td>
+                          <td>{row.tailNumber || "—"}</td>
+                          <td>{row.operator || "—"}</td>
+                          <td>{row.aircraftType || "—"}</td>
+                          <td className="eventImportMessageCell">
+                            {row.error ? <span className="eventImportErrorText">{row.error}</span> : <span className="muted">Можно импортировать</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               ) : null}
             </div>
           ) : null}
@@ -916,7 +1028,9 @@ export function ReferenceView() {
                     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
                     setLayoutImportRows(rows);
                   } catch (err: any) {
-                    setLayoutImportError(String(err?.message ?? err));
+                    const msg = String(err?.message ?? err);
+                    setLayoutImportError(msg);
+                    showFeedback("error", `Не удалось прочитать файл схем: ${msg}`);
                   }
                 }}
               />
@@ -932,7 +1046,9 @@ export function ReferenceView() {
                   }
                   layoutImportM.mutate(payload);
                 } catch (err: any) {
-                  setLayoutImportError(String(err?.message ?? err));
+                  const msg = String(err?.message ?? err);
+                  setLayoutImportError(msg);
+                  showFeedback("error", msg);
                 }
               }}
             >

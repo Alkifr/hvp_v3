@@ -13,54 +13,131 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
-  // Массовая загрузка бортов из CSV (UI читает файл и отправляет список)
+  // Массовая загрузка бортов из CSV (UI читает файл и отправляет список строк)
   app.post("/import", async (req) => {
     assertPermission(req as any, "ref:write");
     const body = z
       .object({
-        operatorId: zUuid,
-        typeId: zUuid,
+        dryRun: z.boolean().optional(),
         isActive: z.boolean().optional(),
-        tailNumbers: z.array(z.string()).min(1).max(5000)
+        rows: z
+          .array(
+            z.object({
+              tailNumber: z.string().optional(),
+              operator: z.string().optional(),
+              aircraftType: z.string().optional()
+            })
+          )
+          .min(1)
+          .max(5000)
       })
       .parse(req.body);
 
-    const norm = (s: string) => s.trim().replace(/^"+|"+$/g, "").toUpperCase();
-    const unique = new Set<string>();
-    const invalid: string[] = [];
-    for (const raw of body.tailNumbers) {
-      const t = norm(raw);
-      if (!t) continue;
-      if (t.length < 2 || t.length > 32) {
-        invalid.push(t);
-        continue;
+    const norm = (s: unknown) =>
+      String(s ?? "")
+        .normalize("NFKC")
+        .replace(/^\uFEFF/, "")
+        .replace(/\u00A0/g, " ")
+        .trim()
+        .replace(/^"+|"+$/g, "");
+    const key = (s: unknown) => norm(s).toLocaleLowerCase("ru-RU");
+    const tailKey = (s: unknown) => norm(s).toLocaleUpperCase("ru-RU");
+
+    const [operators, aircraftTypes, existingAircraft] = await Promise.all([
+      app.prisma.operator.findMany(),
+      app.prisma.aircraftType.findMany(),
+      app.prisma.aircraft.findMany({ select: { tailNumber: true } })
+    ]);
+
+    const operatorByKey = new Map<string, (typeof operators)[number]>();
+    for (const op of operators) {
+      operatorByKey.set(key(op.name), op);
+      operatorByKey.set(key(op.code), op);
+    }
+
+    const typeByKey = new Map<string, (typeof aircraftTypes)[number]>();
+    for (const type of aircraftTypes) {
+      typeByKey.set(key(type.name), type);
+      if (type.icaoType) typeByKey.set(key(type.icaoType), type);
+    }
+
+    const existingTails = new Set(existingAircraft.map((a) => tailKey(a.tailNumber)));
+    const seenInFile = new Set<string>();
+    const toCreate: Array<{ tailNumber: string; operatorId: string; typeId: string; isActive: boolean }> = [];
+    const previewRows: Array<{
+      rowIndex: number;
+      ok: boolean;
+      tailNumber: string;
+      operator: string;
+      aircraftType: string;
+      error?: string;
+    }> = [];
+
+    for (let i = 0; i < body.rows.length; i++) {
+      const row = body.rows[i]!;
+      const rowIndex = i + 2;
+      const tailNumber = tailKey(row.tailNumber);
+      const operatorRaw = norm(row.operator);
+      const aircraftTypeRaw = norm(row.aircraftType);
+      let error = "";
+
+      if (!tailNumber) error = "Не указан tailNumber";
+      else if (tailNumber.length < 2 || tailNumber.length > 32) error = "tailNumber должен быть от 2 до 32 символов";
+      else if (seenInFile.has(tailNumber)) error = `Дубль в файле: ${tailNumber}`;
+      else if (existingTails.has(tailNumber)) error = `Борт уже есть в справочнике: ${tailNumber}`;
+
+      const operator = operatorByKey.get(key(operatorRaw));
+      if (!error && !operatorRaw) error = "Не указан operator";
+      if (!error && !operator) error = `Не найден оператор: ${operatorRaw}`;
+
+      const aircraftType = typeByKey.get(key(aircraftTypeRaw));
+      if (!error && !aircraftTypeRaw) error = "Не указан aircraftType";
+      if (!error && !aircraftType) error = `Не найден тип ВС: ${aircraftTypeRaw}`;
+
+      seenInFile.add(tailNumber);
+      previewRows.push({
+        rowIndex,
+        ok: !error,
+        tailNumber,
+        operator: operatorRaw,
+        aircraftType: aircraftTypeRaw,
+        ...(error ? { error } : {})
+      });
+
+      if (!error && operator && aircraftType) {
+        toCreate.push({
+          tailNumber,
+          operatorId: operator.id,
+          typeId: aircraftType.id,
+          isActive: body.isActive ?? true
+        });
       }
-      unique.add(t);
     }
 
-    const toCreate = Array.from(unique).map((tailNumber) => ({
-      tailNumber,
-      operatorId: body.operatorId,
-      typeId: body.typeId,
-      isActive: body.isActive ?? true
-    }));
+    const summary = {
+      dryRun: Boolean(body.dryRun),
+      totalRows: body.rows.length,
+      okRows: previewRows.filter((r) => r.ok).length,
+      errorRows: previewRows.filter((r) => !r.ok).length
+    };
 
-    if (toCreate.length === 0) {
-      return { ok: true, created: 0, duplicatesOrExisting: 0, invalid, total: body.tailNumbers.length };
+    if (body.dryRun) {
+      return { ok: true, summary, rows: previewRows };
     }
 
-    // createMany с skipDuplicates опирается на unique(tailNumber)
-    const res = await app.prisma.aircraft.createMany({
-      data: toCreate,
-      skipDuplicates: true
-    });
+    const res = toCreate.length
+      ? await app.prisma.aircraft.createMany({
+          data: toCreate,
+          skipDuplicates: true
+        })
+      : { count: 0 };
 
     return {
       ok: true,
+      summary,
+      rows: previewRows,
       created: res.count,
-      duplicatesOrExisting: toCreate.length - res.count,
-      invalid,
-      total: body.tailNumbers.length
+      skipped: body.rows.length - res.count
     };
   });
 

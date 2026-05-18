@@ -25,7 +25,8 @@ const STATUS_LABEL: Record<string, string> = {
   PLANNED: "Запланировано",
   IN_PROGRESS: "В работе",
   DONE: "Завершено",
-  CANCELLED: "Отменено"
+  CANCELLED: "Отменено",
+  DELETED: "Удалено"
 };
 
 const LEVEL_LABEL: Record<string, string> = {
@@ -51,6 +52,10 @@ const FIELD_LABEL: Record<string, string> = {
   eventTypeId: "Тип события",
   startAt: "Начало",
   endAt: "Окончание",
+  budgetStartAt: "Бюджетное начало",
+  budgetEndAt: "Бюджетное окончание",
+  actualStartAt: "Фактическое начало",
+  actualEndAt: "Фактическое окончание",
   notes: "Примечание",
   hangarId: "Ангар",
   layoutId: "Вариант размещения",

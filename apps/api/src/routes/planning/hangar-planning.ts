@@ -79,7 +79,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       app.prisma.maintenanceEvent.findMany({
         where: {
           ...sandboxFilter(req as any),
-          status: { not: EventStatus.CANCELLED },
+          status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] },
           startAt: { lt: query.to },
           endAt: { gt: query.from }
         },
@@ -218,7 +218,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       app.prisma.maintenanceEvent.findMany({
         where: {
           ...sandboxFilter(req as any),
-          status: { not: EventStatus.CANCELLED },
+          status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] },
           startAt: { lt: body.to },
           endAt: { gt: body.from }
         },
@@ -232,7 +232,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
           layoutId: { in: body.layouts.map((l) => l.layoutId) },
           startAt: { lt: body.to },
           endAt: { gt: body.from },
-          event: { status: { not: EventStatus.CANCELLED } }
+          event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
         }
       })
     ]);

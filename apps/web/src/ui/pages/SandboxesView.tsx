@@ -404,7 +404,7 @@ type DiffItem = {
   standCode: string | null;
   startAt: string;
   endAt: string;
-  status: "DRAFT" | "PLANNED" | "CONFIRMED" | "IN_PROGRESS" | "DONE" | "CANCELLED";
+  status: "DRAFT" | "PLANNED" | "CONFIRMED" | "IN_PROGRESS" | "DONE" | "CANCELLED" | "DELETED";
   category: "newOnly" | "conflictSameStand" | "cancelled";
   conflicts: Array<{ prodEventId: string; title: string; aircraftLabel: string; standCode: string | null; startAt: string; endAt: string }>;
 };

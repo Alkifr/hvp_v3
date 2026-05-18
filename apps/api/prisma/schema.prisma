@@ -19,6 +19,7 @@ enum EventStatus {
   IN_PROGRESS
   DONE
   CANCELLED
+  DELETED
 }
 
 enum EventAuditAction {
@@ -556,6 +557,10 @@ model MaintenanceEvent {
 
   startAt       DateTime
   endAt         DateTime
+  budgetStartAt DateTime?
+  budgetEndAt   DateTime?
+  actualStartAt DateTime?
+  actualEndAt   DateTime?
 
   // Опционально можно заранее закрепить в ангаре/варианте (даже без конкретного места)
   hangarId      String?

@@ -1,11 +1,57 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import argon2 from "argon2";
+import { EventAuditAction, EventStatus } from "@prisma/client";
 
-import { zUuid } from "../../lib/zod.js";
+import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
+  const zCleanupFilters = z
+    .object({
+      eventId: zUuid.optional(),
+      eventTypeId: zUuid.optional(),
+      aircraftTypeId: zUuid.optional(),
+      aircraftId: zUuid.optional(),
+      from: zDateTime.optional(),
+      to: zDateTime.optional(),
+      confirmBulk: z.boolean().optional()
+    })
+    .refine((v) => Boolean(v.eventId || v.eventTypeId || v.aircraftTypeId || v.aircraftId || v.from || v.to), {
+      message: "Нужно указать хотя бы один фильтр очистки"
+    })
+    .refine((v) => Boolean(v.eventId || v.from || v.to || v.confirmBulk), {
+      message: "Для массовой очистки без конкретного события укажите период или confirmBulk=true"
+    })
+    .refine((v) => !v.from || !v.to || v.to > v.from, {
+      message: "Дата окончания периода должна быть позже даты начала"
+    });
+
+  const buildCleanupWhere = (filters: z.infer<typeof zCleanupFilters>) => ({
+    sandboxId: null,
+    status: { not: EventStatus.DELETED },
+    ...(filters.eventId ? { id: filters.eventId } : {}),
+    ...(filters.eventTypeId ? { eventTypeId: filters.eventTypeId } : {}),
+    ...(filters.aircraftId ? { aircraftId: filters.aircraftId } : {}),
+    ...(filters.aircraftTypeId ? { aircraft: { typeId: filters.aircraftTypeId } } : {}),
+    ...(filters.from || filters.to
+      ? {
+          ...(filters.to ? { startAt: { lt: filters.to } } : {}),
+          ...(filters.from ? { endAt: { gt: filters.from } } : {})
+        }
+      : {})
+  });
+
+  const cleanupSelect = {
+    id: true,
+    title: true,
+    status: true,
+    startAt: true,
+    endAt: true,
+    aircraft: { select: { id: true, tailNumber: true, type: { select: { id: true, name: true, icaoType: true } } } },
+    eventType: { select: { id: true, name: true, code: true } }
+  };
+
   // permissions list
   app.get("/permissions", async (req) => {
     assertPermission(req as any, "admin:roles");
@@ -161,6 +207,90 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       data: { passwordHash, mustChangePassword: true }
     });
     return { ok: true };
+  });
+
+  app.post("/cleanup/events/preview", async (req) => {
+    assertPermission(req as any, "admin:cleanup");
+    const filters = zCleanupFilters.parse(req.body ?? {});
+    const where = buildCleanupWhere(filters);
+
+    const [total, items] = await Promise.all([
+      app.prisma.maintenanceEvent.count({ where }),
+      app.prisma.maintenanceEvent.findMany({
+        where,
+        select: cleanupSelect,
+        orderBy: [{ startAt: "asc" }, { title: "asc" }],
+        take: 50
+      })
+    ]);
+
+    return { ok: true, total, items };
+  });
+
+  app.post("/cleanup/events/apply", async (req) => {
+    assertPermission(req as any, "admin:cleanup");
+    const body = zCleanupFilters
+      .extend({
+        password: z.string().min(1).max(200),
+        reason: z.string().trim().max(1000).optional()
+      })
+      .parse(req.body ?? {});
+
+    const currentUserId = String((req as any).auth?.id ?? "");
+    const currentUser = currentUserId
+      ? await app.prisma.user.findUnique({ where: { id: currentUserId }, select: { id: true, email: true, passwordHash: true, isActive: true } })
+      : null;
+    if (!currentUser || !currentUser.isActive) {
+      throw app.httpErrors.unauthorized("UNAUTHORIZED");
+    }
+
+    const passwordOk = await argon2.verify(currentUser.passwordHash, body.password);
+    if (!passwordOk) {
+      const err: any = new Error("Пароль указан неверно");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const { reason } = body;
+    const filters = {
+      eventId: body.eventId,
+      eventTypeId: body.eventTypeId,
+      aircraftTypeId: body.aircraftTypeId,
+      aircraftId: body.aircraftId,
+      from: body.from,
+      to: body.to,
+      confirmBulk: body.confirmBulk
+    };
+    const where = buildCleanupWhere(filters);
+    const events = await app.prisma.maintenanceEvent.findMany({
+      where,
+      select: { id: true, status: true, title: true },
+      orderBy: [{ startAt: "asc" }, { title: "asc" }]
+    });
+
+    if (events.length === 0) return { ok: true, updated: 0 };
+
+    await app.prisma.$transaction(async (tx) => {
+      await tx.maintenanceEvent.updateMany({
+        where: { id: { in: events.map((e) => e.id) }, sandboxId: null },
+        data: { status: EventStatus.DELETED }
+      });
+      await tx.maintenanceEventAudit.createMany({
+        data: events.map((event) => ({
+          eventId: event.id,
+          sandboxId: null,
+          action: EventAuditAction.UPDATE,
+          actor: currentUser.email,
+          reason: reason || "Очистка рабочего контура",
+          changes: {
+            status: { from: event.status, to: EventStatus.DELETED },
+            cleanup: { mode: "logical-delete", title: event.title }
+          }
+        }))
+      });
+    });
+
+    return { ok: true, updated: events.length };
   });
 };
 

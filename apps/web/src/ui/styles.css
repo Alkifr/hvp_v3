@@ -457,6 +457,135 @@ a {
   background: #eff6ff;
 }
 
+.eventImportResult {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 14px;
+  background: #fff;
+  min-width: 0;
+}
+
+.eventImportResultHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.eventImportStat {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+}
+
+.eventImportStatOk {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.eventImportStatError {
+  border-color: rgba(220, 38, 38, 0.28);
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.eventImportStatWarn {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.eventImportTableWrap {
+  overflow: auto;
+  max-width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+}
+
+.eventImportTable {
+  min-width: 980px;
+}
+
+.eventImportTable th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  z-index: 1;
+  white-space: nowrap;
+}
+
+.eventImportTable td {
+  vertical-align: top;
+}
+
+.eventImportRowError {
+  background: rgba(254, 242, 242, 0.65);
+}
+
+.eventImportRowWarn {
+  background: rgba(255, 251, 235, 0.72);
+}
+
+.eventImportBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.eventImportBadgeOk {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.eventImportBadgeError {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.eventImportBadgeWarn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.eventImportMessageCell {
+  max-width: 420px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.eventImportErrorText {
+  color: #991b1b;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.eventImportWarnings {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+  color: #92400e;
+  line-height: 1.35;
+}
+
+.eventImportErrorsList {
+  display: grid;
+  gap: 6px;
+  max-width: 100%;
+}
+
 .massCard {
   display: grid;
   gap: 14px;
@@ -708,6 +837,23 @@ a {
 .adminUserActions {
   display: grid;
   gap: 8px;
+}
+
+.adminDangerZone {
+  display: grid;
+  gap: 12px;
+  border-color: rgba(220, 38, 38, 0.28);
+  background: linear-gradient(180deg, #fff 0%, #fff7f7 100%);
+}
+
+.adminCleanupPreview {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.86);
+  overflow-x: auto;
 }
 
 .sandboxSwitcher {
@@ -1548,6 +1694,17 @@ textarea {
   box-sizing: border-box;
 }
 
+.actualTatStripe {
+  position: absolute;
+  top: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: #16a34a;
+  box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.18);
+  pointer-events: none;
+  z-index: 1;
+}
+
 .legendDot {
   width: 10px;
   height: 10px;
@@ -1831,6 +1988,47 @@ textarea {
   font-size: 13px;
 }
 
+.refFeedback {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.refFeedback_success {
+  border-color: rgba(22, 163, 74, 0.3);
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.refFeedback_info {
+  border-color: rgba(37, 99, 235, 0.3);
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.refFeedback_error {
+  border-color: rgba(220, 38, 38, 0.3);
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.refFeedback button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
 .refSection {
   display: grid;
   gap: 12px;
@@ -1846,6 +2044,71 @@ textarea {
 
 .refSectionHint {
   font-size: 12px;
+}
+
+.refSectionTitleWithInfo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.refInfoTip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.refInfoButton {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  padding: 0;
+}
+
+.refInfoButton:hover,
+.refInfoButton:focus-visible {
+  background: rgba(37, 99, 235, 0.14);
+  outline: none;
+}
+
+.refInfoPopover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  display: none;
+  width: min(420px, 82vw);
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: #fff;
+  color: #334155;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.refInfoPopover strong,
+.refInfoPopover span {
+  display: block;
+}
+
+.refInfoPopover strong {
+  margin-bottom: 4px;
+  color: #0f172a;
+}
+
+.refInfoTip:hover .refInfoPopover,
+.refInfoTip:focus-within .refInfoPopover {
+  display: grid;
+  gap: 5px;
 }
 
 .refForm {
@@ -1865,6 +2128,22 @@ textarea {
   padding: 10px;
   display: grid;
   gap: 8px;
+}
+
+.refAircraftImportTableWrap {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+}
+
+.refAircraftImportTable {
+  min-width: 780px;
+}
+
+.refAircraftImportTable th {
+  background: #f8fafc;
+  white-space: nowrap;
 }
 
 .refImportInvalid summary {
@@ -2335,8 +2614,28 @@ textarea {
   gap: 8px 10px;
 }
 
+.evPeriodGrid {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr) 120px;
+  gap: 8px 10px;
+  align-items: end;
+}
+
+.evPeriodName {
+  align-self: center;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 @media (max-width: 640px) {
-  .evForm {
+  .evForm,
+  .evPeriodGrid {
     grid-template-columns: 1fr;
   }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -22,6 +22,10 @@ const FIELD_LABEL: Record<string, string> = {
   eventTypeId: "Тип события",
   startAtLocal: "Начало",
   endAtLocal: "Окончание",
+  budgetStartAtLocal: "Бюджетное начало",
+  budgetEndAtLocal: "Бюджетное окончание",
+  actualStartAtLocal: "Фактическое начало",
+  actualEndAtLocal: "Фактическое окончание",
   notes: "Примечание",
   hangarId: "Ангар",
   layoutId: "Вариант размещения",
@@ -34,7 +38,8 @@ const STATUS_LABEL: Record<string, string> = {
   CONFIRMED: "Подтверждено",
   IN_PROGRESS: "В работе",
   DONE: "Завершено",
-  CANCELLED: "Отменено"
+  CANCELLED: "Отменено",
+  DELETED: "Удалено"
 };
 
 const LEVEL_LABEL: Record<string, string> = {
@@ -67,6 +72,10 @@ type EventRow = {
   title: string;
   startAt: string;
   endAt: string;
+  budgetStartAt?: string | null;
+  budgetEndAt?: string | null;
+  actualStartAt?: string | null;
+  actualEndAt?: string | null;
   level: "STRATEGIC" | "OPERATIONAL";
   status: string;
   aircraft?: {
@@ -106,6 +115,32 @@ function formatExportDate(v: string | Date | null | undefined): string {
   if (!v) return "—";
   const d = dayjs(v);
   return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : "—";
+}
+
+function toInputLocal(v: string | Date | null | undefined): string {
+  if (!v) return "";
+  const d = dayjs(v);
+  return d.isValid() ? d.format("YYYY-MM-DDTHH:mm") : "";
+}
+
+function fromInputLocalOptional(v: string): string | null {
+  if (!v) return null;
+  const d = dayjs(v).second(0).millisecond(0);
+  return d.isValid() ? d.toISOString() : null;
+}
+
+function tatHours(start: string | Date | null | undefined, end: string | Date | null | undefined): number | null {
+  if (!start || !end) return null;
+  const s = dayjs(start);
+  const e = dayjs(end);
+  if (!s.isValid() || !e.isValid() || e.valueOf() <= s.valueOf()) return null;
+  return Math.max(0, e.diff(s, "minute")) / 60;
+}
+
+function formatTat(start: string | Date | null | undefined, end: string | Date | null | undefined): string {
+  const hours = tatHours(start, end);
+  if (hours == null) return "—";
+  return `${Number(hours.toFixed(1))} ч / ${Number((hours / 24).toFixed(2))} дн`;
 }
 
 function htmlEscape(v: unknown): string {
@@ -202,11 +237,15 @@ type EditorDraft = {
   id?: string;
   title: string;
   level: "STRATEGIC" | "OPERATIONAL";
-  status: "DRAFT" | "PLANNED" | "CONFIRMED" | "IN_PROGRESS" | "DONE" | "CANCELLED";
+  status: "DRAFT" | "PLANNED" | "CONFIRMED" | "IN_PROGRESS" | "DONE" | "CANCELLED" | "DELETED";
   aircraftId: string;
   eventTypeId: string;
   startAtLocal: string; // YYYY-MM-DDTHH:mm
   endAtLocal: string; // YYYY-MM-DDTHH:mm
+  budgetStartAtLocal: string;
+  budgetEndAtLocal: string;
+  actualStartAtLocal: string;
+  actualEndAtLocal: string;
   notes: string;
   hangarId: string; // optional, "" means null
   layoutId: string; // optional, "" means null
@@ -313,6 +352,25 @@ function renderTowBreaks(params: {
     );
   }
   return out.length ? out : null;
+}
+
+function renderActualTatStripe(params: { ev: EventRow; from: dayjs.Dayjs; dayWidth: number; canvasWidth: number }) {
+  if (!params.ev.actualStartAt || !params.ev.actualEndAt) return null;
+  const seg = calcBarXW({
+    startAt: params.ev.actualStartAt,
+    endAt: params.ev.actualEndAt,
+    from: params.from,
+    dayWidth: params.dayWidth,
+    canvasWidth: params.canvasWidth
+  });
+  if (!seg) return null;
+  return (
+    <div
+      className="actualTatStripe"
+      style={{ left: seg.x, width: seg.w }}
+      title={`Факт: ${formatExportDate(params.ev.actualStartAt)} – ${formatExportDate(params.ev.actualEndAt)}`}
+    />
+  );
 }
 
 // Образец бара статуса для легенды — использует тот же barVisualStyle,
@@ -930,6 +988,10 @@ export function GanttView() {
       eventTypeId: defaultEventType,
       startAtLocal: dayjs().add(1, "day").hour(9).minute(0).second(0).format("YYYY-MM-DDTHH:mm"),
       endAtLocal: dayjs().add(3, "day").hour(18).minute(0).second(0).format("YYYY-MM-DDTHH:mm"),
+      budgetStartAtLocal: "",
+      budgetEndAtLocal: "",
+      actualStartAtLocal: "",
+      actualEndAtLocal: "",
       notes: "",
       hangarId: "",
       layoutId: "",
@@ -943,8 +1005,8 @@ export function GanttView() {
   };
 
   const openEditorForExisting = (ev: EventRow) => {
-    const startAtLocal = dayjs(ev.startAt).format("YYYY-MM-DDTHH:mm");
-    const endAtLocal = dayjs(ev.endAt).format("YYYY-MM-DDTHH:mm");
+    const startAtLocal = toInputLocal(ev.startAt);
+    const endAtLocal = toInputLocal(ev.endAt);
     const d: EditorDraft = {
       id: ev.id,
       title: ev.title,
@@ -954,6 +1016,10 @@ export function GanttView() {
       eventTypeId: (ev.eventType as any)?.id ?? (ev as any)?.eventTypeId ?? "",
       startAtLocal,
       endAtLocal,
+      budgetStartAtLocal: toInputLocal(ev.budgetStartAt),
+      budgetEndAtLocal: toInputLocal(ev.budgetEndAt),
+      actualStartAtLocal: toInputLocal(ev.actualStartAt),
+      actualEndAtLocal: toInputLocal(ev.actualEndAt),
       notes: (ev as any)?.notes ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
@@ -970,8 +1036,8 @@ export function GanttView() {
   // все данные переносятся, id НЕ копируется (draft.id = undefined),
   // статус сбрасывается в PLANNED, к названию добавляется « (копия)»
   const openEditorForCopy = (ev: EventRow) => {
-    const startAtLocal = dayjs(ev.startAt).format("YYYY-MM-DDTHH:mm");
-    const endAtLocal = dayjs(ev.endAt).format("YYYY-MM-DDTHH:mm");
+    const startAtLocal = toInputLocal(ev.startAt);
+    const endAtLocal = toInputLocal(ev.endAt);
     const d: EditorDraft = {
       title: `${ev.title} (копия)`,
       level: ev.level,
@@ -980,6 +1046,10 @@ export function GanttView() {
       eventTypeId: (ev.eventType as any)?.id ?? (ev as any)?.eventTypeId ?? "",
       startAtLocal,
       endAtLocal,
+      budgetStartAtLocal: toInputLocal(ev.budgetStartAt),
+      budgetEndAtLocal: toInputLocal(ev.budgetEndAt),
+      actualStartAtLocal: "",
+      actualEndAtLocal: "",
       notes: (ev as any)?.notes ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
@@ -1028,6 +1098,10 @@ export function GanttView() {
       "eventTypeId",
       "startAtLocal",
       "endAtLocal",
+      "budgetStartAtLocal",
+      "budgetEndAtLocal",
+      "actualStartAtLocal",
+      "actualEndAtLocal",
       "notes",
       "hangarId",
       "layoutId",
@@ -1074,6 +1148,18 @@ export function GanttView() {
       const startAt = dayjs(draft.startAtLocal).second(0).millisecond(0).toISOString();
       const endAt = dayjs(draft.endAtLocal).second(0).millisecond(0).toISOString();
       if (dayjs(endAt).valueOf() <= dayjs(startAt).valueOf()) throw new Error("Дата окончания должна быть позже начала");
+      const budgetStartAt = fromInputLocalOptional(draft.budgetStartAtLocal);
+      const budgetEndAt = fromInputLocalOptional(draft.budgetEndAtLocal);
+      if ((budgetStartAt && !budgetEndAt) || (!budgetStartAt && budgetEndAt)) throw new Error("Заполните обе даты бюджетного периода");
+      if (budgetStartAt && budgetEndAt && dayjs(budgetEndAt).valueOf() <= dayjs(budgetStartAt).valueOf()) {
+        throw new Error("Окончание бюджетного периода должно быть позже начала");
+      }
+      const actualStartAt = fromInputLocalOptional(draft.actualStartAtLocal);
+      const actualEndAt = fromInputLocalOptional(draft.actualEndAtLocal);
+      if ((actualStartAt && !actualEndAt) || (!actualStartAt && actualEndAt)) throw new Error("Заполните обе даты фактического периода");
+      if (actualStartAt && actualEndAt && dayjs(actualEndAt).valueOf() <= dayjs(actualStartAt).valueOf()) {
+        throw new Error("Окончание фактического периода должно быть позже начала");
+      }
 
       const reason = changeReason.trim();
       const payload = {
@@ -1084,6 +1170,10 @@ export function GanttView() {
         eventTypeId: draft.eventTypeId,
         startAt,
         endAt,
+        budgetStartAt,
+        budgetEndAt,
+        actualStartAt,
+        actualEndAt,
         hangarId: draft.hangarId || null,
         layoutId: draft.layoutId || null,
         notes: draft.notes?.trim() ? draft.notes : null,
@@ -1693,6 +1783,8 @@ export function GanttView() {
         const start = dayjs(ev.startAt);
         const end = dayjs(ev.endAt);
         const durationHours = Math.max(0, end.diff(start, "minute")) / 60;
+        const budgetHours = tatHours(ev.budgetStartAt, ev.budgetEndAt);
+        const actualHours = tatHours(ev.actualStartAt, ev.actualEndAt);
         const towSegments = ev.towSegments ?? [];
         return {
           "Название": ev.title,
@@ -1704,8 +1796,16 @@ export function GanttView() {
           "Статус": STATUS_LABEL[ev.status] ?? ev.status,
           "Начало": formatExportDate(ev.startAt),
           "Окончание": formatExportDate(ev.endAt),
-          "Длительность, часов": Number(durationHours.toFixed(2)),
-          "Длительность, дней": Number((durationHours / 24).toFixed(2)),
+          "Оперативный TAT, часов": Number(durationHours.toFixed(2)),
+          "Оперативный TAT, дней": Number((durationHours / 24).toFixed(2)),
+          "Бюджетное начало": formatExportDate(ev.budgetStartAt),
+          "Бюджетное окончание": formatExportDate(ev.budgetEndAt),
+          "Бюджетный TAT, часов": budgetHours == null ? "" : Number(budgetHours.toFixed(2)),
+          "Фактическое начало": formatExportDate(ev.actualStartAt),
+          "Фактическое окончание": formatExportDate(ev.actualEndAt),
+          "Фактический TAT, часов": actualHours == null ? "" : Number(actualHours.toFixed(2)),
+          "Отклонение факт/оператив, часов": actualHours == null ? "" : Number((actualHours - durationHours).toFixed(2)),
+          "Отклонение факт/бюджет, часов": actualHours == null || budgetHours == null ? "" : Number((actualHours - budgetHours).toFixed(2)),
           "Год начала": start.isValid() ? start.format("YYYY") : "—",
           "Квартал начала": start.isValid() ? `Q${Math.floor(start.month() / 3) + 1}` : "—",
           "Месяц начала": start.isValid() ? start.format("YYYY-MM") : "—",
@@ -1794,7 +1894,17 @@ export function GanttView() {
             const fill = ev.status === "CANCELLED" ? "#94a3b8" : aircraftTypeMarkColor(ev, aircraftPaletteMap);
             const stroke = ev.status === "DONE" ? "#16a34a" : ev.status === "CANCELLED" ? "#64748b" : "#0f172a";
             const label = `${eventAircraftLabel(ev)} · ${ev.title}`;
+            const actualSvg =
+              ev.actualStartAt && ev.actualEndAt
+                ? (() => {
+                    const ax = clamp(xFor(ev.actualStartAt), labelW, labelW + chartW);
+                    const ar = clamp(xFor(ev.actualEndAt), labelW, labelW + chartW);
+                    const aw = Math.max(2, ar - ax);
+                    return `<rect x="${ax.toFixed(1)}" y="${y + 25}" width="${aw.toFixed(1)}" height="3" rx="1.5" fill="#16a34a" opacity="0.95" />`;
+                  })()
+                : "";
             return `<rect x="${x.toFixed(1)}" y="${y + 6}" width="${w.toFixed(1)}" height="18" rx="5" fill="${htmlEscape(fill)}" stroke="${stroke}" stroke-width="1" opacity="${ev.status === "CANCELLED" ? "0.55" : "0.88"}" />
+              ${actualSvg}
               ${w > 80 ? `<text x="${(x + 6).toFixed(1)}" y="${y + 19}" font-size="9" fill="#ffffff">${htmlEscape(label.slice(0, 58))}</text>` : ""}`;
           })
           .join("");
@@ -2387,26 +2497,28 @@ export function GanttView() {
                           const visual = barVisualStyle(ev.status, color);
 
                           return (
-                            <div
-                              key={ev.id}
-                              className="bar"
-                              style={{
-                                left: x,
-                                width: w,
-                                cursor: "pointer",
-                                ...visual,
-                                ...barPaddingStyle(w)
-                              }}
-                              onClick={() => pickEvent(ev)}
-                              title={`${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format(
-                                "DD.MM.YYYY HH:mm"
-                              )}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
-                            >
-                              {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
-                              {canShowBarTitle(w) ? (
-                                <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>{ev.title}</span>
-                              ) : null}
-                            </div>
+                            <Fragment key={ev.id}>
+                              {renderActualTatStripe({ ev, from, dayWidth, canvasWidth })}
+                              <div
+                                className="bar"
+                                style={{
+                                  left: x,
+                                  width: w,
+                                  cursor: "pointer",
+                                  ...visual,
+                                  ...barPaddingStyle(w)
+                                }}
+                                onClick={() => pickEvent(ev)}
+                                title={`${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format(
+                                  "DD.MM.YYYY HH:mm"
+                                )}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
+                              >
+                                {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
+                                {canShowBarTitle(w) ? (
+                                  <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>{ev.title}</span>
+                                ) : null}
+                              </div>
+                            </Fragment>
                           );
                         })}
                       </div>
@@ -2492,8 +2604,9 @@ export function GanttView() {
                           }
 
                           return (
-                            <div
-                              key={ev.id}
+                            <Fragment key={ev.id}>
+                              {renderActualTatStripe({ ev, from, dayWidth, canvasWidth })}
+                              <div
                               className="bar"
                               style={{
                                 left: x,
@@ -2642,7 +2755,8 @@ export function GanttView() {
                                   {eventAircraftLabel(ev)} • {ev.title}
                                 </span>
                               ) : null}
-                            </div>
+                              </div>
+                            </Fragment>
                           );
                         })}
                       </div>
@@ -2796,13 +2910,14 @@ export function GanttView() {
 
             <section className="evCard">
               <header className="evCardHeader">
-                <div className="evCardTitle">Период</div>
-                <div className="evCardHint">Время начала и окончания события (локальное время).</div>
+                <div className="evCardTitle">Периоды и TAT</div>
+                <div className="evCardHint">Оперативный период управляет Ганттом и размещением. Бюджетный и фактический нужны для сравнения TAT.</div>
               </header>
               <div className="evCardBody">
-                <div className="evForm">
+                <div className="evPeriodGrid">
+                  <div className="evPeriodName">Оперативный</div>
                   <label className="evField">
-                    <span className="evFieldLabel">Начало</span>
+                    <span className="evFieldLabel">Дата начала</span>
                     <input
                       className="evInput"
                       type="datetime-local"
@@ -2811,13 +2926,65 @@ export function GanttView() {
                     />
                   </label>
                   <label className="evField">
-                    <span className="evFieldLabel">Окончание</span>
+                    <span className="evFieldLabel">Дата окончания</span>
                     <input
                       className="evInput"
                       type="datetime-local"
                       value={draft.endAtLocal}
                       onChange={(e) => setDraft({ ...draft, endAtLocal: e.target.value })}
                     />
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">TAT</span>
+                    <input className="evInput evInputReadonly" value={formatTat(draft.startAtLocal, draft.endAtLocal)} readOnly />
+                  </label>
+
+                  <div className="evPeriodName">Бюджетный</div>
+                  <label className="evField">
+                    <span className="evFieldLabel">Дата начала</span>
+                    <input
+                      className="evInput"
+                      type="datetime-local"
+                      value={draft.budgetStartAtLocal}
+                      onChange={(e) => setDraft({ ...draft, budgetStartAtLocal: e.target.value })}
+                    />
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">Дата окончания</span>
+                    <input
+                      className="evInput"
+                      type="datetime-local"
+                      value={draft.budgetEndAtLocal}
+                      onChange={(e) => setDraft({ ...draft, budgetEndAtLocal: e.target.value })}
+                    />
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">TAT</span>
+                    <input className="evInput evInputReadonly" value={formatTat(draft.budgetStartAtLocal, draft.budgetEndAtLocal)} readOnly />
+                  </label>
+
+                  <div className="evPeriodName">Фактический</div>
+                  <label className="evField">
+                    <span className="evFieldLabel">Дата начала</span>
+                    <input
+                      className="evInput"
+                      type="datetime-local"
+                      value={draft.actualStartAtLocal}
+                      onChange={(e) => setDraft({ ...draft, actualStartAtLocal: e.target.value })}
+                    />
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">Дата окончания</span>
+                    <input
+                      className="evInput"
+                      type="datetime-local"
+                      value={draft.actualEndAtLocal}
+                      onChange={(e) => setDraft({ ...draft, actualEndAtLocal: e.target.value })}
+                    />
+                  </label>
+                  <label className="evField">
+                    <span className="evFieldLabel">TAT</span>
+                    <input className="evInput evInputReadonly" value={formatTat(draft.actualStartAtLocal, draft.actualEndAtLocal)} readOnly />
                   </label>
                 </div>
               </div>

@@ -50,7 +50,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         layoutId: query.layoutId,
         startAt: { lt: to },
         endAt: { gt: from },
-        event: { status: { not: EventStatus.CANCELLED } }
+        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
       },
       include: {
         stand: true,
@@ -97,7 +97,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         eventId: { not: eventId },
         startAt: { lt: endAt },
         endAt: { gt: startAt },
-        event: { status: { not: EventStatus.CANCELLED } }
+        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
       },
       include: { event: { include: { aircraft: true, eventType: true } } }
     });
@@ -229,7 +229,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
               eventId: body.bumpedEventId,
               startAt: { lt: endAt },
               endAt: { gt: startAt },
-              event: { status: { not: EventStatus.CANCELLED } }
+              event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
             },
             include: { event: { include: { aircraft: true } } }
           })
@@ -240,7 +240,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
               eventId: { not: body.eventId },
               startAt: { lt: endAt },
               endAt: { gt: startAt },
-              event: { status: { not: EventStatus.CANCELLED } }
+              event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
             },
             include: { event: { include: { aircraft: true } } },
             orderBy: [{ startAt: "asc" }]
@@ -394,7 +394,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
               eventId: body.bumpedEventId,
               startAt: { lt: body.endAt },
               endAt: { gt: body.startAt },
-              event: { status: { not: EventStatus.CANCELLED } }
+              event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
             },
             include: { event: { include: { aircraft: true } } }
           })
@@ -405,7 +405,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
               eventId: { not: body.eventId },
               startAt: { lt: body.endAt },
               endAt: { gt: body.startAt },
-              event: { status: { not: EventStatus.CANCELLED } }
+              event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
             },
             include: { event: { include: { aircraft: true } } },
             orderBy: [{ startAt: "asc" }]

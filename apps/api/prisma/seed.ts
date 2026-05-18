@@ -24,6 +24,7 @@ async function main() {
     { code: "ref:write", name: "Редактирование справочников" },
     { code: "admin:users", name: "Администрирование пользователей" },
     { code: "admin:roles", name: "Администрирование ролей/прав" },
+    { code: "admin:cleanup", name: "Очистка рабочего контура" },
     { code: "resources:read", name: "Просмотр ресурсов по событиям" },
     { code: "resources:plan", name: "Планирование ресурсов по событиям" },
     { code: "resources:actual", name: "Факт ресурсов по событиям" },
@@ -59,6 +60,11 @@ async function main() {
     update: { name: "Наблюдатель", isSystem: true },
     create: { code: "VIEWER", name: "Наблюдатель", isSystem: true }
   });
+  const roleSuperAdmin = await prisma.role.upsert({
+    where: { code: "SUPER_ADMIN" },
+    update: { name: "Главный администратор", isSystem: true },
+    create: { code: "SUPER_ADMIN", name: "Главный администратор", isSystem: true }
+  });
 
   const setRolePerms = async (roleId: string, permCodes: string[]) => {
     const permIds = permCodes.map((c) => permByCode.get(c)!.id);
@@ -74,7 +80,14 @@ async function main() {
     );
   };
 
-  await setRolePerms(roleAdmin.id, permissionsSeed.map((p) => p.code) as unknown as string[]);
+  await setRolePerms(roleAdmin.id, permissionsSeed.map((p) => p.code).filter((code) => code !== "admin:cleanup") as string[]);
+  const cleanupPermission = permByCode.get("admin:cleanup");
+  if (cleanupPermission) {
+    await prisma.rolePermission.deleteMany({
+      where: { roleId: roleAdmin.id, permissionId: cleanupPermission.id }
+    });
+  }
+  await setRolePerms(roleSuperAdmin.id, permissionsSeed.map((p) => p.code) as unknown as string[]);
   await setRolePerms(rolePlanner.id, [
     "events:read",
     "events:write",
@@ -117,6 +130,11 @@ async function main() {
     where: { userId_roleId: { userId: admin.id, roleId: roleAdmin.id } },
     update: {},
     create: { userId: admin.id, roleId: roleAdmin.id }
+  });
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: admin.id, roleId: roleSuperAdmin.id } },
+    update: {},
+    create: { userId: admin.id, roleId: roleSuperAdmin.id }
   });
 
   const ensureDemoUser = async (params: {
