@@ -3936,6 +3936,7 @@ textarea {
   background: #eff6ff;
   color: #1d4ed8;
   font-weight: 700;
+  cursor: help;
 }
 
 .hangarMetrics {
@@ -3950,6 +3951,56 @@ textarea {
   padding: 5px 8px;
   border-radius: 999px;
   background: #f1f5f9;
+}
+
+.hangarEfficiencyTimeline {
+  position: relative;
+  height: 16px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.hangarTimelineSegment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22c55e, #0ea5e9);
+}
+
+.hangarTimelineSegmentConflict {
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(220, 38, 38, 0.95) 0,
+    rgba(220, 38, 38, 0.95) 7px,
+    rgba(251, 146, 60, 0.95) 7px,
+    rgba(251, 146, 60, 0.95) 14px
+  );
+  opacity: 1 !important;
+}
+
+.hangarTimelineEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.hangarTimelineLegend {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.hangarTimelineConflictText {
+  color: #b91c1c;
+  font-weight: 700;
 }
 
 .hangarSchemeWrap {

@@ -30,6 +30,33 @@ function getActor(req: any) {
 }
 
 export const reservationsRoutes: FastifyPluginAsync = async (app) => {
+  const findLayoutConflict = async (
+    client: any,
+    params: { sandboxId: string | null; eventId: string; hangarId: string; layoutId: string; startAt: Date; endAt: Date }
+  ) => {
+    return await client.standReservation.findFirst({
+      where: {
+        sandboxId: params.sandboxId,
+        eventId: { not: params.eventId },
+        layoutId: { not: params.layoutId },
+        startAt: { lt: params.endAt },
+        endAt: { gt: params.startAt },
+        layout: { hangarId: params.hangarId },
+        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+      },
+      include: {
+        layout: { select: { name: true } },
+        event: { include: { aircraft: true } }
+      },
+      orderBy: [{ startAt: "asc" }]
+    });
+  };
+
+  const layoutConflictMessage = (conflict: any) =>
+    `В этот период в ангаре уже используется другая схема расстановки: ${conflict.layout?.name ?? "другая схема"} (${conflict.event.title}, ${
+      conflict.event.aircraft?.tailNumber ?? (conflict.event as any).virtualAircraft?.label ?? "—"
+    })`;
+
   // Резервы по варианту расстановки в диапазоне дат (для подсветки занятости)
   app.get("/", async (req) => {
     assertPermission(req, "events:read");
@@ -110,8 +137,25 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
     const layout = await app.prisma.hangarLayout.findUniqueOrThrow({
       where: { id: body.layoutId },
-      select: { id: true, hangarId: true }
+      select: { id: true, hangarId: true, name: true }
     });
+    const stand = await app.prisma.hangarStand.findFirst({
+      where: { id: body.standId, layoutId: body.layoutId },
+      select: { id: true }
+    });
+    if (!stand) throw app.httpErrors.badRequest("Stand does not belong to selected layout");
+
+    const layoutConflict = await findLayoutConflict(app.prisma, {
+      sandboxId: sandboxIdFor(req),
+      eventId,
+      hangarId: layout.hangarId,
+      layoutId: layout.id,
+      startAt,
+      endAt
+    });
+    if (layoutConflict) {
+      throw app.httpErrors.conflict(layoutConflictMessage(layoutConflict));
+    }
 
     // Upsert по уникальному eventId
     const sbId = sandboxIdFor(req);
@@ -215,11 +259,28 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
       const layout = await tx.hangarLayout.findUniqueOrThrow({
         where: { id: body.layoutId },
-        select: { id: true, hangarId: true }
+        select: { id: true, hangarId: true, name: true }
       });
+      const stand = await tx.hangarStand.findFirst({
+        where: { id: body.standId, layoutId: body.layoutId },
+        select: { id: true }
+      });
+      if (!stand) throw app.httpErrors.badRequest("Stand does not belong to selected layout");
 
       const startAt = event.startAt;
       const endAt = event.endAt;
+
+      const layoutConflict = await findLayoutConflict(tx, {
+        sandboxId: sbId,
+        eventId: body.eventId,
+        hangarId: layout.hangarId,
+        layoutId: layout.id,
+        startAt,
+        endAt
+      });
+      if (layoutConflict) {
+        throw app.httpErrors.conflict(layoutConflictMessage(layoutConflict));
+      }
 
       const conflicts = body.bumpedEventId
         ? await tx.standReservation.findMany({
@@ -382,8 +443,25 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
       const layout = await tx.hangarLayout.findUniqueOrThrow({
         where: { id: body.layoutId },
-        select: { id: true, hangarId: true }
+        select: { id: true, hangarId: true, name: true }
       });
+      const stand = await tx.hangarStand.findFirst({
+        where: { id: body.standId, layoutId: body.layoutId },
+        select: { id: true }
+      });
+      if (!stand) throw app.httpErrors.badRequest("Stand does not belong to selected layout");
+
+      const layoutConflict = await findLayoutConflict(tx, {
+        sandboxId: sbId,
+        eventId: body.eventId,
+        hangarId: layout.hangarId,
+        layoutId: layout.id,
+        startAt: body.startAt,
+        endAt: body.endAt
+      });
+      if (layoutConflict) {
+        throw app.httpErrors.conflict(layoutConflictMessage(layoutConflict));
+      }
 
       // конфликты на целевой стоянке для нового времени
       const conflicts = body.bumpedEventId

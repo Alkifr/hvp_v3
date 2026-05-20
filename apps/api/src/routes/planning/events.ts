@@ -768,6 +768,34 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      const layout = await app.prisma.hangarLayout.findUnique({
+        where: { id: existing.reservation.layoutId },
+        select: { id: true, hangarId: true }
+      });
+      if (layout) {
+        const layoutConflict = await app.prisma.standReservation.findFirst({
+          where: {
+            ...sandboxFilter(req),
+            eventId: { not: id },
+            layoutId: { not: layout.id },
+            startAt: { lt: nextEnd },
+            endAt: { gt: nextStart },
+            layout: { hangarId: layout.hangarId },
+            event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+          },
+          include: {
+            layout: { select: { name: true } },
+            event: { include: { aircraft: true } }
+          },
+          orderBy: [{ startAt: "asc" }]
+        });
+        if (layoutConflict) {
+          throw app.httpErrors.conflict(
+            `В этот период в ангаре уже используется другая схема расстановки: ${layoutConflict.layout?.name ?? "другая схема"} (${layoutConflict.event.title}, ${eventAircraftLabel(layoutConflict.event)})`
+          );
+        }
+      }
+
       await app.prisma.standReservation.update({
         where: { eventId: id },
         data: { startAt: nextStart, endAt: nextEnd }

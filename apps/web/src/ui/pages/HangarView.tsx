@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
+import * as XLSX from "xlsx";
 
 import { apiGet, apiPost, apiPut } from "../../lib/api";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
@@ -54,6 +55,22 @@ type SummaryHangar = {
     capacityByBodyType: { narrow: number; wide: number; any: number };
   };
   utilizationPct: number;
+  timeUtilizationPct: number;
+  aircraftHours: number;
+  capacityHours: number;
+  conflictPct: number;
+  conflictSegments: number;
+  efficiencyTimeline: Array<{
+    startAt: string;
+    endAt: string;
+    layoutId: string | null;
+    layoutName: string | null;
+    activeLayoutIds: string[];
+    occupiedCount: number;
+    capacity: number;
+    utilizationPct: number;
+    conflict: boolean;
+  }>;
   occupiedAtCount: number;
   freeAtCount: number | null;
   eventCount: number;
@@ -106,6 +123,41 @@ function standAccepts(stand: SummaryStand, event: SummaryEvent) {
 
 function formatEventPeriod(e: SummaryEvent) {
   return `${dayjs(e.startAt).format("DD.MM HH:mm")} – ${dayjs(e.endAt).format("DD.MM HH:mm")}`;
+}
+
+function hasLayoutLock(hangar: SummaryHangar, layoutId: string, event: SummaryEvent) {
+  return hangar.efficiencyTimeline.find((segment) => {
+    if (!overlaps(segment.startAt, segment.endAt, event.startAt, event.endAt)) return false;
+    return segment.activeLayoutIds.some((activeLayoutId) => activeLayoutId !== layoutId);
+  });
+}
+
+function timelineLeft(from: dayjs.Dayjs, to: dayjs.Dayjs, value: string) {
+  const total = Math.max(1, to.valueOf() - from.valueOf());
+  return Math.max(0, Math.min(100, ((dayjs(value).valueOf() - from.valueOf()) / total) * 100));
+}
+
+function overlapHours(aStart: string | dayjs.Dayjs, aEnd: string | dayjs.Dayjs, bStart: string | dayjs.Dayjs, bEnd: string | dayjs.Dayjs) {
+  const s = Math.max(dayjs(aStart).valueOf(), dayjs(bStart).valueOf());
+  const e = Math.min(dayjs(aEnd).valueOf(), dayjs(bEnd).valueOf());
+  return Math.max(0, e - s) / (60 * 60 * 1000);
+}
+
+function formatReportDate(v: string) {
+  const d = dayjs(v);
+  return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : "—";
+}
+
+function sheetName(raw: string, used: Set<string>) {
+  const base = (raw || "Лист").replace(/[\\/?*[\]:]/g, " ").trim().slice(0, 28) || "Лист";
+  let name = base;
+  let i = 2;
+  while (used.has(name)) {
+    name = `${base.slice(0, 25)} ${i}`;
+    i += 1;
+  }
+  used.add(name);
+  return name;
 }
 
 function ImportLayoutsPanel(props: { onDone: () => void }) {
@@ -259,6 +311,170 @@ export function HangarView() {
     return all.find((e) => e.id === selectedEventId) ?? null;
   }, [summary, selectedEventId]);
 
+  const efficiencyReport = useMemo(() => {
+    const dailyRows: Array<Record<string, string | number>> = [];
+    const eventRows: Array<Record<string, string | number>> = [];
+    const pivotRows: Array<Record<string, string | number>> = [];
+    for (const hangar of summary?.hangars ?? []) {
+      const reservations = hangar.stands.flatMap((stand) =>
+        stand.reservations.map((event) => ({
+          stand,
+          event
+        }))
+      );
+
+      for (let cursor = from.startOf("day"); cursor.valueOf() < to.valueOf(); cursor = cursor.add(1, "day")) {
+        const dayStart = cursor;
+        const dayEnd = dayjs(Math.min(cursor.add(1, "day").valueOf(), to.valueOf()));
+        const dayHours = Math.max(0, dayEnd.diff(dayStart, "minute")) / 60;
+        const selectedCapacity = hangar.standCount;
+        const activeSegments = (hangar.efficiencyTimeline ?? []).filter((segment) =>
+          overlaps(segment.startAt, segment.endAt, dayStart.toISOString(), dayEnd.toISOString())
+        );
+
+        let occupiedTimeHours = 0;
+        let conflictHours = 0;
+        let activeCapacityHours = 0;
+        const activeLayoutNames = new Set<string>();
+        const activeLayoutIds = new Set<string>();
+
+        for (const segment of activeSegments) {
+          const hours = overlapHours(segment.startAt, segment.endAt, dayStart, dayEnd);
+          occupiedTimeHours += hours;
+          if (segment.conflict) conflictHours += hours;
+          const capacity = segment.conflict || segment.capacity <= 0 ? selectedCapacity : segment.capacity;
+          activeCapacityHours += capacity * hours;
+          if (segment.layoutName) activeLayoutNames.add(segment.layoutName);
+          for (const id of segment.activeLayoutIds) activeLayoutIds.add(id);
+        }
+
+        const emptyHours = Math.max(0, dayHours - occupiedTimeHours);
+        const availablePlaceHours = activeCapacityHours + selectedCapacity * emptyHours;
+        const occupiedAircraftHours = reservations.reduce(
+          (sum, x) => sum + overlapHours(x.event.startAt, x.event.endAt, dayStart, dayEnd),
+          0
+        );
+        const freePlaceHours = Math.max(0, availablePlaceHours - occupiedAircraftHours);
+
+        const dailyBase = {
+          "Ангар": hangar.hangar.name,
+          "Код ангара": hangar.hangar.code,
+          "Дата": dayStart.format("YYYY-MM-DD"),
+          "Выбранная схема в UI": hangar.layout.name,
+          "Активные схемы в дне": activeLayoutNames.size ? Array.from(activeLayoutNames).join(", ") : "—",
+          "ID активных схем": activeLayoutIds.size ? Array.from(activeLayoutIds).join(", ") : "—",
+          "Ёмкость выбранной схемы, мест": selectedCapacity,
+          "Часов в периоде даты": Number(dayHours.toFixed(2)),
+          "Доступные место-часы": Number(availablePlaceHours.toFixed(2)),
+          "Занятые ВС-часы": Number(occupiedAircraftHours.toFixed(2)),
+          "Свободные место-часы": Number(freePlaceHours.toFixed(2)),
+          "Занятость по времени, ч": Number(occupiedTimeHours.toFixed(2)),
+          "Занятость по времени, %": dayHours > 0 ? Number(((occupiedTimeHours / dayHours) * 100).toFixed(2)) : 0,
+          "Эффективность по месту-часам, %": availablePlaceHours > 0 ? Number(((occupiedAircraftHours / availablePlaceHours) * 100).toFixed(2)) : 0,
+          "Конфликт схем, ч": Number(conflictHours.toFixed(2)),
+          "Конфликт схем": conflictHours > 0 ? "Да" : "Нет"
+        };
+
+        dailyRows.push(dailyBase);
+        pivotRows.push({
+          ...dailyBase,
+          "Признак строки": "Доступно",
+          "Часы строки": Number(availablePlaceHours.toFixed(2)),
+          "Борт": "—",
+          "Событие": "—",
+          "Тип события": "—",
+          "Тип ВС": "—",
+          "МС": "—",
+          "Период события": "—",
+          "ID события": "—"
+        });
+
+        if (freePlaceHours > 0) {
+          pivotRows.push({
+            ...dailyBase,
+            "Признак строки": "Свободно",
+            "Часы строки": Number(freePlaceHours.toFixed(2)),
+            "Борт": "—",
+            "Событие": "Свободная мощность",
+            "Тип события": "—",
+            "Тип ВС": "—",
+            "МС": "—",
+            "Период события": "—",
+            "ID события": "—"
+          });
+        }
+
+        if (conflictHours > 0) {
+          pivotRows.push({
+            ...dailyBase,
+            "Признак строки": "Конфликт схем",
+            "Часы строки": Number(conflictHours.toFixed(2)),
+            "Борт": "—",
+            "Событие": "Одновременно активны разные схемы ангара",
+            "Тип события": "—",
+            "Тип ВС": "—",
+            "МС": "—",
+            "Период события": "—",
+            "ID события": "—"
+          });
+        }
+
+        for (const { stand, event } of reservations) {
+          const eventHours = overlapHours(event.startAt, event.endAt, dayStart, dayEnd);
+          if (eventHours <= 0) continue;
+          const eventBase = {
+            "Ангар": hangar.hangar.name,
+            "Код ангара": hangar.hangar.code,
+            "Дата": dayStart.format("YYYY-MM-DD"),
+            "Схема": hangar.layout.name,
+            "МС": stand.code,
+            "Борт": event.aircraftLabel,
+            "Событие": event.title,
+            "Тип события": event.eventTypeName ?? "—",
+            "Тип ВС": bodyTypeLabel(event.bodyType),
+            "Занятые ВС-часы": Number(eventHours.toFixed(2)),
+            "Период события": `${formatReportDate(event.startAt)} – ${formatReportDate(event.endAt)}`,
+            "ID события": event.id
+          };
+          eventRows.push(eventBase);
+          pivotRows.push({
+            ...dailyBase,
+            "Признак строки": "Занято",
+            "Часы строки": Number(eventHours.toFixed(2)),
+            "Борт": event.aircraftLabel,
+            "Событие": event.title,
+            "Тип события": event.eventTypeName ?? "—",
+            "Тип ВС": bodyTypeLabel(event.bodyType),
+            "МС": stand.code,
+            "Период события": `${formatReportDate(event.startAt)} – ${formatReportDate(event.endAt)}`,
+            "ID события": event.id
+          });
+        }
+      }
+    }
+    return { dailyRows, eventRows, pivotRows };
+  }, [from, summary, to]);
+
+  const exportEfficiencyXlsx = () => {
+    if (efficiencyReport.pivotRows.length === 0) return;
+    const wb = XLSX.utils.book_new();
+    const appendSheet = (name: string, rows: Array<Record<string, string | number>>, used: Set<string>) => {
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = Object.keys(rows[0] ?? {}).map((key) => ({ wch: Math.min(44, Math.max(12, key.length + 4)) }));
+      XLSX.utils.book_append_sheet(wb, ws, sheetName(name, used));
+    };
+
+    const used = new Set<string>();
+    appendSheet("Для сводной", efficiencyReport.pivotRows, used);
+    appendSheet("По датам все ангары", efficiencyReport.dailyRows, used);
+    for (const hangar of summary?.hangars ?? []) {
+      const rows = efficiencyReport.pivotRows.filter((row) => row["Код ангара"] === hangar.hangar.code);
+      if (rows.length > 0) appendSheet(hangar.hangar.name, rows, used);
+    }
+    if (efficiencyReport.eventRows.length > 0) appendSheet("Детализация событий", efficiencyReport.eventRows, used);
+    XLSX.writeFile(wb, `hangar-efficiency-${fromDate}-${toDate}.xlsx`);
+  };
+
   const reserveM = useMutation({
     mutationFn: async (payload: { eventId: string; layoutId: string; standId: string }) =>
       apiPut(`/api/reservations/by-event/${payload.eventId}`, {
@@ -309,6 +525,11 @@ export function HangarView() {
       setNotice(`Место ${stand.code} рассчитано на ${bodyTypeLabel(stand.bodyType)}, событие требует ${bodyTypeLabel(selectedEvent.bodyType)}.`);
       return;
     }
+    const layoutLock = hasLayoutLock(hangar, hangar.layout.id, selectedEvent);
+    if (layoutLock) {
+      setNotice(`Схема «${hangar.layout.name}» недоступна: в периоде уже используется «${layoutLock.layoutName ?? "другая схема"}».`);
+      return;
+    }
     const conflict = stand.reservations.find((r) => r.id !== selectedEvent.id && overlaps(r.startAt, r.endAt, selectedEvent.startAt, selectedEvent.endAt));
     if (conflict) {
       setNotice(`Место ${stand.code} занято: ${conflict.aircraftLabel} • ${conflict.title} (${formatEventPeriod(conflict)}).`);
@@ -336,9 +557,13 @@ export function HangarView() {
         {hangar.stands.map((stand) => {
           const isDraft = Array.from(draft.values()).some((v) => v.layoutId === hangar.layout.id && v.standId === stand.id);
           const isBadType = Boolean(selectedEvent && !standAccepts(stand, selectedEvent));
+          const layoutLock = selectedEvent ? hasLayoutLock(hangar, hangar.layout.id, selectedEvent) : null;
+          const isLockedLayout = Boolean(layoutLock);
           const occupied = viewMode === "moment" ? Boolean(stand.occupiedAt) : stand.utilizationPct > 0;
-          const fill = isBadType ? "rgba(100,116,139,0.65)" : viewMode === "moment" ? (occupied ? "rgba(239,68,68,0.82)" : "rgba(34,197,94,0.72)") : occupancyColor(stand.utilizationPct);
-          const title = viewMode === "moment" && stand.occupiedAt
+          const fill = isBadType || isLockedLayout ? "rgba(100,116,139,0.65)" : viewMode === "moment" ? (occupied ? "rgba(239,68,68,0.82)" : "rgba(34,197,94,0.72)") : occupancyColor(stand.utilizationPct);
+          const title = isLockedLayout
+            ? `${stand.code}: схема недоступна, активна «${layoutLock?.layoutName ?? "другая схема"}»`
+            : viewMode === "moment" && stand.occupiedAt
             ? `${stand.code}: ${stand.occupiedAt.aircraftLabel} • ${stand.occupiedAt.title}`
             : `${stand.code}: ${viewMode === "moment" ? "свободно" : `${stand.utilizationPct.toFixed(0)}%`}`;
           return (
@@ -373,6 +598,12 @@ export function HangarView() {
   const renderHangarCard = (hangar: SummaryHangar, expanded: boolean) => {
     const layouts = layoutsByHangar[hangar.hangar.id] ?? [];
     const cap = hangar.layout.capacityByBodyType;
+    const efficiencyTooltip =
+      `Эффективность активной схемы за выбранный период.\n` +
+      `Формула: ВС-часы / доступные место-часы активной схемы.\n` +
+      `ВС-часы: ${hangar.aircraftHours.toFixed(2)}.\n` +
+      `Доступные место-часы: ${hangar.capacityHours.toFixed(2)}.\n` +
+      `Занятость ангара по времени: ${hangar.timeUtilizationPct.toFixed(2)}%.`;
     return (
       <section key={hangar.hangar.id} className={expanded ? "hangarPlanCard hangarPlanCardExpanded" : "hangarPlanCard"}>
         <header className="hangarPlanCardHead">
@@ -382,7 +613,9 @@ export function HangarView() {
               {hangar.hangar.code} · {hangar.layout.name} · мест: {hangar.standCount}
             </div>
           </div>
-          <div className="hangarLoadBadge">{hangar.utilizationPct.toFixed(0)}%</div>
+          <div className="hangarLoadBadge" title={efficiencyTooltip} aria-label={efficiencyTooltip}>
+            {hangar.utilizationPct.toFixed(0)}%
+          </div>
         </header>
         <select
           className="refInput"
@@ -401,8 +634,32 @@ export function HangarView() {
         </select>
         <div className="hangarMetrics">
           <span>Событий: <b>{hangar.eventCount}</b></span>
-          <span>{viewMode === "moment" ? <>Свободно сейчас: <b>{hangar.freeAtCount ?? "—"}</b></> : <>Мест: <b>{hangar.standCount}</b></>}</span>
+          <span>{viewMode === "moment" ? <>Свободно сейчас: <b>{hangar.freeAtCount ?? "—"}</b></> : <>Занят по времени: <b>{hangar.timeUtilizationPct.toFixed(0)}%</b></>}</span>
           <span>Узк./шир./люб.: <b>{cap.narrow}/{cap.wide}/{cap.any}</b></span>
+          <span>ВС-часы: <b>{hangar.aircraftHours.toFixed(0)}</b></span>
+        </div>
+        <div className="hangarEfficiencyTimeline" aria-label={`Эффективность использования ${hangar.hangar.name}`}>
+          {(hangar.efficiencyTimeline ?? []).length === 0 ? (
+            <div className="hangarTimelineEmpty">Нет занятости в выбранном периоде</div>
+          ) : (
+            hangar.efficiencyTimeline.map((segment, idx) => {
+              const left = timelineLeft(from, to, segment.startAt);
+              const right = timelineLeft(from, to, segment.endAt);
+              const width = Math.max(0.6, right - left);
+              return (
+                <div
+                  key={`${segment.startAt}-${idx}`}
+                  className={segment.conflict ? "hangarTimelineSegment hangarTimelineSegmentConflict" : "hangarTimelineSegment"}
+                  style={{ left: `${left}%`, width: `${width}%`, opacity: Math.min(1, Math.max(0.35, segment.utilizationPct / 100)) }}
+                  title={`${dayjs(segment.startAt).format("DD.MM HH:mm")} – ${dayjs(segment.endAt).format("DD.MM HH:mm")} · ${segment.layoutName ?? "без схемы"} · ${segment.occupiedCount}/${segment.capacity || "?"}`}
+                />
+              );
+            })
+          )}
+        </div>
+        <div className="hangarTimelineLegend">
+          <span>Эффективность: <b>{hangar.utilizationPct.toFixed(0)}%</b></span>
+          {hangar.conflictSegments > 0 ? <span className="hangarTimelineConflictText">конфликты схем: {hangar.conflictSegments}</span> : null}
         </div>
         <div className="hangarSchemeWrap">{renderScheme(hangar, !expanded)}</div>
       </section>
@@ -471,6 +728,15 @@ export function HangarView() {
         </div>
         <button className="btn" type="button" onClick={() => autoFitM.mutate()} disabled={!summary || autoFitM.isPending}>
           {autoFitM.isPending ? "Подбор…" : "Подобрать схемы"}
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={exportEfficiencyXlsx}
+          disabled={efficiencyReport.pivotRows.length === 0}
+          title="Выгрузить детальный расчёт эффективности использования ангаров в Excel"
+        >
+          Эффективность XLSX
         </button>
         <button className="btn btnPrimary" type="button" onClick={applyDraft} disabled={draftCount === 0 || reserveM.isPending}>
           Применить draft ({draftCount})

@@ -20,6 +20,18 @@ type SummaryEvent = {
   reservation: { layoutId: string; standId: string } | null;
 };
 
+type EfficiencySegment = {
+  startAt: Date;
+  endAt: Date;
+  layoutId: string | null;
+  layoutName: string | null;
+  activeLayoutIds: string[];
+  occupiedCount: number;
+  capacity: number;
+  utilizationPct: number;
+  conflict: boolean;
+};
+
 function overlapMs(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): number {
   return Math.max(0, Math.min(aEnd.getTime(), bEnd.getTime()) - Math.max(aStart.getTime(), bStart.getTime()));
 }
@@ -41,6 +53,87 @@ function eventBodyType(event: any, bodyTypeByAircraftTypeId: Map<string, BodyTyp
 
 function standAccepts(standBodyType: BodyType, eventBodyTypeValue: BodyType): boolean {
   return !standBodyType || !eventBodyTypeValue || standBodyType === eventBodyTypeValue;
+}
+
+function buildHangarEfficiency(params: {
+  from: Date;
+  to: Date;
+  layouts: any[];
+  events: SummaryEvent[];
+}) {
+  const { from, to, layouts, events } = params;
+  const periodMs = Math.max(1, to.getTime() - from.getTime());
+  const layoutById = new Map(layouts.map((l: any) => [l.id, l]));
+  const hangarIds = Array.from(new Set(layouts.map((l: any) => l.hangarId)));
+
+  return hangarIds.map((hangarId) => {
+    const hangarLayouts = layouts.filter((l: any) => l.hangarId === hangarId);
+    const hangar = hangarLayouts[0]?.hangar ?? null;
+    const hangarEvents = events.filter((e) => {
+      const layoutId = e.reservation?.layoutId;
+      return Boolean(layoutId && layoutById.get(layoutId)?.hangarId === hangarId);
+    });
+    const points = new Set<number>([from.getTime(), to.getTime()]);
+    for (const e of hangarEvents) {
+      const s = Math.max(from.getTime(), e.startAt.getTime());
+      const en = Math.min(to.getTime(), e.endAt.getTime());
+      if (s < en) {
+        points.add(s);
+        points.add(en);
+      }
+    }
+
+    const sorted = Array.from(points).sort((a, b) => a - b);
+    const timeline: EfficiencySegment[] = [];
+    let occupiedMs = 0;
+    let aircraftHours = 0;
+    let capacityHours = 0;
+    let conflictMs = 0;
+
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const s = sorted[i]!;
+      const en = sorted[i + 1]!;
+      if (en <= s) continue;
+      const active = hangarEvents.filter((e) => e.startAt.getTime() < en && e.endAt.getTime() > s);
+      if (active.length === 0) continue;
+
+      const activeLayoutIds = Array.from(new Set(active.map((e) => e.reservation?.layoutId).filter(Boolean) as string[]));
+      const conflict = activeLayoutIds.length > 1;
+      const primaryLayout = activeLayoutIds.length === 1 ? layoutById.get(activeLayoutIds[0]!) : null;
+      const capacity = primaryLayout ? (primaryLayout.stands ?? []).length : 0;
+      const durationHours = (en - s) / (60 * 60 * 1000);
+      const occupiedCount = active.length;
+      const utilizationPct = capacity > 0 ? (occupiedCount / capacity) * 100 : 100;
+
+      occupiedMs += en - s;
+      aircraftHours += occupiedCount * durationHours;
+      if (!conflict && capacity > 0) capacityHours += capacity * durationHours;
+      if (conflict) conflictMs += en - s;
+      timeline.push({
+        startAt: new Date(s),
+        endAt: new Date(en),
+        layoutId: primaryLayout?.id ?? null,
+        layoutName: primaryLayout?.name ?? (conflict ? "Конфликт схем" : null),
+        activeLayoutIds,
+        occupiedCount,
+        capacity,
+        utilizationPct,
+        conflict
+      });
+    }
+
+    return {
+      hangarId,
+      hangarName: hangar?.name ?? "Ангар",
+      timeUtilizationPct: Math.min(100, (occupiedMs / periodMs) * 100),
+      capacityUtilizationPct: capacityHours > 0 ? (aircraftHours / capacityHours) * 100 : 0,
+      aircraftHours: Number(aircraftHours.toFixed(2)),
+      capacityHours: Number(capacityHours.toFixed(2)),
+      conflictPct: Math.min(100, (conflictMs / periodMs) * 100),
+      conflictSegments: timeline.filter((x) => x.conflict).length,
+      timeline
+    };
+  });
 }
 
 const zLayoutsParam = z
@@ -69,7 +162,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     const selectedLayoutIds = new Set(query.layoutIds ?? []);
     const [layouts, events, aircraftTypes] = await Promise.all([
       app.prisma.hangarLayout.findMany({
-        where: selectedLayoutIds.size ? { id: { in: Array.from(selectedLayoutIds) } } : { isActive: true },
+        where: { isActive: true },
         include: {
           hangar: true,
           stands: { where: { isActive: true }, orderBy: { code: "asc" } }
@@ -97,7 +190,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       aircraftTypes.map((t: any) => [t.id, (t.bodyType ?? null) as BodyType])
     );
     const selectedLayouts = selectedLayoutIds.size
-      ? layouts
+      ? layouts.filter((l: any) => selectedLayoutIds.has(l.id))
       : Array.from(new Map(layouts.map((l: any) => [l.hangarId, l])).values());
     const periodMs = Math.max(1, query.to.getTime() - query.from.getTime());
     const summaryEvents: SummaryEvent[] = events.map((e: any) => ({
@@ -111,6 +204,9 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       endAt: e.endAt,
       reservation: e.reservation ? { layoutId: e.reservation.layoutId, standId: e.reservation.standId } : null
     }));
+    const efficiencyByHangarId = new Map(
+      buildHangarEfficiency({ from: query.from, to: query.to, layouts, events: summaryEvents }).map((x) => [x.hangarId, x])
+    );
 
     const byLayout = selectedLayouts.map((layout: any) => {
       const stands = layout.stands ?? [];
@@ -140,7 +236,10 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
           reservations: reservationsOnStand
         };
       });
-      const layoutEvents = summaryEvents.filter((e) => e.reservation?.layoutId === layout.id);
+      const layoutEvents = summaryEvents.filter((e) => {
+        const layoutId = e.reservation?.layoutId;
+        return Boolean(layoutId && layouts.find((l: any) => l.id === layoutId)?.hangarId === layout.hangarId);
+      });
       const capacityByBodyType = {
         narrow: stands.filter((s: any) => s.bodyType === "NARROW_BODY").length,
         wide: stands.filter((s: any) => s.bodyType === "WIDE_BODY").length,
@@ -158,7 +257,13 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
           obstacles: layout.obstacles,
           capacityByBodyType
         },
-        utilizationPct: stands.length ? Math.min(100, (occupiedMsTotal / (stands.length * periodMs)) * 100) : 0,
+        utilizationPct: efficiencyByHangarId.get(layout.hangarId)?.capacityUtilizationPct ?? (stands.length ? Math.min(100, (occupiedMsTotal / (stands.length * periodMs)) * 100) : 0),
+        timeUtilizationPct: efficiencyByHangarId.get(layout.hangarId)?.timeUtilizationPct ?? 0,
+        aircraftHours: efficiencyByHangarId.get(layout.hangarId)?.aircraftHours ?? 0,
+        capacityHours: efficiencyByHangarId.get(layout.hangarId)?.capacityHours ?? 0,
+        conflictPct: efficiencyByHangarId.get(layout.hangarId)?.conflictPct ?? 0,
+        conflictSegments: efficiencyByHangarId.get(layout.hangarId)?.conflictSegments ?? 0,
+        efficiencyTimeline: efficiencyByHangarId.get(layout.hangarId)?.timeline ?? [],
         occupiedAtCount: occupiedNow,
         freeAtCount: query.at ? Math.max(0, stands.length - occupiedNow) : null,
         eventCount: layoutEvents.length,
@@ -229,11 +334,12 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       app.prisma.standReservation.findMany({
         where: {
           ...sandboxFilter(req as any),
-          layoutId: { in: body.layouts.map((l) => l.layoutId) },
+          layout: { hangarId: { in: body.layouts.map((l) => l.hangarId) } },
           startAt: { lt: body.to },
           endAt: { gt: body.from },
           event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
-        }
+        },
+        include: { layout: { select: { hangarId: true } } }
       })
     ]);
 
@@ -241,10 +347,14 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       aircraftTypes.map((t: any) => [t.id, (t.bodyType ?? null) as BodyType])
     );
     const busyByStand = new Map<string, Array<{ startAt: Date; endAt: Date }>>();
+    const layoutLocksByHangar = new Map<string, Array<{ layoutId: string; startAt: Date; endAt: Date }>>();
     for (const r of reservations as any[]) {
       const arr = busyByStand.get(r.standId) ?? [];
       arr.push({ startAt: r.startAt, endAt: r.endAt });
       busyByStand.set(r.standId, arr);
+      const locks = layoutLocksByHangar.get(r.layout.hangarId) ?? [];
+      locks.push({ layoutId: r.layoutId, startAt: r.startAt, endAt: r.endAt });
+      layoutLocksByHangar.set(r.layout.hangarId, locks);
     }
     const standOptions = layouts.flatMap((layout: any) =>
       (layout.stands ?? []).map((stand: any) => ({
@@ -273,6 +383,11 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     for (const event of candidates) {
       const stand = standOptions.find((s) => {
         if (!standAccepts(s.bodyType, event.bodyType)) return false;
+        const layoutLocks = layoutLocksByHangar.get(s.hangarId) ?? [];
+        const incompatibleLayout = layoutLocks.some(
+          (l) => l.layoutId !== s.layoutId && l.startAt < event.endAt && l.endAt > event.startAt
+        );
+        if (incompatibleLayout) return false;
         const busy = busyByStand.get(s.standId) ?? [];
         return !busy.some((b) => b.startAt < event.endAt && b.endAt > event.startAt);
       });
@@ -284,6 +399,9 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       const busy = busyByStand.get(stand.standId) ?? [];
       busy.push({ startAt: event.startAt, endAt: event.endAt });
       busyByStand.set(stand.standId, busy);
+      const locks = layoutLocksByHangar.get(stand.hangarId) ?? [];
+      locks.push({ layoutId: stand.layoutId, startAt: event.startAt, endAt: event.endAt });
+      layoutLocksByHangar.set(stand.hangarId, locks);
     }
 
     return {

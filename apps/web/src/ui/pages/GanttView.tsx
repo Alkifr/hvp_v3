@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -1257,6 +1257,7 @@ export function GanttView() {
   const [dndHoverBarIds, setDndHoverBarIds] = useState<string[]>([]);
   const [dndHoverIntent, setDndHoverIntent] = useState<"move" | "bump" | null>(null);
   const [dndNotice, setDndNotice] = useState<string | null>(null);
+  const [dndBlockedReason, setDndBlockedReason] = useState<string | null>(null);
 
   // Надёжный DnD на pointer events + предпросмотр по времени.
   const [ptrDrag, setPtrDrag] = useState<
@@ -1275,6 +1276,26 @@ export function GanttView() {
   const [ptrTarget, setPtrTarget] = useState<null | { layoutId: string; standId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string }>(
     null
   );
+
+  const findDndLayoutLock = useCallback((
+    target: { layoutId: string; standId: string; rowKey: string },
+    eventId: string,
+    startAt: string,
+    endAt: string
+  ) => {
+    const row = (hangarStandRowsRef.current ?? []).find((r: any) => r?.key === target.rowKey);
+    const targetHangarId = String(row?.hangarId ?? "");
+    if (!targetHangarId || !target.layoutId) return null;
+    const startMs = dayjs(startAt).valueOf();
+    const endMs = dayjs(endAt).valueOf();
+    return events.find((ev) => {
+      if (ev.id === eventId || ev.status === "CANCELLED" || ev.status === "DELETED") return false;
+      const hangarId = String((ev.hangar as any)?.id ?? (ev.layout as any)?.hangarId ?? "");
+      const layoutId = String((ev.layout as any)?.id ?? "");
+      if (!hangarId || !layoutId || hangarId !== targetHangarId || layoutId === target.layoutId) return false;
+      return dayjs(ev.startAt).valueOf() < endMs && dayjs(ev.endAt).valueOf() > startMs;
+    });
+  }, [events]);
 
   useEffect(() => {
     ptrPreviewRef.current = ptrPreview;
@@ -1377,6 +1398,21 @@ export function GanttView() {
           if (g) {
             const pv = { startAt: new Date(startMs).toISOString(), endAt: new Date(endMs).toISOString(), x: g.x, w: g.w };
 
+            const layoutLock = findDndLayoutLock(nextTarget, d.eventId, pv.startAt, pv.endAt);
+            if (layoutLock) {
+              const reason = `Недоступно: в этом периоде уже используется другая схема расстановки (${(layoutLock.layout as any)?.name ?? "другая схема"}, ${eventAircraftLabel(layoutLock)} • ${layoutLock.title}).`;
+              ptrTargetRef.current = null;
+              setPtrTarget(null);
+              setDndHoverKey(nextTarget.rowKey);
+              setDndHoverIntent(null);
+              if (dndHoverBarIds.length) setDndHoverBarIds([]);
+              setDndBlockedReason(reason);
+              ptrPreviewRef.current = pv;
+              setPtrPreview(pv);
+              return;
+            }
+            if (dndBlockedReason) setDndBlockedReason(null);
+
             // Определяем "вытеснение" по GHOST: если период ghost пересекается с любыми событиями на целевой строке
             // (кроме перетаскиваемого), то intent=bump и подсвечиваем все такие события.
             const pvStart = startMs;
@@ -1430,6 +1466,7 @@ export function GanttView() {
       }
       ptrPreviewRef.current = null;
       setPtrPreview(null);
+      if (dndBlockedReason) setDndBlockedReason(null);
     };
 
     const onUp = () => {
@@ -1442,6 +1479,7 @@ export function GanttView() {
       ptrTargetRef.current = null;
       setPtrPreview(null);
       setPtrTarget(null);
+      setDndBlockedReason(null);
 
       if (!d?.started) return;
       if (!t) return;
@@ -1473,7 +1511,7 @@ export function GanttView() {
       window.removeEventListener("pointermove", onMove as any);
       window.removeEventListener("pointerup", onUp as any);
     };
-  }, [dndActive, ptrDrag, ptrTarget, dndHoverKey, dndHoverBarIds, dndHoverIntent]);
+  }, [dndActive, ptrDrag, ptrTarget, dndHoverKey, dndHoverBarIds, dndHoverIntent, dndBlockedReason, findDndLayoutLock]);
 
   const addTowM = useMutation({
     mutationFn: async () => {
@@ -2281,7 +2319,7 @@ export function GanttView() {
           </div>
         </div>
 
-        {copySelectMode || (dndEnabled && !dndActive) || dndNotice || rangeError || q.isFetching || q.error ? (
+        {copySelectMode || (dndEnabled && !dndActive) || dndNotice || dndBlockedReason || rangeError || q.isFetching || q.error ? (
           <div className="ganttNotices">
             {copySelectMode ? (
               <span className="gpChip gpChipCopy">
@@ -2295,6 +2333,7 @@ export function GanttView() {
               </span>
             ) : null}
             {dndNotice ? <span className="gpChip">{dndNotice}</span> : null}
+            {dndBlockedReason ? <span className="gpChip gpChipError">{dndBlockedReason}</span> : null}
             {rangeError ? <span className="gpChip gpChipError">{rangeError}</span> : null}
             {q.error ? <span className="gpChip gpChipError">{String((q.error as any).message || q.error)}</span> : null}
           </div>
