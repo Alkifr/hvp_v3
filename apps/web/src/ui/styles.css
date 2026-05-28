@@ -3,6 +3,7 @@
     sans-serif;
   color: #0f172a;
   background: #f8fafc;
+  --topbar-sticky-height: 54px;
 }
 
 * {
@@ -11,6 +12,7 @@
 
 body {
   margin: 0;
+  overflow-x: hidden;
 }
 
 a {
@@ -266,13 +268,14 @@ a {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-height: var(--topbar-sticky-height);
   padding: 10px 12px;
   margin: -18px -18px 14px -18px;
   background: #fff;
   border-bottom: 1px solid rgba(148, 163, 184, 0.28);
   position: sticky;
   top: 0;
-  z-index: 15;
+  z-index: 30;
 }
 
 .topbarSpacer {
@@ -1040,6 +1043,9 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .ganttPanelHeader {
@@ -1525,8 +1531,10 @@ textarea {
 
 .ganttGrid {
   position: relative;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: visible;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 14px;
   background: white;
@@ -1536,12 +1544,15 @@ textarea {
 
 .ganttHeaderRow {
   position: sticky;
-  top: 0;
+  top: var(--topbar-sticky-height);
   background: white;
-  z-index: 5;
+  z-index: 20;
   border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
   display: flex;
   align-items: stretch;
+  width: 100%;
+  min-width: 0;
 }
 
 .ganttHeaderRow > .ganttLabel {
@@ -1556,6 +1567,8 @@ textarea {
 .ganttBody {
   display: flex;
   align-items: stretch;
+  width: 100%;
+  min-width: 0;
 }
 
 .ganttLeftCol {
@@ -1568,10 +1581,11 @@ textarea {
 }
 
 .ganttRightCol {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   position: relative;
   z-index: 1;
+  overflow: hidden;
 }
 
 .ganttHeaderRightViewport {
@@ -1579,7 +1593,7 @@ textarea {
      так sync scrollLeft работает стабильно во всех Chromium */
   overflow-x: auto;
   overflow-y: hidden;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   scrollbar-width: none; /* Firefox */
   pointer-events: none; /* пользователь не скроллит хедер вручную */
@@ -1592,7 +1606,44 @@ textarea {
 .ganttRightScroll {
   overflow-x: auto;
   overflow-y: hidden;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
+  scrollbar-width: none;
+}
+
+.ganttRightScroll::-webkit-scrollbar {
+  display: none;
+}
+
+.ganttBottomScrollRow {
+  position: sticky;
+  bottom: 0;
+  z-index: 19;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  background: #fff;
+  border-top: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 -2px 8px rgba(15, 23, 42, 0.06);
+}
+
+.ganttBottomScrollSpacer {
+  width: 220px;
+  flex: 0 0 220px;
+  background: #fff;
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.ganttBottomScrollViewport {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.ganttBottomScrollInner {
+  height: 1px;
 }
 
 .ganttRightInner {
@@ -1762,6 +1813,22 @@ textarea {
   z-index: 20;
   overflow: auto;
   max-height: 260px;
+}
+
+.msdSearch {
+  position: sticky;
+  top: -8px;
+  z-index: 1;
+  padding: 0 0 8px;
+  background: #fff;
+}
+
+.msdSearch input {
+  width: 100%;
+  min-height: 32px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  font-size: 13px;
 }
 
 .msdOption {

@@ -98,8 +98,12 @@ function eventAircraftLabel(ev: EventRow): string {
   return ev.aircraft?.tailNumber ?? ev.virtualAircraft?.label ?? "—";
 }
 
+function eventOperatorId(ev: EventRow): string {
+  return ev.aircraft?.operatorId ?? ev.aircraft?.operator?.id ?? ev.virtualAircraft?.operatorId ?? "";
+}
+
 function eventOperatorLabel(ev: EventRow, operatorNameById?: Map<string, string>): string {
-  const opId = ev.aircraft?.operatorId ?? ev.aircraft?.operator?.id ?? ev.virtualAircraft?.operatorId ?? "";
+  const opId = eventOperatorId(ev);
   return ev.aircraft?.operator?.name ?? (opId ? operatorNameById?.get(opId) : undefined) ?? "—";
 }
 
@@ -115,6 +119,17 @@ function formatExportDate(v: string | Date | null | undefined): string {
   if (!v) return "—";
   const d = dayjs(v);
   return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : "—";
+}
+
+function toExcelDate(v: string | Date | null | undefined): Date | "" {
+  if (!v) return "";
+  const d = dayjs(v);
+  return d.isValid() ? d.toDate() : "";
+}
+
+function formatReportCell(v: unknown): string {
+  if (v instanceof Date) return formatExportDate(v);
+  return String(v ?? "");
 }
 
 function toInputLocal(v: string | Date | null | undefined): string {
@@ -220,6 +235,7 @@ type Aircraft = {
 };
 type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
 type EventType = { id: string; code: string; name: string; color?: string | null };
+type OperatorRef = { id: string; code?: string | null; name: string; isActive?: boolean };
 type Hangar = { id: string; name: string };
 type Layout = { id: string; name: string; hangarId: string; code?: string; capacitySummary?: string };
 type Stand = { id: string; layoutId: string; code: string; name: string; isActive?: boolean };
@@ -707,6 +723,7 @@ export function GanttView() {
 
   const headerViewportRef = useRef<HTMLDivElement | null>(null);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
+  const bottomScrollRef = useRef<HTMLDivElement | null>(null);
 
   const ptrPreviewRef = useRef<null | { startAt: string; endAt: string; x: number; w: number }>(null);
   const ptrTargetRef = useRef<
@@ -746,6 +763,11 @@ export function GanttView() {
     const one = savedUi?.filterAircraftTypeId;
     return one ? [String(one)] : [];
   });
+  const [filterOperatorIds, setFilterOperatorIds] = useState<string[]>(() => {
+    const arr = savedUi?.filterOperatorIds;
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    return [];
+  });
   const [filterAircraftIds, setFilterAircraftIds] = useState<string[]>(() => {
     const arr = savedUi?.filterAircraftIds;
     if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
@@ -761,6 +783,11 @@ export function GanttView() {
   const aircraftTypesQ = useQuery({
     queryKey: ["ref", "aircraft-types"],
     queryFn: () => apiGet<AircraftTypeRef[]>("/api/ref/aircraft-types")
+  });
+
+  const operatorsQ = useQuery({
+    queryKey: ["ref", "operators"],
+    queryFn: () => apiGet<OperatorRef[]>("/api/ref/operators")
   });
 
   const q = useQuery({
@@ -846,6 +873,7 @@ export function GanttView() {
     const rt = dayjs().add(30, "day").format("YYYY-MM-DD");
 
     setFilterAircraftTypeIds([]);
+    setFilterOperatorIds([]);
     setFilterAircraftIds([]);
     setFilterEventTypeIds([]);
     setSelectedHangarIds([]);
@@ -908,6 +936,7 @@ export function GanttView() {
       groupMode,
       selectedHangarIds,
       filterAircraftTypeIds,
+      filterOperatorIds,
       filterAircraftIds,
       filterEventTypeIds,
       dndEnabled,
@@ -921,6 +950,7 @@ export function GanttView() {
     groupMode,
     selectedHangarIds,
     filterAircraftTypeIds,
+    filterOperatorIds,
     filterAircraftIds,
     filterEventTypeIds,
     dndEnabled,
@@ -936,15 +966,32 @@ export function GanttView() {
     // при изменении диапазона/ширины синхронизируем заголовок с текущим scrollLeft тела
     const h = headerViewportRef.current;
     const b = bodyScrollRef.current;
+    const s = bottomScrollRef.current;
     if (!h || !b) return;
     h.scrollLeft = b.scrollLeft;
+    if (s) s.scrollLeft = b.scrollLeft;
   }, [days, canvasWidth]);
 
-  const onBodyScroll = () => {
+  const syncGanttScrollLeft = useCallback((scrollLeft: number, source?: "body" | "bottom") => {
     const h = headerViewportRef.current;
     const b = bodyScrollRef.current;
-    if (!h || !b) return;
-    h.scrollLeft = b.scrollLeft;
+    const s = bottomScrollRef.current;
+
+    if (h && h.scrollLeft !== scrollLeft) h.scrollLeft = scrollLeft;
+    if (b && source !== "body" && b.scrollLeft !== scrollLeft) b.scrollLeft = scrollLeft;
+    if (s && source !== "bottom" && s.scrollLeft !== scrollLeft) s.scrollLeft = scrollLeft;
+  }, []);
+
+  const onBodyScroll = () => {
+    const b = bodyScrollRef.current;
+    if (!b) return;
+    syncGanttScrollLeft(b.scrollLeft, "body");
+  };
+
+  const onBottomScroll = () => {
+    const s = bottomScrollRef.current;
+    if (!s) return;
+    syncGanttScrollLeft(s.scrollLeft, "bottom");
   };
 
   // редактор
@@ -1621,6 +1668,11 @@ export function GanttView() {
         "";
       return filterAircraftTypeIds.includes(String(tid));
     };
+    const byOperatorFilter = (e: EventRow) => {
+      if (filterOperatorIds.length === 0) return true;
+      const opId = eventOperatorId(e);
+      return filterOperatorIds.includes(String(opId));
+    };
     const byAircraftFilter = (e: EventRow) => {
       if (filterAircraftIds.length === 0) return true;
       const aid = (e.aircraft as any)?.id ?? (e as any).aircraftId ?? "";
@@ -1632,7 +1684,7 @@ export function GanttView() {
       return filterEventTypeIds.includes(String(id));
     };
 
-    const visible = events.filter((e) => inSelected(e) && byTypeFilter(e) && byAircraftFilter(e) && byEventTypeFilter(e));
+    const visible = events.filter((e) => inSelected(e) && byTypeFilter(e) && byOperatorFilter(e) && byAircraftFilter(e) && byEventTypeFilter(e));
     const activeVisible = visible.filter((e) => e.status !== "CANCELLED");
     const cancelledVisible = visible.filter((e) => e.status === "CANCELLED");
 
@@ -1746,7 +1798,7 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, selectedHangarIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds, events, dndActive, dndStandsQ.data, dndStandById]);
+  }, [groupMode, selectedHangarIds, filterAircraftTypeIds, filterOperatorIds, filterAircraftIds, filterEventTypeIds, events, dndActive, dndStandsQ.data, dndStandById]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -1766,13 +1818,15 @@ export function GanttView() {
         (e.virtualAircraft as any)?.aircraftTypeId ??
         "";
       const okType = filterAircraftTypeIds.length === 0 || filterAircraftTypeIds.includes(String(tid));
+      const opId = eventOperatorId(e);
+      const okOperator = filterOperatorIds.length === 0 || filterOperatorIds.includes(String(opId));
       const aid = (e.aircraft as any)?.id ?? (e as any).aircraftId ?? "";
       const okAcft = filterAircraftIds.length === 0 || filterAircraftIds.includes(String(aid));
       const eventTypeId = (e.eventType as any)?.id ?? (e as any).eventTypeId ?? "";
       const okEventType = filterEventTypeIds.length === 0 || filterEventTypeIds.includes(String(eventTypeId));
-      return okHangar && okType && okAcft && okEventType;
+      return okHangar && okType && okOperator && okAcft && okEventType;
     });
-  }, [events, selectedHangarIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds]);
+  }, [events, selectedHangarIds, filterAircraftTypeIds, filterOperatorIds, filterAircraftIds, filterEventTypeIds]);
 
   const visibleEvents = useMemo(() => exportEvents.filter((e) => e.status !== "CANCELLED"), [exportEvents]);
 
@@ -1808,11 +1862,14 @@ export function GanttView() {
 
   const operatorNameById = useMemo(() => {
     const m = new Map<string, string>();
+    for (const o of operatorsQ.data ?? []) {
+      if (o.id && !m.has(o.id)) m.set(o.id, o.name);
+    }
     for (const a of aircraftQ.data ?? []) {
       if (a.operator?.id && !m.has(a.operator.id)) m.set(a.operator.id, a.operator.name);
     }
     return m;
-  }, [aircraftQ.data]);
+  }, [aircraftQ.data, operatorsQ.data]);
 
   const reportRows = useMemo(() => {
     return [...exportEvents]
@@ -1821,6 +1878,12 @@ export function GanttView() {
         const start = dayjs(ev.startAt);
         const end = dayjs(ev.endAt);
         const durationHours = Math.max(0, end.diff(start, "minute")) / 60;
+        const rangeStartMs = Math.max(start.valueOf(), from.valueOf());
+        const rangeEndMs = Math.min(end.valueOf(), to.valueOf());
+        const rangeDurationHours =
+          start.isValid() && end.isValid() && rangeEndMs > rangeStartMs ? (rangeEndMs - rangeStartMs) / (60 * 60 * 1000) : 0;
+        const rangeStart = dayjs(rangeStartMs);
+        const rangeEnd = dayjs(rangeEndMs);
         const budgetHours = tatHours(ev.budgetStartAt, ev.budgetEndAt);
         const actualHours = tatHours(ev.actualStartAt, ev.actualEndAt);
         const towSegments = ev.towSegments ?? [];
@@ -1832,15 +1895,19 @@ export function GanttView() {
           "Тип события": ev.eventType?.name ?? "—",
           "Уровень": LEVEL_LABEL[ev.level] ?? ev.level,
           "Статус": STATUS_LABEL[ev.status] ?? ev.status,
-          "Начало": formatExportDate(ev.startAt),
-          "Окончание": formatExportDate(ev.endAt),
+          "Начало": toExcelDate(ev.startAt),
+          "Окончание": toExcelDate(ev.endAt),
           "Оперативный TAT, часов": Number(durationHours.toFixed(2)),
           "Оперативный TAT, дней": Number((durationHours / 24).toFixed(2)),
-          "Бюджетное начало": formatExportDate(ev.budgetStartAt),
-          "Бюджетное окончание": formatExportDate(ev.budgetEndAt),
+          "Начало в выбранном периоде": rangeDurationHours > 0 ? rangeStart.toDate() : "",
+          "Окончание в выбранном периоде": rangeDurationHours > 0 ? rangeEnd.toDate() : "",
+          "TAT в выбранном периоде, часов": Number(rangeDurationHours.toFixed(2)),
+          "TAT в выбранном периоде, дней": Number((rangeDurationHours / 24).toFixed(2)),
+          "Бюджетное начало": toExcelDate(ev.budgetStartAt),
+          "Бюджетное окончание": toExcelDate(ev.budgetEndAt),
           "Бюджетный TAT, часов": budgetHours == null ? "" : Number(budgetHours.toFixed(2)),
-          "Фактическое начало": formatExportDate(ev.actualStartAt),
-          "Фактическое окончание": formatExportDate(ev.actualEndAt),
+          "Фактическое начало": toExcelDate(ev.actualStartAt),
+          "Фактическое окончание": toExcelDate(ev.actualEndAt),
           "Фактический TAT, часов": actualHours == null ? "" : Number(actualHours.toFixed(2)),
           "Отклонение факт/оператив, часов": actualHours == null ? "" : Number((actualHours - durationHours).toFixed(2)),
           "Отклонение факт/бюджет, часов": actualHours == null || budgetHours == null ? "" : Number((actualHours - budgetHours).toFixed(2)),
@@ -1859,7 +1926,7 @@ export function GanttView() {
           "ID события": ev.id
         };
       });
-  }, [exportEvents, aircraftTypeById, operatorNameById]);
+  }, [exportEvents, aircraftTypeById, operatorNameById, from, to]);
 
   const exportBaseName = `gantt-${rangeFromApplied}-${rangeToApplied}`;
   const reportMeta = [
@@ -1872,10 +1939,31 @@ export function GanttView() {
 
   const exportTableXlsx = () => {
     if (reportRows.length === 0) return;
-    const ws = XLSX.utils.json_to_sheet(reportRows);
-    ws["!cols"] = Object.keys(reportRows[0] ?? {}).map((key) => ({
+    const ws = XLSX.utils.json_to_sheet(reportRows, { cellDates: true });
+    const columns = Object.keys(reportRows[0] ?? {});
+    ws["!cols"] = columns.map((key) => ({
       wch: Math.min(42, Math.max(12, key.length + 4))
     }));
+    const dateColumns = new Set([
+      "Начало",
+      "Окончание",
+      "Начало в выбранном периоде",
+      "Окончание в выбранном периоде",
+      "Бюджетное начало",
+      "Бюджетное окончание",
+      "Фактическое начало",
+      "Фактическое окончание"
+    ]);
+    const range = ws["!ref"] ? XLSX.utils.decode_range(ws["!ref"]) : null;
+    if (range) {
+      for (const [idx, key] of columns.entries()) {
+        if (!dateColumns.has(key)) continue;
+        for (let row = range.s.r + 1; row <= range.e.r; row++) {
+          const cell = ws[XLSX.utils.encode_cell({ r: row, c: idx })];
+          if (cell && cell.t === "d") cell.z = "dd.mm.yyyy hh:mm";
+        }
+      }
+    }
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "События");
     XLSX.writeFile(wb, `${exportBaseName}-events.xlsx`);
@@ -1886,7 +1974,7 @@ export function GanttView() {
     const columns = Object.keys(reportRows[0] ?? {});
     const header = columns.map((c) => `<th>${htmlEscape(c)}</th>`).join("");
     const body = reportRows
-      .map((row) => `<tr>${columns.map((c) => `<td>${htmlEscape((row as any)[c])}</td>`).join("")}</tr>`)
+      .map((row) => `<tr>${columns.map((c) => `<td>${htmlEscape(formatReportCell((row as any)[c]))}</td>`).join("")}</tr>`)
       .join("");
     openPrintableDocument(
       "Отчёт по событиям Гантта",
@@ -2190,6 +2278,35 @@ export function GanttView() {
                 placeholder="все"
                 width={200}
                 maxHeight={260}
+                searchable
+                searchPlaceholder="Найти ангар"
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Оператор</span>
+              <MultiSelectDropdown
+                options={(operatorsQ.data ?? []).map((o) => ({
+                  id: o.id,
+                  label: o.code ? `${o.code} • ${o.name}` : o.name
+                }))}
+                value={filterOperatorIds}
+                onChange={(next) => {
+                  setFilterOperatorIds(next);
+                  if (next.length > 0 && filterAircraftIds.length > 0) {
+                    const allowed = new Set(
+                      (aircraftQ.data ?? [])
+                        .filter((a: any) => next.includes(String(a.operatorId ?? a.operator?.id ?? "")))
+                        .map((a) => String(a.id))
+                    );
+                    const pruned = filterAircraftIds.filter((id) => allowed.has(String(id)));
+                    if (pruned.length !== filterAircraftIds.length) setFilterAircraftIds(pruned);
+                  }
+                }}
+                placeholder="все"
+                width={220}
+                maxHeight={320}
+                searchable
+                searchPlaceholder="Найти оператора"
               />
             </label>
             <label className="tgField">
@@ -2215,6 +2332,8 @@ export function GanttView() {
                 placeholder="все"
                 width={240}
                 maxHeight={320}
+                searchable
+                searchPlaceholder="Найти тип ВС"
               />
             </label>
             <label className="tgField">
@@ -2226,12 +2345,19 @@ export function GanttView() {
                       ? true
                       : filterAircraftTypeIds.includes(String(a.typeId ?? ""))
                   )
+                  .filter((a: any) =>
+                    filterOperatorIds.length === 0
+                      ? true
+                      : filterOperatorIds.includes(String(a.operatorId ?? a.operator?.id ?? ""))
+                  )
                   .map((a: any) => ({ id: a.id, label: a.tailNumber }))}
                 value={filterAircraftIds}
                 onChange={setFilterAircraftIds}
                 placeholder="все"
                 width={200}
                 maxHeight={320}
+                searchable
+                searchPlaceholder="Найти борт"
               />
             </label>
             <label className="tgField">
@@ -2246,6 +2372,8 @@ export function GanttView() {
                 placeholder="все"
                 width={200}
                 maxHeight={260}
+                searchable
+                searchPlaceholder="Найти тип события"
               />
             </label>
           </div>
@@ -2815,6 +2943,12 @@ export function GanttView() {
             Нет событий в выбранном диапазоне.
           </div>
         ) : null}
+        <div className="ganttBottomScrollRow" aria-hidden="true">
+          <div className="ganttBottomScrollSpacer" />
+          <div className="ganttBottomScrollViewport" ref={bottomScrollRef} onScroll={onBottomScroll}>
+            <div className="ganttBottomScrollInner" style={{ width: canvasWidth }} />
+          </div>
+        </div>
       </div>
 
       <Drawer

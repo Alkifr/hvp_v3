@@ -9,8 +9,11 @@ export function MultiSelectDropdown(props: {
   placeholder?: string;
   width?: number;
   maxHeight?: number;
+  searchable?: boolean;
+  searchPlaceholder?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -24,7 +27,17 @@ export function MultiSelectDropdown(props: {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) setSearch("");
+  }, [open]);
+
   const selectedSet = useMemo(() => new Set(props.value), [props.value]);
+  const showSearch = props.searchable ?? props.options.length > 8;
+  const filteredOptions = useMemo(() => {
+    const q = search.trim().toLocaleLowerCase("ru-RU");
+    if (!q) return props.options;
+    return props.options.filter((o) => o.label.toLocaleLowerCase("ru-RU").includes(q));
+  }, [props.options, search]);
   const selectedLabel = useMemo(() => {
     if (props.value.length === 0) return props.placeholder ?? "не выбрано";
     if (props.value.length === 1) {
@@ -49,10 +62,23 @@ export function MultiSelectDropdown(props: {
       </button>
       {open ? (
         <div className="msdPanel" style={{ maxHeight: props.maxHeight ? `${props.maxHeight}px` : undefined }}>
+          {showSearch ? (
+            <div className="msdSearch">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                placeholder={props.searchPlaceholder ?? "Поиск..."}
+                autoFocus
+              />
+            </div>
+          ) : null}
           {props.options.length === 0 ? (
             <div className="msdEmpty">Нет вариантов</div>
+          ) : filteredOptions.length === 0 ? (
+            <div className="msdEmpty">Ничего не найдено</div>
           ) : (
-            props.options.map((o) => (
+            filteredOptions.map((o) => (
               <label key={o.id} className="msdOption">
                 <input type="checkbox" checked={selectedSet.has(o.id)} onChange={() => toggle(o.id)} />
                 <span>{o.label}</span>
