@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { EventAuditAction, EventStatus, PlanningLevel } from "@prisma/client";
 
-import { zUuid } from "../../lib/zod.js";
+import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 
@@ -277,6 +277,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         scheduleMode: z.enum(["compact", "sequential", "fixedCadence"]).optional().default("compact"),
         cadenceHours: z.number().positive().max(8760).optional(),
         placementMode: z.enum(["auto", "preferredHangars", "draftOnConflict"]).optional().default("auto"),
+        budgetStartAt: zDateTime.nullable().optional(),
+        budgetEndAt: zDateTime.nullable().optional(),
+        actualStartAt: zDateTime.nullable().optional(),
+        actualEndAt: zDateTime.nullable().optional(),
         towBeforeMinutes: z.number().int().min(0).max(24 * 60).optional().default(0),
         towAfterMinutes: z.number().int().min(0).max(24 * 60).optional().default(0),
         towBlocksStand: z.boolean().optional().default(false),
@@ -287,6 +291,14 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       .refine((v) => v.endTo >= v.startFrom, { message: "endTo must be >= startFrom" })
       .refine((v) => v.scheduleMode !== "fixedCadence" || (v.cadenceHours ?? 0) > 0, {
         message: "cadenceHours is required for fixedCadence"
+      })
+      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: "budget period must have both dates" })
+      .refine((v) => !v.budgetStartAt || !v.budgetEndAt || v.budgetEndAt > v.budgetStartAt, {
+        message: "budgetEndAt must be after budgetStartAt"
+      })
+      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: "actual period must have both dates" })
+      .refine((v) => !v.actualStartAt || !v.actualEndAt || v.actualEndAt > v.actualStartAt, {
+        message: "actualEndAt must be after actualStartAt"
       })
       .parse(req.body);
 
@@ -413,6 +425,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           ...p,
           startAt: new Date(p.startAt).toISOString(),
           endAt: new Date(p.endAt).toISOString(),
+          budgetStartAt: body.budgetStartAt?.toISOString() ?? null,
+          budgetEndAt: body.budgetEndAt?.toISOString() ?? null,
+          actualStartAt: body.actualStartAt?.toISOString() ?? null,
+          actualEndAt: body.actualEndAt?.toISOString() ?? null,
           towBeforeStartAt: p.towBeforeStartAt ? new Date(p.towBeforeStartAt).toISOString() : undefined,
           towBeforeEndAt: p.towBeforeEndAt ? new Date(p.towBeforeEndAt).toISOString() : undefined,
           towAfterStartAt: p.towAfterStartAt ? new Date(p.towAfterStartAt).toISOString() : undefined,
@@ -446,6 +462,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         title: string;
         startAt: Date;
         endAt: Date;
+        budgetStartAt: Date | null;
+        budgetEndAt: Date | null;
+        actualStartAt: Date | null;
+        actualEndAt: Date | null;
         hangarId: string | null;
         layoutId: string | null;
         standId: string | null;
@@ -474,6 +494,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               eventTypeId: body.eventTypeId,
               startAt,
               endAt,
+              budgetStartAt: body.budgetStartAt ?? null,
+              budgetEndAt: body.budgetEndAt ?? null,
+              actualStartAt: body.actualStartAt ?? null,
+              actualEndAt: body.actualEndAt ?? null,
               hangarId: p.hangarId,
               layoutId: p.layoutId,
               virtualAircraft: virtualAircraft as Prisma.InputJsonValue
@@ -511,6 +535,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
                   towBeforeMinutes: body.towBeforeMinutes,
                   towAfterMinutes: body.towAfterMinutes,
                   towBlocksStand: body.towBlocksStand,
+                  budgetStartAt: body.budgetStartAt?.toISOString() ?? null,
+                  budgetEndAt: body.budgetEndAt?.toISOString() ?? null,
+                  actualStartAt: body.actualStartAt?.toISOString() ?? null,
+                  actualEndAt: body.actualEndAt?.toISOString() ?? null,
                   warnings: p.warnings
                 }
               }
@@ -522,6 +550,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             title: ev.title,
             startAt,
             endAt,
+            budgetStartAt: body.budgetStartAt ?? null,
+            budgetEndAt: body.budgetEndAt ?? null,
+            actualStartAt: body.actualStartAt ?? null,
+            actualEndAt: body.actualEndAt ?? null,
             hangarId: p.hangarId,
             layoutId: p.layoutId,
             standId: p.standId,
@@ -544,6 +576,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               eventTypeId: body.eventTypeId,
               startAt,
               endAt,
+              budgetStartAt: body.budgetStartAt ?? null,
+              budgetEndAt: body.budgetEndAt ?? null,
+              actualStartAt: body.actualStartAt ?? null,
+              actualEndAt: body.actualEndAt ?? null,
               hangarId: null,
               layoutId: null,
               virtualAircraft: virtualAircraft as Prisma.InputJsonValue
@@ -567,6 +603,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
                   towBeforeMinutes: body.towBeforeMinutes,
                   towAfterMinutes: body.towAfterMinutes,
                   towBlocksStand: body.towBlocksStand,
+                  budgetStartAt: body.budgetStartAt?.toISOString() ?? null,
+                  budgetEndAt: body.budgetEndAt?.toISOString() ?? null,
+                  actualStartAt: body.actualStartAt?.toISOString() ?? null,
+                  actualEndAt: body.actualEndAt?.toISOString() ?? null,
                   warnings: u?.warnings ?? []
                 }
               }
@@ -578,6 +618,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             title: ev.title,
             startAt,
             endAt,
+            budgetStartAt: body.budgetStartAt ?? null,
+            budgetEndAt: body.budgetEndAt ?? null,
+            actualStartAt: body.actualStartAt ?? null,
+            actualEndAt: body.actualEndAt ?? null,
             hangarId: null,
             layoutId: null,
             standId: null,
@@ -601,6 +645,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         ...r,
         startAt: r.startAt.toISOString(),
         endAt: r.endAt.toISOString(),
+        budgetStartAt: r.budgetStartAt?.toISOString() ?? null,
+        budgetEndAt: r.budgetEndAt?.toISOString() ?? null,
+        actualStartAt: r.actualStartAt?.toISOString() ?? null,
+        actualEndAt: r.actualEndAt?.toISOString() ?? null,
         towBeforeStartAt: r.towBeforeStartAt?.toISOString(),
         towBeforeEndAt: r.towBeforeEndAt?.toISOString(),
         towAfterStartAt: r.towAfterStartAt?.toISOString(),
