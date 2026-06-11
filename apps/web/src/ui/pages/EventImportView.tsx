@@ -11,6 +11,12 @@ type ImportPreviewRow = {
   title?: string;
   startAt?: string;
   endAt?: string;
+  budgetStartAt?: string | null;
+  budgetEndAt?: string | null;
+  actualStartAt?: string | null;
+  actualEndAt?: string | null;
+  towStartAt?: string | null;
+  towEndAt?: string | null;
   aircraftTail?: string;
   eventTypeKey?: string;
   hangar?: string | null;
@@ -46,6 +52,17 @@ function formatImportDate(value?: string) {
   const d = new Date(value);
   if (!Number.isFinite(d.valueOf())) return value;
   return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatImportPeriod(start?: string | null, end?: string | null) {
+  if (!start && !end) return "—";
+  return (
+    <>
+      {formatImportDate(start ?? undefined)}
+      <br />
+      <span className="muted">до {formatImportDate(end ?? undefined)}</span>
+    </>
+  );
 }
 
 export function EventImportView() {
@@ -99,7 +116,8 @@ export function EventImportView() {
 
       <div className="card" style={{ display: "grid", gap: 10 }}>
         <div className="muted">
-          Excel/CSV. Шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt, Hangar, HangarStand
+          Excel/CSV. Шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt, budgetStartAt, budgetEndAt,
+          actualStartAt, actualEndAt, towStartAt, towEndAt, Hangar, HangarStand. Периоды можно оставлять пустыми.
         </div>
         <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>
           {activeSandbox ? (
@@ -197,11 +215,13 @@ export function EventImportView() {
                   <span className="eventImportStat eventImportStatError">с ошибками: {(importResult as any).summary?.errorRows ?? 0}</span>
                   <span className="eventImportStat">событий: {(importResult as any).summary?.wouldCreateEvents ?? 0}</span>
                   <span className="eventImportStat">резервов: {(importResult as any).summary?.wouldCreateReservations ?? 0}</span>
+                  <span className="eventImportStat">буксировок: {(importResult as any).summary?.wouldCreateTows ?? 0}</span>
                 </>
               ) : (
                 <>
                   <span className="eventImportStat eventImportStatOk">создано событий: {(importResult as any).createdEvents ?? 0}</span>
                   <span className="eventImportStat">создано резервов: {(importResult as any).createdReservations ?? 0}</span>
+                  <span className="eventImportStat">создано буксировок: {(importResult as any).createdTows ?? 0}</span>
                   <span className="eventImportStat eventImportStatError">ошибок: {resultErrors.length}</span>
                 </>
               )}
@@ -218,6 +238,9 @@ export function EventImportView() {
                       <th>Тип события</th>
                       <th>Борт</th>
                       <th>Период</th>
+                      <th>Бюджетный период</th>
+                      <th>Фактический период</th>
+                      <th>Буксировка</th>
                       <th>Ангар / место</th>
                       <th>Комментарий</th>
                     </tr>
@@ -237,10 +260,11 @@ export function EventImportView() {
                         <td>{row.eventTypeKey || "—"}</td>
                         <td>{row.aircraftTail || "—"}</td>
                         <td>
-                          {formatImportDate(row.startAt)}
-                          <br />
-                          <span className="muted">до {formatImportDate(row.endAt)}</span>
+                          {formatImportPeriod(row.startAt, row.endAt)}
                         </td>
+                        <td>{formatImportPeriod(row.budgetStartAt, row.budgetEndAt)}</td>
+                        <td>{formatImportPeriod(row.actualStartAt, row.actualEndAt)}</td>
+                        <td>{formatImportPeriod(row.towStartAt, row.towEndAt)}</td>
                         <td>
                           {row.hangar || "—"}
                           {row.stand ? <span className="muted"> / {row.stand}</span> : null}
