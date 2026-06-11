@@ -196,6 +196,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   app.post("/import", async (req) => {
     assertCanWriteEvent(req);
 
+    const zOptionalDateCell = z.union([z.string(), z.date(), z.number(), z.null()]).optional();
     const body = z
       .object({
         dryRun: z.boolean().optional(),
@@ -209,6 +210,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               Event_name: z.string(),
               startAt: z.union([z.string(), z.date(), z.number()]),
               endAt: z.union([z.string(), z.date(), z.number()]),
+              budgetStartAt: zOptionalDateCell,
+              budgetEndAt: zOptionalDateCell,
+              actualStartAt: zOptionalDateCell,
+              actualEndAt: zOptionalDateCell,
+              towStartAt: zOptionalDateCell,
+              towEndAt: zOptionalDateCell,
               Hangar: z.string().optional(),
               HangarStand: z.string().optional()
             })
@@ -239,6 +246,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         return new Date(ms);
       }
       return new Date(v);
+    };
+    const parseOptionalDate = (v: string | number | Date | null | undefined, label: string) => {
+      if (v == null) return null;
+      if (typeof v === "string" && norm(v) === "") return null;
+      const d = parseDate(v);
+      if (!Number.isFinite(d.valueOf())) throw new Error(`Некорректная дата ${label}: ${String(v)}`);
+      return d;
+    };
+    const validateOptionalPeriod = (start: Date | null, end: Date | null, label: string) => {
+      if ((start && !end) || (!start && end)) throw new Error(`Заполните обе даты периода "${label}"`);
+      if (start && end && end <= start) throw new Error(`Окончание периода "${label}" должно быть позже начала`);
     };
 
     const rows = body.rows;
@@ -351,6 +369,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       title?: string;
       startAt?: string;
       endAt?: string;
+      budgetStartAt?: string | null;
+      budgetEndAt?: string | null;
+      actualStartAt?: string | null;
+      actualEndAt?: string | null;
+      towStartAt?: string | null;
+      towEndAt?: string | null;
       aircraftTail?: string;
       eventTypeKey?: string;
       hangar?: string | null;
@@ -364,6 +388,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     let wouldCreateEvents = 0;
     let wouldCreateReservations = 0;
+    let wouldCreateTows = 0;
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i]!;
@@ -382,6 +407,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           throw new Error(`Некорректные даты startAt/endAt: ${String(r.startAt)} / ${String(r.endAt)}`);
         }
         if (endAt <= startAt) throw new Error("endAt должен быть позже startAt");
+        const budgetStartAt = parseOptionalDate(r.budgetStartAt, "budgetStartAt");
+        const budgetEndAt = parseOptionalDate(r.budgetEndAt, "budgetEndAt");
+        validateOptionalPeriod(budgetStartAt, budgetEndAt, "Бюджетный");
+        const actualStartAt = parseOptionalDate(r.actualStartAt, "actualStartAt");
+        const actualEndAt = parseOptionalDate(r.actualEndAt, "actualEndAt");
+        validateOptionalPeriod(actualStartAt, actualEndAt, "Фактический");
+        const towStartAt = parseOptionalDate(r.towStartAt, "towStartAt");
+        const towEndAt = parseOptionalDate(r.towEndAt, "towEndAt");
+        validateOptionalPeriod(towStartAt, towEndAt, "Буксировка");
+        if (towStartAt && towEndAt && (towStartAt < startAt || towEndAt > endAt)) {
+          throw new Error("Период буксировки должен быть внутри startAt/endAt");
+        }
 
         const aircraft = aircraftByTail.get(aircraftTail);
         if (!aircraft) throw new Error(`Не найден борт: ${aircraftTail}`);
@@ -440,6 +477,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           title,
           startAt: startAt.toISOString(),
           endAt: endAt.toISOString(),
+          budgetStartAt: budgetStartAt?.toISOString() ?? null,
+          budgetEndAt: budgetEndAt?.toISOString() ?? null,
+          actualStartAt: actualStartAt?.toISOString() ?? null,
+          actualEndAt: actualEndAt?.toISOString() ?? null,
+          towStartAt: towStartAt?.toISOString() ?? null,
+          towEndAt: towEndAt?.toISOString() ?? null,
           aircraftTail,
           eventTypeKey: norm(r.Event_name),
           hangar: hangar?.name ?? null,
@@ -448,6 +491,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         });
 
         wouldCreateEvents += 1;
+        if (towStartAt && towEndAt) wouldCreateTows += 1;
         if (resolvedStand) {
           wouldCreateReservations += 1;
           plannedReservations.push({ standId: resolvedStand.standId, startAt, endAt, label: `${aircraftTail} • ${title}` });
@@ -470,7 +514,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       okRows: previewRows.filter((r) => r.ok).length,
       errorRows: previewRows.filter((r) => !r.ok).length,
       wouldCreateEvents,
-      wouldCreateReservations
+      wouldCreateReservations,
+      wouldCreateTows
     };
 
     if (dryRun) {
@@ -482,6 +527,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       ok: true as const,
       createdEvents: 0,
       createdReservations: 0,
+      createdTows: 0,
       errors: [] as Array<{ rowIndex: number; message: string }>
     };
     const importedEventIds = new Set<string>();
@@ -498,6 +544,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         const standCode = upper(r.HangarStand);
         const startAt = parseDate(r.startAt);
         const endAt = parseDate(r.endAt);
+        const budgetStartAt = parseOptionalDate(r.budgetStartAt, "budgetStartAt");
+        const budgetEndAt = parseOptionalDate(r.budgetEndAt, "budgetEndAt");
+        const actualStartAt = parseOptionalDate(r.actualStartAt, "actualStartAt");
+        const actualEndAt = parseOptionalDate(r.actualEndAt, "actualEndAt");
+        const towStartAt = parseOptionalDate(r.towStartAt, "towStartAt");
+        const towEndAt = parseOptionalDate(r.towEndAt, "towEndAt");
 
         const aircraft = aircraftByTail.get(aircraftTail)!;
         const eventType = eventTypeByKey.get(eventKey)!;
@@ -515,6 +567,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               eventTypeId: eventType.id,
               startAt,
               endAt,
+              budgetStartAt,
+              budgetEndAt,
+              actualStartAt,
+              actualEndAt,
               hangarId: hangar?.id ?? null,
               sandboxId: sbId
             }
@@ -537,6 +593,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                   Event_name: norm((r as any).Event_name),
                   startAt: startAt.toISOString(),
                   endAt: endAt.toISOString(),
+                  budgetStartAt: budgetStartAt?.toISOString() ?? null,
+                  budgetEndAt: budgetEndAt?.toISOString() ?? null,
+                  actualStartAt: actualStartAt?.toISOString() ?? null,
+                  actualEndAt: actualEndAt?.toISOString() ?? null,
+                  towStartAt: towStartAt?.toISOString() ?? null,
+                  towEndAt: towEndAt?.toISOString() ?? null,
                   Hangar: hangarStr,
                   HangarStand: standCode
                 }
@@ -579,6 +641,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             });
 
             result.createdReservations += 1;
+          }
+          if (towStartAt && towEndAt) {
+            await tx.eventTow.create({
+              data: { eventId: created.id, sandboxId: sbId, startAt: towStartAt, endAt: towEndAt }
+            });
+            result.createdTows += 1;
           }
 
           result.createdEvents += 1;
