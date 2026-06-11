@@ -24,6 +24,10 @@ type MassPreview = {
     standId: string;
     scheduledBy: "compact" | "sequential" | "fixedCadence";
     warnings: string[];
+    budgetStartAt?: string | null;
+    budgetEndAt?: string | null;
+    actualStartAt?: string | null;
+    actualEndAt?: string | null;
     towBeforeStartAt?: string;
     towBeforeEndAt?: string;
     towAfterStartAt?: string;
@@ -56,6 +60,10 @@ type MassResult = {
     layoutId: string | null;
     standId: string | null;
     status: string;
+    budgetStartAt?: string | null;
+    budgetEndAt?: string | null;
+    actualStartAt?: string | null;
+    actualEndAt?: string | null;
     towBeforeStartAt?: string;
     towBeforeEndAt?: string;
     towAfterStartAt?: string;
@@ -64,6 +72,12 @@ type MassResult = {
   createdTowsBefore?: number;
   createdTowsAfter?: number;
 };
+
+function fromInputLocalOptional(value: string): string | null {
+  if (!value) return null;
+  const d = dayjs(value).second(0).millisecond(0);
+  return d.isValid() ? d.toISOString() : null;
+}
 
 export function MassPlanView() {
   const qc = useQueryClient();
@@ -81,6 +95,10 @@ export function MassPlanView() {
   const [spacingHours, setSpacingHours] = useState(0);
   const [cadenceHours, setCadenceHours] = useState(168);
   const [placementMode, setPlacementMode] = useState<"auto" | "preferredHangars" | "draftOnConflict">("auto");
+  const [budgetStartAtLocal, setBudgetStartAtLocal] = useState("");
+  const [budgetEndAtLocal, setBudgetEndAtLocal] = useState("");
+  const [actualStartAtLocal, setActualStartAtLocal] = useState("");
+  const [actualEndAtLocal, setActualEndAtLocal] = useState("");
   const [towBeforeMinutes, setTowBeforeMinutes] = useState(0);
   const [towAfterMinutes, setTowAfterMinutes] = useState(0);
   const [towBlocksStand, setTowBlocksStand] = useState(false);
@@ -118,6 +136,10 @@ export function MassPlanView() {
     spacingHours: Math.max(0, Number(spacingHours) || 0),
     cadenceHours: scheduleMode === "fixedCadence" ? Math.max(1, Number(cadenceHours) || 1) : undefined,
     placementMode,
+    budgetStartAt: fromInputLocalOptional(budgetStartAtLocal),
+    budgetEndAt: fromInputLocalOptional(budgetEndAtLocal),
+    actualStartAt: fromInputLocalOptional(actualStartAtLocal),
+    actualEndAt: fromInputLocalOptional(actualEndAtLocal),
     towBeforeMinutes: Math.max(0, Math.min(24 * 60, Number(towBeforeMinutes) || 0)),
     towAfterMinutes: Math.max(0, Math.min(24 * 60, Number(towAfterMinutes) || 0)),
     towBlocksStand
@@ -175,6 +197,8 @@ export function MassPlanView() {
 
   const formatRange = (from?: string, to?: string) =>
     from && to ? `${dayjs(from).format("DD.MM HH:mm")} → ${dayjs(to).format("DD.MM HH:mm")}` : "—";
+
+  const formatPeriod = (from?: string | null, to?: string | null) => formatRange(from ?? undefined, to ?? undefined);
 
   return (
     <div className="massPage">
@@ -366,6 +390,42 @@ export function MassPlanView() {
               </label>
 
               <label className="massField">
+                <span className="muted">Бюджетное начало</span>
+                <input
+                  type="datetime-local"
+                  value={budgetStartAtLocal}
+                  onChange={(e) => setBudgetStartAtLocal(e.target.value)}
+                />
+              </label>
+
+              <label className="massField">
+                <span className="muted">Бюджетное окончание</span>
+                <input
+                  type="datetime-local"
+                  value={budgetEndAtLocal}
+                  onChange={(e) => setBudgetEndAtLocal(e.target.value)}
+                />
+              </label>
+
+              <label className="massField">
+                <span className="muted">Фактическое начало</span>
+                <input
+                  type="datetime-local"
+                  value={actualStartAtLocal}
+                  onChange={(e) => setActualStartAtLocal(e.target.value)}
+                />
+              </label>
+
+              <label className="massField">
+                <span className="muted">Фактическое окончание</span>
+                <input
+                  type="datetime-local"
+                  value={actualEndAtLocal}
+                  onChange={(e) => setActualEndAtLocal(e.target.value)}
+                />
+              </label>
+
+              <label className="massField">
                 <span className="muted">Буксировка до, мин</span>
                 <input
                   type="number"
@@ -468,6 +528,8 @@ export function MassPlanView() {
                     <th>Название</th>
                     <th>Начало</th>
                     <th>Окончание</th>
+                    <th>Бюджетный период</th>
+                    <th>Фактический период</th>
                     <th>Ангар</th>
                     <th>Режим</th>
                     <th>Буксировка до</th>
@@ -482,6 +544,8 @@ export function MassPlanView() {
                       <td>{p.title}</td>
                       <td>{dayjs(p.startAt).format("DD.MM.YYYY HH:mm")}</td>
                       <td>{dayjs(p.endAt).format("DD.MM.YYYY HH:mm")}</td>
+                      <td>{formatPeriod(p.budgetStartAt, p.budgetEndAt)}</td>
+                      <td>{formatPeriod(p.actualStartAt, p.actualEndAt)}</td>
                       <td>{hangarById.get(p.hangarId)?.name ?? p.hangarId}</td>
                       <td><span className="massModeBadge">{scheduleLabel(p.scheduledBy)}</span></td>
                       <td>{formatRange(p.towBeforeStartAt, p.towBeforeEndAt)}</td>
@@ -543,6 +607,8 @@ export function MassPlanView() {
                   <th>Название</th>
                   <th>Начало</th>
                   <th>Окончание</th>
+                  <th>Бюджетный период</th>
+                  <th>Фактический период</th>
                   <th>Ангар / статус</th>
                   <th>Буксировки</th>
                 </tr>
@@ -554,6 +620,8 @@ export function MassPlanView() {
                     <td>{ev.title}</td>
                     <td>{dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")}</td>
                     <td>{dayjs(ev.endAt).format("DD.MM.YYYY HH:mm")}</td>
+                    <td>{formatPeriod(ev.budgetStartAt, ev.budgetEndAt)}</td>
+                    <td>{formatPeriod(ev.actualStartAt, ev.actualEndAt)}</td>
                     <td>
                       {ev.hangarId ? (hangarById.get(ev.hangarId)?.name ?? ev.hangarId) : <span className="muted">Черновик (без места)</span>}
                     </td>
