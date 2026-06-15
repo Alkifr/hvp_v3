@@ -1650,6 +1650,13 @@ textarea {
   position: relative;
 }
 
+.placementLinkLayer {
+  position: absolute;
+  inset: 0 auto auto 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .ganttLabel {
   padding: 10px 12px;
   border-right: none; /* разделитель теперь на колонке слева */
@@ -1743,6 +1750,27 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   box-sizing: border-box;
+  z-index: 2;
+}
+
+.barLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.barTat {
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+
+.barText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .actualTatStripe {
@@ -2681,6 +2709,12 @@ textarea {
   gap: 8px 10px;
 }
 
+.evLocationGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+
 .evPeriodGrid {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr) 120px;
@@ -2702,6 +2736,7 @@ textarea {
 
 @media (max-width: 640px) {
   .evForm,
+  .evLocationGrid,
   .evPeriodGrid {
     grid-template-columns: 1fr;
   }
@@ -2765,6 +2800,42 @@ textarea {
   gap: 8px;
   align-items: center;
   margin-top: 8px;
+}
+
+.evCheckRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.evPlacementList {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.evPlacementItem {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.evPlacementBody {
+  display: grid;
+  gap: 10px;
+}
+
+.evPlacementHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .evTowList {

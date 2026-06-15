@@ -30,6 +30,53 @@ function getActor(req: any) {
 }
 
 export const reservationsRoutes: FastifyPluginAsync = async (app) => {
+  const replaceSingleReservation = async (
+    tx: any,
+    params: {
+      eventId: string;
+      sandboxId: string | null;
+      hangarId: string;
+      layoutId: string;
+      standId: string;
+      startAt: Date;
+      endAt: Date;
+      budgetStartAt?: Date | null;
+      budgetEndAt?: Date | null;
+      actualStartAt?: Date | null;
+      actualEndAt?: Date | null;
+    }
+  ) => {
+    await tx.standReservation.deleteMany({ where: { eventId: params.eventId } });
+    await tx.eventPlacement.deleteMany({ where: { eventId: params.eventId } });
+    const placement = await tx.eventPlacement.create({
+      data: {
+        eventId: params.eventId,
+        sandboxId: params.sandboxId,
+        startAt: params.startAt,
+        endAt: params.endAt,
+        budgetStartAt: params.budgetStartAt ?? null,
+        budgetEndAt: params.budgetEndAt ?? null,
+        actualStartAt: params.actualStartAt ?? null,
+        actualEndAt: params.actualEndAt ?? null,
+        hangarId: params.hangarId,
+        layoutId: params.layoutId,
+        standId: params.standId,
+        sortOrder: 0
+      }
+    });
+    return await tx.standReservation.create({
+      data: {
+        eventId: params.eventId,
+        placementId: placement.id,
+        sandboxId: params.sandboxId,
+        layoutId: params.layoutId,
+        standId: params.standId,
+        startAt: params.startAt,
+        endAt: params.endAt
+      }
+    });
+  };
+
   const findLayoutConflict = async (
     client: any,
     params: { sandboxId: string | null; eventId: string; hangarId: string; layoutId: string; startAt: Date; endAt: Date }
@@ -106,8 +153,9 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!event) throw app.httpErrors.notFound("Event not found");
 
-    const existingReservation = await app.prisma.standReservation.findUnique({
-      where: { eventId }
+    const existingReservation = await app.prisma.standReservation.findFirst({
+      where: { eventId, ...sandboxFilter(req) },
+      orderBy: [{ startAt: "asc" }]
     });
 
     const startAt = body.startAt ?? event.startAt;
@@ -157,25 +205,22 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.conflict(layoutConflictMessage(layoutConflict));
     }
 
-    // Upsert по уникальному eventId
     const sbId = sandboxIdFor(req);
-    const reservation = await app.prisma.standReservation.upsert({
-      where: { eventId },
-      update: {
-        layoutId: body.layoutId,
-        standId: body.standId,
-        startAt,
-        endAt
-      },
-      create: {
+    const reservation = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) =>
+      replaceSingleReservation(tx, {
         eventId,
         sandboxId: sbId,
+        hangarId: layout.hangarId,
         layoutId: body.layoutId,
         standId: body.standId,
         startAt,
-        endAt
-      }
-    });
+        endAt,
+        budgetStartAt: (event as any).budgetStartAt ?? null,
+        budgetEndAt: (event as any).budgetEndAt ?? null,
+        actualStartAt: (event as any).actualStartAt ?? null,
+        actualEndAt: (event as any).actualEndAt ?? null
+      })
+    );
 
     // Подтянем layout/hangar в событие (для удобства фильтрации в Гантте)
     await app.prisma.maintenanceEvent.update({
@@ -253,7 +298,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     const moved = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const event = await tx.maintenanceEvent.findFirst({
         where: { id: body.eventId, sandboxId: sbId },
-        include: { reservation: true, aircraft: true }
+        include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
       });
       if (!event) throw app.httpErrors.notFound("Event not found");
 
@@ -322,6 +367,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
 
         // 1) снять резервы у всех конфликтующих
         await tx.standReservation.deleteMany({ where: { eventId: { in: toBump } } });
+        await tx.eventPlacement.deleteMany({ where: { eventId: { in: toBump } } });
         // 2) убрать ангар/вариант и перевести в DRAFT (без ангара/места)
         await tx.maintenanceEvent.updateMany({
           where: { id: { in: toBump } },
@@ -350,20 +396,27 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      const existingReservation = event.reservation
+      const existingReservation = event.reservations[0]
         ? {
-            layoutId: event.reservation.layoutId,
-            standId: event.reservation.standId,
-            startAt: event.reservation.startAt,
-            endAt: event.reservation.endAt
+            layoutId: event.reservations[0].layoutId,
+            standId: event.reservations[0].standId,
+            startAt: event.reservations[0].startAt,
+            endAt: event.reservations[0].endAt
           }
         : null;
 
-      // upsert резерва для перетаскиваемого события
-      const reservation = await tx.standReservation.upsert({
-        where: { eventId: body.eventId },
-        update: { layoutId: body.layoutId, standId: body.standId, startAt, endAt },
-        create: { eventId: body.eventId, sandboxId: sbId, layoutId: body.layoutId, standId: body.standId, startAt, endAt }
+      const reservation = await replaceSingleReservation(tx, {
+        eventId: body.eventId,
+        sandboxId: sbId,
+        hangarId: layout.hangarId,
+        layoutId: body.layoutId,
+        standId: body.standId,
+        startAt,
+        endAt,
+        budgetStartAt: (event as any).budgetStartAt ?? null,
+        budgetEndAt: (event as any).budgetEndAt ?? null,
+        actualStartAt: (event as any).actualStartAt ?? null,
+        actualEndAt: (event as any).actualEndAt ?? null
       });
 
       await tx.maintenanceEvent.update({
@@ -437,7 +490,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     const moved = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const event = await tx.maintenanceEvent.findFirst({
         where: { id: body.eventId, sandboxId: sbId },
-        include: { reservation: true, aircraft: true }
+        include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
       });
       if (!event) throw app.httpErrors.notFound("Event not found");
 
@@ -502,6 +555,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         bumpedEventIds.push(...toBump);
 
         await tx.standReservation.deleteMany({ where: { eventId: { in: toBump } } });
+        await tx.eventPlacement.deleteMany({ where: { eventId: { in: toBump } } });
         await tx.maintenanceEvent.updateMany({
           where: { id: { in: toBump } },
           data: { hangarId: null, layoutId: null, status: EventStatus.DRAFT }
@@ -533,12 +587,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         endAt: event.endAt.toISOString(),
         hangarId: event.hangarId ?? null,
         layoutId: event.layoutId ?? null,
-        reservation: event.reservation
+        reservation: event.reservations[0]
           ? {
-              layoutId: event.reservation.layoutId,
-              standId: event.reservation.standId,
-              startAt: event.reservation.startAt.toISOString(),
-              endAt: event.reservation.endAt.toISOString()
+              layoutId: event.reservations[0].layoutId,
+              standId: event.reservations[0].standId,
+              startAt: event.reservations[0].startAt.toISOString(),
+              endAt: event.reservations[0].endAt.toISOString()
             }
           : null
       };
@@ -549,11 +603,18 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         data: { startAt: body.startAt, endAt: body.endAt, layoutId: layout.id, hangarId: layout.hangarId }
       });
 
-      // upsert резерва для события — следует времени события
-      const reservation = await tx.standReservation.upsert({
-        where: { eventId: body.eventId },
-        update: { layoutId: body.layoutId, standId: body.standId, startAt: body.startAt, endAt: body.endAt },
-        create: { eventId: body.eventId, sandboxId: sbId, layoutId: body.layoutId, standId: body.standId, startAt: body.startAt, endAt: body.endAt }
+      const reservation = await replaceSingleReservation(tx, {
+        eventId: body.eventId,
+        sandboxId: sbId,
+        hangarId: layout.hangarId,
+        layoutId: body.layoutId,
+        standId: body.standId,
+        startAt: body.startAt,
+        endAt: body.endAt,
+        budgetStartAt: (event as any).budgetStartAt ?? null,
+        budgetEndAt: (event as any).budgetEndAt ?? null,
+        actualStartAt: (event as any).actualStartAt ?? null,
+        actualEndAt: (event as any).actualEndAt ?? null
       });
 
       await tx.maintenanceEventAudit.create({
@@ -596,13 +657,15 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       select: { id: true }
     });
     if (!event) throw app.httpErrors.notFound("Event not found");
-    const existing = await app.prisma.standReservation.findUnique({ where: { eventId } });
+    const existing = await app.prisma.standReservation.findFirst({ where: { eventId, ...sandboxFilter(req) }, orderBy: [{ startAt: "asc" }] });
     if (!existing) {
       // идемпотентность: если резерва нет — считаем, что "уже снято"
       return { ok: true, deleted: 0 };
     }
 
     const del = await app.prisma.standReservation.deleteMany({ where: { eventId } });
+    await app.prisma.eventPlacement.deleteMany({ where: { eventId } });
+    await app.prisma.maintenanceEvent.update({ where: { id: eventId }, data: { hangarId: null, layoutId: null } });
 
     await app.prisma.maintenanceEventAudit.create({
       data: {

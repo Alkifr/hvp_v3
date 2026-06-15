@@ -330,6 +330,7 @@ model Sandbox {
   members SandboxMember[]
 
   events            MaintenanceEvent[]
+  placements        EventPlacement[]
   reservations      StandReservation[]
   towSegments       EventTow[]
   auditTrail        MaintenanceEventAudit[]
@@ -487,6 +488,7 @@ model Hangar {
 
   layouts HangarLayout[]
   events  MaintenanceEvent[]
+  placements EventPlacement[]
 }
 
 model HangarLayout {
@@ -509,6 +511,7 @@ model HangarLayout {
 
   reservations StandReservation[]
   events       MaintenanceEvent[]
+  placements  EventPlacement[]
 
   @@unique([hangarId, code])
   @@index([hangarId])
@@ -535,6 +538,7 @@ model HangarStand {
 
   layout HangarLayout @relation(fields: [layoutId], references: [id])
   reservations StandReservation[]
+  placements EventPlacement[]
 
   @@unique([layoutId, code])
   @@index([layoutId])
@@ -577,7 +581,8 @@ model MaintenanceEvent {
   layout  HangarLayout? @relation(fields: [layoutId], references: [id])
   sandbox Sandbox?      @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
-  reservation StandReservation?
+  reservations StandReservation[]
+  placements   EventPlacement[]
   auditTrail  MaintenanceEventAudit[]
   towSegments EventTow[]
 
@@ -594,6 +599,41 @@ model MaintenanceEvent {
   @@index([hangarId])
   @@index([layoutId])
   @@index([sandboxId])
+}
+
+// Этапы размещения одного события по ангарам/местам.
+// Один MaintenanceEvent остаётся логическим событием, а placements описывают,
+// где и когда выполнялась работа при перебуксировках между ангарами.
+model EventPlacement {
+  id        String   @id @default(uuid())
+  eventId   String
+  sandboxId String?
+  startAt   DateTime
+  endAt     DateTime
+  budgetStartAt DateTime?
+  budgetEndAt   DateTime?
+  actualStartAt DateTime?
+  actualEndAt   DateTime?
+  hangarId  String?
+  layoutId  String?
+  standId   String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  hangar  Hangar?          @relation(fields: [hangarId], references: [id])
+  layout  HangarLayout?    @relation(fields: [layoutId], references: [id])
+  stand   HangarStand?     @relation(fields: [standId], references: [id])
+
+  reservation StandReservation?
+
+  @@index([eventId, sortOrder])
+  @@index([sandboxId])
+  @@index([hangarId])
+  @@index([layoutId])
+  @@index([standId, startAt, endAt])
 }
 
 // Буксировки (закатка/выкатка) как интервалы внутри события (могут быть несколько раз)
@@ -634,11 +674,12 @@ model MaintenanceEventAudit {
 model StandReservation {
   id        String   @id @default(uuid())
 
-  // Резервирование может быть привязано к событию (обычно да)
-  eventId   String   @unique
-  sandboxId String?
-  layoutId  String
-  standId   String
+  // Резервирование привязано к событию и, для многоангарных событий, к конкретному этапу.
+  eventId     String
+  placementId String? @unique
+  sandboxId   String?
+  layoutId    String
+  standId     String
 
   // Диапазон резерва (может совпадать с event.startAt/endAt или отличаться)
   startAt   DateTime
@@ -647,11 +688,13 @@ model StandReservation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  layout  HangarLayout     @relation(fields: [layoutId], references: [id])
-  stand   HangarStand      @relation(fields: [standId], references: [id])
-  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  event     MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  placement EventPlacement?  @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  layout    HangarLayout     @relation(fields: [layoutId], references: [id])
+  stand     HangarStand      @relation(fields: [standId], references: [id])
+  sandbox   Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
+  @@index([eventId])
   @@index([layoutId])
   @@index([standId, startAt, endAt])
   @@index([sandboxId])

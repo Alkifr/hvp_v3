@@ -69,6 +69,7 @@ function safeWriteGanttUi(v: any) {
 
 type EventRow = {
   id: string;
+  segmentKey?: string;
   title: string;
   startAt: string;
   endAt: string;
@@ -91,7 +92,26 @@ type EventRow = {
   hangar?: { id?: string; name: string } | null;
   layout?: { id?: string; name: string; hangarId?: string } | null;
   reservation?: { stand?: { id?: string; code: string } | null } | null;
+  placements?: EventPlacementRow[];
   towSegments?: Array<{ id: string; startAt: string; endAt: string }>;
+};
+
+type EventPlacementRow = {
+  id: string;
+  eventId: string;
+  startAt: string;
+  endAt: string;
+  budgetStartAt?: string | null;
+  budgetEndAt?: string | null;
+  actualStartAt?: string | null;
+  actualEndAt?: string | null;
+  hangarId?: string | null;
+  layoutId?: string | null;
+  standId?: string | null;
+  sortOrder?: number;
+  hangar?: { id?: string; name: string } | null;
+  layout?: { id?: string; name: string; hangarId?: string } | null;
+  stand?: { id?: string; code: string; name?: string } | null;
 };
 
 function eventAircraftLabel(ev: EventRow): string {
@@ -144,6 +164,74 @@ function fromInputLocalOptional(v: string): string | null {
   return d.isValid() ? d.toISOString() : null;
 }
 
+function placementDraftFromEvent(ev: EventRow): PlacementDraft[] {
+  const rows = ev.placements?.length
+    ? ev.placements
+    : [
+        {
+          id: "legacy",
+          eventId: ev.id,
+          startAt: ev.startAt,
+          endAt: ev.endAt,
+          budgetStartAt: ev.budgetStartAt,
+          budgetEndAt: ev.budgetEndAt,
+          actualStartAt: ev.actualStartAt,
+          actualEndAt: ev.actualEndAt,
+          hangarId: (ev.hangar as any)?.id ?? (ev.layout as any)?.hangarId ?? "",
+          layoutId: (ev.layout as any)?.id ?? "",
+          standId: (ev.reservation?.stand as any)?.id ?? "",
+          hangar: ev.hangar,
+          layout: ev.layout,
+          stand: ev.reservation?.stand ?? null
+        } as EventPlacementRow
+      ];
+  return rows.map((p) => ({
+    id: p.id === "legacy" ? undefined : p.id,
+    startAtLocal: toInputLocal(p.startAt),
+    endAtLocal: toInputLocal(p.endAt),
+    budgetStartAtLocal: toInputLocal(p.budgetStartAt),
+    budgetEndAtLocal: toInputLocal(p.budgetEndAt),
+    actualStartAtLocal: toInputLocal(p.actualStartAt),
+    actualEndAtLocal: toInputLocal(p.actualEndAt),
+    hangarId: p.hangarId ?? (p.hangar as any)?.id ?? (p.layout as any)?.hangarId ?? "",
+    layoutId: p.layoutId ?? (p.layout as any)?.id ?? "",
+    standId: p.standId ?? (p.stand as any)?.id ?? ""
+  }));
+}
+
+function placementApiPayload(placements: PlacementDraft[]) {
+  return placements.map((p, idx) => {
+    const startAt = dayjs(p.startAtLocal).second(0).millisecond(0);
+    const endAt = dayjs(p.endAtLocal).second(0).millisecond(0);
+    if (!startAt.isValid() || !endAt.isValid()) throw new Error("Заполните даты всех этапов размещения");
+    if (endAt.valueOf() <= startAt.valueOf()) throw new Error("Окончание этапа должно быть позже начала");
+    const budgetStartAt = fromInputLocalOptional(p.budgetStartAtLocal);
+    const budgetEndAt = fromInputLocalOptional(p.budgetEndAtLocal);
+    if ((budgetStartAt && !budgetEndAt) || (!budgetStartAt && budgetEndAt)) throw new Error("Заполните обе плановые даты этапа");
+    if (budgetStartAt && budgetEndAt && dayjs(budgetEndAt).valueOf() <= dayjs(budgetStartAt).valueOf()) {
+      throw new Error("Плановое окончание этапа должно быть позже начала");
+    }
+    const actualStartAt = fromInputLocalOptional(p.actualStartAtLocal);
+    const actualEndAt = fromInputLocalOptional(p.actualEndAtLocal);
+    if ((actualStartAt && !actualEndAt) || (!actualStartAt && actualEndAt)) throw new Error("Заполните обе фактические даты этапа");
+    if (actualStartAt && actualEndAt && dayjs(actualEndAt).valueOf() <= dayjs(actualStartAt).valueOf()) {
+      throw new Error("Фактическое окончание этапа должно быть позже начала");
+    }
+    return {
+      startAt: startAt.toISOString(),
+      endAt: endAt.toISOString(),
+      budgetStartAt,
+      budgetEndAt,
+      actualStartAt,
+      actualEndAt,
+      hangarId: p.hangarId || null,
+      layoutId: p.layoutId || null,
+      standId: p.standId || null,
+      sortOrder: idx
+    };
+  });
+}
+
 function tatHours(start: string | Date | null | undefined, end: string | Date | null | undefined): number | null {
   if (!start || !end) return null;
   const s = dayjs(start);
@@ -153,6 +241,13 @@ function tatHours(start: string | Date | null | undefined, end: string | Date | 
 }
 
 function formatTat(start: string | Date | null | undefined, end: string | Date | null | undefined): string {
+  const hours = tatHours(start, end);
+  if (hours == null) return "—";
+  const days = hours / 24;
+  return String(Number(days.toFixed(days < 1 ? 1 : 0)));
+}
+
+function formatTatDetailed(start: string | Date | null | undefined, end: string | Date | null | undefined): string {
   const hours = tatHours(start, end);
   if (hours == null) return "—";
   return `${Number(hours.toFixed(1))} ч / ${Number((hours / 24).toFixed(2))} дн`;
@@ -266,6 +361,21 @@ type EditorDraft = {
   hangarId: string; // optional, "" means null
   layoutId: string; // optional, "" means null
   standId: string; // optional, "" means no reservation
+  multiPlacement: boolean;
+  placements: PlacementDraft[];
+};
+
+type PlacementDraft = {
+  id?: string;
+  startAtLocal: string;
+  endAtLocal: string;
+  budgetStartAtLocal: string;
+  budgetEndAtLocal: string;
+  actualStartAtLocal: string;
+  actualEndAtLocal: string;
+  hangarId: string;
+  layoutId: string;
+  standId: string;
 };
 
 type EventAudit = {
@@ -370,6 +480,47 @@ function renderTowBreaks(params: {
   return out.length ? out : null;
 }
 
+function renderPlacementBreaks(params: {
+  ev: EventRow;
+  barX: number;
+  barW: number;
+  from: dayjs.Dayjs;
+  dayWidth: number;
+  canvasWidth: number;
+}) {
+  const placements = params.ev.placements ?? [];
+  if (placements.length < 2) return null;
+  return placements
+    .slice(1)
+    .map((p, idx) => {
+      const seg = calcBarXW({
+        startAt: p.startAt,
+        endAt: p.endAt,
+        from: params.from,
+        dayWidth: params.dayWidth,
+        canvasWidth: params.canvasWidth
+      });
+      if (!seg) return null;
+      const left = clamp(seg.x - params.barX, 0, params.barW);
+      return (
+        <div
+          key={`placement-break:${p.id ?? idx}`}
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left,
+            borderLeft: "2px dashed rgba(255,255,255,0.95)",
+            zIndex: 1,
+            pointerEvents: "none"
+          }}
+          title="Смена ангара"
+        />
+      );
+    })
+    .filter(Boolean);
+}
+
 function renderActualTatStripe(params: { ev: EventRow; from: dayjs.Dayjs; dayWidth: number; canvasWidth: number }) {
   if (!params.ev.actualStartAt || !params.ev.actualEndAt) return null;
   const seg = calcBarXW({
@@ -412,10 +563,113 @@ function LegendStatus(props: { status: string; baseColor: string; label: string 
 }
 
 function formatRowLabel(ev: EventRow) {
-  const bits = [ev.eventType?.name];
-  if (ev.hangar?.name) bits.push(ev.hangar.name);
-  if (ev.reservation?.stand?.code) bits.push(ev.reservation.stand.code);
-  return bits.filter(Boolean).join(" • ");
+  return ev.eventType?.name ?? "";
+}
+
+function placementLabel(ev: EventRow) {
+  return [ev.hangar?.name, ev.reservation?.stand?.code ?? ev.layout?.name].filter(Boolean).join(" / ") || "Без места";
+}
+
+function compactHangarLabel(name: string | null | undefined) {
+  if (!name) return "";
+  const n = String(name).trim();
+  const digits = n.match(/\d+/)?.[0];
+  if (digits) return `H-${digits}`;
+  return n.replace(/^ангар\s*/i, "H-").replace(/\s+/g, "");
+}
+
+function compactStandLabel(code: string | null | undefined) {
+  if (!code) return "";
+  return String(code).trim().replace(/\s*-\s*/g, "-").replace(/\s+/g, "");
+}
+
+function compactBarLabel(ev: EventRow) {
+  const type = ev.eventType?.name || ev.title;
+  const hangar = compactHangarLabel(ev.hangar?.name);
+  const stand = compactStandLabel(ev.reservation?.stand?.code);
+  const place = [hangar, stand].filter(Boolean).join("-");
+  return place ? `${type}/${place}` : type;
+}
+
+function preferredTat(ev: EventRow): { label: string; source: "Факт" | "Опер." | "Бюдж." } {
+  const actual = formatTat(ev.actualStartAt, ev.actualEndAt);
+  if (actual !== "—") return { label: actual, source: "Факт" };
+  const operational = formatTat(ev.startAt, ev.endAt);
+  if (operational !== "—") return { label: operational, source: "Опер." };
+  return { label: formatTat(ev.budgetStartAt, ev.budgetEndAt), source: "Бюдж." };
+}
+
+function hangarSummaryLabel(ev: EventRow) {
+  const placements = ev.placements ?? [];
+  const names = placements.length
+    ? placements.map((p) => compactHangarLabel(p.hangar?.name ?? "") || compactHangarLabel((p.layout as any)?.hangar?.name ?? ""))
+    : [compactHangarLabel(ev.hangar?.name)];
+  return Array.from(new Set(names.filter(Boolean))).join(" → ");
+}
+
+function standSummaryLabel(ev: EventRow) {
+  const placements = ev.placements ?? [];
+  const names = placements.length
+    ? placements.map((p) => compactStandLabel(p.stand?.code ?? ""))
+    : [compactStandLabel(ev.reservation?.stand?.code)];
+  return Array.from(new Set(names.filter(Boolean))).join(" → ");
+}
+
+function aircraftAxisSubLabel(ev: EventRow) {
+  return [ev.eventType?.name, hangarSummaryLabel(ev), standSummaryLabel(ev)].filter(Boolean).join(" • ");
+}
+
+function shortEventName(ev: EventRow) {
+  return ev.eventType?.name || ev.title;
+}
+
+function aircraftBarText(ev: EventRow, width: number) {
+  const tat = preferredTat(ev);
+  const showFull = width >= 80;
+  return { tat, parts: [showFull ? ev.title : ""].filter(Boolean) };
+}
+
+function hangarBarText(ev: EventRow, width: number) {
+  const tat = preferredTat(ev);
+  const fullName = width >= 230 ? ev.title : "";
+  return { tat, parts: [eventAircraftLabel(ev), shortEventName(ev), fullName].filter(Boolean) };
+}
+
+function BarLabel(props: { tat: { label: string; source: string }; parts: string[] }) {
+  return (
+    <span className="barLabel">
+      <strong className="barTat" title={props.tat.source}>{props.tat.label}</strong>
+      {props.parts.length ? <span className="barText">{props.parts.join(" • ")}</span> : null}
+    </span>
+  );
+}
+
+function eventTooltip(ev: EventRow) {
+  const base = `${eventAircraftLabel(ev)} • ${ev.title}`;
+  const period = `${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format("DD.MM.YYYY HH:mm")}`;
+  const place = placementLabel(ev);
+  const plan = ev.budgetStartAt && ev.budgetEndAt ? `\nПлан: ${formatExportDate(ev.budgetStartAt)} – ${formatExportDate(ev.budgetEndAt)}` : "";
+  const fact = ev.actualStartAt && ev.actualEndAt ? `\nФакт: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}` : "";
+  const prefix = ev.segmentKey ? `Этап: ${place}\n` : "";
+  return `${prefix}${base}\n${period}${plan}${fact}`;
+}
+
+function eventSegmentsForHangarRows(ev: EventRow): EventRow[] {
+  if (!ev.placements?.length) return [ev];
+  return ev.placements.map((p, idx) => ({
+    ...ev,
+    segmentKey: `${ev.id}:placement:${p.id ?? idx}`,
+    startAt: p.startAt,
+    endAt: p.endAt,
+    budgetStartAt: p.budgetStartAt ?? null,
+    budgetEndAt: p.budgetEndAt ?? null,
+    actualStartAt: p.actualStartAt ?? null,
+    actualEndAt: p.actualEndAt ?? null,
+    placements: undefined,
+    hangar: p.hangar ?? (p.hangarId ? ({ id: p.hangarId, name: ev.hangar?.name ?? "Ангар" } as any) : null),
+    layout: p.layout ?? (p.layoutId ? ({ id: p.layoutId, name: ev.layout?.name ?? "Вариант", hangarId: p.hangarId ?? undefined } as any) : null),
+    reservation: p.stand ? { stand: p.stand } : null
+  }));
 }
 
 function isValidDateInput(v: string) {
@@ -1042,7 +1296,21 @@ export function GanttView() {
       notes: "",
       hangarId: "",
       layoutId: "",
-      standId: ""
+      standId: "",
+      multiPlacement: false,
+      placements: [
+        {
+          startAtLocal: dayjs().add(1, "day").hour(9).minute(0).second(0).format("YYYY-MM-DDTHH:mm"),
+          endAtLocal: dayjs().add(3, "day").hour(18).minute(0).second(0).format("YYYY-MM-DDTHH:mm"),
+          budgetStartAtLocal: "",
+          budgetEndAtLocal: "",
+          actualStartAtLocal: "",
+          actualEndAtLocal: "",
+          hangarId: "",
+          layoutId: "",
+          standId: ""
+        }
+      ]
     };
     setDraft(d);
     setOriginal(d);
@@ -1054,6 +1322,7 @@ export function GanttView() {
   const openEditorForExisting = (ev: EventRow) => {
     const startAtLocal = toInputLocal(ev.startAt);
     const endAtLocal = toInputLocal(ev.endAt);
+    const placements = placementDraftFromEvent(ev);
     const d: EditorDraft = {
       id: ev.id,
       title: ev.title,
@@ -1070,7 +1339,9 @@ export function GanttView() {
       notes: (ev as any)?.notes ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
-      standId: (ev.reservation?.stand as any)?.id ?? ""
+      standId: (ev.reservation?.stand as any)?.id ?? "",
+      multiPlacement: placements.length > 1,
+      placements
     };
     setDraft(d);
     setOriginal(d);
@@ -1085,6 +1356,7 @@ export function GanttView() {
   const openEditorForCopy = (ev: EventRow) => {
     const startAtLocal = toInputLocal(ev.startAt);
     const endAtLocal = toInputLocal(ev.endAt);
+    const placements = placementDraftFromEvent(ev);
     const d: EditorDraft = {
       title: `${ev.title} (копия)`,
       level: ev.level,
@@ -1100,7 +1372,9 @@ export function GanttView() {
       notes: (ev as any)?.notes ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
-      standId: (ev.reservation?.stand as any)?.id ?? ""
+      standId: (ev.reservation?.stand as any)?.id ?? "",
+      multiPlacement: placements.length > 1,
+      placements: placements.map((p) => ({ ...p, id: undefined }))
     };
     setDraft(d);
     setOriginal(d);
@@ -1113,8 +1387,9 @@ export function GanttView() {
   // Унифицированный выбор события: в обычном режиме — редактирование,
   // в режиме копирования — открытие мастера копии.
   const pickEvent = (ev: EventRow) => {
-    if (copySelectMode) openEditorForCopy(ev);
-    else openEditorForExisting(ev);
+    const fullEvent = events.find((candidate) => candidate.id === ev.id) ?? ev;
+    if (copySelectMode) openEditorForCopy(fullEvent);
+    else openEditorForExisting(fullEvent);
   };
 
   const layoutsForEditorQ = useQuery({
@@ -1123,10 +1398,20 @@ export function GanttView() {
     enabled: !!draft?.hangarId
   });
 
+  const allLayoutsQ = useQuery({
+    queryKey: ["ref", "layouts", "all"],
+    queryFn: () => apiGet<Layout[]>("/api/ref/layouts")
+  });
+
   const standsForEditorQ = useQuery({
     queryKey: ["ref", "stands", "editor", draft?.layoutId ?? ""],
     queryFn: () => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(draft!.layoutId)}`),
     enabled: !!draft?.layoutId
+  });
+
+  const allStandsQ = useQuery({
+    queryKey: ["ref", "stands", "all"],
+    queryFn: () => apiGet<Stand[]>("/api/ref/stands")
   });
 
   const historyQ = useQuery({
@@ -1137,6 +1422,18 @@ export function GanttView() {
 
   const computeDraftDiff = (a: EditorDraft | null, b: EditorDraft | null) => {
     if (!a || !b) return [];
+    const normalizePlacementsForDiff = (items: PlacementDraft[]) =>
+      items.map((p) => ({
+        startAtLocal: p.startAtLocal,
+        endAtLocal: p.endAtLocal,
+        budgetStartAtLocal: p.budgetStartAtLocal,
+        budgetEndAtLocal: p.budgetEndAtLocal,
+        actualStartAtLocal: p.actualStartAtLocal,
+        actualEndAtLocal: p.actualEndAtLocal,
+        hangarId: p.hangarId,
+        layoutId: p.layoutId,
+        standId: p.standId
+      }));
     const keys: Array<keyof EditorDraft> = [
       "title",
       "level",
@@ -1152,11 +1449,16 @@ export function GanttView() {
       "notes",
       "hangarId",
       "layoutId",
-      "standId"
+      "standId",
+      "multiPlacement"
     ];
-    return keys
+    const diffs = keys
       .filter((k) => (a[k] ?? "") !== (b[k] ?? ""))
       .map((k) => ({ field: String(k), from: a[k] ?? "", to: b[k] ?? "" }));
+    if (JSON.stringify(normalizePlacementsForDiff(a.placements)) !== JSON.stringify(normalizePlacementsForDiff(b.placements))) {
+      diffs.push({ field: "placements", from: "изменено", to: "изменено" });
+    }
+    return diffs;
   };
 
   const requestSaveWithReason = (what: "event" | "reserve") => {
@@ -1207,6 +1509,21 @@ export function GanttView() {
       if (actualStartAt && actualEndAt && dayjs(actualEndAt).valueOf() <= dayjs(actualStartAt).valueOf()) {
         throw new Error("Окончание фактического периода должно быть позже начала");
       }
+      const placementsPayload = draft.multiPlacement
+        ? placementApiPayload(draft.placements)
+        : placementApiPayload([
+            {
+              startAtLocal: draft.startAtLocal,
+              endAtLocal: draft.endAtLocal,
+              budgetStartAtLocal: draft.budgetStartAtLocal,
+              budgetEndAtLocal: draft.budgetEndAtLocal,
+              actualStartAtLocal: draft.actualStartAtLocal,
+              actualEndAtLocal: draft.actualEndAtLocal,
+              hangarId: draft.hangarId,
+              layoutId: draft.layoutId,
+              standId: draft.standId
+            }
+          ]);
 
       const reason = changeReason.trim();
       const payload = {
@@ -1223,6 +1540,7 @@ export function GanttView() {
         actualEndAt,
         hangarId: draft.hangarId || null,
         layoutId: draft.layoutId || null,
+        placements: placementsPayload,
         notes: draft.notes?.trim() ? draft.notes : null,
         ...(reason ? { changeReason: reason } : {})
       };
@@ -1684,7 +2002,10 @@ export function GanttView() {
       return filterEventTypeIds.includes(String(id));
     };
 
-    const visible = events.filter((e) => inSelected(e) && byTypeFilter(e) && byOperatorFilter(e) && byAircraftFilter(e) && byEventTypeFilter(e));
+    const visible = events
+      .filter((e) => byTypeFilter(e) && byOperatorFilter(e) && byAircraftFilter(e) && byEventTypeFilter(e))
+      .flatMap(eventSegmentsForHangarRows)
+      .filter((e) => inSelected(e));
     const activeVisible = visible.filter((e) => e.status !== "CANCELLED");
     const cancelledVisible = visible.filter((e) => e.status === "CANCELLED");
 
@@ -1711,7 +2032,9 @@ export function GanttView() {
         const meta = dndStandById.get(sid);
         const layoutId = meta?.layoutId ?? String((e.layout as any)?.id ?? "");
         const hangarId = meta?.hangarId ?? hid;
-        const label = meta ? `${meta.hangarName} / ${meta.code}` : `${hname} / ${scode}`;
+        const label = meta
+          ? `${compactHangarLabel(meta.hangarName)} / ${compactStandLabel(meta.code)}`
+          : `${compactHangarLabel(hname)} / ${compactStandLabel(scode)}`;
         const rec = byStandId.get(sid) ?? { standId: sid, layoutId, hangarId, label, events: [] as EventRow[] };
         rec.events.push(e);
         byStandId.set(sid, rec);
@@ -1740,7 +2063,7 @@ export function GanttView() {
       .sort((a, b) => a.hangarName.localeCompare(b.hangarName, "ru"));
 
     for (const h of hangarList) {
-      rows.push({ key: `hangar:${h.hid}:no-stand`, label: `${h.hangarName} / Без места`, kind: "hangarNoStand", hangarId: h.hid, events: h.events });
+      rows.push({ key: `hangar:${h.hid}:no-stand`, label: `${compactHangarLabel(h.hangarName)} / Без места`, kind: "hangarNoStand", hangarId: h.hid, events: h.events });
     }
 
     // Добавим пустые стоянки как drop-зоны только в режиме DnD
@@ -1751,7 +2074,7 @@ export function GanttView() {
             standId: s.id,
             layoutId: s.layoutId,
             hangarId: s.hangarId,
-            label: `${s.hangarName} / ${s.code}`,
+            label: `${compactHangarLabel(s.hangarName)} / ${compactStandLabel(s.code)}`,
             events: []
           });
         }
@@ -1805,13 +2128,54 @@ export function GanttView() {
     hangarStandRowsRef.current = hangarStandRows as any[];
   }, [hangarStandRows]);
 
+  const placementLinks = useMemo(() => {
+    if (groupMode !== "HANGAR_STAND") return [];
+    const bySegmentKey = new Map<string, { rowIdx: number; ev: EventRow }>();
+    hangarStandRows.forEach((row, rowIdx) => {
+      row.events.forEach((p) => {
+        if (p.ev.segmentKey) bySegmentKey.set(p.ev.segmentKey, { rowIdx, ev: p.ev });
+      });
+    });
+    const links: Array<{ key: string; x1: number; y1: number; x2: number; y2: number; color: string }> = [];
+    const rowH = 44;
+    for (const ev of events) {
+      const placements = ev.placements ?? [];
+      if (placements.length < 2) continue;
+      const sorted = [...placements].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || Date.parse(a.startAt) - Date.parse(b.startAt));
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const a = sorted[i]!;
+        const b = sorted[i + 1]!;
+        const ak = `${ev.id}:placement:${a.id ?? i}`;
+        const bk = `${ev.id}:placement:${b.id ?? i + 1}`;
+        const ar = bySegmentKey.get(ak);
+        const br = bySegmentKey.get(bk);
+        if (!ar || !br) continue;
+        const ag = calcBarXW({ startAt: a.startAt, endAt: a.endAt, from, dayWidth, canvasWidth });
+        const bg = calcBarXW({ startAt: b.startAt, endAt: b.endAt, from, dayWidth, canvasWidth });
+        if (!ag || !bg) continue;
+        links.push({
+          key: `${ak}->${bk}`,
+          x1: ag.x + ag.w,
+          y1: ar.rowIdx * rowH + rowH / 2,
+          x2: bg.x,
+          y2: br.rowIdx * rowH + rowH / 2,
+          color: aircraftTypeMarkColor(ev, aircraftPaletteMap)
+        });
+      }
+    }
+    return links;
+  }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap]);
+
   const exportEvents = useMemo(() => {
     const getHangarId = (e: EventRow) => (e.hangar as any)?.id ?? (e.layout as any)?.hangarId ?? "";
     return events.filter((e) => {
       const hid = getHangarId(e);
       const isUnassigned = !hid;
       const okHangar =
-        selectedHangarIds.length === 0 || selectedHangarIds.includes(hid) || isUnassigned;
+        selectedHangarIds.length === 0 ||
+        selectedHangarIds.includes(hid) ||
+        (e.placements ?? []).some((p) => selectedHangarIds.includes(String(p.hangarId ?? (p.hangar as any)?.id ?? ""))) ||
+        isUnassigned;
       const tid =
         (e.aircraft as any)?.typeId ??
         (e.aircraft as any)?.type?.id ??
@@ -1843,12 +2207,15 @@ export function GanttView() {
 
   const aircraftRows = useMemo(
     () => [
-      ...visibleEvents.map((ev) => ({
-        key: ev.id,
-        label: eventAircraftLabel(ev),
-        subLabel: formatRowLabel(ev) || ev.title,
-        events: [{ ev, overlapToMs: null } as PlacedEvent]
-      })),
+      ...visibleEvents.map((ev) => {
+        const segments = eventSegmentsForHangarRows(ev);
+        return {
+          key: ev.id,
+          label: eventAircraftLabel(ev),
+          subLabel: aircraftAxisSubLabel(ev) || formatRowLabel(ev) || ev.title,
+          events: segments.map((segment) => ({ ev: segment, overlapToMs: null } as PlacedEvent))
+        };
+      }),
       ...cancelledAircraftRows
     ],
     [visibleEvents, cancelledAircraftRows]
@@ -1887,6 +2254,7 @@ export function GanttView() {
         const budgetHours = tatHours(ev.budgetStartAt, ev.budgetEndAt);
         const actualHours = tatHours(ev.actualStartAt, ev.actualEndAt);
         const towSegments = ev.towSegments ?? [];
+        const placements = ev.placements ?? [];
         return {
           "Название": ev.title,
           "Борт": eventAircraftLabel(ev),
@@ -1918,6 +2286,13 @@ export function GanttView() {
           "Вариант размещения": ev.layout?.name ?? "—",
           "Место": ev.reservation?.stand?.code ?? "—",
           "Есть резерв": ev.reservation?.stand ? "Да" : "Нет",
+          "Этапов размещения": placements.length || 1,
+          "Интервалы размещения": placements
+            .map((p, idx) => {
+              const place = p.stand?.code ?? p.layout?.name ?? p.hangar?.name ?? "без места";
+              return `${idx + 1}. ${formatExportDate(p.startAt)} – ${formatExportDate(p.endAt)} · ${place}`;
+            })
+            .join("; "),
           "Буксировок": towSegments.length,
           "Интервалы буксировок": towSegments
             .map((t) => `${formatExportDate(t.startAt)} – ${formatExportDate(t.endAt)}`)
@@ -2019,7 +2394,7 @@ export function GanttView() {
             const w = Math.max(2, right - x);
             const fill = ev.status === "CANCELLED" ? "#94a3b8" : aircraftTypeMarkColor(ev, aircraftPaletteMap);
             const stroke = ev.status === "DONE" ? "#16a34a" : ev.status === "CANCELLED" ? "#64748b" : "#0f172a";
-            const label = `${eventAircraftLabel(ev)} · ${ev.title}`;
+            const label = compactBarLabel(ev);
             const actualSvg =
               ev.actualStartAt && ev.actualEndAt
                 ? (() => {
@@ -2095,6 +2470,119 @@ export function GanttView() {
     { label: "+3 мес", days: 90 },
     { label: "+год", days: 365 }
   ];
+
+  const layoutsByHangar = useMemo(() => {
+    const m = new Map<string, Layout[]>();
+    for (const l of allLayoutsQ.data ?? []) {
+      const arr = m.get(l.hangarId) ?? [];
+      arr.push(l);
+      m.set(l.hangarId, arr);
+    }
+    return m;
+  }, [allLayoutsQ.data]);
+
+  const standsByLayout = useMemo(() => {
+    const m = new Map<string, Stand[]>();
+    for (const s of allStandsQ.data ?? []) {
+      const arr = m.get(s.layoutId) ?? [];
+      arr.push(s);
+      m.set(s.layoutId, arr);
+    }
+    return m;
+  }, [allStandsQ.data]);
+
+  const setDraftPlacement = (idx: number, patch: Partial<PlacementDraft>) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const next = d.placements.map((p, i) => (i === idx ? { ...p, ...patch } : p));
+      return { ...d, placements: next };
+    });
+  };
+
+  const setMultiPlacementMode = (enabled: boolean) => {
+    setDraft((d) => {
+      if (!d) return d;
+      if (enabled) {
+        const first = d.placements[0] ?? {
+          startAtLocal: d.startAtLocal,
+          endAtLocal: d.endAtLocal,
+              budgetStartAtLocal: d.budgetStartAtLocal,
+              budgetEndAtLocal: d.budgetEndAtLocal,
+              actualStartAtLocal: d.actualStartAtLocal,
+              actualEndAtLocal: d.actualEndAtLocal,
+          hangarId: d.hangarId,
+          layoutId: d.layoutId,
+          standId: d.standId
+        };
+        return {
+          ...d,
+          multiPlacement: true,
+          placements: [{
+            ...first,
+            startAtLocal: d.startAtLocal,
+            endAtLocal: d.endAtLocal,
+            budgetStartAtLocal: d.budgetStartAtLocal,
+            budgetEndAtLocal: d.budgetEndAtLocal,
+            actualStartAtLocal: d.actualStartAtLocal,
+            actualEndAtLocal: d.actualEndAtLocal
+          }]
+        };
+      }
+      const first = d.placements[0];
+      return {
+        ...d,
+        multiPlacement: false,
+        hangarId: first?.hangarId ?? d.hangarId,
+        layoutId: first?.layoutId ?? d.layoutId,
+        standId: first?.standId ?? d.standId,
+        placements: [
+          {
+            startAtLocal: d.startAtLocal,
+            endAtLocal: d.endAtLocal,
+            budgetStartAtLocal: first?.budgetStartAtLocal ?? d.budgetStartAtLocal,
+            budgetEndAtLocal: first?.budgetEndAtLocal ?? d.budgetEndAtLocal,
+            actualStartAtLocal: first?.actualStartAtLocal ?? d.actualStartAtLocal,
+            actualEndAtLocal: first?.actualEndAtLocal ?? d.actualEndAtLocal,
+            hangarId: first?.hangarId ?? d.hangarId,
+            layoutId: first?.layoutId ?? d.layoutId,
+            standId: first?.standId ?? d.standId
+          }
+        ]
+      };
+    });
+  };
+
+  const addPlacementDraft = () => {
+    setDraft((d) => {
+      if (!d) return d;
+      const prev = d.placements[d.placements.length - 1];
+      const startAtLocal = prev?.endAtLocal || d.startAtLocal;
+      const endAtLocal = dayjs(startAtLocal).add(12, "hour").format("YYYY-MM-DDTHH:mm");
+      return {
+        ...d,
+        multiPlacement: true,
+        placements: [...d.placements, {
+          startAtLocal,
+          endAtLocal,
+          budgetStartAtLocal: "",
+          budgetEndAtLocal: "",
+          actualStartAtLocal: "",
+          actualEndAtLocal: "",
+          hangarId: "",
+          layoutId: "",
+          standId: ""
+        }]
+      };
+    });
+  };
+
+  const removePlacementDraft = (idx: number) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const next = d.placements.filter((_p, i) => i !== idx);
+      return { ...d, placements: next.length ? next : d.placements };
+    });
+  };
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -2651,6 +3139,28 @@ export function GanttView() {
           <div className="ganttRightCol">
             <div className="ganttRightScroll" ref={bodyScrollRef} onScroll={onBodyScroll}>
               <div className="ganttRightInner" style={{ width: canvasWidth }}>
+                {groupMode === "HANGAR_STAND" && placementLinks.length > 0 ? (
+                  <svg
+                    className="placementLinkLayer"
+                    width={canvasWidth}
+                    height={Math.max(44, hangarStandRows.length * 44)}
+                    aria-hidden="true"
+                  >
+                    {placementLinks.map((l) => (
+                      <line
+                        key={l.key}
+                        x1={l.x1}
+                        y1={l.y1}
+                        x2={l.x2}
+                        y2={l.y2}
+                        stroke={l.color}
+                        strokeWidth={2}
+                        strokeDasharray="5 5"
+                        opacity={0.75}
+                      />
+                    ))}
+                  </svg>
+                ) : null}
                 {groupMode === "AIRCRAFT"
                   ? aircraftRows.map((r) => (
                       <div className="ganttCanvas" key={r.key} style={{ width: canvasWidth }}>
@@ -2664,7 +3174,7 @@ export function GanttView() {
                           const visual = barVisualStyle(ev.status, color);
 
                           return (
-                            <Fragment key={ev.id}>
+                            <Fragment key={ev.segmentKey ?? ev.id}>
                               {renderActualTatStripe({ ev, from, dayWidth, canvasWidth })}
                               <div
                                 className="bar"
@@ -2676,13 +3186,14 @@ export function GanttView() {
                                   ...barPaddingStyle(w)
                                 }}
                                 onClick={() => pickEvent(ev)}
-                                title={`${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format(
-                                  "DD.MM.YYYY HH:mm"
-                                )}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
+                                title={`${eventTooltip(ev)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
                               >
                                 {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
+                                {renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
                                 {canShowBarTitle(w) ? (
-                                  <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>{ev.title}</span>
+                                  <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
+                                    <BarLabel {...aircraftBarText(ev, w)} />
+                                  </span>
                                 ) : null}
                               </div>
                             </Fragment>
@@ -2828,9 +3339,7 @@ export function GanttView() {
                                 if (dndActive) return;
                                 pickEvent(ev);
                               }}
-                              title={`${eventAircraftLabel(ev)} • ${ev.title}\n${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(
-                                ev.endAt
-                              ).format("DD.MM.YYYY HH:mm")}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
+                              title={`${eventTooltip(ev)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
                             >
                               {/* Ручки ресайза (чтобы "по краям" работало стабильно) */}
                               {dndActive ? (
@@ -2919,7 +3428,7 @@ export function GanttView() {
                               {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
                               {canShowBarTitle(w) ? (
                                 <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
-                                  {eventAircraftLabel(ev)} • {ev.title}
+                                  <BarLabel {...hangarBarText(ev, w)} />
                                 </span>
                               ) : null}
                               </div>
@@ -2988,7 +3497,7 @@ export function GanttView() {
               </header>
               <div className="evCardBody">
                 <div className="evForm">
-                  <label className="evField evFieldWide">
+                  <label className="evField">
                     <span className="evFieldLabel">Название</span>
                     <input
                       className="evInput"
@@ -3109,7 +3618,7 @@ export function GanttView() {
                   </label>
                   <label className="evField">
                     <span className="evFieldLabel">TAT</span>
-                    <input className="evInput evInputReadonly" value={formatTat(draft.startAtLocal, draft.endAtLocal)} readOnly />
+                    <input className="evInput evInputReadonly" value={formatTatDetailed(draft.startAtLocal, draft.endAtLocal)} readOnly />
                   </label>
 
                   <div className="evPeriodName">Бюджетный</div>
@@ -3133,7 +3642,7 @@ export function GanttView() {
                   </label>
                   <label className="evField">
                     <span className="evFieldLabel">TAT</span>
-                    <input className="evInput evInputReadonly" value={formatTat(draft.budgetStartAtLocal, draft.budgetEndAtLocal)} readOnly />
+                    <input className="evInput evInputReadonly" value={formatTatDetailed(draft.budgetStartAtLocal, draft.budgetEndAtLocal)} readOnly />
                   </label>
 
                   <div className="evPeriodName">Фактический</div>
@@ -3157,7 +3666,7 @@ export function GanttView() {
                   </label>
                   <label className="evField">
                     <span className="evFieldLabel">TAT</span>
-                    <input className="evInput evInputReadonly" value={formatTat(draft.actualStartAtLocal, draft.actualEndAtLocal)} readOnly />
+                    <input className="evInput evInputReadonly" value={formatTatDetailed(draft.actualStartAtLocal, draft.actualEndAtLocal)} readOnly />
                   </label>
                 </div>
               </div>
@@ -3171,7 +3680,7 @@ export function GanttView() {
                 </div>
               </header>
               <div className="evCardBody">
-                <div className="evForm">
+                <div className="evLocationGrid">
                   <label className="evField">
                     <span className="evFieldLabel">Ангар</span>
                     <select
@@ -3204,7 +3713,7 @@ export function GanttView() {
                       ))}
                     </select>
                   </label>
-                  <label className="evField evFieldWide">
+                  <label className="evField">
                     <span className="evFieldLabel">Место</span>
                     <select
                       className="evInput"
@@ -3221,18 +3730,142 @@ export function GanttView() {
                     </select>
                   </label>
                 </div>
+                <label className="evCheckRow">
+                  <input
+                    type="checkbox"
+                    checked={draft.multiPlacement}
+                    onChange={(e) => setMultiPlacementMode(e.target.checked)}
+                  />
+                  <span>Событие в нескольких ангарах</span>
+                </label>
+                {draft.multiPlacement ? (
+                  <div className="evPlacementList">
+                    {draft.placements.map((p, idx) => {
+                      const layoutOptions = p.hangarId ? layoutsByHangar.get(p.hangarId) ?? [] : [];
+                      const standOptions = p.layoutId ? standsByLayout.get(p.layoutId) ?? [] : [];
+                      const prev = draft.placements[idx - 1];
+                      const towHours =
+                        prev && dayjs(p.startAtLocal).isValid() && dayjs(prev.endAtLocal).isValid()
+                          ? Math.max(0, dayjs(p.startAtLocal).diff(dayjs(prev.endAtLocal), "minute")) / 60
+                          : null;
+                      return (
+                        <div className="evPlacementItem" key={p.id ?? idx}>
+                          <div className="evPlacementHead">
+                            <strong>Этап {idx + 1}</strong>
+                            {towHours != null && idx > 0 ? <span className="muted">Буксировка: {Number(towHours.toFixed(1))} ч</span> : null}
+                            <button className="btn" type="button" onClick={() => removePlacementDraft(idx)} disabled={draft.placements.length <= 1}>
+                              Удалить
+                            </button>
+                          </div>
+                          <div className="evPlacementBody">
+                            <div className="evPeriodGrid">
+                              <div className="evPeriodName">Оперативный</div>
+                              <label className="evField">
+                                <span className="evFieldLabel">Дата начала</span>
+                                <input className="evInput" type="datetime-local" value={p.startAtLocal} onChange={(e) => setDraftPlacement(idx, { startAtLocal: e.target.value })} />
+                              </label>
+                              <label className="evField">
+                                <span className="evFieldLabel">Дата окончания</span>
+                                <input className="evInput" type="datetime-local" value={p.endAtLocal} onChange={(e) => setDraftPlacement(idx, { endAtLocal: e.target.value })} />
+                              </label>
+                              <label className="evField">
+                                <span className="evFieldLabel">TAT</span>
+                                <input className="evInput evInputReadonly" value={formatTatDetailed(p.startAtLocal, p.endAtLocal)} readOnly />
+                              </label>
+
+                              <div className="evPeriodName">Бюджетный</div>
+                              <label className="evField">
+                                <span className="evFieldLabel">Дата начала</span>
+                                <input className="evInput" type="datetime-local" value={p.budgetStartAtLocal} onChange={(e) => setDraftPlacement(idx, { budgetStartAtLocal: e.target.value })} />
+                              </label>
+                              <label className="evField">
+                                <span className="evFieldLabel">Дата окончания</span>
+                                <input className="evInput" type="datetime-local" value={p.budgetEndAtLocal} onChange={(e) => setDraftPlacement(idx, { budgetEndAtLocal: e.target.value })} />
+                              </label>
+                              <label className="evField">
+                                <span className="evFieldLabel">TAT</span>
+                                <input className="evInput evInputReadonly" value={formatTatDetailed(p.budgetStartAtLocal, p.budgetEndAtLocal)} readOnly />
+                              </label>
+
+                              <div className="evPeriodName">Фактический</div>
+                              <label className="evField">
+                                <span className="evFieldLabel">Дата начала</span>
+                                <input className="evInput" type="datetime-local" value={p.actualStartAtLocal} onChange={(e) => setDraftPlacement(idx, { actualStartAtLocal: e.target.value })} />
+                              </label>
+                              <label className="evField">
+                                <span className="evFieldLabel">Дата окончания</span>
+                                <input className="evInput" type="datetime-local" value={p.actualEndAtLocal} onChange={(e) => setDraftPlacement(idx, { actualEndAtLocal: e.target.value })} />
+                              </label>
+                              <label className="evField">
+                                <span className="evFieldLabel">TAT</span>
+                                <input className="evInput evInputReadonly" value={formatTatDetailed(p.actualStartAtLocal, p.actualEndAtLocal)} readOnly />
+                              </label>
+                            </div>
+                            <div className="evLocationGrid">
+                            <label className="evField">
+                              <span className="evFieldLabel">Ангар</span>
+                              <select
+                                className="evInput"
+                                value={p.hangarId}
+                                onChange={(e) => setDraftPlacement(idx, { hangarId: e.target.value, layoutId: "", standId: "" })}
+                              >
+                                <option value="">— не задан —</option>
+                                {(hangarsQ.data ?? []).map((h) => (
+                                  <option key={h.id} value={h.id}>{h.name}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="evField">
+                              <span className="evFieldLabel">Вариант</span>
+                              <select
+                                className="evInput"
+                                value={p.layoutId}
+                                onChange={(e) => setDraftPlacement(idx, { layoutId: e.target.value, standId: "" })}
+                                disabled={!p.hangarId}
+                              >
+                                <option value="">— не задан —</option>
+                                {layoutOptions.map((l) => (
+                                  <option key={l.id} value={l.id}>{l.name}{l.capacitySummary ? ` — ${l.capacitySummary}` : ""}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="evField">
+                              <span className="evFieldLabel">Место</span>
+                              <select
+                                className="evInput"
+                                value={p.standId}
+                                onChange={(e) => setDraftPlacement(idx, { standId: e.target.value })}
+                                disabled={!p.layoutId}
+                              >
+                                <option value="">— не выбрано —</option>
+                                {standOptions.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.code} • {s.name}</option>
+                                ))}
+                              </select>
+                            </label>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <button className="btn" type="button" onClick={addPlacementDraft}>
+                      Добавить этап
+                    </button>
+                    <div className="muted small">Сохраните событие, чтобы применить этапы и пересчитать резервы мест.</div>
+                  </div>
+                ) : null}
                 <div className="evInlineActions">
                   <button
                     className="btn"
                     onClick={() => unreserveM.mutate()}
-                    disabled={!draft.id || !draft.standId || unreserveM.isPending}
+                    disabled={!draft.id || !draft.standId || draft.multiPlacement || unreserveM.isPending}
                   >
                     Снять резерв
                   </button>
                   <button
                     className="btn btnPrimary"
                     onClick={() => requestSaveWithReason("reserve")}
-                    disabled={!draft.id || reserveM.isPending}
+                    disabled={!draft.id || draft.multiPlacement || reserveM.isPending}
                   >
                     Назначить место
                   </button>

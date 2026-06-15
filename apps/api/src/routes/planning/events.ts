@@ -67,6 +67,246 @@ function diffEvent(before: any, after: any) {
   return changes;
 }
 
+const placementInclude = {
+  hangar: true,
+  layout: true,
+  stand: true,
+  reservation: { include: { stand: true } }
+};
+
+const eventInclude: Prisma.MaintenanceEventInclude = {
+  aircraft: { include: { operator: true, type: true } },
+  eventType: true,
+  hangar: true,
+  layout: true,
+  reservations: { include: { stand: true }, orderBy: [{ startAt: "asc" }] },
+  placements: { include: placementInclude, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
+  towSegments: { orderBy: [{ startAt: "asc" }] }
+};
+
+function serializeEvent(event: any) {
+  const reservations = event.reservations ?? [];
+  const placements = event.placements ?? [];
+  return {
+    ...event,
+    reservation: reservations[0] ?? null,
+    placements
+  };
+}
+
+function defaultPlacementFromEvent(event: any) {
+  const reservation = event.reservations?.[0] ?? event.reservation ?? null;
+  return {
+    startAt: reservation?.startAt ?? event.startAt,
+    endAt: reservation?.endAt ?? event.endAt,
+    budgetStartAt: event.budgetStartAt ?? null,
+    budgetEndAt: event.budgetEndAt ?? null,
+    actualStartAt: event.actualStartAt ?? null,
+    actualEndAt: event.actualEndAt ?? null,
+    hangarId: event.hangarId ?? event.layout?.hangarId ?? null,
+    layoutId: reservation?.layoutId ?? event.layoutId ?? null,
+    standId: reservation?.standId ?? null,
+    sortOrder: 0
+  };
+}
+
+const zPlacementInput = z.object({
+  id: zUuid.optional(),
+  startAt: zDateTime,
+  endAt: zDateTime,
+  budgetStartAt: zDateTime.nullable().optional(),
+  budgetEndAt: zDateTime.nullable().optional(),
+  actualStartAt: zDateTime.nullable().optional(),
+  actualEndAt: zDateTime.nullable().optional(),
+  hangarId: zUuid.nullable().optional(),
+  layoutId: zUuid.nullable().optional(),
+  standId: zUuid.nullable().optional(),
+  sortOrder: z.number().int().min(0).optional()
+});
+
+type PlacementInput = z.infer<typeof zPlacementInput>;
+
+function assertPlacementPeriods(placements: PlacementInput[], eventStart: Date, eventEnd: Date) {
+  const sorted = [...placements].sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+  for (let i = 0; i < sorted.length; i++) {
+    const p = sorted[i]!;
+    if (p.endAt <= p.startAt) throw new Error("Placement endAt must be after startAt");
+    if (Boolean(p.budgetStartAt) !== Boolean(p.budgetEndAt)) {
+      throw new Error("Placement budget period must have both dates");
+    }
+    if (p.budgetStartAt && p.budgetEndAt && p.budgetEndAt <= p.budgetStartAt) {
+      throw new Error("Placement budgetEndAt must be after budgetStartAt");
+    }
+    if (Boolean(p.actualStartAt) !== Boolean(p.actualEndAt)) {
+      throw new Error("Placement actual period must have both dates");
+    }
+    if (p.actualStartAt && p.actualEndAt && p.actualEndAt <= p.actualStartAt) {
+      throw new Error("Placement actualEndAt must be after actualStartAt");
+    }
+    if (p.startAt < eventStart || p.endAt > eventEnd) {
+      throw new Error("Placement interval must be within event startAt/endAt");
+    }
+    const prev = sorted[i - 1];
+    if (prev && prev.endAt > p.startAt) {
+      throw new Error("Placement intervals must not overlap");
+    }
+  }
+}
+
+async function resolvePlacementLocation(tx: any, p: PlacementInput) {
+  let layoutId = p.layoutId ?? null;
+  let hangarId = p.hangarId ?? null;
+  let standId = p.standId ?? null;
+
+  if (standId) {
+    const stand = await tx.hangarStand.findUnique({
+      where: { id: standId },
+      include: { layout: { select: { id: true, hangarId: true } } }
+    });
+    if (!stand) throw new Error("Stand not found");
+    if (layoutId && stand.layoutId !== layoutId) throw new Error("Stand does not belong to selected layout");
+    layoutId = stand.layoutId;
+    hangarId = stand.layout.hangarId;
+  } else if (layoutId) {
+    const layout = await tx.hangarLayout.findUnique({
+      where: { id: layoutId },
+      select: { id: true, hangarId: true }
+    });
+    if (!layout) throw new Error("Layout not found");
+    if (hangarId && layout.hangarId !== hangarId) throw new Error("Layout does not belong to selected hangar");
+    hangarId = layout.hangarId;
+  }
+
+  return { hangarId, layoutId, standId };
+}
+
+async function assertPlacementConflicts(tx: any, params: {
+  sandboxId: string | null;
+  eventId: string;
+  hangarId: string | null;
+  layoutId: string | null;
+  standId: string | null;
+  startAt: Date;
+  endAt: Date;
+}) {
+  if (params.standId) {
+    const conflict = await tx.standReservation.findFirst({
+      where: {
+        sandboxId: params.sandboxId,
+        standId: params.standId,
+        eventId: { not: params.eventId },
+        startAt: { lt: params.endAt },
+        endAt: { gt: params.startAt },
+        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+      },
+      include: { event: { include: { aircraft: true } } }
+    });
+    if (conflict) {
+      throw new Error(`Место уже занято: ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`);
+    }
+  }
+
+  if (params.hangarId && params.layoutId) {
+    const layoutConflict = await tx.standReservation.findFirst({
+      where: {
+        sandboxId: params.sandboxId,
+        eventId: { not: params.eventId },
+        layoutId: { not: params.layoutId },
+        startAt: { lt: params.endAt },
+        endAt: { gt: params.startAt },
+        layout: { hangarId: params.hangarId },
+        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+      },
+      include: { layout: { select: { name: true } }, event: { include: { aircraft: true } } },
+      orderBy: [{ startAt: "asc" }]
+    });
+    if (layoutConflict) {
+      throw new Error(
+        `В этот период в ангаре уже используется другая схема расстановки: ${layoutConflict.layout?.name ?? "другая схема"} (${layoutConflict.event.title}, ${eventAircraftLabel(layoutConflict.event)})`
+      );
+    }
+  }
+}
+
+async function replaceEventPlacements(tx: any, params: {
+  eventId: string;
+  sandboxId: string | null;
+  eventStart: Date;
+  eventEnd: Date;
+  placements: PlacementInput[];
+}) {
+  const placements = params.placements.length
+    ? [...params.placements].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.startAt.getTime() - b.startAt.getTime())
+    : [{
+        startAt: params.eventStart,
+        endAt: params.eventEnd,
+        budgetStartAt: null,
+        budgetEndAt: null,
+        actualStartAt: null,
+        actualEndAt: null,
+        hangarId: null,
+        layoutId: null,
+        standId: null,
+        sortOrder: 0
+      }];
+
+  assertPlacementPeriods(placements, params.eventStart, params.eventEnd);
+
+  await tx.standReservation.deleteMany({ where: { eventId: params.eventId } });
+  await tx.eventPlacement.deleteMany({ where: { eventId: params.eventId } });
+
+  let firstLocation: { hangarId: string | null; layoutId: string | null } = { hangarId: null, layoutId: null };
+  for (const [idx, p] of placements.entries()) {
+    const location = await resolvePlacementLocation(tx, p);
+    if (idx === 0) firstLocation = { hangarId: location.hangarId, layoutId: location.layoutId };
+    await assertPlacementConflicts(tx, {
+      sandboxId: params.sandboxId,
+      eventId: params.eventId,
+      hangarId: location.hangarId,
+      layoutId: location.layoutId,
+      standId: location.standId,
+      startAt: p.startAt,
+      endAt: p.endAt
+    });
+
+    const placement = await tx.eventPlacement.create({
+      data: {
+        eventId: params.eventId,
+        sandboxId: params.sandboxId,
+        startAt: p.startAt,
+        endAt: p.endAt,
+        budgetStartAt: p.budgetStartAt ?? null,
+        budgetEndAt: p.budgetEndAt ?? null,
+        actualStartAt: p.actualStartAt ?? null,
+        actualEndAt: p.actualEndAt ?? null,
+        hangarId: location.hangarId,
+        layoutId: location.layoutId,
+        standId: location.standId,
+        sortOrder: idx
+      }
+    });
+
+    if (location.layoutId && location.standId) {
+      await tx.standReservation.create({
+        data: {
+          eventId: params.eventId,
+          placementId: placement.id,
+          sandboxId: params.sandboxId,
+          layoutId: location.layoutId,
+          standId: location.standId,
+          startAt: p.startAt,
+          endAt: p.endAt
+        }
+      });
+    }
+  }
+
+  await tx.maintenanceEvent.update({
+    where: { id: params.eventId },
+    data: { hangarId: firstLocation.hangarId, layoutId: firstLocation.layoutId }
+  });
+}
+
 export const eventsRoutes: FastifyPluginAsync = async (app) => {
   // Важно для производительности: UI будет запрашивать события по диапазону дат
   app.get("/", async (req) => {
@@ -86,29 +326,23 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const from = query.from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const to = query.to ?? new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
 
-    return await app.prisma.maintenanceEvent.findMany({
+    const rows = await app.prisma.maintenanceEvent.findMany({
       where: {
         ...sandboxFilter(req),
         status: { not: EventStatus.DELETED },
         ...(query.level ? { level: query.level } : {}),
-        ...(query.hangarId ? { hangarId: query.hangarId } : {}),
-        ...(query.layoutId ? { layoutId: query.layoutId } : {}),
+        ...(query.hangarId ? { OR: [{ hangarId: query.hangarId }, { placements: { some: { hangarId: query.hangarId } } }] } : {}),
+        ...(query.layoutId ? { OR: [{ layoutId: query.layoutId }, { placements: { some: { layoutId: query.layoutId } } }] } : {}),
         ...(query.aircraftId ? { aircraftId: query.aircraftId } : {}),
         ...(query.aircraftTypeId ? { aircraft: { typeId: query.aircraftTypeId } } : {}),
         // пересечение диапазонов [startAt, endAt)
         startAt: { lt: to },
         endAt: { gt: from }
       },
-      include: {
-        aircraft: { include: { operator: true, type: true } },
-        eventType: true,
-        hangar: true,
-        layout: true,
-        reservation: { include: { stand: true } },
-        towSegments: { orderBy: [{ startAt: "asc" }] }
-      },
+      include: eventInclude,
       orderBy: [{ startAt: "asc" }]
     });
+    return rows.map(serializeEvent);
   });
 
   // --- Буксировки (интервалы) ---
@@ -189,6 +423,89 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     });
     return { ok: true, deleted: 1 };
+  });
+
+  app.get("/:id/placements", async (req) => {
+    assertPermission(req, "events:read");
+    const eventId = zUuid.parse((req.params as any).id);
+    const event = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) },
+      select: { id: true }
+    });
+    if (!event) throw app.httpErrors.notFound("Event not found");
+    return await app.prisma.eventPlacement.findMany({
+      where: { eventId, ...sandboxFilter(req) },
+      include: placementInclude,
+      orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }]
+    });
+  });
+
+  app.put("/:id/placements", async (req) => {
+    assertCanWriteEvent(req);
+    const eventId = zUuid.parse((req.params as any).id);
+    const body = z
+      .object({
+        placements: z.array(zPlacementInput).min(1).max(50),
+        changeReason: z.string().trim().min(1).max(1000)
+      })
+      .parse(req.body);
+
+    const event = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) },
+      include: { placements: true }
+    });
+    if (!event) throw app.httpErrors.notFound("Event not found");
+
+    const sbId = sandboxIdFor(req);
+    const before = event.placements.map((p) => ({
+      startAt: p.startAt.toISOString(),
+      endAt: p.endAt.toISOString(),
+      budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
+      budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
+      actualStartAt: p.actualStartAt?.toISOString() ?? null,
+      actualEndAt: p.actualEndAt?.toISOString() ?? null,
+      hangarId: p.hangarId ?? null,
+      layoutId: p.layoutId ?? null,
+      standId: p.standId ?? null
+    }));
+
+    await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await replaceEventPlacements(tx, {
+        eventId,
+        sandboxId: sbId,
+        eventStart: event.startAt,
+        eventEnd: event.endAt,
+        placements: body.placements
+      });
+      await tx.maintenanceEventAudit.create({
+        data: {
+          eventId,
+          sandboxId: sbId,
+          action: EventAuditAction.UPDATE,
+          actor: getActor(req),
+          reason: body.changeReason,
+          changes: {
+            placements: {
+              from: before,
+              to: body.placements.map((p) => ({
+                startAt: p.startAt.toISOString(),
+                endAt: p.endAt.toISOString(),
+                budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
+                budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
+                actualStartAt: p.actualStartAt?.toISOString() ?? null,
+                actualEndAt: p.actualEndAt?.toISOString() ?? null,
+                hangarId: p.hangarId ?? null,
+                layoutId: p.layoutId ?? null,
+                standId: p.standId ?? null
+              }))
+            }
+          }
+        }
+      });
+    });
+
+    const reloaded = await app.prisma.maintenanceEvent.findUniqueOrThrow({ where: { id: eventId }, include: eventInclude });
+    return serializeEvent(reloaded);
   });
 
   // Импорт событий из Excel/CSV (UI парсит файл и отправляет строки в JSON).
@@ -606,6 +923,25 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             }
           });
 
+          if (!standCode) {
+            await tx.eventPlacement.create({
+              data: {
+                eventId: created.id,
+                sandboxId: sbId,
+                startAt,
+                endAt,
+                budgetStartAt,
+                budgetEndAt,
+                actualStartAt,
+                actualEndAt,
+                hangarId: hangar?.id ?? null,
+                layoutId: null,
+                standId: null,
+                sortOrder: 0
+              }
+            });
+          }
+
           if (standCode) {
             if (!hangar) throw new Error("Указано HangarStand, но не указан/не найден Hangar");
             const key = `${hangar.id}|${standCode}`;
@@ -631,8 +967,33 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               );
             }
 
+            const placement = await tx.eventPlacement.create({
+              data: {
+                eventId: created.id,
+                sandboxId: sbId,
+                startAt,
+                endAt,
+                budgetStartAt,
+                budgetEndAt,
+                actualStartAt,
+                actualEndAt,
+                hangarId: hangar.id,
+                layoutId: stand.layoutId,
+                standId: stand.id,
+                sortOrder: 0
+              }
+            });
+
             await tx.standReservation.create({
-              data: { eventId: created.id, layoutId: stand.layoutId, standId: stand.id, startAt, endAt, sandboxId: sbId }
+              data: {
+                eventId: created.id,
+                placementId: placement.id,
+                layoutId: stand.layoutId,
+                standId: stand.id,
+                startAt,
+                endAt,
+                sandboxId: sbId
+              }
             });
 
             await tx.maintenanceEvent.update({
@@ -684,6 +1045,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         actualEndAt: zDateTime.nullable().optional(),
         hangarId: zUuid.optional(),
         layoutId: zUuid.optional(),
+        placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
@@ -699,45 +1061,83 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: "aircraftId or virtualAircraft required" })
       .parse(req.body);
 
-    const { changeReason, ...data } = body;
+    const { changeReason, placements, ...data } = body;
     const sbId = sandboxIdFor(req);
-    const created = await app.prisma.maintenanceEvent.create({
-      data: {
-        ...data,
-        sandboxId: sbId,
-        aircraftId: data.aircraftId ?? (data.virtualAircraft ? null : undefined),
-        virtualAircraft: data.virtualAircraft ? (data.virtualAircraft as object) : undefined
-      }
-    });
+    const created = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const event = await tx.maintenanceEvent.create({
+        data: {
+          ...data,
+          sandboxId: sbId,
+          aircraftId: data.aircraftId ?? (data.virtualAircraft ? null : undefined),
+          virtualAircraft: data.virtualAircraft ? (data.virtualAircraft as object) : undefined
+        }
+      });
 
-    await app.prisma.maintenanceEventAudit.create({
-      data: {
-        eventId: created.id,
+      await replaceEventPlacements(tx, {
+        eventId: event.id,
         sandboxId: sbId,
-        action: EventAuditAction.CREATE,
-        actor: getActor(req),
-        reason: changeReason ?? "Создание события",
-        changes: {
-          created: {
-            title: created.title,
-            level: created.level,
-            status: created.status,
-            aircraftId: created.aircraftId,
-            eventTypeId: created.eventTypeId,
-            startAt: created.startAt.toISOString(),
-            endAt: created.endAt.toISOString(),
-            budgetStartAt: (created as any).budgetStartAt?.toISOString() ?? null,
-            budgetEndAt: (created as any).budgetEndAt?.toISOString() ?? null,
-            actualStartAt: (created as any).actualStartAt?.toISOString() ?? null,
-            actualEndAt: (created as any).actualEndAt?.toISOString() ?? null,
-            hangarId: created.hangarId ?? null,
-            layoutId: created.layoutId ?? null
+        eventStart: event.startAt,
+        eventEnd: event.endAt,
+        placements: placements?.length
+          ? placements
+          : [
+              {
+                startAt: event.startAt,
+                endAt: event.endAt,
+                budgetStartAt: data.budgetStartAt ?? null,
+                budgetEndAt: data.budgetEndAt ?? null,
+                actualStartAt: data.actualStartAt ?? null,
+                actualEndAt: data.actualEndAt ?? null,
+                hangarId: data.hangarId ?? null,
+                layoutId: data.layoutId ?? null,
+                standId: null,
+                sortOrder: 0
+              }
+            ]
+      });
+
+      await tx.maintenanceEventAudit.create({
+        data: {
+          eventId: event.id,
+          sandboxId: sbId,
+          action: EventAuditAction.CREATE,
+          actor: getActor(req),
+          reason: changeReason ?? "Создание события",
+          changes: {
+            created: {
+              title: event.title,
+              level: event.level,
+              status: event.status,
+              aircraftId: event.aircraftId,
+              eventTypeId: event.eventTypeId,
+              startAt: event.startAt.toISOString(),
+              endAt: event.endAt.toISOString(),
+              budgetStartAt: (event as any).budgetStartAt?.toISOString() ?? null,
+              budgetEndAt: (event as any).budgetEndAt?.toISOString() ?? null,
+              actualStartAt: (event as any).actualStartAt?.toISOString() ?? null,
+              actualEndAt: (event as any).actualEndAt?.toISOString() ?? null,
+              hangarId: event.hangarId ?? null,
+              layoutId: event.layoutId ?? null,
+              placements: (placements ?? []).map((p) => ({
+                startAt: p.startAt.toISOString(),
+                endAt: p.endAt.toISOString(),
+                budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
+                budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
+                actualStartAt: p.actualStartAt?.toISOString() ?? null,
+                actualEndAt: p.actualEndAt?.toISOString() ?? null,
+                hangarId: p.hangarId ?? null,
+                layoutId: p.layoutId ?? null,
+                standId: p.standId ?? null
+              }))
+            }
           }
         }
-      }
+      });
+
+      return await tx.maintenanceEvent.findUniqueOrThrow({ where: { id: event.id }, include: eventInclude });
     });
 
-    return created;
+    return serializeEvent(created);
   });
 
   app.patch("/:id", async (req) => {
@@ -758,6 +1158,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         actualEndAt: zDateTime.nullable().optional(),
         hangarId: zUuid.nullable().optional(),
         layoutId: zUuid.nullable().optional(),
+        placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
@@ -765,11 +1166,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     const existing = await app.prisma.maintenanceEvent.findFirst({
       where: { id, ...sandboxFilter(req) },
-      include: { reservation: true }
+      include: {
+        reservations: { include: { stand: true }, orderBy: [{ startAt: "asc" }] },
+        placements: { include: placementInclude, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
+        layout: true
+      }
     });
     if (!existing) throw app.httpErrors.notFound("Event not found");
 
-    const { changeReason, ...patch } = body;
+    const { changeReason, placements, ...patch } = body;
     const nextStatus = body.status ?? existing.status;
     let patchData = { ...patch } as Record<string, unknown>;
 
@@ -812,65 +1217,83 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("actualEndAt must be after actualStartAt");
     }
 
-    const updated = await app.prisma.maintenanceEvent.update({
-      where: { id },
-      data: patchData
+    const placementChanged = placements !== undefined;
+    const singlePlacementSyncNeeded =
+      !placementChanged &&
+      (body.startAt !== undefined ||
+        body.endAt !== undefined ||
+        body.hangarId !== undefined ||
+        body.layoutId !== undefined) &&
+      ((existing.placements ?? []).length <= 1);
+
+    const updated = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const event = await tx.maintenanceEvent.update({
+        where: { id },
+        data: patchData
+      });
+
+      if (placementChanged) {
+        await replaceEventPlacements(tx, {
+          eventId: id,
+          sandboxId: sandboxIdFor(req),
+          eventStart: nextStart,
+          eventEnd: nextEnd,
+          placements: placements ?? []
+        });
+      } else if (singlePlacementSyncNeeded) {
+        await replaceEventPlacements(tx, {
+          eventId: id,
+          sandboxId: sandboxIdFor(req),
+          eventStart: nextStart,
+          eventEnd: nextEnd,
+          placements: [
+            {
+              ...defaultPlacementFromEvent(existing),
+              startAt: nextStart,
+              endAt: nextEnd,
+              budgetStartAt: nextBudgetStart ?? null,
+              budgetEndAt: nextBudgetEnd ?? null,
+              actualStartAt: nextActualStart ?? null,
+              actualEndAt: nextActualEnd ?? null,
+              hangarId: body.hangarId === undefined ? defaultPlacementFromEvent(existing).hangarId : body.hangarId,
+              layoutId: body.layoutId === undefined ? defaultPlacementFromEvent(existing).layoutId : body.layoutId,
+              standId: body.layoutId === null ? null : defaultPlacementFromEvent(existing).standId,
+              sortOrder: 0
+            }
+          ]
+        });
+      }
+
+      return event;
     });
 
-    if (existing.reservation) {
-      const conflict = await app.prisma.standReservation.findFirst({
-        where: {
-          ...sandboxFilter(req),
-          standId: existing.reservation.standId,
-          eventId: { not: id },
-          startAt: { lt: nextEnd },
-          endAt: { gt: nextStart },
-          event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
-        },
-        include: { event: { include: { aircraft: true } } }
-      });
-
-      if (conflict) {
-        throw app.httpErrors.conflict(
-          `Место уже занято в этот период: ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`
-        );
-      }
-
-      const layout = await app.prisma.hangarLayout.findUnique({
-        where: { id: existing.reservation.layoutId },
-        select: { id: true, hangarId: true }
-      });
-      if (layout) {
-        const layoutConflict = await app.prisma.standReservation.findFirst({
-          where: {
-            ...sandboxFilter(req),
-            eventId: { not: id },
-            layoutId: { not: layout.id },
-            startAt: { lt: nextEnd },
-            endAt: { gt: nextStart },
-            layout: { hangarId: layout.hangarId },
-            event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
-          },
-          include: {
-            layout: { select: { name: true } },
-            event: { include: { aircraft: true } }
-          },
-          orderBy: [{ startAt: "asc" }]
-        });
-        if (layoutConflict) {
-          throw app.httpErrors.conflict(
-            `В этот период в ангаре уже используется другая схема расстановки: ${layoutConflict.layout?.name ?? "другая схема"} (${layoutConflict.event.title}, ${eventAircraftLabel(layoutConflict.event)})`
-          );
-        }
-      }
-
-      await app.prisma.standReservation.update({
-        where: { eventId: id },
-        data: { startAt: nextStart, endAt: nextEnd }
-      });
-    }
-
     const changes = diffEvent(existing, updated);
+    if (placementChanged) {
+      (changes as any).placements = {
+        from: (existing.placements ?? []).map((p: any) => ({
+          startAt: p.startAt.toISOString(),
+          endAt: p.endAt.toISOString(),
+          budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
+          budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
+          actualStartAt: p.actualStartAt?.toISOString() ?? null,
+          actualEndAt: p.actualEndAt?.toISOString() ?? null,
+          hangarId: p.hangarId ?? null,
+          layoutId: p.layoutId ?? null,
+          standId: p.standId ?? null
+        })),
+        to: (placements ?? []).map((p) => ({
+          startAt: p.startAt.toISOString(),
+          endAt: p.endAt.toISOString(),
+          budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
+          budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
+          actualStartAt: p.actualStartAt?.toISOString() ?? null,
+          actualEndAt: p.actualEndAt?.toISOString() ?? null,
+          hangarId: p.hangarId ?? null,
+          layoutId: p.layoutId ?? null,
+          standId: p.standId ?? null
+        }))
+      };
+    }
     const changedKeys = Object.keys(changes);
     if (changedKeys.length > 0 && !changeReason) {
       throw app.httpErrors.badRequest("changeReason is required when updating an event");
@@ -889,7 +1312,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    return updated;
+    const reloaded = await app.prisma.maintenanceEvent.findUniqueOrThrow({ where: { id }, include: eventInclude });
+    return serializeEvent(reloaded);
   });
 
   app.get("/:id/history", async (req) => {

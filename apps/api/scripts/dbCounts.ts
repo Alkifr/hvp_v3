@@ -18,6 +18,7 @@ async function main() {
     layout: await prisma.hangarLayout.count(),
     stand: await prisma.hangarStand.count(),
     event: await prisma.maintenanceEvent.count(),
+    placement: await prisma.eventPlacement.count(),
     reservation: await prisma.standReservation.count()
   };
 
