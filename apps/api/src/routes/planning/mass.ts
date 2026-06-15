@@ -503,8 +503,24 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               virtualAircraft: virtualAircraft as Prisma.InputJsonValue
             }
           });
+          const placement = await tx.eventPlacement.create({
+            data: {
+              eventId: ev.id,
+              sandboxId: sbId,
+              startAt,
+              endAt,
+              budgetStartAt: body.budgetStartAt ?? null,
+              budgetEndAt: body.budgetEndAt ?? null,
+              actualStartAt: body.actualStartAt ?? null,
+              actualEndAt: body.actualEndAt ?? null,
+              hangarId: p.hangarId,
+              layoutId: p.layoutId,
+              standId: p.standId,
+              sortOrder: 0
+            }
+          });
           await tx.standReservation.create({
-            data: { eventId: ev.id, sandboxId: sbId, layoutId: p.layoutId, standId: p.standId, startAt, endAt }
+            data: { eventId: ev.id, placementId: placement.id, sandboxId: sbId, layoutId: p.layoutId, standId: p.standId, startAt, endAt }
           });
           const towRows = [
             p.towBeforeStartAt != null && p.towBeforeEndAt != null

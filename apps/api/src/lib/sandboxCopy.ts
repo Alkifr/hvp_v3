@@ -97,7 +97,32 @@ export async function copyPlanToSandbox(
 
   const sourceEventIds = Array.from(eventIdMap.keys());
 
-  // Резервы: 1:1 с событием (eventId уникален)
+  const placementIdMap = new Map<string, string>();
+  const placements = await tx.eventPlacement.findMany({
+    where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
+  });
+  if (placements.length) {
+    for (const p of placements) placementIdMap.set(p.id, randomUUID());
+    await tx.eventPlacement.createMany({
+      data: placements.map((p) => ({
+        id: placementIdMap.get(p.id)!,
+        eventId: eventIdMap.get(p.eventId)!,
+        sandboxId: targetSandboxId,
+        startAt: p.startAt,
+        endAt: p.endAt,
+        budgetStartAt: p.budgetStartAt,
+        budgetEndAt: p.budgetEndAt,
+        actualStartAt: p.actualStartAt,
+        actualEndAt: p.actualEndAt,
+        hangarId: p.hangarId,
+        layoutId: p.layoutId,
+        standId: p.standId,
+        sortOrder: p.sortOrder
+      }))
+    });
+  }
+
+  // Резервы могут быть 1:N с событием и связаны с конкретным этапом.
   const reservations = await tx.standReservation.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -105,6 +130,7 @@ export async function copyPlanToSandbox(
     const resCreated = await tx.standReservation.createMany({
       data: reservations.map((r) => ({
         eventId: eventIdMap.get(r.eventId)!,
+        placementId: r.placementId ? (placementIdMap.get(r.placementId) ?? null) : null,
         sandboxId: targetSandboxId,
         layoutId: r.layoutId,
         standId: r.standId,

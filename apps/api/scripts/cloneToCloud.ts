@@ -39,6 +39,7 @@ const COPY_ORDER = [
   ["Warehouse", () => local.warehouse.findMany(), (rows: any[]) => cloud.warehouse.createMany({ data: rows })],
   ["Material", () => local.material.findMany(), (rows: any[]) => cloud.material.createMany({ data: rows })],
   ["MaintenanceEvent", () => local.maintenanceEvent.findMany(), (rows: any[]) => cloud.maintenanceEvent.createMany({ data: rows })],
+  ["EventPlacement", () => local.eventPlacement.findMany(), (rows: any[]) => cloud.eventPlacement.createMany({ data: rows })],
   ["StandReservation", () => local.standReservation.findMany(), (rows: any[]) => cloud.standReservation.createMany({ data: rows })],
   ["EventTow", () => local.eventTow.findMany(), (rows: any[]) => cloud.eventTow.createMany({ data: rows })],
   ["MaintenanceEventAudit", () => local.maintenanceEventAudit.findMany(), (rows: any[]) => cloud.maintenanceEventAudit.createMany({ data: rows })],

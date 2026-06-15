@@ -179,7 +179,8 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
         include: {
           aircraft: { include: { type: true } },
           eventType: true,
-          reservation: true
+          reservations: { orderBy: [{ startAt: "asc" }] },
+          placements: { orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] }
         },
         orderBy: [{ startAt: "asc" }]
       }),
@@ -193,17 +194,34 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       ? layouts.filter((l: any) => selectedLayoutIds.has(l.id))
       : Array.from(new Map(layouts.map((l: any) => [l.hangarId, l])).values());
     const periodMs = Math.max(1, query.to.getTime() - query.from.getTime());
-    const summaryEvents: SummaryEvent[] = events.map((e: any) => ({
-      id: e.id,
-      title: e.title,
-      status: e.status,
-      aircraftLabel: aircraftLabel(e),
-      bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
-      eventTypeName: e.eventType?.name ?? null,
-      startAt: e.startAt,
-      endAt: e.endAt,
-      reservation: e.reservation ? { layoutId: e.reservation.layoutId, standId: e.reservation.standId } : null
-    }));
+    const summaryEvents: SummaryEvent[] = events.flatMap((e: any) => {
+      const placements = e.placements?.length ? e.placements : [];
+      if (placements.length === 0) {
+        const reservation = e.reservations?.[0] ?? null;
+        return [{
+          id: e.id,
+          title: e.title,
+          status: e.status,
+          aircraftLabel: aircraftLabel(e),
+          bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
+          eventTypeName: e.eventType?.name ?? null,
+          startAt: reservation?.startAt ?? e.startAt,
+          endAt: reservation?.endAt ?? e.endAt,
+          reservation: reservation ? { layoutId: reservation.layoutId, standId: reservation.standId } : null
+        }];
+      }
+      return placements.map((p: any) => ({
+        id: e.id,
+        title: e.title,
+        status: e.status,
+        aircraftLabel: aircraftLabel(e),
+        bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
+        eventTypeName: e.eventType?.name ?? null,
+        startAt: p.startAt,
+        endAt: p.endAt,
+        reservation: p.layoutId && p.standId ? { layoutId: p.layoutId, standId: p.standId } : null
+      }));
+    });
     const efficiencyByHangarId = new Map(
       buildHangarEfficiency({ from: query.from, to: query.to, layouts, events: summaryEvents }).map((x) => [x.hangarId, x])
     );
@@ -327,7 +345,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
           startAt: { lt: body.to },
           endAt: { gt: body.from }
         },
-        include: { aircraft: { include: { type: true } }, eventType: true, reservation: true },
+        include: { aircraft: { include: { type: true } }, eventType: true, reservations: { orderBy: [{ startAt: "asc" }] } },
         orderBy: [{ startAt: "asc" }]
       }),
       app.prisma.aircraftType.findMany({ select: { id: true, bodyType: true } }),
@@ -368,7 +386,10 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       }))
     );
     const candidates = events
-      .filter((e: any) => !e.reservation || !body.layouts.some((l) => l.layoutId === e.reservation?.layoutId))
+      .filter((e: any) => {
+        const reservation = e.reservations?.[0] ?? null;
+        return !reservation || !body.layouts.some((l) => l.layoutId === reservation.layoutId);
+      })
       .map((e: any) => ({
         id: e.id,
         title: e.title,

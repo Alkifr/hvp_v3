@@ -23,6 +23,7 @@ async function main() {
     palettes: await prisma.aircraftTypePalette.findMany({ orderBy: [{ operatorId: "asc" }, { aircraftTypeId: "asc" }] }),
 
     events: await prisma.maintenanceEvent.findMany({ orderBy: [{ startAt: "asc" }] }),
+    placements: await prisma.eventPlacement.findMany({ orderBy: [{ eventId: "asc" }, { sortOrder: "asc" }, { startAt: "asc" }] }),
     reservations: await prisma.standReservation.findMany({ orderBy: [{ standId: "asc" }, { startAt: "asc" }] }),
     tows: await prisma.eventTow.findMany({ orderBy: [{ eventId: "asc" }, { startAt: "asc" }] }),
     audits: await prisma.maintenanceEventAudit.findMany({ orderBy: [{ eventId: "asc" }, { createdAt: "asc" }] }),
@@ -58,6 +59,7 @@ async function main() {
     stands: data.stands.length,
     palettes: data.palettes.length,
     events: data.events.length,
+    placements: data.placements.length,
     reservations: data.reservations.length,
     tows: data.tows.length,
     audits: data.audits.length,

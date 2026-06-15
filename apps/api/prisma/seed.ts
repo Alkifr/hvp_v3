@@ -288,16 +288,27 @@ async function main() {
       }
     }));
 
-  await prisma.standReservation.upsert({
-    where: { eventId: event.id },
-    update: {
+  await prisma.standReservation.deleteMany({ where: { eventId: event.id } });
+  await prisma.eventPlacement.deleteMany({ where: { eventId: event.id } });
+  const placement = await prisma.eventPlacement.create({
+    data: {
+      eventId: event.id,
+      startAt: start,
+      endAt: end,
+      budgetStartAt: (event as any).budgetStartAt ?? null,
+      budgetEndAt: (event as any).budgetEndAt ?? null,
+      actualStartAt: (event as any).actualStartAt ?? null,
+      actualEndAt: (event as any).actualEndAt ?? null,
+      hangarId: hangars[0]!.id,
       layoutId: layout1.id,
       standId: stands[0]!.id,
-      startAt: start,
-      endAt: end
-    },
-    create: {
+      sortOrder: 0
+    }
+  });
+  await prisma.standReservation.create({
+    data: {
       eventId: event.id,
+      placementId: placement.id,
       layoutId: layout1.id,
       standId: stands[0]!.id,
       startAt: start,

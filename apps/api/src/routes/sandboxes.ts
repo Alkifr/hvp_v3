@@ -259,7 +259,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
           aircraft: { select: { tailNumber: true } },
           eventType: { select: { name: true, color: true } },
           hangar: { select: { name: true } },
-          reservation: { include: { stand: { select: { code: true, name: true } } } }
+          reservations: { include: { stand: { select: { code: true, name: true } } }, orderBy: [{ startAt: "asc" }] }
         },
         orderBy: [{ startAt: "asc" }]
       }),
@@ -274,7 +274,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
           aircraft: { select: { tailNumber: true } },
           eventType: { select: { name: true } },
           hangar: { select: { name: true } },
-          reservation: { include: { stand: { select: { code: true } } } }
+          reservations: { include: { stand: { select: { code: true } } }, orderBy: [{ startAt: "asc" }] }
         },
         orderBy: [{ startAt: "asc" }]
       })
@@ -305,19 +305,24 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
     for (const se of sandboxEvents) {
       const label =
         se.aircraft?.tailNumber ?? ((se.virtualAircraft as any)?.label as string | undefined) ?? "—";
-      const standCode = se.reservation?.stand?.code ?? null;
+      const seReservation = se.reservations[0] ?? null;
+      const standCode = seReservation?.stand?.code ?? null;
       const conflicts = prodEvents
         .filter((pe) => {
-          if (!se.reservation || !pe.reservation) return false;
-          if (se.reservation.standId !== pe.reservation.standId) return false;
-          return se.reservation.startAt < pe.reservation.endAt && se.reservation.endAt > pe.reservation.startAt;
+          const peReservation = pe.reservations[0] ?? null;
+          if (!seReservation || !peReservation) return false;
+          if (seReservation.standId !== peReservation.standId) return false;
+          return seReservation.startAt < peReservation.endAt && seReservation.endAt > peReservation.startAt;
         })
         .map((pe) => ({
+          ...(() => {
+            const peReservation = pe.reservations[0] ?? null;
+            return { standCode: peReservation?.stand?.code ?? null };
+          })(),
           prodEventId: pe.id,
           title: pe.title,
           aircraftLabel:
             pe.aircraft?.tailNumber ?? ((pe.virtualAircraft as any)?.label as string | undefined) ?? "—",
-          standCode: pe.reservation?.stand?.code ?? null,
           startAt: pe.startAt.toISOString(),
           endAt: pe.endAt.toISOString()
         }));
@@ -456,28 +461,45 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
 
         const srcIds = Array.from(eventIdMap.keys());
 
+        const placementIdMap = new Map<string, string>();
+        const sourcePlacements = await tx.eventPlacement.findMany({
+          where: { eventId: { in: srcIds }, sandboxId }
+        });
+        if (sourcePlacements.length > 0) {
+          for (const p of sourcePlacements) placementIdMap.set(p.id, randomUUID());
+          await tx.eventPlacement.createMany({
+            data: sourcePlacements.map((p) => ({
+              id: placementIdMap.get(p.id)!,
+              eventId: eventIdMap.get(p.eventId)!,
+              sandboxId: null,
+              startAt: p.startAt,
+              endAt: p.endAt,
+              budgetStartAt: p.budgetStartAt,
+              budgetEndAt: p.budgetEndAt,
+              actualStartAt: p.actualStartAt,
+              actualEndAt: p.actualEndAt,
+              hangarId: p.hangarId,
+              layoutId: p.layoutId,
+              standId: p.standId,
+              sortOrder: p.sortOrder
+            }))
+          });
+        }
+
         const reservations = await tx.standReservation.findMany({
           where: { eventId: { in: srcIds }, sandboxId }
         });
         let createdReservations = 0;
         if (reservations.length > 0) {
-          // Проверяем, какие eventId уже имеют резерв в проде
-          const mappedEventIds = reservations.map((r) => eventIdMap.get(r.eventId)!);
-          const existing = await tx.standReservation.findMany({
-            where: { eventId: { in: mappedEventIds } },
-            select: { eventId: true }
-          });
-          const existingSet = new Set(existing.map((e) => e.eventId));
-          const toCreate = reservations
-            .filter((r) => !existingSet.has(eventIdMap.get(r.eventId)!))
-            .map((r) => ({
-              eventId: eventIdMap.get(r.eventId)!,
-              sandboxId: null,
-              layoutId: r.layoutId,
-              standId: r.standId,
-              startAt: r.startAt,
-              endAt: r.endAt
-            }));
+          const toCreate = reservations.map((r) => ({
+            eventId: eventIdMap.get(r.eventId)!,
+            placementId: r.placementId ? (placementIdMap.get(r.placementId) ?? null) : null,
+            sandboxId: null,
+            layoutId: r.layoutId,
+            standId: r.standId,
+            startAt: r.startAt,
+            endAt: r.endAt
+          }));
           if (toCreate.length > 0) {
             const c = await tx.standReservation.createMany({ data: toCreate });
             createdReservations = c.count;
