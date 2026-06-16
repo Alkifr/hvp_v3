@@ -569,6 +569,21 @@ function factToneLabel(tone: "good" | "warn" | "bad") {
   return "Факт требует внимания";
 }
 
+const EXIT_TIME_LABEL_WIDTH = 42;
+const EXIT_TIME_LABEL_GAP = 4;
+
+function canShowExitTimeLabel(zoom: ZoomLevel) {
+  return zoom === "hour" || zoom === "day";
+}
+
+function exitTimeLabel(ev: EventRow) {
+  return dayjs(ev.actualEndAt ?? ev.endAt).format("HH:mm");
+}
+
+function exitTimeTitle(ev: EventRow) {
+  return ev.actualEndAt ? `Фактическое время выхода: ${formatExportDate(ev.actualEndAt)}` : `Плановое время выхода: ${formatExportDate(ev.endAt)}`;
+}
+
 // Образец бара статуса для легенды — использует тот же barVisualStyle,
 // что и фактический рендер событий, поэтому легенда всегда синхронна с UI.
 function LegendStatus(props: { status: string; baseColor: string; label: string }) {
@@ -824,11 +839,12 @@ function packOverlapsIntoLanes(events: EventRow[]): PlacedEvent[][] {
   return lanes.map((l) => l.items);
 }
 
-type ZoomLevel = "hour" | "day" | "week" | "month" | "quarter" | "year";
+type TimeScale = "hour" | "day" | "week" | "month" | "quarter" | "year";
+type ZoomLevel = TimeScale;
 
-const ZOOM_ORDER: ZoomLevel[] = ["hour", "day", "week", "month", "quarter", "year"];
+const ZOOM_ORDER: TimeScale[] = ["hour", "day", "week", "month", "quarter", "year"];
 
-const ZOOM_LABEL: Record<ZoomLevel, string> = {
+const ZOOM_LABEL: Record<TimeScale, string> = {
   hour: "час",
   day: "сутки",
   week: "неделя",
@@ -840,7 +856,7 @@ const ZOOM_LABEL: Record<ZoomLevel, string> = {
 // ширина "одного дня" в пикселях на разных уровнях зума.
 // умный зум: чем крупнее группировка, тем меньше px приходится на 1 день,
 // и тем короче общая горизонтальная полоса при том же диапазоне дат.
-const ZOOM_PX_PER_DAY: Record<ZoomLevel, number> = {
+const ZOOM_PX_PER_DAY: Record<TimeScale, number> = {
   hour: 360,     // 15 px / час
   day: 24,
   week: 10,      // ~70 px / неделя
@@ -849,84 +865,100 @@ const ZOOM_PX_PER_DAY: Record<ZoomLevel, number> = {
   year: 0.4      // ~146 px / год
 };
 
-type GanttTick = { at: dayjs.Dayjs; minorLabel: string; majorLabel: string | null };
+type GanttTick = { at: dayjs.Dayjs; minorLabel: string; majorLabel: string | null; majorKey: string };
 
-function labelsFor(d: dayjs.Dayjs, zoom: ZoomLevel): { minorLabel: string; majorKey: string; majorLabel: string } {
-  switch (zoom) {
+function startOfScale(d: dayjs.Dayjs, scale: TimeScale): dayjs.Dayjs {
+  switch (scale) {
     case "hour":
-      return { minorLabel: d.format("HH"), majorKey: d.format("YYYY-MM-DD"), majorLabel: d.format("DD MMM YYYY") };
+      return d.startOf("hour");
     case "day":
-      return { minorLabel: d.format("D"), majorKey: d.format("YYYY-MM"), majorLabel: d.format("MMM YYYY") };
-    case "week": {
-      const end = d.add(6, "day");
-      return {
-        minorLabel: `${d.format("D")}–${end.format("D MMM")}`,
-        majorKey: d.format("YYYY-MM"),
-        majorLabel: d.format("MMM YYYY")
-      };
-    }
+      return d.startOf("day");
+    case "week":
+      return d.startOf("week");
     case "month":
-      return { minorLabel: d.format("MMM"), majorKey: d.format("YYYY"), majorLabel: d.format("YYYY") };
-    case "quarter": {
-      const q = Math.floor(d.month() / 3) + 1;
-      return { minorLabel: `Q${q}`, majorKey: d.format("YYYY"), majorLabel: d.format("YYYY") };
-    }
+      return d.startOf("month");
+    case "quarter":
+      return d.startOf("month").subtract(d.month() % 3, "month");
     case "year":
-      return { minorLabel: d.format("YYYY"), majorKey: "", majorLabel: "" };
+      return d.startOf("year");
   }
 }
 
-function buildGanttTicks(from: dayjs.Dayjs, to: dayjs.Dayjs, zoom: ZoomLevel): GanttTick[] {
-  const startOfUnit = (d: dayjs.Dayjs): dayjs.Dayjs => {
-    switch (zoom) {
-      case "hour":
-        return d.startOf("hour");
-      case "day":
-        return d.startOf("day");
-      case "week":
-        return d.startOf("week");
-      case "month":
-        return d.startOf("month");
-      case "quarter":
-        return d.startOf("month").subtract(d.month() % 3, "month");
-      case "year":
-        return d.startOf("year");
-    }
-  };
+function addScale(d: dayjs.Dayjs, scale: TimeScale): dayjs.Dayjs {
+  switch (scale) {
+    case "hour":
+      return d.add(1, "hour");
+    case "day":
+      return d.add(1, "day");
+    case "week":
+      return d.add(1, "week");
+    case "month":
+      return d.add(1, "month");
+    case "quarter":
+      return d.add(3, "month");
+    case "year":
+      return d.add(1, "year");
+  }
+}
 
+function labelForScale(d: dayjs.Dayjs, scale: TimeScale) {
+  switch (scale) {
+    case "hour":
+      return d.format("HH");
+    case "day":
+      return d.format("D");
+    case "week": {
+      const end = d.add(6, "day");
+      return `${d.format("D")}–${end.format("D MMM")}`;
+    }
+    case "month":
+      return d.format("MMM");
+    case "quarter": {
+      const q = Math.floor(d.month() / 3) + 1;
+      return `Q${q}`;
+    }
+    case "year":
+      return d.format("YYYY");
+  }
+}
+
+function histogramLabelForScale(d: dayjs.Dayjs, scale: TimeScale) {
+  switch (scale) {
+    case "hour":
+      return d.format("DD.MM HH:00");
+    case "day":
+      return d.format("DD.MM");
+    case "week":
+      return `${d.format("DD.MM")}–${d.add(6, "day").format("DD.MM")}`;
+    case "month":
+      return d.format("MMM YYYY");
+    case "quarter":
+      return `Q${Math.floor(d.month() / 3) + 1} ${d.format("YYYY")}`;
+    case "year":
+      return d.format("YYYY");
+  }
+}
+
+function majorKeyFor(d: dayjs.Dayjs, scale: TimeScale) {
+  return startOfScale(d, scale).toISOString();
+}
+
+function buildGanttTicks(from: dayjs.Dayjs, to: dayjs.Dayjs, majorScale: TimeScale, minorScale: TimeScale): GanttTick[] {
   const out: GanttTick[] = [];
-  let cur = startOfUnit(from);
+  let cur = startOfScale(from, minorScale);
   let lastMajorKey = "";
   const HARD_LIMIT = 5000;
 
   for (let i = 0; i < HARD_LIMIT && cur.valueOf() < to.valueOf(); i++) {
-    const { minorLabel, majorKey, majorLabel } = labelsFor(cur, zoom);
+    const majorKey = majorKeyFor(cur, majorScale);
     out.push({
       at: cur,
-      minorLabel,
-      majorLabel: majorKey !== "" && majorKey !== lastMajorKey ? majorLabel : null
+      minorLabel: labelForScale(cur, minorScale),
+      majorLabel: majorKey !== lastMajorKey ? labelForScale(startOfScale(cur, majorScale), majorScale) : null,
+      majorKey
     });
     lastMajorKey = majorKey;
-    switch (zoom) {
-      case "hour":
-        cur = cur.add(1, "hour");
-        break;
-      case "day":
-        cur = cur.add(1, "day");
-        break;
-      case "week":
-        cur = cur.add(1, "week");
-        break;
-      case "month":
-        cur = cur.add(1, "month");
-        break;
-      case "quarter":
-        cur = cur.add(3, "month");
-        break;
-      case "year":
-        cur = cur.add(1, "year");
-        break;
-    }
+    cur = addScale(cur, minorScale);
   }
   return out;
 }
@@ -999,6 +1031,7 @@ export function GanttView() {
 
   const headerViewportRef = useRef<HTMLDivElement | null>(null);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
+  const histogramViewportRef = useRef<HTMLDivElement | null>(null);
   const bottomScrollRef = useRef<HTMLDivElement | null>(null);
 
   const ptrPreviewRef = useRef<null | { startAt: string; endAt: string; x: number; w: number }>(null);
@@ -1031,10 +1064,27 @@ export function GanttView() {
   const [ganttDisplayMode, setGanttDisplayMode] = useState<GanttDisplayMode>(() =>
     savedUi?.ganttDisplayMode === "PLAN_FACT" ? "PLAN_FACT" : "CURRENT"
   );
-  const [zoom, setZoom] = useState<ZoomLevel>(() => {
-    const z = savedUi?.zoom;
+  const [majorScale, setMajorScale] = useState<TimeScale>(() => {
+    const z = savedUi?.majorScale;
+    if ((ZOOM_ORDER as string[]).includes(String(z))) return z as TimeScale;
+    const legacy = savedUi?.zoom;
+    if (legacy === "hour") return "day";
+    if (legacy === "day") return "week";
+    if (legacy === "week") return "month";
+    if (legacy === "month" || legacy === "quarter") return "year";
+    return "week";
+  });
+  const [minorScale, setMinorScale] = useState<TimeScale>(() => {
+    const z = savedUi?.minorScale ?? savedUi?.zoom;
     return (ZOOM_ORDER as string[]).includes(String(z)) ? (z as ZoomLevel) : "day";
   });
+
+  useEffect(() => {
+    const minorIdx = ZOOM_ORDER.indexOf(minorScale);
+    const majorIdx = ZOOM_ORDER.indexOf(majorScale);
+    if (majorIdx > minorIdx || minorScale === "year") return;
+    setMajorScale(ZOOM_ORDER[Math.min(minorIdx + 1, ZOOM_ORDER.length - 1)]!);
+  }, [majorScale, minorScale]);
 
   const [filterAircraftTypeIds, setFilterAircraftTypeIds] = useState<string[]>(() => {
     const arr = savedUi?.filterAircraftTypeIds;
@@ -1204,6 +1254,32 @@ export function GanttView() {
     }
   });
 
+  const ganttSlotStandsQ = useQuery({
+    queryKey: ["ref", "gantt-slot-stands", selectedHangarIds.slice().sort().join(",")],
+    enabled: groupMode === "HANGAR_STAND",
+    queryFn: async () => {
+      const layouts = await apiGet<Layout[]>(
+        selectedHangarIds.length === 1
+          ? `/api/ref/layouts?hangarId=${encodeURIComponent(selectedHangarIds[0]!)}`
+          : "/api/ref/layouts"
+      );
+      const selected = new Set(selectedHangarIds);
+      const filteredLayouts = selected.size === 0 ? layouts : layouts.filter((l) => selected.has(l.hangarId));
+      const standsPerLayout = await Promise.all(
+        filteredLayouts.map((l) => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(l.id)}`))
+      );
+      const out: Array<Stand & { hangarId: string }> = [];
+      for (let i = 0; i < filteredLayouts.length; i++) {
+        const layout = filteredLayouts[i]!;
+        for (const stand of standsPerLayout[i] ?? []) {
+          if ((stand as any).isActive === false) continue;
+          out.push({ ...(stand as any), layoutId: (stand as any).layoutId ?? layout.id, hangarId: layout.hangarId });
+        }
+      }
+      return out;
+    }
+  });
+
   const dndStandById = useMemo(() => {
     const m = new Map<string, DndStand>();
     for (const s of dndStandsQ.data ?? []) m.set(s.id, s);
@@ -1218,6 +1294,8 @@ export function GanttView() {
       rangeToInput,
       groupMode,
       ganttDisplayMode,
+      majorScale,
+      minorScale,
       selectedHangarIds,
       filterAircraftTypeIds,
       filterOperatorIds,
@@ -1225,7 +1303,7 @@ export function GanttView() {
       filterEventTypeIds,
       filterPlanningKind,
       dndEnabled,
-      zoom
+      zoom: minorScale
     });
   }, [
     rangeFromApplied,
@@ -1234,6 +1312,8 @@ export function GanttView() {
     rangeToInput,
     groupMode,
     ganttDisplayMode,
+    majorScale,
+    minorScale,
     selectedHangarIds,
     filterAircraftTypeIds,
     filterOperatorIds,
@@ -1241,32 +1321,36 @@ export function GanttView() {
     filterEventTypeIds,
     filterPlanningKind,
     dndEnabled,
-    zoom
   ]);
 
   const events = q.data ?? [];
-  const dayWidth = ZOOM_PX_PER_DAY[zoom];
+  const dayWidth = ZOOM_PX_PER_DAY[minorScale];
   const canvasWidth = Math.max(1, Math.round(days * dayWidth));
   const ganttRowHeight = ganttDisplayMode === "PLAN_FACT" ? 56 : 44;
-  const ticks = useMemo(() => buildGanttTicks(from, to, zoom), [from, to, zoom]);
+  const ticks = useMemo(() => buildGanttTicks(from, to, majorScale, minorScale), [from, to, majorScale, minorScale]);
+  const showSlotHistogram = groupMode === "HANGAR_STAND";
 
   useEffect(() => {
     // при изменении диапазона/ширины синхронизируем заголовок с текущим scrollLeft тела
     const h = headerViewportRef.current;
     const b = bodyScrollRef.current;
+    const g = histogramViewportRef.current;
     const s = bottomScrollRef.current;
     if (!h || !b) return;
     h.scrollLeft = b.scrollLeft;
+    if (g) g.scrollLeft = b.scrollLeft;
     if (s) s.scrollLeft = b.scrollLeft;
   }, [days, canvasWidth]);
 
   const syncGanttScrollLeft = useCallback((scrollLeft: number, source?: "body" | "bottom") => {
     const h = headerViewportRef.current;
     const b = bodyScrollRef.current;
+    const g = histogramViewportRef.current;
     const s = bottomScrollRef.current;
 
     if (h && h.scrollLeft !== scrollLeft) h.scrollLeft = scrollLeft;
     if (b && source !== "body" && b.scrollLeft !== scrollLeft) b.scrollLeft = scrollLeft;
+    if (g && g.scrollLeft !== scrollLeft) g.scrollLeft = scrollLeft;
     if (s && source !== "bottom" && s.scrollLeft !== scrollLeft) s.scrollLeft = scrollLeft;
   }, []);
 
@@ -2249,6 +2333,110 @@ export function GanttView() {
 
   const visibleEvents = useMemo(() => exportEvents.filter((e) => e.status !== "CANCELLED"), [exportEvents]);
 
+  const slotHistogram = useMemo(() => {
+    if (groupMode !== "HANGAR_STAND") return [];
+    const stands = ganttSlotStandsQ.data ?? [];
+    const totalSlots = stands.length;
+    if (totalSlots <= 0) return [];
+
+    const buckets: Array<{ key: string; label: string; left: number; width: number; occupied: number; free: number; total: number; start: dayjs.Dayjs; end: dayjs.Dayjs }> = [];
+    let cursor = startOfScale(from, minorScale);
+    const limit = to;
+
+    while (cursor.valueOf() < limit.valueOf()) {
+      const bucketStart = cursor;
+      const bucketEnd = addScale(cursor, minorScale);
+      const occupiedStandIds = new Set<string>();
+      const bucketStartMs = bucketStart.valueOf();
+      const bucketEndMs = bucketEnd.valueOf();
+
+      for (const ev of visibleEvents) {
+        const placements = ev.placements?.length
+          ? ev.placements
+          : [
+              {
+                startAt: ev.startAt,
+                endAt: ev.endAt,
+                standId: (ev.reservation?.stand as any)?.id ?? ""
+              }
+            ];
+        for (const p of placements) {
+          const standId = String((p as any).standId ?? (p as any).stand?.id ?? "");
+          if (!standId) continue;
+          const startMs = dayjs(p.startAt).valueOf();
+          const endMs = dayjs(p.endAt).valueOf();
+          if (Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < bucketEndMs && endMs > bucketStartMs) {
+            occupiedStandIds.add(standId);
+          }
+        }
+      }
+
+      const occupied = Math.min(totalSlots, occupiedStandIds.size);
+      const left = Math.max(0, bucketStart.diff(from, "day", true) * dayWidth);
+      const width = Math.max(1, bucketEnd.diff(bucketStart, "day", true) * dayWidth);
+      buckets.push({
+        key: bucketStart.toISOString(),
+        label: histogramLabelForScale(bucketStart, minorScale),
+        left,
+        width,
+        occupied,
+        free: Math.max(0, totalSlots - occupied),
+        total: totalSlots,
+        start: bucketStart,
+        end: bucketEnd
+      });
+      cursor = bucketEnd;
+    }
+    return buckets;
+  }, [groupMode, minorScale, ganttSlotStandsQ.data, visibleEvents, from, to, dayWidth]);
+
+  const hasExitLabelCollision = useCallback(
+    (rowEvents: PlacedEvent[], current: EventRow, targetStartAt: string, targetEndAt: string, labelLeft: number, labelRight: number) => {
+      for (const item of rowEvents) {
+        const ev = item.ev;
+        const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
+        const intervals = [displayPeriod];
+        if (!dndActive && ganttDisplayMode === "PLAN_FACT" && ev.actualStartAt && ev.actualEndAt) {
+          intervals.push({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, source: "Факт" as const });
+        }
+
+        for (const interval of intervals) {
+          const isTarget =
+            (ev.segmentKey ?? ev.id) === (current.segmentKey ?? current.id) &&
+            interval.startAt === targetStartAt &&
+            interval.endAt === targetEndAt;
+          if (isTarget) continue;
+          const seg = calcBarXW({ startAt: interval.startAt, endAt: interval.endAt, from, dayWidth, canvasWidth });
+          if (!seg) continue;
+          if (labelRight > seg.x - 2 && labelLeft < seg.x + seg.w + 2) return true;
+        }
+      }
+      return false;
+    },
+    [canvasWidth, dayWidth, dndActive, from, ganttDisplayMode]
+  );
+
+  const renderExitTimeLabel = useCallback(
+    (rowEvents: PlacedEvent[], ev: EventRow, seg: { x: number; w: number }, targetStartAt: string, targetEndAt: string, targetIsFact: boolean) => {
+      if (!canShowExitTimeLabel(minorScale)) return null;
+      const labelLeft = seg.x + seg.w + EXIT_TIME_LABEL_GAP;
+      const labelRight = labelLeft + EXIT_TIME_LABEL_WIDTH;
+      if (labelRight > canvasWidth - 2) return null;
+      if (hasExitLabelCollision(rowEvents, ev, targetStartAt, targetEndAt, labelLeft, labelRight)) return null;
+      const top = ganttDisplayMode === "PLAN_FACT" ? (targetIsFact ? 34 : 8) : 14;
+      return (
+        <span
+          className={`exitTimeLabel${targetIsFact ? " exitTimeLabelFact" : ""}`}
+          style={{ left: labelLeft, top, width: EXIT_TIME_LABEL_WIDTH }}
+          title={exitTimeTitle(ev)}
+        >
+          {exitTimeLabel(ev)}
+        </span>
+      );
+    },
+    [canvasWidth, ganttDisplayMode, hasExitLabelCollision, minorScale]
+  );
+
   const cancelledAircraftRows = useMemo(() => {
     if (groupMode !== "AIRCRAFT") return [];
     const cancelled = exportEvents.filter((e) => e.status === "CANCELLED");
@@ -2362,7 +2550,7 @@ export function GanttView() {
   const exportBaseName = `gantt-${rangeFromApplied}-${rangeToApplied}`;
   const reportMeta = [
     `Период: ${dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – ${dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}`,
-    `Зум: ${ZOOM_LABEL[zoom]}`,
+    `Шкала: ${ZOOM_LABEL[majorScale]} / ${ZOOM_LABEL[minorScale]}`,
     `Вид: ${ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт"}`,
     `Группировка: ${groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}`,
     `Контур: ${activeSandbox ? `песочница «${activeSandbox.name}»` : "рабочий контур"}`,
@@ -2655,7 +2843,7 @@ export function GanttView() {
             <span className="muted ganttPanelPeriod">
               {dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – {dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}
               <span className="ganttPanelDot" aria-hidden="true">·</span>
-              {ZOOM_LABEL[zoom]}
+              {ZOOM_LABEL[majorScale]} / {ZOOM_LABEL[minorScale]}
               <span className="ganttPanelDot" aria-hidden="true">·</span>
               {ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт"}
               <span className="ganttPanelDot" aria-hidden="true">·</span>
@@ -2780,9 +2968,30 @@ export function GanttView() {
                 <option value="PLAN_FACT">План-факт</option>
               </select>
             </label>
-            <label className="tgField" title="Укрупнённый / детализированный зум шкалы">
-              <span className="tgFieldLabel">Зум</span>
-              <select value={zoom} onChange={(e) => setZoom(e.target.value as ZoomLevel)}>
+            <label className="tgField" title="Крупные блоки шкалы времени">
+              <span className="tgFieldLabel">Major</span>
+              <select value={majorScale} onChange={(e) => setMajorScale(e.target.value as TimeScale)}>
+                {ZOOM_ORDER.filter((z) => ZOOM_ORDER.indexOf(z) > ZOOM_ORDER.indexOf(minorScale) || (minorScale === "year" && z === "year")).map((z) => (
+                  <option key={z} value={z}>
+                    {ZOOM_LABEL[z]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="tgField" title="Мелкие деления сетки, ширина канваса и шаг гистограммы">
+              <span className="tgFieldLabel">Minor</span>
+              <select
+                value={minorScale}
+                onChange={(e) => {
+                  const next = e.target.value as TimeScale;
+                  setMinorScale(next);
+                  const nextIdx = ZOOM_ORDER.indexOf(next);
+                  const majorIdx = ZOOM_ORDER.indexOf(majorScale);
+                  if (majorIdx <= nextIdx && next !== "year") {
+                    setMajorScale(ZOOM_ORDER[Math.min(nextIdx + 1, ZOOM_ORDER.length - 1)]!);
+                  }
+                }}
+              >
                 {ZOOM_ORDER.map((z) => (
                   <option key={z} value={z}>
                     {ZOOM_LABEL[z]}
@@ -3165,6 +3374,7 @@ export function GanttView() {
                   const left = Math.max(0, leftRaw);
                   const width = Math.max(1, rightRaw - left);
                   const isMajor = t.majorLabel != null;
+                  const majorIdx = ticks.findIndex((candidate) => candidate.majorKey === t.majorKey);
                   return (
                     <div
                       key={i}
@@ -3175,7 +3385,8 @@ export function GanttView() {
                         top: 0,
                         bottom: 0,
                         borderRight: "1px solid rgba(148,163,184,0.18)",
-                        background: isMajor ? "rgba(37,99,235,0.06)" : "transparent",
+                        borderLeft: isMajor ? "1px solid rgba(37,99,235,0.24)" : undefined,
+                        background: majorIdx % 2 ? "rgba(148, 163, 184, 0.08)" : "transparent",
                         padding: "2px 4px",
                         overflow: "hidden",
                         boxSizing: "border-box"
@@ -3214,8 +3425,8 @@ export function GanttView() {
         <div className="ganttBody">
           <div className="ganttLeftCol">
             {groupMode === "AIRCRAFT"
-              ? aircraftRows.map((r) => (
-                  <div className="ganttLabel" key={r.key} style={{ height: ganttRowHeight }}>
+              ? aircraftRows.map((r, rowIdx) => (
+                  <div className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ height: ganttRowHeight }}>
                     <div>
                       <strong>{r.label}</strong>
                     </div>
@@ -3224,8 +3435,8 @@ export function GanttView() {
                     </div>
                   </div>
                 ))
-              : hangarStandRows.map((r) => (
-                  <div className="ganttLabel" key={r.key} style={{ height: ganttRowHeight }}>
+              : hangarStandRows.map((r, rowIdx) => (
+                  <div className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ height: ganttRowHeight }}>
                     <div>
                       <strong>{r.label}</strong>
                     </div>
@@ -3260,8 +3471,8 @@ export function GanttView() {
                   </svg>
                 ) : null}
                 {groupMode === "AIRCRAFT"
-                  ? aircraftRows.map((r) => (
-                      <div className="ganttCanvas" key={r.key} style={{ width: canvasWidth, minHeight: ganttRowHeight }}>
+                  ? aircraftRows.map((r, rowIdx) => (
+                      <div className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ width: canvasWidth, minHeight: ganttRowHeight }}>
                         <TodayLine from={from} to={to} canvasWidth={canvasWidth} />
                         {r.events.map((p) => {
                           const ev = p.ev;
@@ -3276,6 +3487,10 @@ export function GanttView() {
                               ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth })
                               : null;
                           const actualTone = factTone(ev);
+                          const exitTargetIsFact = Boolean(actualSeg) || displayPeriod.source === "Факт";
+                          const exitTargetSeg = actualSeg ?? g;
+                          const exitTargetStartAt = exitTargetIsFact && ev.actualStartAt ? ev.actualStartAt : displayPeriod.startAt;
+                          const exitTargetEndAt = exitTargetIsFact && ev.actualEndAt ? ev.actualEndAt : displayPeriod.endAt;
 
                           return (
                             <Fragment key={ev.segmentKey ?? ev.id}>
@@ -3306,14 +3521,15 @@ export function GanttView() {
                                   title={`${factToneLabel(actualTone)}: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}`}
                                 />
                               ) : null}
+                              {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                             </Fragment>
                           );
                         })}
                       </div>
                     ))
-                  : hangarStandRows.map((r) => (
+                  : hangarStandRows.map((r, rowIdx) => (
                       <div
-                        className="ganttCanvas"
+                        className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}`}
                         key={r.key}
                         style={{
                           width: canvasWidth,
@@ -3363,6 +3579,10 @@ export function GanttView() {
                               ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth })
                               : null;
                           const actualTone = factTone(ev);
+                          const exitTargetIsFact = Boolean(actualSeg) || displayPeriod.source === "Факт";
+                          const exitTargetSeg = actualSeg ?? g;
+                          const exitTargetStartAt = exitTargetIsFact && ev.actualStartAt ? ev.actualStartAt : displayPeriod.startAt;
+                          const exitTargetEndAt = exitTargetIsFact && ev.actualEndAt ? ev.actualEndAt : displayPeriod.endAt;
 
                           let overlapOverlay: React.ReactNode = null;
                           if (p.overlapToMs) {
@@ -3555,6 +3775,7 @@ export function GanttView() {
                                 title={`${factToneLabel(actualTone)}: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}`}
                               />
                             ) : null}
+                            {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                             </Fragment>
                           );
                         })}
@@ -3575,7 +3796,39 @@ export function GanttView() {
             Нет событий в выбранном диапазоне.
           </div>
         ) : null}
-        <div className="ganttBottomScrollRow" aria-hidden="true">
+        {showSlotHistogram ? (
+          <div className="ganttSlotHistogramRow">
+            <div className="ganttSlotHistogramLabel">
+              <strong>Слоты</strong>
+              <span>занято / свободно</span>
+            </div>
+            <div className="ganttSlotHistogramViewport" ref={histogramViewportRef}>
+              <div className="ganttSlotHistogramCanvas" style={{ width: canvasWidth }}>
+                {slotHistogram.length > 0 ? (
+                  slotHistogram.map((b) => {
+                    const occupiedPct = b.total > 0 ? (b.occupied / b.total) * 100 : 0;
+                    const freePct = Math.max(0, 100 - occupiedPct);
+                    return (
+                      <div
+                        className="slotBucket"
+                        key={b.key}
+                        style={{ left: b.left, width: Math.max(2, b.width - 1) }}
+                        title={`${b.label}: занято ${b.occupied}, свободно ${b.free}, всего ${b.total}`}
+                      >
+                        <div className="slotBucketFree" style={{ height: `${freePct}%` }} />
+                        <div className="slotBucketOccupied" style={{ height: `${occupiedPct}%` }} />
+                        {b.width >= 22 ? <span className="slotBucketValue">{b.occupied}</span> : null}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="slotHistogramEmpty">Нет активных мест для выбранного ангара</div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        <div className={`ganttBottomScrollRow${showSlotHistogram ? " ganttBottomScrollRowAboveHistogram" : ""}`} aria-hidden="true">
           <div className="ganttBottomScrollSpacer" />
           <div className="ganttBottomScrollViewport" ref={bottomScrollRef} onScroll={onBottomScroll}>
             <div className="ganttBottomScrollInner" style={{ width: canvasWidth }} />
