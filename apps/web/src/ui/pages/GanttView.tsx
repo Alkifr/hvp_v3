@@ -531,10 +531,6 @@ function renderPlacementBreaks(params: {
     .filter(Boolean);
 }
 
-function hasActualPeriod(ev: EventRow) {
-  return Boolean(ev.actualStartAt && ev.actualEndAt);
-}
-
 function eventPlanningKind(ev: EventRow): "PLANNED" | "UNPLANNED" {
   if (ev.planningKind === "PLANNED" || ev.planningKind === "UNPLANNED") return ev.planningKind;
   return ev.budgetStartAt && ev.budgetEndAt ? "PLANNED" : "UNPLANNED";
@@ -622,14 +618,6 @@ function compactBarLabel(ev: EventRow) {
   const stand = compactStandLabel(ev.reservation?.stand?.code);
   const place = [hangar, stand].filter(Boolean).join("-");
   return place ? `${type}/${place}` : type;
-}
-
-function preferredTat(ev: EventRow): { label: string; source: "Факт" | "Опер." | "Бюдж." } {
-  const actual = formatTat(ev.actualStartAt, ev.actualEndAt);
-  if (actual !== "—") return { label: actual, source: "Факт" };
-  const operational = formatTat(ev.startAt, ev.endAt);
-  if (operational !== "—") return { label: operational, source: "Опер." };
-  return { label: formatTat(ev.budgetStartAt, ev.budgetEndAt), source: "Бюдж." };
 }
 
 function hangarSummaryLabel(ev: EventRow) {
