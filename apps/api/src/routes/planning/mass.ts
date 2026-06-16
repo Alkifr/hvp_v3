@@ -489,6 +489,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             data: {
               level: PlanningLevel.OPERATIONAL,
               status: EventStatus.PLANNED,
+              planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
               title,
               sandboxId: sbId,
               eventTypeId: body.eventTypeId,
@@ -587,6 +588,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             data: {
               level: PlanningLevel.OPERATIONAL,
               status: EventStatus.DRAFT,
+              planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
               title,
               sandboxId: sbId,
               eventTypeId: body.eventTypeId,

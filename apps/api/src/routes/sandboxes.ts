@@ -427,6 +427,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
             sandboxId: null,
             level: src.level,
             status: src.status,
+            planningKind: (src as any).planningKind ?? ((src as any).budgetStartAt && (src as any).budgetEndAt ? "PLANNED" : "UNPLANNED"),
             title: src.title,
             aircraftId: src.aircraftId,
             eventTypeId: src.eventTypeId,

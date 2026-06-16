@@ -6,6 +6,9 @@ import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 
+const PLANNING_KIND_VALUES = ["PLANNED", "UNPLANNED"] as const;
+type PlanningKind = (typeof PLANNING_KIND_VALUES)[number];
+
 function assertCanWrite(req: any) {
   if (!canWriteInContext(req)) {
     const err: any = new Error("SANDBOX_READ_ONLY");
@@ -42,6 +45,7 @@ function diffEvent(before: any, after: any) {
     "title",
     "level",
     "status",
+    "planningKind",
     "aircraftId",
     "eventTypeId",
     "startAt",
@@ -65,6 +69,63 @@ function diffEvent(before: any, after: any) {
     if (bv !== av) changes[f] = { from: bv ?? null, to: av ?? null };
   }
   return changes;
+}
+
+function planningKindFromBudget(budgetStartAt: Date | null | undefined, budgetEndAt: Date | null | undefined): PlanningKind {
+  return budgetStartAt && budgetEndAt ? "PLANNED" : "UNPLANNED";
+}
+
+function normalizeCreatePlanningPeriod(params: {
+  planningKind?: PlanningKind;
+  startAt: Date;
+  endAt: Date;
+  budgetStartAt?: Date | null;
+  budgetEndAt?: Date | null;
+}) {
+  if (params.planningKind === "UNPLANNED") {
+    return { planningKind: "UNPLANNED" as const, budgetStartAt: null, budgetEndAt: null };
+  }
+
+  if (params.planningKind === "PLANNED" && !params.budgetStartAt && !params.budgetEndAt) {
+    return { planningKind: "PLANNED" as const, budgetStartAt: params.startAt, budgetEndAt: params.endAt };
+  }
+
+  const planningKind = params.planningKind ?? planningKindFromBudget(params.budgetStartAt, params.budgetEndAt);
+  return {
+    planningKind,
+    budgetStartAt: params.budgetStartAt ?? null,
+    budgetEndAt: params.budgetEndAt ?? null
+  };
+}
+
+function normalizePatchPlanningPeriod(params: {
+  existing: any;
+  planningKind?: PlanningKind;
+  startAt: Date;
+  endAt: Date;
+  budgetStartAt?: Date | null;
+  budgetEndAt?: Date | null;
+}) {
+  if (params.planningKind === "UNPLANNED") {
+    return { planningKind: "UNPLANNED" as const, budgetStartAt: null, budgetEndAt: null };
+  }
+
+  const nextBudgetStart = params.budgetStartAt === undefined ? (params.existing as any).budgetStartAt : params.budgetStartAt;
+  const nextBudgetEnd = params.budgetEndAt === undefined ? (params.existing as any).budgetEndAt : params.budgetEndAt;
+
+  if (params.planningKind === "PLANNED" && !nextBudgetStart && !nextBudgetEnd) {
+    return { planningKind: "PLANNED" as const, budgetStartAt: params.startAt, budgetEndAt: params.endAt };
+  }
+
+  const budgetChanged = params.budgetStartAt !== undefined || params.budgetEndAt !== undefined;
+  const planningKind =
+    params.planningKind ?? (budgetChanged ? planningKindFromBudget(nextBudgetStart, nextBudgetEnd) : ((params.existing as any).planningKind ?? planningKindFromBudget(nextBudgetStart, nextBudgetEnd)));
+
+  return {
+    planningKind,
+    budgetStartAt: nextBudgetStart ?? null,
+    budgetEndAt: nextBudgetEnd ?? null
+  };
 }
 
 const placementInclude = {
@@ -335,9 +396,13 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         ...(query.layoutId ? { OR: [{ layoutId: query.layoutId }, { placements: { some: { layoutId: query.layoutId } } }] } : {}),
         ...(query.aircraftId ? { aircraftId: query.aircraftId } : {}),
         ...(query.aircraftTypeId ? { aircraft: { typeId: query.aircraftTypeId } } : {}),
-        // пересечение диапазонов [startAt, endAt)
-        startAt: { lt: to },
-        endAt: { gt: from }
+        // пересечение диапазонов [startAt, endAt): оперативный план, факт и этапы размещения.
+        OR: [
+          { startAt: { lt: to }, endAt: { gt: from } },
+          { actualStartAt: { lt: to }, actualEndAt: { gt: from } },
+          { placements: { some: { startAt: { lt: to }, endAt: { gt: from } } } },
+          { placements: { some: { actualStartAt: { lt: to }, actualEndAt: { gt: from } } } }
+        ]
       },
       include: eventInclude,
       orderBy: [{ startAt: "asc" }]
@@ -879,6 +944,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             data: {
               level: PlanningLevel.OPERATIONAL,
               status: EventStatus.PLANNED,
+              planningKind: planningKindFromBudget(budgetStartAt, budgetEndAt),
               title,
               aircraftId: aircraft.id,
               eventTypeId: eventType.id,
@@ -1033,6 +1099,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         level: z.nativeEnum(PlanningLevel),
         status: z.nativeEnum(EventStatus).optional(),
+        planningKind: z.enum(PLANNING_KIND_VALUES).optional(),
         title: z.string().trim().min(1).max(300),
         aircraftId: zUuid.optional(),
         virtualAircraft: zVirtualAircraft.optional(),
@@ -1063,14 +1130,24 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     const { changeReason, placements, ...data } = body;
     const sbId = sandboxIdFor(req);
+    const planning = normalizeCreatePlanningPeriod({
+      planningKind: data.planningKind,
+      startAt: data.startAt,
+      endAt: data.endAt,
+      budgetStartAt: data.budgetStartAt,
+      budgetEndAt: data.budgetEndAt
+    });
     const created = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const event = await tx.maintenanceEvent.create({
         data: {
           ...data,
+          planningKind: planning.planningKind,
+          budgetStartAt: planning.budgetStartAt,
+          budgetEndAt: planning.budgetEndAt,
           sandboxId: sbId,
           aircraftId: data.aircraftId ?? (data.virtualAircraft ? null : undefined),
           virtualAircraft: data.virtualAircraft ? (data.virtualAircraft as object) : undefined
-        }
+        } as any
       });
 
       await replaceEventPlacements(tx, {
@@ -1084,8 +1161,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               {
                 startAt: event.startAt,
                 endAt: event.endAt,
-                budgetStartAt: data.budgetStartAt ?? null,
-                budgetEndAt: data.budgetEndAt ?? null,
+                budgetStartAt: planning.budgetStartAt,
+                budgetEndAt: planning.budgetEndAt,
                 actualStartAt: data.actualStartAt ?? null,
                 actualEndAt: data.actualEndAt ?? null,
                 hangarId: data.hangarId ?? null,
@@ -1108,6 +1185,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               title: event.title,
               level: event.level,
               status: event.status,
+              planningKind: (event as any).planningKind,
               aircraftId: event.aircraftId,
               eventTypeId: event.eventTypeId,
               startAt: event.startAt.toISOString(),
@@ -1147,6 +1225,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         level: z.nativeEnum(PlanningLevel).optional(),
         status: z.nativeEnum(EventStatus).optional(),
+        planningKind: z.enum(PLANNING_KIND_VALUES).optional(),
         title: z.string().trim().min(1).max(300).optional(),
         aircraftId: zUuid.optional(),
         eventTypeId: zUuid.optional(),
@@ -1176,7 +1255,33 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     const { changeReason, placements, ...patch } = body;
     const nextStatus = body.status ?? existing.status;
-    let patchData = { ...patch } as Record<string, unknown>;
+    const nextStart = body.startAt ?? existing.startAt;
+    const nextEnd = body.endAt ?? existing.endAt;
+    if (nextEnd <= nextStart) {
+      throw app.httpErrors.badRequest("endAt must be after startAt");
+    }
+    const planning = normalizePatchPlanningPeriod({
+      existing,
+      planningKind: body.planningKind,
+      startAt: nextStart,
+      endAt: nextEnd,
+      budgetStartAt: body.budgetStartAt,
+      budgetEndAt: body.budgetEndAt
+    });
+    const nextBudgetStart = planning.budgetStartAt;
+    const nextBudgetEnd = planning.budgetEndAt;
+    if ((nextBudgetStart && !nextBudgetEnd) || (!nextBudgetStart && nextBudgetEnd)) {
+      throw app.httpErrors.badRequest("budget period must have both dates");
+    }
+    if (nextBudgetStart && nextBudgetEnd && nextBudgetEnd <= nextBudgetStart) {
+      throw app.httpErrors.badRequest("budgetEndAt must be after budgetStartAt");
+    }
+    let patchData = {
+      ...patch,
+      planningKind: planning.planningKind,
+      budgetStartAt: planning.budgetStartAt,
+      budgetEndAt: planning.budgetEndAt
+    } as Record<string, unknown>;
 
     // При закрытии события (DONE/CONFIRMED) с виртуальным бортом — создаём Aircraft и привязываем
     const virtualAircraft = existing.virtualAircraft as { operatorId: string; aircraftTypeId: string; label: string } | null;
@@ -1195,19 +1300,6 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       patchData = { ...patchData, aircraftId: aircraft.id, virtualAircraft: Prisma.JsonNull };
     }
 
-    const nextStart = body.startAt ?? existing.startAt;
-    const nextEnd = body.endAt ?? existing.endAt;
-    if (nextEnd <= nextStart) {
-      throw app.httpErrors.badRequest("endAt must be after startAt");
-    }
-    const nextBudgetStart = body.budgetStartAt === undefined ? (existing as any).budgetStartAt : body.budgetStartAt;
-    const nextBudgetEnd = body.budgetEndAt === undefined ? (existing as any).budgetEndAt : body.budgetEndAt;
-    if ((nextBudgetStart && !nextBudgetEnd) || (!nextBudgetStart && nextBudgetEnd)) {
-      throw app.httpErrors.badRequest("budget period must have both dates");
-    }
-    if (nextBudgetStart && nextBudgetEnd && nextBudgetEnd <= nextBudgetStart) {
-      throw app.httpErrors.badRequest("budgetEndAt must be after budgetStartAt");
-    }
     const nextActualStart = body.actualStartAt === undefined ? (existing as any).actualStartAt : body.actualStartAt;
     const nextActualEnd = body.actualEndAt === undefined ? (existing as any).actualEndAt : body.actualEndAt;
     if ((nextActualStart && !nextActualEnd) || (!nextActualStart && nextActualEnd)) {

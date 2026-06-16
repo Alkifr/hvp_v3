@@ -18,6 +18,7 @@ const FIELD_LABEL: Record<string, string> = {
   title: "Название",
   level: "Уровень",
   status: "Статус",
+  planningKind: "Тип планирования",
   aircraftId: "Борт",
   eventTypeId: "Тип события",
   startAtLocal: "Начало",
@@ -45,6 +46,11 @@ const STATUS_LABEL: Record<string, string> = {
 const LEVEL_LABEL: Record<string, string> = {
   OPERATIONAL: "Оперативный",
   STRATEGIC: "Стратегический"
+};
+
+const PLANNING_KIND_LABEL: Record<string, string> = {
+  PLANNED: "Плановое",
+  UNPLANNED: "Внеплановое"
 };
 
 function safeReadGanttUi(): any | null {
@@ -79,6 +85,7 @@ type EventRow = {
   actualEndAt?: string | null;
   level: "STRATEGIC" | "OPERATIONAL";
   status: string;
+  planningKind?: "PLANNED" | "UNPLANNED" | string;
   aircraft?: {
     id?: string;
     tailNumber: string;
@@ -338,6 +345,8 @@ type AircraftTypePaletteRow = { id: string; operatorId: string; aircraftTypeId: 
 type DndStand = Stand & { hangarId: string; hangarName: string; layoutName: string };
 
 type GroupMode = "AIRCRAFT" | "HANGAR_STAND";
+type GanttDisplayMode = "CURRENT" | "PLAN_FACT";
+type PlanningKindFilter = "ALL" | "PLANNED" | "UNPLANNED";
 
 type TowSegment = { id: string; eventId: string; startAt: string; endAt: string };
 
@@ -349,6 +358,7 @@ type EditorDraft = {
   title: string;
   level: "STRATEGIC" | "OPERATIONAL";
   status: "DRAFT" | "PLANNED" | "CONFIRMED" | "IN_PROGRESS" | "DONE" | "CANCELLED" | "DELETED";
+  planningKind: "PLANNED" | "UNPLANNED";
   aircraftId: string;
   eventTypeId: string;
   startAtLocal: string; // YYYY-MM-DDTHH:mm
@@ -521,23 +531,46 @@ function renderPlacementBreaks(params: {
     .filter(Boolean);
 }
 
-function renderActualTatStripe(params: { ev: EventRow; from: dayjs.Dayjs; dayWidth: number; canvasWidth: number }) {
-  if (!params.ev.actualStartAt || !params.ev.actualEndAt) return null;
-  const seg = calcBarXW({
-    startAt: params.ev.actualStartAt,
-    endAt: params.ev.actualEndAt,
-    from: params.from,
-    dayWidth: params.dayWidth,
-    canvasWidth: params.canvasWidth
-  });
-  if (!seg) return null;
-  return (
-    <div
-      className="actualTatStripe"
-      style={{ left: seg.x, width: seg.w }}
-      title={`Факт: ${formatExportDate(params.ev.actualStartAt)} – ${formatExportDate(params.ev.actualEndAt)}`}
-    />
-  );
+function hasActualPeriod(ev: EventRow) {
+  return Boolean(ev.actualStartAt && ev.actualEndAt);
+}
+
+function eventPlanningKind(ev: EventRow): "PLANNED" | "UNPLANNED" {
+  if (ev.planningKind === "PLANNED" || ev.planningKind === "UNPLANNED") return ev.planningKind;
+  return ev.budgetStartAt && ev.budgetEndAt ? "PLANNED" : "UNPLANNED";
+}
+
+function displayPeriodForMode(ev: EventRow, mode: GanttDisplayMode): { startAt: string; endAt: string; source: "Опер." | "Факт" } {
+  if (mode === "CURRENT" && ev.actualStartAt && ev.actualEndAt) {
+    return { startAt: ev.actualStartAt, endAt: ev.actualEndAt, source: "Факт" };
+  }
+  return { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." };
+}
+
+function displayTatForMode(ev: EventRow, mode: GanttDisplayMode): { label: string; source: "Опер." | "Факт" } {
+  const period = displayPeriodForMode(ev, mode);
+  return { label: formatTat(period.startAt, period.endAt), source: period.source };
+}
+
+function operationalTat(ev: EventRow) {
+  return { label: formatTat(ev.startAt, ev.endAt), source: "Опер." };
+}
+
+function factTone(ev: EventRow): "good" | "warn" | "bad" {
+  const actualHours = tatHours(ev.actualStartAt, ev.actualEndAt);
+  const operationalHours = tatHours(ev.startAt, ev.endAt);
+  if (actualHours == null || operationalHours == null || !ev.actualEndAt) return "warn";
+  const endsLater = dayjs(ev.actualEndAt).valueOf() > dayjs(ev.endAt).valueOf();
+  const tatLonger = actualHours > operationalHours;
+  if (endsLater && tatLonger) return "bad";
+  if (!endsLater && !tatLonger) return "good";
+  return "warn";
+}
+
+function factToneLabel(tone: "good" | "warn" | "bad") {
+  if (tone === "bad") return "Факт позже плана, TAT больше";
+  if (tone === "good") return "Факт в срок, TAT не больше плана";
+  return "Факт требует внимания";
 }
 
 // Образец бара статуса для легенды — использует тот же barVisualStyle,
@@ -623,14 +656,14 @@ function shortEventName(ev: EventRow) {
   return ev.eventType?.name || ev.title;
 }
 
-function aircraftBarText(ev: EventRow, width: number) {
-  const tat = preferredTat(ev);
+function aircraftBarText(ev: EventRow, width: number, mode: GanttDisplayMode = "CURRENT") {
+  const tat = mode === "PLAN_FACT" ? operationalTat(ev) : displayTatForMode(ev, mode);
   const showFull = width >= 80;
   return { tat, parts: [showFull ? ev.title : ""].filter(Boolean) };
 }
 
-function hangarBarText(ev: EventRow, width: number) {
-  const tat = preferredTat(ev);
+function hangarBarText(ev: EventRow, width: number, mode: GanttDisplayMode = "CURRENT") {
+  const tat = mode === "PLAN_FACT" ? operationalTat(ev) : displayTatForMode(ev, mode);
   const fullName = width >= 230 ? ev.title : "";
   return { tat, parts: [eventAircraftLabel(ev), shortEventName(ev), fullName].filter(Boolean) };
 }
@@ -646,12 +679,13 @@ function BarLabel(props: { tat: { label: string; source: string }; parts: string
 
 function eventTooltip(ev: EventRow) {
   const base = `${eventAircraftLabel(ev)} • ${ev.title}`;
-  const period = `${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format("DD.MM.YYYY HH:mm")}`;
+  const period = `Опер.: ${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format("DD.MM.YYYY HH:mm")}`;
   const place = placementLabel(ev);
   const plan = ev.budgetStartAt && ev.budgetEndAt ? `\nПлан: ${formatExportDate(ev.budgetStartAt)} – ${formatExportDate(ev.budgetEndAt)}` : "";
   const fact = ev.actualStartAt && ev.actualEndAt ? `\nФакт: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}` : "";
+  const planningKind = `\nТип: ${PLANNING_KIND_LABEL[eventPlanningKind(ev)]}`;
   const prefix = ev.segmentKey ? `Этап: ${place}\n` : "";
-  return `${prefix}${base}\n${period}${plan}${fact}`;
+  return `${prefix}${base}\n${period}${planningKind}${plan}${fact}`;
 }
 
 function eventSegmentsForHangarRows(ev: EventRow): EventRow[] {
@@ -1006,6 +1040,9 @@ export function GanttView() {
   }, [from, to]);
 
   const [groupMode, setGroupMode] = useState<GroupMode>(() => (savedUi?.groupMode === "HANGAR_STAND" ? "HANGAR_STAND" : "AIRCRAFT"));
+  const [ganttDisplayMode, setGanttDisplayMode] = useState<GanttDisplayMode>(() =>
+    savedUi?.ganttDisplayMode === "PLAN_FACT" ? "PLAN_FACT" : "CURRENT"
+  );
   const [zoom, setZoom] = useState<ZoomLevel>(() => {
     const z = savedUi?.zoom;
     return (ZOOM_ORDER as string[]).includes(String(z)) ? (z as ZoomLevel) : "day";
@@ -1033,6 +1070,9 @@ export function GanttView() {
     if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
     return [];
   });
+  const [filterPlanningKind, setFilterPlanningKind] = useState<PlanningKindFilter>(() =>
+    savedUi?.filterPlanningKind === "PLANNED" || savedUi?.filterPlanningKind === "UNPLANNED" ? savedUi.filterPlanningKind : "ALL"
+  );
 
   const aircraftTypesQ = useQuery({
     queryKey: ["ref", "aircraft-types"],
@@ -1130,6 +1170,7 @@ export function GanttView() {
     setFilterOperatorIds([]);
     setFilterAircraftIds([]);
     setFilterEventTypeIds([]);
+    setFilterPlanningKind("ALL");
     setSelectedHangarIds([]);
 
     setRangeFromInput(rf);
@@ -1188,11 +1229,13 @@ export function GanttView() {
       rangeFromInput,
       rangeToInput,
       groupMode,
+      ganttDisplayMode,
       selectedHangarIds,
       filterAircraftTypeIds,
       filterOperatorIds,
       filterAircraftIds,
       filterEventTypeIds,
+      filterPlanningKind,
       dndEnabled,
       zoom
     });
@@ -1202,11 +1245,13 @@ export function GanttView() {
     rangeFromInput,
     rangeToInput,
     groupMode,
+    ganttDisplayMode,
     selectedHangarIds,
     filterAircraftTypeIds,
     filterOperatorIds,
     filterAircraftIds,
     filterEventTypeIds,
+    filterPlanningKind,
     dndEnabled,
     zoom
   ]);
@@ -1214,6 +1259,7 @@ export function GanttView() {
   const events = q.data ?? [];
   const dayWidth = ZOOM_PX_PER_DAY[zoom];
   const canvasWidth = Math.max(1, Math.round(days * dayWidth));
+  const ganttRowHeight = ganttDisplayMode === "PLAN_FACT" ? 56 : 44;
   const ticks = useMemo(() => buildGanttTicks(from, to, zoom), [from, to, zoom]);
 
   useEffect(() => {
@@ -1281,16 +1327,19 @@ export function GanttView() {
   const openEditorForNew = () => {
     const defaultAircraft = aircraftQ.data?.[0]?.id ?? "";
     const defaultEventType = eventTypesQ.data?.[0]?.id ?? "";
+    const defaultStart = dayjs().add(1, "day").hour(9).minute(0).second(0).format("YYYY-MM-DDTHH:mm");
+    const defaultEnd = dayjs().add(3, "day").hour(18).minute(0).second(0).format("YYYY-MM-DDTHH:mm");
     const d: EditorDraft = {
       title: "ТО",
       level: "OPERATIONAL",
       status: "PLANNED",
+      planningKind: "PLANNED",
       aircraftId: defaultAircraft,
       eventTypeId: defaultEventType,
-      startAtLocal: dayjs().add(1, "day").hour(9).minute(0).second(0).format("YYYY-MM-DDTHH:mm"),
-      endAtLocal: dayjs().add(3, "day").hour(18).minute(0).second(0).format("YYYY-MM-DDTHH:mm"),
-      budgetStartAtLocal: "",
-      budgetEndAtLocal: "",
+      startAtLocal: defaultStart,
+      endAtLocal: defaultEnd,
+      budgetStartAtLocal: defaultStart,
+      budgetEndAtLocal: defaultEnd,
       actualStartAtLocal: "",
       actualEndAtLocal: "",
       notes: "",
@@ -1300,10 +1349,10 @@ export function GanttView() {
       multiPlacement: false,
       placements: [
         {
-          startAtLocal: dayjs().add(1, "day").hour(9).minute(0).second(0).format("YYYY-MM-DDTHH:mm"),
-          endAtLocal: dayjs().add(3, "day").hour(18).minute(0).second(0).format("YYYY-MM-DDTHH:mm"),
-          budgetStartAtLocal: "",
-          budgetEndAtLocal: "",
+          startAtLocal: defaultStart,
+          endAtLocal: defaultEnd,
+          budgetStartAtLocal: defaultStart,
+          budgetEndAtLocal: defaultEnd,
           actualStartAtLocal: "",
           actualEndAtLocal: "",
           hangarId: "",
@@ -1328,6 +1377,7 @@ export function GanttView() {
       title: ev.title,
       level: ev.level,
       status: (ev.status as any) ?? "PLANNED",
+      planningKind: eventPlanningKind(ev),
       aircraftId: (ev.aircraft as any)?.id ?? (ev as any).aircraftId ?? "",
       eventTypeId: (ev.eventType as any)?.id ?? (ev as any)?.eventTypeId ?? "",
       startAtLocal,
@@ -1361,6 +1411,7 @@ export function GanttView() {
       title: `${ev.title} (копия)`,
       level: ev.level,
       status: "PLANNED",
+      planningKind: eventPlanningKind(ev),
       aircraftId: (ev.aircraft as any)?.id ?? (ev as any).aircraftId ?? "",
       eventTypeId: (ev.eventType as any)?.id ?? (ev as any)?.eventTypeId ?? "",
       startAtLocal,
@@ -1374,7 +1425,7 @@ export function GanttView() {
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
       multiPlacement: placements.length > 1,
-      placements: placements.map((p) => ({ ...p, id: undefined }))
+      placements: placements.map((p) => ({ ...p, id: undefined, actualStartAtLocal: "", actualEndAtLocal: "" }))
     };
     setDraft(d);
     setOriginal(d);
@@ -1438,6 +1489,7 @@ export function GanttView() {
       "title",
       "level",
       "status",
+      "planningKind",
       "aircraftId",
       "eventTypeId",
       "startAtLocal",
@@ -1509,14 +1561,26 @@ export function GanttView() {
       if (actualStartAt && actualEndAt && dayjs(actualEndAt).valueOf() <= dayjs(actualStartAt).valueOf()) {
         throw new Error("Окончание фактического периода должно быть позже начала");
       }
+      const normalizedBudgetStartAt = draft.planningKind === "UNPLANNED" ? null : budgetStartAt ?? startAt;
+      const normalizedBudgetEndAt = draft.planningKind === "UNPLANNED" ? null : budgetEndAt ?? endAt;
       const placementsPayload = draft.multiPlacement
-        ? placementApiPayload(draft.placements)
+        ? placementApiPayload(
+            draft.placements.map((p) =>
+              draft.planningKind === "UNPLANNED"
+                ? { ...p, budgetStartAtLocal: "", budgetEndAtLocal: "" }
+                : {
+                    ...p,
+                    budgetStartAtLocal: p.budgetStartAtLocal || p.startAtLocal,
+                    budgetEndAtLocal: p.budgetEndAtLocal || p.endAtLocal
+                  }
+            )
+          )
         : placementApiPayload([
             {
               startAtLocal: draft.startAtLocal,
               endAtLocal: draft.endAtLocal,
-              budgetStartAtLocal: draft.budgetStartAtLocal,
-              budgetEndAtLocal: draft.budgetEndAtLocal,
+              budgetStartAtLocal: normalizedBudgetStartAt ? draft.budgetStartAtLocal || draft.startAtLocal : "",
+              budgetEndAtLocal: normalizedBudgetEndAt ? draft.budgetEndAtLocal || draft.endAtLocal : "",
               actualStartAtLocal: draft.actualStartAtLocal,
               actualEndAtLocal: draft.actualEndAtLocal,
               hangarId: draft.hangarId,
@@ -1529,13 +1593,14 @@ export function GanttView() {
       const payload = {
         level: draft.level,
         status: draft.status,
+        planningKind: draft.planningKind,
         title: draft.title,
         aircraftId: draft.aircraftId,
         eventTypeId: draft.eventTypeId,
         startAt,
         endAt,
-        budgetStartAt,
-        budgetEndAt,
+        budgetStartAt: normalizedBudgetStartAt,
+        budgetEndAt: normalizedBudgetEndAt,
         actualStartAt,
         actualEndAt,
         hangarId: draft.hangarId || null,
@@ -2001,9 +2066,10 @@ export function GanttView() {
       const id = (e.eventType as any)?.id ?? (e as any).eventTypeId ?? "";
       return filterEventTypeIds.includes(String(id));
     };
+    const byPlanningKindFilter = (e: EventRow) => filterPlanningKind === "ALL" || eventPlanningKind(e) === filterPlanningKind;
 
     const visible = events
-      .filter((e) => byTypeFilter(e) && byOperatorFilter(e) && byAircraftFilter(e) && byEventTypeFilter(e))
+      .filter((e) => byTypeFilter(e) && byOperatorFilter(e) && byAircraftFilter(e) && byEventTypeFilter(e) && byPlanningKindFilter(e))
       .flatMap(eventSegmentsForHangarRows)
       .filter((e) => inSelected(e));
     const activeVisible = visible.filter((e) => e.status !== "CANCELLED");
@@ -2121,7 +2187,7 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, selectedHangarIds, filterAircraftTypeIds, filterOperatorIds, filterAircraftIds, filterEventTypeIds, events, dndActive, dndStandsQ.data, dndStandById]);
+  }, [groupMode, selectedHangarIds, filterAircraftTypeIds, filterOperatorIds, filterAircraftIds, filterEventTypeIds, filterPlanningKind, events, dndActive, dndStandsQ.data, dndStandById]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -2137,7 +2203,7 @@ export function GanttView() {
       });
     });
     const links: Array<{ key: string; x1: number; y1: number; x2: number; y2: number; color: string }> = [];
-    const rowH = 44;
+    const rowH = ganttRowHeight;
     for (const ev of events) {
       const placements = ev.placements ?? [];
       if (placements.length < 2) continue;
@@ -2164,7 +2230,7 @@ export function GanttView() {
       }
     }
     return links;
-  }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap]);
+  }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap, ganttRowHeight]);
 
   const exportEvents = useMemo(() => {
     const getHangarId = (e: EventRow) => (e.hangar as any)?.id ?? (e.layout as any)?.hangarId ?? "";
@@ -2188,9 +2254,10 @@ export function GanttView() {
       const okAcft = filterAircraftIds.length === 0 || filterAircraftIds.includes(String(aid));
       const eventTypeId = (e.eventType as any)?.id ?? (e as any).eventTypeId ?? "";
       const okEventType = filterEventTypeIds.length === 0 || filterEventTypeIds.includes(String(eventTypeId));
-      return okHangar && okType && okOperator && okAcft && okEventType;
+      const okPlanningKind = filterPlanningKind === "ALL" || eventPlanningKind(e) === filterPlanningKind;
+      return okHangar && okType && okOperator && okAcft && okEventType && okPlanningKind;
     });
-  }, [events, selectedHangarIds, filterAircraftTypeIds, filterOperatorIds, filterAircraftIds, filterEventTypeIds]);
+  }, [events, selectedHangarIds, filterAircraftTypeIds, filterOperatorIds, filterAircraftIds, filterEventTypeIds, filterPlanningKind]);
 
   const visibleEvents = useMemo(() => exportEvents.filter((e) => e.status !== "CANCELLED"), [exportEvents]);
 
@@ -2263,6 +2330,7 @@ export function GanttView() {
           "Тип события": ev.eventType?.name ?? "—",
           "Уровень": LEVEL_LABEL[ev.level] ?? ev.level,
           "Статус": STATUS_LABEL[ev.status] ?? ev.status,
+          "Тип планирования": PLANNING_KIND_LABEL[eventPlanningKind(ev)] ?? eventPlanningKind(ev),
           "Начало": toExcelDate(ev.startAt),
           "Окончание": toExcelDate(ev.endAt),
           "Оперативный TAT, часов": Number(durationHours.toFixed(2)),
@@ -2307,6 +2375,7 @@ export function GanttView() {
   const reportMeta = [
     `Период: ${dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – ${dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}`,
     `Зум: ${ZOOM_LABEL[zoom]}`,
+    `Вид: ${ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт"}`,
     `Группировка: ${groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}`,
     `Контур: ${activeSandbox ? `песочница «${activeSandbox.name}»` : "рабочий контур"}`,
     `Событий: ${reportRows.length}`
@@ -2367,7 +2436,7 @@ export function GanttView() {
 
     const labelW = 210;
     const chartW = 1180;
-    const rowH = 30;
+    const rowH = ganttDisplayMode === "PLAN_FACT" ? 58 : 30;
     const headerH = 58;
     const height = headerH + rowsWithEvents.length * rowH + 22;
     const width = labelW + chartW + 24;
@@ -2389,24 +2458,29 @@ export function GanttView() {
         const y = headerH + idx * rowH;
         const bars = r.events
           .map(({ ev }) => {
-            const x = clamp(xFor(ev.startAt), labelW, labelW + chartW);
-            const right = clamp(xFor(ev.endAt), labelW, labelW + chartW);
+            const displayPeriod = displayPeriodForMode(ev, ganttDisplayMode);
+            const x = clamp(xFor(displayPeriod.startAt), labelW, labelW + chartW);
+            const right = clamp(xFor(displayPeriod.endAt), labelW, labelW + chartW);
             const w = Math.max(2, right - x);
             const fill = ev.status === "CANCELLED" ? "#94a3b8" : aircraftTypeMarkColor(ev, aircraftPaletteMap);
             const stroke = ev.status === "DONE" ? "#16a34a" : ev.status === "CANCELLED" ? "#64748b" : "#0f172a";
             const label = compactBarLabel(ev);
             const actualSvg =
-              ev.actualStartAt && ev.actualEndAt
+              ganttDisplayMode === "PLAN_FACT" && ev.actualStartAt && ev.actualEndAt
                 ? (() => {
                     const ax = clamp(xFor(ev.actualStartAt), labelW, labelW + chartW);
                     const ar = clamp(xFor(ev.actualEndAt), labelW, labelW + chartW);
                     const aw = Math.max(2, ar - ax);
-                    return `<rect x="${ax.toFixed(1)}" y="${y + 25}" width="${aw.toFixed(1)}" height="3" rx="1.5" fill="#16a34a" opacity="0.95" />`;
+                    const tone = factTone(ev);
+                    const factFill = tone === "bad" ? "#dc2626" : tone === "warn" ? "#f97316" : "#16a34a";
+                    return `<rect x="${ax.toFixed(1)}" y="${y + 29}" width="${aw.toFixed(1)}" height="22" rx="8" fill="${factFill}" opacity="0.95" />`;
                   })()
                 : "";
-            return `<rect x="${x.toFixed(1)}" y="${y + 6}" width="${w.toFixed(1)}" height="18" rx="5" fill="${htmlEscape(fill)}" stroke="${stroke}" stroke-width="1" opacity="${ev.status === "CANCELLED" ? "0.55" : "0.88"}" />
+            const barY = ganttDisplayMode === "PLAN_FACT" ? y + 5 : y + 6;
+            const barH = ganttDisplayMode === "PLAN_FACT" ? 22 : 18;
+            return `<rect x="${x.toFixed(1)}" y="${barY}" width="${w.toFixed(1)}" height="${barH}" rx="5" fill="${htmlEscape(fill)}" stroke="${stroke}" stroke-width="1" opacity="${ev.status === "CANCELLED" ? "0.55" : "0.88"}" />
               ${actualSvg}
-              ${w > 80 ? `<text x="${(x + 6).toFixed(1)}" y="${y + 19}" font-size="9" fill="#ffffff">${htmlEscape(label.slice(0, 58))}</text>` : ""}`;
+              ${w > 80 ? `<text x="${(x + 6).toFixed(1)}" y="${ganttDisplayMode === "PLAN_FACT" ? y + 15 : y + 19}" font-size="9" fill="#ffffff">${htmlEscape(label.slice(0, 58))}</text>` : ""}`;
           })
           .join("");
         const label = `${(r as any).label ?? "—"}${(r as any).subLabel ? ` · ${(r as any).subLabel}` : ""}`;
@@ -2595,6 +2669,8 @@ export function GanttView() {
               <span className="ganttPanelDot" aria-hidden="true">·</span>
               {ZOOM_LABEL[zoom]}
               <span className="ganttPanelDot" aria-hidden="true">·</span>
+              {ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт"}
+              <span className="ganttPanelDot" aria-hidden="true">·</span>
               {groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}
             </span>
           </div>
@@ -2707,6 +2783,13 @@ export function GanttView() {
               <select value={groupMode} onChange={(e) => setGroupMode(e.target.value as GroupMode)}>
                 <option value="AIRCRAFT">Борт / событие</option>
                 <option value="HANGAR_STAND">Ангар / место</option>
+              </select>
+            </label>
+            <label className="tgField" title="Текущий график показывает факт вместо плана, когда факт заполнен; План-факт показывает два бара">
+              <span className="tgFieldLabel">Отображение</span>
+              <select value={ganttDisplayMode} onChange={(e) => setGanttDisplayMode(e.target.value as GanttDisplayMode)}>
+                <option value="CURRENT">Текущий график</option>
+                <option value="PLAN_FACT">План-факт</option>
               </select>
             </label>
             <label className="tgField" title="Укрупнённый / детализированный зум шкалы">
@@ -2864,6 +2947,14 @@ export function GanttView() {
                 searchPlaceholder="Найти тип события"
               />
             </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Планирование</span>
+              <select value={filterPlanningKind} onChange={(e) => setFilterPlanningKind(e.target.value as PlanningKindFilter)}>
+                <option value="ALL">все</option>
+                <option value="PLANNED">плановые</option>
+                <option value="UNPLANNED">внеплановые</option>
+              </select>
+            </label>
           </div>
 
           <div className="ganttToolbarGroup">
@@ -3007,6 +3098,25 @@ export function GanttView() {
                   />
                   Линия «сегодня»
                 </span>
+                <span className="ganttLegendItem">
+                  <span className="legendBar legendPlanFactSample" aria-hidden="true">
+                    <span className="legendPlanFactPlan" />
+                    <span className="legendPlanFactActual legendPlanFactActualGood" />
+                  </span>
+                  План-факт: верхний — оперативный план, нижний — факт
+                </span>
+                <span className="ganttLegendItem">
+                  <span className="legendBar legendFactGood" aria-hidden="true" />
+                  Факт в срок, TAT не больше плана
+                </span>
+                <span className="ganttLegendItem">
+                  <span className="legendBar legendFactWarn" aria-hidden="true" />
+                  Факт требует внимания
+                </span>
+                <span className="ganttLegendItem">
+                  <span className="legendBar legendFactBad" aria-hidden="true" />
+                  Факт позже плана, TAT больше
+                </span>
               </div>
             </div>
 
@@ -3117,7 +3227,7 @@ export function GanttView() {
           <div className="ganttLeftCol">
             {groupMode === "AIRCRAFT"
               ? aircraftRows.map((r) => (
-                  <div className="ganttLabel" key={r.key}>
+                  <div className="ganttLabel" key={r.key} style={{ height: ganttRowHeight }}>
                     <div>
                       <strong>{r.label}</strong>
                     </div>
@@ -3127,7 +3237,7 @@ export function GanttView() {
                   </div>
                 ))
               : hangarStandRows.map((r) => (
-                  <div className="ganttLabel" key={r.key}>
+                  <div className="ganttLabel" key={r.key} style={{ height: ganttRowHeight }}>
                     <div>
                       <strong>{r.label}</strong>
                     </div>
@@ -3143,7 +3253,7 @@ export function GanttView() {
                   <svg
                     className="placementLinkLayer"
                     width={canvasWidth}
-                    height={Math.max(44, hangarStandRows.length * 44)}
+                    height={Math.max(ganttRowHeight, hangarStandRows.length * ganttRowHeight)}
                     aria-hidden="true"
                   >
                     {placementLinks.map((l) => (
@@ -3163,21 +3273,26 @@ export function GanttView() {
                 ) : null}
                 {groupMode === "AIRCRAFT"
                   ? aircraftRows.map((r) => (
-                      <div className="ganttCanvas" key={r.key} style={{ width: canvasWidth }}>
+                      <div className="ganttCanvas" key={r.key} style={{ width: canvasWidth, minHeight: ganttRowHeight }}>
                         <TodayLine from={from} to={to} canvasWidth={canvasWidth} />
                         {r.events.map((p) => {
                           const ev = p.ev;
-                          const g = calcBarXW({ startAt: ev.startAt, endAt: ev.endAt, from, dayWidth, canvasWidth });
+                          const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
+                          const g = calcBarXW({ startAt: displayPeriod.startAt, endAt: displayPeriod.endAt, from, dayWidth, canvasWidth });
                           if (!g) return null;
                           const { x, w } = g;
                           const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
                           const visual = barVisualStyle(ev.status, color);
+                          const actualSeg =
+                            ganttDisplayMode === "PLAN_FACT" && ev.actualStartAt && ev.actualEndAt
+                              ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth })
+                              : null;
+                          const actualTone = factTone(ev);
 
                           return (
                             <Fragment key={ev.segmentKey ?? ev.id}>
-                              {renderActualTatStripe({ ev, from, dayWidth, canvasWidth })}
                               <div
-                                className="bar"
+                                className={`bar${ganttDisplayMode === "PLAN_FACT" ? " barPlanFactPlan" : ""}${displayPeriod.source === "Факт" ? " barCurrentFact" : ""}`}
                                 style={{
                                   left: x,
                                   width: w,
@@ -3188,14 +3303,21 @@ export function GanttView() {
                                 onClick={() => pickEvent(ev)}
                                 title={`${eventTooltip(ev)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
                               >
-                                {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
-                                {renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
+                                {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth }) : null}
+                                {displayPeriod.source === "Опер." ? renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth }) : null}
                                 {canShowBarTitle(w) ? (
                                   <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
-                                    <BarLabel {...aircraftBarText(ev, w)} />
+                                    <BarLabel {...aircraftBarText(ev, w, ganttDisplayMode)} />
                                   </span>
                                 ) : null}
                               </div>
+                              {actualSeg ? (
+                                <div
+                                  className={`factBar factBar${actualTone[0].toUpperCase()}${actualTone.slice(1)}`}
+                                  style={{ left: actualSeg.x, width: actualSeg.w }}
+                                  title={`${factToneLabel(actualTone)}: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}`}
+                                />
+                              ) : null}
                             </Fragment>
                           );
                         })}
@@ -3207,6 +3329,7 @@ export function GanttView() {
                         key={r.key}
                         style={{
                           width: canvasWidth,
+                          minHeight: ganttRowHeight,
                           outline:
                             dndActive && dndHoverKey === r.key && dndHoverIntent === "move"
                               ? "2px solid rgba(37, 99, 235, 0.55)"
@@ -3241,11 +3364,17 @@ export function GanttView() {
                         ) : null}
                         {r.events.map((p) => {
                           const ev = p.ev;
-                          const g = calcBarXW({ startAt: ev.startAt, endAt: ev.endAt, from, dayWidth, canvasWidth });
+                          const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
+                          const g = calcBarXW({ startAt: displayPeriod.startAt, endAt: displayPeriod.endAt, from, dayWidth, canvasWidth });
                           if (!g) return null;
                           const { x, w } = g;
                           const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
                           const visual = barVisualStyle(ev.status, color);
+                          const actualSeg =
+                            ganttDisplayMode === "PLAN_FACT" && ev.actualStartAt && ev.actualEndAt
+                              ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth })
+                              : null;
+                          const actualTone = factTone(ev);
 
                           let overlapOverlay: React.ReactNode = null;
                           if (p.overlapToMs) {
@@ -3283,9 +3412,8 @@ export function GanttView() {
 
                           return (
                             <Fragment key={ev.id}>
-                              {renderActualTatStripe({ ev, from, dayWidth, canvasWidth })}
                               <div
-                              className="bar"
+                              className={`bar${ganttDisplayMode === "PLAN_FACT" ? " barPlanFactPlan" : ""}${displayPeriod.source === "Факт" ? " barCurrentFact" : ""}`}
                               style={{
                                 left: x,
                                 width: w,
@@ -3425,13 +3553,20 @@ export function GanttView() {
                                 </>
                               ) : null}
                               {overlapOverlay}
-                              {renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth })}
+                              {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth }) : null}
                               {canShowBarTitle(w) ? (
                                 <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
-                                  <BarLabel {...hangarBarText(ev, w)} />
+                                  <BarLabel {...hangarBarText(ev, w, ganttDisplayMode)} />
                                 </span>
                               ) : null}
                               </div>
+                            {actualSeg ? (
+                              <div
+                                className={`factBar factBar${actualTone[0].toUpperCase()}${actualTone.slice(1)}`}
+                                style={{ left: actualSeg.x, width: actualSeg.w }}
+                                title={`${factToneLabel(actualTone)}: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}`}
+                              />
+                            ) : null}
                             </Fragment>
                           );
                         })}
@@ -3533,6 +3668,34 @@ export function GanttView() {
                     </select>
                   </label>
                   <label className="evField">
+                    <span className="evFieldLabel">Тип планирования</span>
+                    <select
+                      className="evInput"
+                      value={draft.planningKind}
+                      onChange={(e) => {
+                        const planningKind = e.target.value as EditorDraft["planningKind"];
+                        setDraft({
+                          ...draft,
+                          planningKind,
+                          budgetStartAtLocal: planningKind === "PLANNED" ? draft.budgetStartAtLocal || draft.startAtLocal : "",
+                          budgetEndAtLocal: planningKind === "PLANNED" ? draft.budgetEndAtLocal || draft.endAtLocal : "",
+                          placements: draft.placements.map((p) =>
+                            planningKind === "PLANNED"
+                              ? {
+                                  ...p,
+                                  budgetStartAtLocal: p.budgetStartAtLocal || p.startAtLocal,
+                                  budgetEndAtLocal: p.budgetEndAtLocal || p.endAtLocal
+                                }
+                              : { ...p, budgetStartAtLocal: "", budgetEndAtLocal: "" }
+                          )
+                        });
+                      }}
+                    >
+                      <option value="PLANNED">Плановое</option>
+                      <option value="UNPLANNED">Внеплановое</option>
+                    </select>
+                  </label>
+                  <label className="evField">
                     <span className="evFieldLabel">Борт</span>
                     <select
                       className="evInput"
@@ -3629,6 +3792,7 @@ export function GanttView() {
                       type="datetime-local"
                       value={draft.budgetStartAtLocal}
                       onChange={(e) => setDraft({ ...draft, budgetStartAtLocal: e.target.value })}
+                      disabled={draft.planningKind === "UNPLANNED"}
                     />
                   </label>
                   <label className="evField">
@@ -3638,6 +3802,7 @@ export function GanttView() {
                       type="datetime-local"
                       value={draft.budgetEndAtLocal}
                       onChange={(e) => setDraft({ ...draft, budgetEndAtLocal: e.target.value })}
+                      disabled={draft.planningKind === "UNPLANNED"}
                     />
                   </label>
                   <label className="evField">
@@ -3776,11 +3941,11 @@ export function GanttView() {
                               <div className="evPeriodName">Бюджетный</div>
                               <label className="evField">
                                 <span className="evFieldLabel">Дата начала</span>
-                                <input className="evInput" type="datetime-local" value={p.budgetStartAtLocal} onChange={(e) => setDraftPlacement(idx, { budgetStartAtLocal: e.target.value })} />
+                                <input className="evInput" type="datetime-local" value={p.budgetStartAtLocal} onChange={(e) => setDraftPlacement(idx, { budgetStartAtLocal: e.target.value })} disabled={draft.planningKind === "UNPLANNED"} />
                               </label>
                               <label className="evField">
                                 <span className="evFieldLabel">Дата окончания</span>
-                                <input className="evInput" type="datetime-local" value={p.budgetEndAtLocal} onChange={(e) => setDraftPlacement(idx, { budgetEndAtLocal: e.target.value })} />
+                                <input className="evInput" type="datetime-local" value={p.budgetEndAtLocal} onChange={(e) => setDraftPlacement(idx, { budgetEndAtLocal: e.target.value })} disabled={draft.planningKind === "UNPLANNED"} />
                               </label>
                               <label className="evField">
                                 <span className="evFieldLabel">TAT</span>
