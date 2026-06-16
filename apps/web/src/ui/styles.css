@@ -1784,6 +1784,72 @@ textarea {
   z-index: 1;
 }
 
+.barPlanFactPlan {
+  top: 4px;
+  height: 24px;
+  border-radius: 10px;
+}
+
+.barCurrentFact {
+  box-shadow:
+    inset 0 -3px 0 rgba(22, 163, 74, 0.92),
+    0 0 0 1px rgba(22, 163, 74, 0.24);
+}
+
+.factBar {
+  position: absolute;
+  top: 28px;
+  height: 24px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 2;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
+.factBarGood,
+.legendFactGood {
+  background: #16a34a;
+}
+
+.factBarWarn,
+.legendFactWarn {
+  background: #f97316;
+}
+
+.factBarBad,
+.legendFactBad {
+  background: #dc2626;
+}
+
+.legendPlanFactSample {
+  position: relative;
+  height: 16px;
+  background: transparent;
+}
+
+.legendPlanFactPlan,
+.legendPlanFactActual {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: 999px;
+}
+
+.legendPlanFactPlan {
+  top: 1px;
+  height: 6px;
+  background: #94a3b8;
+}
+
+.legendPlanFactActual {
+  bottom: 1px;
+  height: 6px;
+}
+
+.legendPlanFactActualGood {
+  background: #16a34a;
+}
+
 .legendDot {
   width: 10px;
   height: 10px;

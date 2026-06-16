@@ -278,11 +278,14 @@ async function main() {
       data: {
         level: PlanningLevel.OPERATIONAL,
         status: EventStatus.PLANNED,
+        planningKind: "PLANNED",
         title: "Демо: A‑check",
         aircraftId: aircraft.id,
         eventTypeId: aCheck.id,
         startAt: start,
         endAt: end,
+        budgetStartAt: start,
+        budgetEndAt: end,
         hangarId: hangars[0]!.id,
         layoutId: layout1.id
       }

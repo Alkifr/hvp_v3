@@ -22,6 +22,11 @@ enum EventStatus {
   DELETED
 }
 
+enum EventPlanningKind {
+  PLANNED
+  UNPLANNED
+}
+
 enum EventAuditAction {
   CREATE
   UPDATE
@@ -548,6 +553,7 @@ model MaintenanceEvent {
   id            String        @id @default(uuid())
   level         PlanningLevel
   status        EventStatus   @default(PLANNED)
+  planningKind  EventPlanningKind @default(PLANNED)
   title         String
 
   // контекст планирования: null = рабочий контур, иначе — песочница
@@ -596,6 +602,7 @@ model MaintenanceEvent {
   @@index([aircraftId])
   @@index([eventTypeId])
   @@index([startAt, endAt])
+  @@index([planningKind])
   @@index([hangarId])
   @@index([layoutId])
   @@index([sandboxId])
