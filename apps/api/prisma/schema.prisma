@@ -34,6 +34,44 @@ enum EventAuditAction {
   UNRESERVE
 }
 
+enum TechnicalPlanStatus {
+  DRAFT
+  IN_REVIEW
+  READY
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+enum TechnicalNeedCategory {
+  PERSONNEL
+  MATERIAL
+  TOOL
+  DOCUMENTATION
+  EQUIPMENT
+  CONTRACTOR
+  OTHER
+}
+
+enum TechnicalNeedStatus {
+  NEEDED
+  REQUESTED
+  IN_PROGRESS
+  READY
+  BLOCKED
+  CANCELLED
+}
+
+enum TechnicalStepStatus {
+  NOT_STARTED
+  READY
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  SKIPPED
+}
+
 enum StockMovementType {
   IN
   OUT
@@ -345,6 +383,9 @@ model Sandbox {
   materialReservations MaterialReservation[]
   materialIssues    MaterialIssue[]
   stockMovements    StockMovement[]
+  technicalPlans    EventTechnicalPlan[]
+  technicalNeeds    EventTechnicalNeed[]
+  technicalSteps    EventTechnicalStep[]
 
   @@index([ownerId])
 }
@@ -598,6 +639,7 @@ model MaintenanceEvent {
   materialReservations MaterialReservation[]
   materialIssues       MaterialIssue[]
   stockMovements       StockMovement[]
+  technicalPlan        EventTechnicalPlan?
 
   @@index([aircraftId])
   @@index([eventTypeId])
@@ -606,6 +648,92 @@ model MaintenanceEvent {
   @@index([hangarId])
   @@index([layoutId])
   @@index([sandboxId])
+}
+
+model EventTechnicalPlan {
+  id           String              @id @default(uuid())
+  eventId      String              @unique
+  sandboxId    String?
+  status       TechnicalPlanStatus @default(DRAFT)
+  leadEngineer String?
+  readinessPct Int                 @default(0)
+  notes        String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  needs EventTechnicalNeed[]
+  steps EventTechnicalStep[]
+
+  @@index([sandboxId])
+  @@index([status])
+}
+
+model EventTechnicalNeed {
+  id          String                @id @default(uuid())
+  planId      String
+  sandboxId   String?
+  category    TechnicalNeedCategory
+  description String
+  quantity    String?
+  requiredAt  DateTime?
+  responsible String?
+  status      TechnicalNeedStatus   @default(NEEDED)
+  isBlocker   Boolean               @default(false)
+  notes       String?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  plan    EventTechnicalPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?           @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@index([planId])
+  @@index([sandboxId])
+  @@index([status])
+  @@index([category])
+}
+
+model EventTechnicalStep {
+  id             String              @id @default(uuid())
+  planId         String
+  sandboxId      String?
+  seq            Int                 @default(0)
+  title          String
+  description    String?
+  responsible    String?
+  plannedStartAt DateTime?
+  plannedEndAt   DateTime?
+  actualStartAt  DateTime?
+  actualEndAt    DateTime?
+  status         TechnicalStepStatus @default(NOT_STARTED)
+  progressPct    Int                 @default(0)
+  isBlocker      Boolean             @default(false)
+  notes          String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  plan    EventTechnicalPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?           @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  predecessors EventTechnicalStepDependency[] @relation("StepDependencySuccessor")
+  successors   EventTechnicalStepDependency[] @relation("StepDependencyPredecessor")
+
+  @@index([planId, seq])
+  @@index([sandboxId])
+  @@index([status])
+}
+
+model EventTechnicalStepDependency {
+  predecessorStepId String
+  successorStepId   String
+
+  predecessor EventTechnicalStep @relation("StepDependencyPredecessor", fields: [predecessorStepId], references: [id], onDelete: Cascade)
+  successor   EventTechnicalStep @relation("StepDependencySuccessor", fields: [successorStepId], references: [id], onDelete: Cascade)
+
+  @@id([predecessorStepId, successorStepId])
+  @@index([successorStepId])
 }
 
 // Этапы размещения одного события по ангарам/местам.

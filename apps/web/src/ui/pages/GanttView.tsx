@@ -571,6 +571,8 @@ function factToneLabel(tone: "good" | "warn" | "bad") {
 
 const EXIT_TIME_LABEL_WIDTH = 42;
 const EXIT_TIME_LABEL_GAP = 4;
+const MIN_GANTT_LABEL_WIDTH = 160;
+const MAX_GANTT_LABEL_WIDTH = 420;
 
 function canShowExitTimeLabel(zoom: ZoomLevel) {
   return zoom === "hour" || zoom === "day";
@@ -963,11 +965,11 @@ function buildGanttTicks(from: dayjs.Dayjs, to: dayjs.Dayjs, majorScale: TimeSca
   return out;
 }
 
-function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: number }) {
-  const today = dayjs.utc().startOf("day");
-  if (today.valueOf() < props.from.valueOf() || today.valueOf() >= props.to.valueOf()) return null;
-  const totalDays = Math.max(1, props.to.diff(props.from, "day"));
-  const x = (today.diff(props.from, "day") / totalDays) * props.canvasWidth;
+function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: number; currentMinute: dayjs.Dayjs }) {
+  const now = props.currentMinute;
+  if (now.valueOf() < props.from.valueOf() || now.valueOf() >= props.to.valueOf()) return null;
+  const totalDays = Math.max(1 / 1440, props.to.diff(props.from, "day", true));
+  const x = (now.diff(props.from, "day", true) / totalDays) * props.canvasWidth;
   return (
     <div
       style={{
@@ -980,7 +982,7 @@ function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: num
         zIndex: 5,
         pointerEvents: "none"
       }}
-      title="Сегодня"
+      title={`Текущее время: ${now.format("DD.MM.YYYY HH:mm")}`}
     />
   );
 }
@@ -1050,6 +1052,11 @@ export function GanttView() {
   const [rangeFromInput, setRangeFromInput] = useState<string>(() => String(savedUi?.rangeFromInput ?? savedUi?.rangeFromApplied ?? initialFrom));
   const [rangeToInput, setRangeToInput] = useState<string>(() => String(savedUi?.rangeToInput ?? savedUi?.rangeToApplied ?? initialTo));
   const [rangeError, setRangeError] = useState<string | null>(null);
+  const [ganttLabelWidth, setGanttLabelWidth] = useState<number>(() => {
+    const raw = Number(savedUi?.ganttLabelWidth);
+    return Number.isFinite(raw) ? clamp(raw, MIN_GANTT_LABEL_WIDTH, MAX_GANTT_LABEL_WIDTH) : 220;
+  });
+  const [currentMinute, setCurrentMinute] = useState(() => dayjs().second(0).millisecond(0));
 
   const from = useMemo(() => dayjs.utc(rangeFromApplied).startOf("day"), [rangeFromApplied]);
   // полузакрытый интервал [from, to)
@@ -1302,6 +1309,7 @@ export function GanttView() {
       filterAircraftIds,
       filterEventTypeIds,
       filterPlanningKind,
+      ganttLabelWidth,
       dndEnabled,
       zoom: minorScale
     });
@@ -1320,6 +1328,7 @@ export function GanttView() {
     filterAircraftIds,
     filterEventTypeIds,
     filterPlanningKind,
+    ganttLabelWidth,
     dndEnabled,
   ]);
 
@@ -1329,6 +1338,49 @@ export function GanttView() {
   const ganttRowHeight = ganttDisplayMode === "PLAN_FACT" ? 56 : 44;
   const ticks = useMemo(() => buildGanttTicks(from, to, majorScale, minorScale), [from, to, majorScale, minorScale]);
   const showSlotHistogram = groupMode === "HANGAR_STAND";
+  const ganttLabelColStyle = useMemo(() => ({ width: ganttLabelWidth, flexBasis: ganttLabelWidth }), [ganttLabelWidth]);
+  const majorSegments = useMemo(() => {
+    const out: Array<{ key: string; label: string; left: number; width: number; alt: boolean }> = [];
+    for (let i = 0; i < ticks.length; i++) {
+      const tick = ticks[i]!;
+      if (out.some((s) => s.key === tick.majorKey)) continue;
+      const start = startOfScale(tick.at, majorScale);
+      const end = addScale(start, majorScale);
+      const left = Math.max(0, start.diff(from, "day", true) * dayWidth);
+      const right = Math.min(canvasWidth, end.diff(from, "day", true) * dayWidth);
+      if (right <= 0 || left >= canvasWidth) continue;
+      out.push({
+        key: tick.majorKey,
+        label: labelForScale(start, majorScale),
+        left,
+        width: Math.max(1, right - left),
+        alt: out.length % 2 === 1
+      });
+    }
+    return out;
+  }, [canvasWidth, dayWidth, from, majorScale, ticks]);
+
+  const startGanttLabelResize = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = ganttLabelWidth;
+    const onMove = (ev: PointerEvent) => {
+      setGanttLabelWidth(clamp(startWidth + ev.clientX - startX, MIN_GANTT_LABEL_WIDTH, MAX_GANTT_LABEL_WIDTH));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }, [ganttLabelWidth]);
+
+  useEffect(() => {
+    const update = () => setCurrentMinute(dayjs().second(0).millisecond(0));
+    update();
+    const timer = window.setInterval(update, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     // при изменении диапазона/ширины синхронизируем заголовок с текущим scrollLeft тела
@@ -2266,6 +2318,18 @@ export function GanttView() {
     hangarStandRowsRef.current = hangarStandRows as any[];
   }, [hangarStandRows]);
 
+  const isHangarBoundaryRow = useCallback(
+    (rowIdx: number) => {
+      if (groupMode !== "HANGAR_STAND" || rowIdx <= 0) return false;
+      const current = hangarStandRows[rowIdx] as any;
+      const previous = hangarStandRows[rowIdx - 1] as any;
+      const currentHangarId = String(current?.hangarId ?? "");
+      const previousHangarId = String(previous?.hangarId ?? "");
+      return Boolean(currentHangarId && currentHangarId !== previousHangarId);
+    },
+    [groupMode, hangarStandRows]
+  );
+
   const placementLinks = useMemo(() => {
     if (groupMode !== "HANGAR_STAND") return [];
     const bySegmentKey = new Map<string, { rowIdx: number; ev: EventRow }>();
@@ -2339,16 +2403,18 @@ export function GanttView() {
     const totalSlots = stands.length;
     if (totalSlots <= 0) return [];
 
-    const buckets: Array<{ key: string; label: string; left: number; width: number; occupied: number; free: number; total: number; start: dayjs.Dayjs; end: dayjs.Dayjs }> = [];
+    const buckets: Array<{ key: string; label: string; left: number; width: number; occupied: number; total: number; start: dayjs.Dayjs; end: dayjs.Dayjs }> = [];
     let cursor = startOfScale(from, minorScale);
     const limit = to;
 
     while (cursor.valueOf() < limit.valueOf()) {
       const bucketStart = cursor;
       const bucketEnd = addScale(cursor, minorScale);
+      const visibleStart = bucketStart.valueOf() < from.valueOf() ? from : bucketStart;
+      const visibleEnd = bucketEnd.valueOf() > to.valueOf() ? to : bucketEnd;
       const occupiedStandIds = new Set<string>();
-      const bucketStartMs = bucketStart.valueOf();
-      const bucketEndMs = bucketEnd.valueOf();
+      const bucketStartMs = visibleStart.valueOf();
+      const bucketEndMs = visibleEnd.valueOf();
 
       for (const ev of visibleEvents) {
         const placements = ev.placements?.length
@@ -2372,15 +2438,14 @@ export function GanttView() {
       }
 
       const occupied = Math.min(totalSlots, occupiedStandIds.size);
-      const left = Math.max(0, bucketStart.diff(from, "day", true) * dayWidth);
-      const width = Math.max(1, bucketEnd.diff(bucketStart, "day", true) * dayWidth);
+      const left = Math.max(0, visibleStart.diff(from, "day", true) * dayWidth);
+      const width = Math.max(1, visibleEnd.diff(visibleStart, "day", true) * dayWidth);
       buckets.push({
         key: bucketStart.toISOString(),
         label: histogramLabelForScale(bucketStart, minorScale),
         left,
         width,
         occupied,
-        free: Math.max(0, totalSlots - occupied),
         total: totalSlots,
         start: bucketStart,
         end: bucketEnd
@@ -3360,21 +3425,27 @@ export function GanttView() {
 
       <div className={`ganttGrid${copySelectMode ? " ganttPickMode" : ""}`}>
         <div className="ganttHeaderRow">
-          <div className="ganttLabel">
+          <div className="ganttLabel ganttAxisLabel" style={ganttLabelColStyle}>
             <strong>{groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}</strong>
+            <button
+              type="button"
+              className="ganttAxisResizeHandle"
+              onPointerDown={startGanttLabelResize}
+              title="Потяните, чтобы изменить ширину левой оси"
+              aria-label="Изменить ширину левой оси"
+            />
           </div>
           <div className="ganttHeaderRightViewport" ref={headerViewportRef}>
             <div className="ganttCanvas" style={{ width: canvasWidth, height: 44 }}>
-              <TodayLine from={from} to={to} canvasWidth={canvasWidth} />
-              <div style={{ position: "absolute", inset: 0 }}>
+              <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} />
+              <div className="ganttTimelineMinorRow">
                 {ticks.map((t, i) => {
                   const nextAt = ticks[i + 1]?.at ?? to;
                   const leftRaw = t.at.diff(from, "day", true) * dayWidth;
                   const rightRaw = nextAt.diff(from, "day", true) * dayWidth;
                   const left = Math.max(0, leftRaw);
                   const width = Math.max(1, rightRaw - left);
-                  const isMajor = t.majorLabel != null;
-                  const majorIdx = ticks.findIndex((candidate) => candidate.majorKey === t.majorKey);
+                  const majorIdx = majorSegments.findIndex((candidate) => candidate.key === t.majorKey);
                   return (
                     <div
                       key={i}
@@ -3385,29 +3456,17 @@ export function GanttView() {
                         top: 0,
                         bottom: 0,
                         borderRight: "1px solid rgba(148,163,184,0.18)",
-                        borderLeft: isMajor ? "1px solid rgba(37,99,235,0.24)" : undefined,
                         background: majorIdx % 2 ? "rgba(148, 163, 184, 0.08)" : "transparent",
                         padding: "2px 4px",
                         overflow: "hidden",
                         boxSizing: "border-box"
                       }}
-                      title={t.majorLabel ? `${t.majorLabel} • ${t.minorLabel}` : t.minorLabel}
+                      title={`${labelForScale(startOfScale(t.at, majorScale), majorScale)} • ${t.minorLabel}`}
                     >
                       <div
                         style={{
-                          fontSize: 10,
-                          lineHeight: "12px",
-                          color: "#334155",
-                          whiteSpace: "nowrap",
-                          visibility: isMajor ? "visible" : "hidden"
-                        }}
-                      >
-                        {t.majorLabel ?? "·"}
-                      </div>
-                      <div
-                        style={{
                           fontSize: 12,
-                          lineHeight: "14px",
+                          lineHeight: "18px",
                           color: "#64748b",
                           whiteSpace: "nowrap"
                         }}
@@ -3418,12 +3477,24 @@ export function GanttView() {
                   );
                 })}
               </div>
+              <div className="ganttTimelineMajorRow">
+                {majorSegments.map((m) => (
+                  <div
+                    key={m.key}
+                    className={`ganttTimelineMajorCell${m.alt ? " ganttTimelineMajorCellAlt" : ""}`}
+                    style={{ left: m.left, width: m.width }}
+                    title={m.label}
+                  >
+                    {m.label}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
 
         <div className="ganttBody">
-          <div className="ganttLeftCol">
+          <div className="ganttLeftCol" style={ganttLabelColStyle}>
             {groupMode === "AIRCRAFT"
               ? aircraftRows.map((r, rowIdx) => (
                   <div className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ height: ganttRowHeight }}>
@@ -3436,7 +3507,11 @@ export function GanttView() {
                   </div>
                 ))
               : hangarStandRows.map((r, rowIdx) => (
-                  <div className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ height: ganttRowHeight }}>
+                  <div
+                    className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}${isHangarBoundaryRow(rowIdx) ? " ganttHangarBoundary" : ""}`}
+                    key={r.key}
+                    style={{ height: ganttRowHeight }}
+                  >
                     <div>
                       <strong>{r.label}</strong>
                     </div>
@@ -3473,7 +3548,7 @@ export function GanttView() {
                 {groupMode === "AIRCRAFT"
                   ? aircraftRows.map((r, rowIdx) => (
                       <div className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ width: canvasWidth, minHeight: ganttRowHeight }}>
-                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} />
+                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} />
                         {r.events.map((p) => {
                           const ev = p.ev;
                           const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
@@ -3529,7 +3604,7 @@ export function GanttView() {
                     ))
                   : hangarStandRows.map((r, rowIdx) => (
                       <div
-                        className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}`}
+                        className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}${isHangarBoundaryRow(rowIdx) ? " ganttHangarBoundary" : ""}`}
                         key={r.key}
                         style={{
                           width: canvasWidth,
@@ -3545,7 +3620,7 @@ export function GanttView() {
                         data-stand-id={r.standId ?? ""}
                         data-layout-id={r.layoutId ?? ""}
                       >
-                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} />
+                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} />
                         {dndActive && ptrPreview && ptrTarget?.rowKey === r.key ? (
                           <div
                             className="bar"
@@ -3796,43 +3871,47 @@ export function GanttView() {
             Нет событий в выбранном диапазоне.
           </div>
         ) : null}
-        {showSlotHistogram ? (
-          <div className="ganttSlotHistogramRow">
-            <div className="ganttSlotHistogramLabel">
-              <strong>Слоты</strong>
-              <span>занято / свободно</span>
+        <div className="ganttStickyFooter" aria-label="Нижняя панель диаграммы">
+          <div className="ganttBottomScrollRow" aria-hidden="true">
+            <div className="ganttBottomScrollSpacer" style={ganttLabelColStyle} />
+            <div className="ganttBottomScrollViewport" ref={bottomScrollRef} onScroll={onBottomScroll}>
+              <div className="ganttBottomScrollInner" style={{ width: canvasWidth }} />
             </div>
-            <div className="ganttSlotHistogramViewport" ref={histogramViewportRef}>
-              <div className="ganttSlotHistogramCanvas" style={{ width: canvasWidth }}>
-                {slotHistogram.length > 0 ? (
-                  slotHistogram.map((b) => {
-                    const occupiedPct = b.total > 0 ? (b.occupied / b.total) * 100 : 0;
-                    const freePct = Math.max(0, 100 - occupiedPct);
-                    return (
-                      <div
-                        className="slotBucket"
-                        key={b.key}
-                        style={{ left: b.left, width: Math.max(2, b.width - 1) }}
-                        title={`${b.label}: занято ${b.occupied}, свободно ${b.free}, всего ${b.total}`}
-                      >
-                        <div className="slotBucketFree" style={{ height: `${freePct}%` }} />
-                        <div className="slotBucketOccupied" style={{ height: `${occupiedPct}%` }} />
-                        {b.width >= 22 ? <span className="slotBucketValue">{b.occupied}</span> : null}
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="slotHistogramEmpty">Нет активных мест для выбранного ангара</div>
-                )}
+          </div>
+          {showSlotHistogram ? (
+            <div className="ganttSlotHistogramRow">
+              <div className="ganttSlotHistogramLabel" style={ganttLabelColStyle}>
+                <strong>Слоты</strong>
+                <span>занято</span>
+              </div>
+              <div className="ganttSlotHistogramViewport" ref={histogramViewportRef}>
+                <div className="ganttSlotHistogramCanvas" style={{ width: canvasWidth }}>
+                  {slotHistogram.length > 0 ? (
+                    slotHistogram.map((b) => {
+                      const occupiedPct = b.total > 0 ? (b.occupied / b.total) * 100 : 0;
+                      return (
+                        <div
+                          className="slotBucket"
+                          key={b.key}
+                          style={{ left: b.left, width: Math.max(2, b.width - 1) }}
+                          title={`${b.label}: занято ${b.occupied} из ${b.total}`}
+                        >
+                          <div className="slotBucketOccupied" style={{ height: `${occupiedPct}%` }} />
+                          {b.occupied > 0 && b.width >= 22 ? (
+                            <span className="slotBucketValue" style={{ bottom: `calc(${occupiedPct}% + 3px)` }}>
+                              {b.occupied}
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="slotHistogramEmpty">Нет активных мест для выбранного ангара</div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ) : null}
-        <div className={`ganttBottomScrollRow${showSlotHistogram ? " ganttBottomScrollRowAboveHistogram" : ""}`} aria-hidden="true">
-          <div className="ganttBottomScrollSpacer" />
-          <div className="ganttBottomScrollViewport" ref={bottomScrollRef} onScroll={onBottomScroll}>
-            <div className="ganttBottomScrollInner" style={{ width: canvasWidth }} />
-          </div>
+          ) : null}
         </div>
       </div>
 
@@ -4467,6 +4546,20 @@ export function GanttView() {
                 >
                   Отмена
                 </button>
+                {draft.id ? (
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      localStorage.setItem("hangarPlanning:itpSelectedEventId", draft.id!);
+                      setEditorOpen(false);
+                      setCopyFromTitle(null);
+                      location.hash = "itp";
+                    }}
+                    type="button"
+                  >
+                    Открыть в РМ ИТП
+                  </button>
+                ) : null}
                 <button
                   className="btn btnPrimary"
                   onClick={() => {

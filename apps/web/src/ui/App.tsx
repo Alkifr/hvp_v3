@@ -6,6 +6,7 @@ import { HangarView } from "./pages/HangarView";
 import { GanttView } from "./pages/GanttView";
 import { EventImportView } from "./pages/EventImportView";
 import { MassPlanView } from "./pages/MassPlanView";
+import { RmItpView } from "./pages/RmItpView";
 import { ReferenceView } from "./pages/ReferenceView";
 import { LoginView } from "./pages/LoginView";
 import { ProfileView } from "./pages/ProfileView";
@@ -14,7 +15,21 @@ import { SandboxesView } from "./pages/SandboxesView";
 import { SandboxSwitcher, useActiveSandbox } from "./components/SandboxSwitcher";
 import { authMe } from "./auth/authApi";
 
-type Page = "gantt" | "hangar" | "import" | "mass" | "ref" | "profile" | "admin" | "sandboxes";
+type Page = "gantt" | "hangar" | "import" | "mass" | "itp" | "ref" | "profile" | "admin" | "sandboxes";
+
+function isPage(value: string): value is Page {
+  return (
+    value === "hangar" ||
+    value === "ref" ||
+    value === "gantt" ||
+    value === "import" ||
+    value === "mass" ||
+    value === "itp" ||
+    value === "profile" ||
+    value === "admin" ||
+    value === "sandboxes"
+  );
+}
 
 function NavIcon(props: { active: boolean; onClick: () => void; label: string; icon: ReactNode }) {
   return (
@@ -65,6 +80,14 @@ const ICONS = {
       <path d="M3 17l9 5 9-5" />
     </svg>
   ),
+  itp: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 4h9l3 3v13H6z" />
+      <path d="M15 4v4h4" />
+      <path d="M9 12h6" />
+      <path d="M9 16h4" />
+    </svg>
+  ),
   ref: (
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2V5z" />
@@ -106,17 +129,7 @@ export function App() {
 
   const initial = useMemo<Page>(() => {
     const hash = (location.hash || "").replace("#", "");
-    if (
-      hash === "hangar" ||
-      hash === "ref" ||
-      hash === "gantt" ||
-      hash === "import" ||
-      hash === "mass" ||
-      hash === "profile" ||
-      hash === "admin" ||
-      hash === "sandboxes"
-    )
-      return hash;
+    if (isPage(hash)) return hash;
     return "gantt";
   }, []);
 
@@ -125,6 +138,15 @@ export function App() {
   useEffect(() => {
     location.hash = page;
   }, [page]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = (location.hash || "").replace("#", "");
+      if (isPage(hash)) setPage(hash);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   if (meQ.isLoading) {
     return (
@@ -174,6 +196,7 @@ function AppShell(props: {
             <>
               <NavIcon active={page === "gantt"} onClick={() => setPage("gantt")} label="План (Гантт)" icon={ICONS.gantt} />
               <NavIcon active={page === "hangar"} onClick={() => setPage("hangar")} label="Ангар (схема)" icon={ICONS.hangar} />
+              <NavIcon active={page === "itp"} onClick={() => setPage("itp")} label="РМ ИТП" icon={ICONS.itp} />
             </>
           ) : null}
 
@@ -222,6 +245,7 @@ function AppShell(props: {
         {page === "hangar" && <HangarView />}
         {page === "import" && <EventImportView />}
         {page === "mass" && <MassPlanView />}
+        {page === "itp" && <RmItpView />}
         {page === "ref" && <ReferenceView />}
         {page === "profile" && <ProfileView me={me} />}
         {page === "admin" && <AdminView permissions={permissions} />}
