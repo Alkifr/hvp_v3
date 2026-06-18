@@ -624,6 +624,10 @@ function compactHangarLabel(name: string | null | undefined) {
   return n.replace(/^ангар\s*/i, "H-").replace(/\s+/g, "");
 }
 
+function hangarAxisLabel(name: string | null | undefined) {
+  return String(name ?? "").trim() || "Ангар";
+}
+
 function compactStandLabel(code: string | null | undefined) {
   if (!code) return "";
   return String(code).trim().replace(/\s*-\s*/g, "-").replace(/\s+/g, "");
@@ -2223,8 +2227,8 @@ export function GanttView() {
         const layoutId = meta?.layoutId ?? String((e.layout as any)?.id ?? "");
         const hangarId = meta?.hangarId ?? hid;
         const label = meta
-          ? `${compactHangarLabel(meta.hangarName)} / ${compactStandLabel(meta.code)}`
-          : `${compactHangarLabel(hname)} / ${compactStandLabel(scode)}`;
+          ? `${hangarAxisLabel(meta.hangarName)} / ${compactStandLabel(meta.code)}`
+          : `${hangarAxisLabel(hname)} / ${compactStandLabel(scode)}`;
         const rec = byStandId.get(sid) ?? { standId: sid, layoutId, hangarId, label, events: [] as EventRow[] };
         rec.events.push(e);
         byStandId.set(sid, rec);
@@ -2253,7 +2257,7 @@ export function GanttView() {
       .sort((a, b) => a.hangarName.localeCompare(b.hangarName, "ru"));
 
     for (const h of hangarList) {
-      rows.push({ key: `hangar:${h.hid}:no-stand`, label: `${compactHangarLabel(h.hangarName)} / Без места`, kind: "hangarNoStand", hangarId: h.hid, events: h.events });
+      rows.push({ key: `hangar:${h.hid}:no-stand`, label: `${hangarAxisLabel(h.hangarName)} / Без места`, kind: "hangarNoStand", hangarId: h.hid, events: h.events });
     }
 
     // Добавим пустые стоянки как drop-зоны только в режиме DnD
@@ -2264,7 +2268,7 @@ export function GanttView() {
             standId: s.id,
             layoutId: s.layoutId,
             hangarId: s.hangarId,
-            label: `${compactHangarLabel(s.hangarName)} / ${compactStandLabel(s.code)}`,
+            label: `${hangarAxisLabel(s.hangarName)} / ${compactStandLabel(s.code)}`,
             events: []
           });
         }
