@@ -1106,9 +1106,9 @@ a {
 .ganttToolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 16px;
+  gap: 8px 10px;
   align-items: center;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.25);
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
@@ -1117,8 +1117,9 @@ a {
 .ganttToolbarGroup {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   padding: 2px 0;
+  flex-wrap: wrap;
 }
 
 .ganttToolbarActionsGroup {
@@ -1126,7 +1127,7 @@ a {
 }
 
 .ganttToolbarGroup + .ganttToolbarGroup {
-  padding-left: 14px;
+  padding-left: 10px;
   border-left: 1px solid rgba(148, 163, 184, 0.35);
 }
 
@@ -1143,7 +1144,7 @@ a {
 .tgField {
   display: inline-flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   line-height: 1;
 }
 
@@ -1157,11 +1158,11 @@ a {
 
 .tgField select,
 .tgField input[type="date"] {
-  padding: 6px 8px;
+  padding: 5px 7px;
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.45);
   background: #fff;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .tgField select:focus,
@@ -2419,6 +2420,14 @@ textarea {
   cursor: pointer;
 }
 
+.msdCompact .msdBtn {
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  min-height: 28px;
+  font-size: 12px;
+}
+
 .msdBtnText {
   text-align: left;
   overflow: hidden;
@@ -2435,7 +2444,7 @@ textarea {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  right: 0;
+  min-width: min(320px, 86vw);
   background: #fff;
   border: 1px solid rgba(148, 163, 184, 0.45);
   border-radius: 12px;
@@ -2443,14 +2452,53 @@ textarea {
   padding: 8px;
   z-index: 20;
   overflow: auto;
+  overscroll-behavior: contain;
   max-height: 260px;
 }
 
-.msdSearch {
+.msdPanelHeader {
   position: sticky;
   top: -8px;
-  z-index: 1;
-  padding: 0 0 8px;
+  z-index: 2;
+  display: grid;
+  gap: 8px;
+  margin: -8px -8px 0;
+  padding: 8px 8px 8px;
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(148, 163, 184, 0.22);
+}
+
+.msdActions {
+  display: flex;
+  gap: 6px;
+}
+
+.msdActions button,
+.msdOptionActions button {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.msdActions button:hover,
+.msdOptionActions button:hover {
+  border-color: rgba(37, 99, 235, 0.55);
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.msdActions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.msdSearch {
   background: #fff;
 }
 
@@ -2464,12 +2512,33 @@ textarea {
 
 .msdOption {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
   padding: 8px 8px;
   border-radius: 10px;
   cursor: pointer;
   user-select: none;
+}
+
+.msdOptionText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msdOptionActions {
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.msdOption:hover .msdOptionActions,
+.msdOption:focus-within .msdOptionActions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .msdOption:hover {
@@ -3123,12 +3192,12 @@ textarea {
   align-self: stretch;
 }
 .tgField .msdBtn {
-  padding: 6px 10px;
+  padding: 5px 8px;
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.45);
-  font-size: 13px;
+  font-size: 12px;
   background: #fff;
-  min-height: 30px;
+  min-height: 28px;
 }
 .tgField .msdBtn:hover {
   border-color: rgba(37, 99, 235, 0.55);
@@ -4945,6 +5014,289 @@ textarea {
 
 .sandboxMembersEmpty {
   padding: 12px 10px;
+}
+
+/* ====== Mobile layout ====== */
+
+@media (max-width: 760px) {
+  :root {
+    --topbar-sticky-height: 48px;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  .appShell {
+    display: block;
+    min-height: 100vh;
+    padding-bottom: 62px;
+  }
+
+  .nav {
+    position: fixed;
+    inset: auto 0 0 0;
+    height: 58px;
+    padding: 6px 8px;
+    border-right: 0;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    z-index: 70;
+  }
+
+  .navBrand {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    margin: 0 2px 0 0;
+    font-size: 12px;
+  }
+
+  .navGroup,
+  .navGroupBottom {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .navGroupBottom {
+    margin-top: 0;
+    margin-left: auto;
+    padding-top: 0;
+    padding-left: 8px;
+    border-top: 0;
+    border-left: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  .navIcon {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+  }
+
+  .navIcon.active {
+    box-shadow: inset 0 -2px 0 #60a5fa;
+  }
+
+  .navTooltip {
+    display: none;
+  }
+
+  .content {
+    padding: 10px;
+    min-width: 0;
+  }
+
+  .topbar {
+    top: 0;
+    min-height: var(--topbar-sticky-height);
+    padding: 6px 8px;
+    gap: 8px;
+    overflow-x: auto;
+  }
+
+  .topbarProdBanner,
+  .topbarSandboxBanner {
+    white-space: nowrap;
+  }
+
+  .massHero,
+  .hangarHero {
+    display: grid;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .massHero h1,
+  .hangarHero h1 {
+    font-size: 21px;
+  }
+
+  .massHeroStats,
+  .hangarHeroStats {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .ganttPanelHeader,
+  .ganttPanelActions {
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .ganttPanelActions {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .ganttToolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .ganttToolbarGroup,
+  .ganttToolbarGroup + .ganttToolbarGroup {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .ganttToolbarActionsGroup {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .tgLabel {
+    grid-column: 1 / -1;
+  }
+
+  .tgField,
+  .tgField .msdRoot,
+  .tgField select,
+  .tgField input[type="date"] {
+    width: 100% !important;
+  }
+
+  .tgPresets {
+    grid-column: 1 / -1;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .msdPanel {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    top: auto;
+    bottom: 68px;
+    min-width: 0;
+    max-height: min(420px, 62vh) !important;
+    z-index: 90;
+  }
+
+  .ganttGrid {
+    border-radius: 10px;
+  }
+
+  .ganttHeaderRow,
+  .ganttStickyFooter {
+    position: sticky;
+  }
+
+  .ganttLeftCol,
+  .ganttHeaderRow > .ganttLabel,
+  .ganttBottomScrollSpacer,
+  .ganttSlotHistogramLabel {
+    width: 150px !important;
+    flex-basis: 150px !important;
+  }
+
+  .ganttLabel {
+    padding: 8px 9px;
+    font-size: 12px;
+  }
+
+  .drawerV2,
+  .drawer {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .drawerBackdrop {
+    align-items: stretch;
+  }
+
+  .evForm,
+  .evPeriodGrid,
+  .evLocationGrid,
+  .evPlacementGrid,
+  .evTowGrid,
+  .itpPassportGrid,
+  .itpFormGrid,
+  .itpPickerGrid,
+  .sandboxRangeRow,
+  .sandboxShareAddRow {
+    grid-template-columns: 1fr !important;
+  }
+
+  .itpInlineForm {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .itpInlineForm > input,
+  .itpInlineForm > select,
+  .itpGrow {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .itpNetworkHeader {
+    margin-left: 132px;
+  }
+
+  .itpNetworkGroup {
+    grid-template-columns: 132px minmax(620px, 1fr);
+  }
+
+  .itpNetworkGroupTitle {
+    font-size: 11px;
+    padding: 8px;
+  }
+
+  .itpTable,
+  .refTable,
+  .sandboxMembersHead,
+  .sandboxMembersRow {
+    font-size: 12px;
+  }
+
+  .refSectionHeader,
+  .massResultHeader,
+  .profileActivityHeader,
+  .profileActivityToolbar,
+  .hangarSideHeader {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .content {
+    padding: 8px;
+  }
+
+  .ganttToolbarGroup,
+  .ganttToolbarGroup + .ganttToolbarGroup {
+    grid-template-columns: 1fr;
+  }
+
+  .ganttLeftCol,
+  .ganttHeaderRow > .ganttLabel,
+  .ganttBottomScrollSpacer,
+  .ganttSlotHistogramLabel {
+    width: 128px !important;
+    flex-basis: 128px !important;
+  }
+
+  .massHero,
+  .hangarHero,
+  .card {
+    border-radius: 12px;
+  }
 }
 
 .sandboxRoleBadge {

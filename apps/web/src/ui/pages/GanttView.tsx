@@ -1265,32 +1265,6 @@ export function GanttView() {
     }
   });
 
-  const ganttSlotStandsQ = useQuery({
-    queryKey: ["ref", "gantt-slot-stands", selectedHangarIds.slice().sort().join(",")],
-    enabled: groupMode === "HANGAR_STAND",
-    queryFn: async () => {
-      const layouts = await apiGet<Layout[]>(
-        selectedHangarIds.length === 1
-          ? `/api/ref/layouts?hangarId=${encodeURIComponent(selectedHangarIds[0]!)}`
-          : "/api/ref/layouts"
-      );
-      const selected = new Set(selectedHangarIds);
-      const filteredLayouts = selected.size === 0 ? layouts : layouts.filter((l) => selected.has(l.hangarId));
-      const standsPerLayout = await Promise.all(
-        filteredLayouts.map((l) => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(l.id)}`))
-      );
-      const out: Array<Stand & { hangarId: string }> = [];
-      for (let i = 0; i < filteredLayouts.length; i++) {
-        const layout = filteredLayouts[i]!;
-        for (const stand of standsPerLayout[i] ?? []) {
-          if ((stand as any).isActive === false) continue;
-          out.push({ ...(stand as any), layoutId: (stand as any).layoutId ?? layout.id, hangarId: layout.hangarId });
-        }
-      }
-      return out;
-    }
-  });
-
   const dndStandById = useMemo(() => {
     const m = new Map<string, DndStand>();
     for (const s of dndStandsQ.data ?? []) m.set(s.id, s);
@@ -2403,11 +2377,8 @@ export function GanttView() {
 
   const slotHistogram = useMemo(() => {
     if (groupMode !== "HANGAR_STAND") return [];
-    const stands = ganttSlotStandsQ.data ?? [];
-    const totalSlots = stands.length;
-    if (totalSlots <= 0) return [];
 
-    const buckets: Array<{ key: string; label: string; left: number; width: number; occupied: number; total: number; start: dayjs.Dayjs; end: dayjs.Dayjs }> = [];
+    const buckets: Array<{ key: string; label: string; left: number; width: number; occupied: number; start: dayjs.Dayjs; end: dayjs.Dayjs }> = [];
     let cursor = startOfScale(from, minorScale);
     const limit = to;
 
@@ -2416,7 +2387,7 @@ export function GanttView() {
       const bucketEnd = addScale(cursor, minorScale);
       const visibleStart = bucketStart.valueOf() < from.valueOf() ? from : bucketStart;
       const visibleEnd = bucketEnd.valueOf() > to.valueOf() ? to : bucketEnd;
-      const occupiedStandIds = new Set<string>();
+      let occupied = 0;
       const bucketStartMs = visibleStart.valueOf();
       const bucketEndMs = visibleEnd.valueOf();
 
@@ -2426,22 +2397,17 @@ export function GanttView() {
           : [
               {
                 startAt: ev.startAt,
-                endAt: ev.endAt,
-                standId: (ev.reservation?.stand as any)?.id ?? ""
+                endAt: ev.endAt
               }
             ];
-        for (const p of placements) {
-          const standId = String((p as any).standId ?? (p as any).stand?.id ?? "");
-          if (!standId) continue;
+        const overlapsBucket = placements.some((p) => {
           const startMs = dayjs(p.startAt).valueOf();
           const endMs = dayjs(p.endAt).valueOf();
-          if (Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < bucketEndMs && endMs > bucketStartMs) {
-            occupiedStandIds.add(standId);
-          }
-        }
+          return Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < bucketEndMs && endMs > bucketStartMs;
+        });
+        if (overlapsBucket) occupied += 1;
       }
 
-      const occupied = Math.min(totalSlots, occupiedStandIds.size);
       const left = Math.max(0, visibleStart.diff(from, "day", true) * dayWidth);
       const width = Math.max(1, visibleEnd.diff(visibleStart, "day", true) * dayWidth);
       buckets.push({
@@ -2450,14 +2416,18 @@ export function GanttView() {
         left,
         width,
         occupied,
-        total: totalSlots,
         start: bucketStart,
         end: bucketEnd
       });
       cursor = bucketEnd;
     }
     return buckets;
-  }, [groupMode, minorScale, ganttSlotStandsQ.data, visibleEvents, from, to, dayWidth]);
+  }, [groupMode, minorScale, visibleEvents, from, to, dayWidth]);
+
+  const slotHistogramMaxOccupied = useMemo(
+    () => Math.max(1, ...slotHistogram.map((bucket) => bucket.occupied)),
+    [slotHistogram]
+  );
 
   const hasExitLabelCollision = useCallback(
     (rowEvents: PlacedEvent[], current: EventRow, targetStartAt: string, targetEndAt: string, labelLeft: number, labelRight: number) => {
@@ -2774,6 +2744,20 @@ export function GanttView() {
         setRangeFromApplied(todayValue);
       }
     }
+    setRangeError(null);
+  };
+
+  const applyManualRange = () => {
+    if (!isValidDateInput(rangeFromInput) || !isValidDateInput(rangeToInput)) {
+      setRangeError("Укажите корректный период.");
+      return;
+    }
+    if (dayjs(rangeFromInput).isAfter(dayjs(rangeToInput))) {
+      setRangeError("Дата начала не может быть позже даты окончания.");
+      return;
+    }
+    setRangeFromApplied(rangeFromInput);
+    setRangeToApplied(rangeToInput);
     setRangeError(null);
   };
 
@@ -3113,10 +3097,11 @@ export function GanttView() {
                 value={selectedHangarIds}
                 onChange={setSelectedHangarIds}
                 placeholder="все"
-                width={200}
+                width={150}
                 maxHeight={260}
                 searchable
                 searchPlaceholder="Найти ангар"
+                compact
               />
             </label>
             <label className="tgField">
@@ -3140,10 +3125,11 @@ export function GanttView() {
                   }
                 }}
                 placeholder="все"
-                width={220}
+                width={160}
                 maxHeight={320}
                 searchable
                 searchPlaceholder="Найти оператора"
+                compact
               />
             </label>
             <label className="tgField">
@@ -3151,7 +3137,7 @@ export function GanttView() {
               <MultiSelectDropdown
                 options={(aircraftTypesQ.data ?? []).map((t) => ({
                   id: t.id,
-                  label: t.icaoType ? `${t.icaoType} • ${t.name}` : t.name
+                  label: t.name
                 }))}
                 value={filterAircraftTypeIds}
                 onChange={(next) => {
@@ -3167,10 +3153,11 @@ export function GanttView() {
                   }
                 }}
                 placeholder="все"
-                width={240}
+                width={150}
                 maxHeight={320}
                 searchable
                 searchPlaceholder="Найти тип ВС"
+                compact
               />
             </label>
             <label className="tgField">
@@ -3191,10 +3178,11 @@ export function GanttView() {
                 value={filterAircraftIds}
                 onChange={setFilterAircraftIds}
                 placeholder="все"
-                width={200}
+                width={140}
                 maxHeight={320}
                 searchable
                 searchPlaceholder="Найти борт"
+                compact
               />
             </label>
             <label className="tgField">
@@ -3207,10 +3195,11 @@ export function GanttView() {
                 value={filterEventTypeIds}
                 onChange={setFilterEventTypeIds}
                 placeholder="все"
-                width={200}
+                width={160}
                 maxHeight={260}
                 searchable
                 searchPlaceholder="Найти тип события"
+                compact
               />
             </label>
             <label className="tgField">
@@ -3243,16 +3232,10 @@ export function GanttView() {
               <input
                 type="date"
                 value={rangeFromInput}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setRangeFromInput(v);
-                  if (!isValidDateInput(v)) return;
-                  if (dayjs(v).isAfter(dayjs(rangeToApplied))) {
-                    setRangeToInput(v);
-                    setRangeToApplied(v);
-                  }
-                  setRangeFromApplied(v);
-                  setRangeError(null);
+                onChange={(e) => setRangeFromInput(e.target.value)}
+                onBlur={applyManualRange}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyManualRange();
                 }}
                 style={{ width: 150 }}
               />
@@ -3262,16 +3245,10 @@ export function GanttView() {
               <input
                 type="date"
                 value={rangeToInput}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setRangeToInput(v);
-                  if (!isValidDateInput(v)) return;
-                  if (dayjs(v).isBefore(dayjs(rangeFromApplied))) {
-                    setRangeFromInput(v);
-                    setRangeFromApplied(v);
-                  }
-                  setRangeToApplied(v);
-                  setRangeError(null);
+                onChange={(e) => setRangeToInput(e.target.value)}
+                onBlur={applyManualRange}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyManualRange();
                 }}
                 style={{ width: 150 }}
               />
@@ -3663,40 +3640,6 @@ export function GanttView() {
                           const exitTargetStartAt = exitTargetIsFact && ev.actualStartAt ? ev.actualStartAt : displayPeriod.startAt;
                           const exitTargetEndAt = exitTargetIsFact && ev.actualEndAt ? ev.actualEndAt : displayPeriod.endAt;
 
-                          let overlapOverlay: React.ReactNode = null;
-                          if (p.overlapToMs) {
-                            const oEnd = dayjs.utc(p.overlapToMs);
-                            const overlapSeg = calcBarXW({
-                              startAt: ev.startAt,
-                              endAt: oEnd.toISOString(),
-                              from,
-                              dayWidth,
-                              canvasWidth
-                            });
-                            const overlayLeft = overlapSeg ? clamp(overlapSeg.x - x, 0, w) : 0;
-                            const rawOverlayWidth = overlapSeg ? overlapSeg.w : 0;
-                            const overlayWidth = clamp(rawOverlayWidth, 0, w - overlayLeft);
-                            if (overlayWidth > 0) {
-                              overlapOverlay = (
-                                <div
-                                  style={{
-                                    position: "absolute",
-                                    top: 0,
-                                    bottom: 0,
-                                    left: overlayLeft,
-                                    width: overlayWidth,
-                                    backgroundColor: "rgba(220, 38, 38, 0.30)",
-                                    backgroundImage:
-                                      "repeating-linear-gradient(135deg, rgba(220,38,38,0.55) 0px, rgba(220,38,38,0.55) 6px, rgba(220,38,38,0) 6px, rgba(220,38,38,0) 12px)",
-                                  zIndex: 0,
-                                  pointerEvents: "none"
-                                  }}
-                                  title="Нахлёст"
-                                />
-                              );
-                            }
-                          }
-
                           return (
                             <Fragment key={ev.id}>
                               <div
@@ -3839,7 +3782,6 @@ export function GanttView() {
                                   />
                                 </>
                               ) : null}
-                              {overlapOverlay}
                               {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth }) : null}
                               {canShowBarTitle(w) ? (
                                 <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
@@ -3885,20 +3827,20 @@ export function GanttView() {
           {showSlotHistogram ? (
             <div className="ganttSlotHistogramRow">
               <div className="ganttSlotHistogramLabel" style={ganttLabelColStyle}>
-                <strong>Слоты</strong>
-                <span>занято</span>
+                <strong>События</strong>
+                <span>кол-во в периоде</span>
               </div>
               <div className="ganttSlotHistogramViewport" ref={histogramViewportRef}>
                 <div className="ganttSlotHistogramCanvas" style={{ width: canvasWidth }}>
                   {slotHistogram.length > 0 ? (
                     slotHistogram.map((b) => {
-                      const occupiedPct = b.total > 0 ? (b.occupied / b.total) * 100 : 0;
+                      const occupiedPct = b.occupied > 0 ? (b.occupied / slotHistogramMaxOccupied) * 100 : 0;
                       return (
                         <div
                           className="slotBucket"
                           key={b.key}
                           style={{ left: b.left, width: Math.max(2, b.width - 1) }}
-                          title={`${b.label}: занято ${b.occupied} из ${b.total}`}
+                          title={`${b.label}: событий ${b.occupied}`}
                         >
                           <div className="slotBucketOccupied" style={{ height: `${occupiedPct}%` }} />
                           {b.occupied > 0 && b.width >= 22 ? (
@@ -3910,7 +3852,7 @@ export function GanttView() {
                       );
                     })
                   ) : (
-                    <div className="slotHistogramEmpty">Нет активных мест для выбранного ангара</div>
+                  <div className="slotHistogramEmpty">Нет событий в выбранном диапазоне</div>
                   )}
                 </div>
               </div>

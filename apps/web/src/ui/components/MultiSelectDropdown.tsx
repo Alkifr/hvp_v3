@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 
 export type MultiSelectOption = { id: string; label: string };
 
@@ -11,6 +11,7 @@ export function MultiSelectDropdown(props: {
   maxHeight?: number;
   searchable?: boolean;
   searchPlaceholder?: string;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -54,36 +55,76 @@ export function MultiSelectDropdown(props: {
     props.onChange(Array.from(next));
   };
 
+  const selectAll = () => props.onChange(props.options.map((o) => o.id));
+  const selectOnly = (id: string) => props.onChange([id]);
+  const selectExcept = (id: string) => props.onChange(props.options.filter((o) => o.id !== id).map((o) => o.id));
+  const keepWheelInsidePanel = (e: WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const atTop = el.scrollTop <= 0;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+    if ((atTop && e.deltaY < 0) || (atBottom && e.deltaY > 0)) {
+      e.preventDefault();
+    }
+    e.stopPropagation();
+  };
+
   return (
-    <div ref={rootRef} className="msdRoot" style={{ width: props.width ? `${props.width}px` : undefined }}>
+    <div ref={rootRef} className={`msdRoot${props.compact ? " msdCompact" : ""}`} style={{ width: props.width ? `${props.width}px` : undefined }}>
       <button type="button" className="msdBtn" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="msdBtnText">{selectedLabel}</span>
         <span className="msdChevron">{open ? "▴" : "▾"}</span>
       </button>
       {open ? (
-        <div className="msdPanel" style={{ maxHeight: props.maxHeight ? `${props.maxHeight}px` : undefined }}>
-          {showSearch ? (
-            <div className="msdSearch">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => e.stopPropagation()}
-                placeholder={props.searchPlaceholder ?? "Поиск..."}
-                autoFocus
-              />
+        <div className="msdPanel" style={{ maxHeight: props.maxHeight ? `${props.maxHeight}px` : undefined }} onWheel={keepWheelInsidePanel}>
+          <div className="msdPanelHeader">
+            <div className="msdActions" role="group" aria-label="Быстрый выбор">
+              <button type="button" onClick={selectAll} disabled={props.options.length === 0 || props.value.length === props.options.length}>
+                Выбрать все
+              </button>
+              <button type="button" onClick={() => props.onChange([])} disabled={props.value.length === 0}>
+                Сбросить
+              </button>
             </div>
-          ) : null}
+            {showSearch ? (
+              <div className="msdSearch">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  placeholder={props.searchPlaceholder ?? "Поиск..."}
+                  autoFocus
+                />
+              </div>
+            ) : null}
+          </div>
           {props.options.length === 0 ? (
             <div className="msdEmpty">Нет вариантов</div>
           ) : filteredOptions.length === 0 ? (
             <div className="msdEmpty">Ничего не найдено</div>
           ) : (
-            filteredOptions.map((o) => (
-              <label key={o.id} className="msdOption">
-                <input type="checkbox" checked={selectedSet.has(o.id)} onChange={() => toggle(o.id)} />
-                <span>{o.label}</span>
-              </label>
-            ))
+            filteredOptions.map((o) => {
+              const isOnlySelected = props.value.length === 1 && selectedSet.has(o.id);
+              return (
+                <label key={o.id} className="msdOption">
+                  <input type="checkbox" checked={selectedSet.has(o.id)} onChange={() => toggle(o.id)} />
+                  <span className="msdOptionText">{o.label}</span>
+                  <span className="msdOptionActions">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (isOnlySelected) selectExcept(o.id);
+                        else selectOnly(o.id);
+                      }}
+                      title={isOnlySelected ? "Выбрать все, кроме этого значения" : "Оставить только это значение"}
+                    >
+                      {isOnlySelected ? "Кроме" : "Только"}
+                    </button>
+                  </span>
+                </label>
+              );
+            })
           )}
         </div>
       ) : null}
