@@ -346,6 +346,7 @@ type DndStand = Stand & { hangarId: string; hangarName: string; layoutName: stri
 
 type GroupMode = "AIRCRAFT" | "HANGAR_STAND";
 type GanttDisplayMode = "CURRENT" | "PLAN_FACT";
+type TimelineTimeMode = "UTC" | "LOCAL";
 type PlanningKindFilter = "ALL" | "PLANNED" | "UNPLANNED";
 
 type TowSegment = { id: string; eventId: string; startAt: string; endAt: string };
@@ -402,15 +403,27 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function timelineDate(value: string | Date | number, mode: TimelineTimeMode): dayjs.Dayjs {
+  return mode === "UTC" ? dayjs.utc(value) : dayjs(value);
+}
+
+function formatTimelineDate(value: string | Date | null | undefined, mode: TimelineTimeMode): string {
+  if (!value) return "—";
+  const d = timelineDate(value, mode);
+  return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : "—";
+}
+
 function calcBarXW(params: {
   startAt: string;
   endAt: string;
   from: dayjs.Dayjs;
   dayWidth: number;
   canvasWidth: number;
+  timeMode?: TimelineTimeMode;
 }): { x: number; w: number; leftRaw: number; rightRaw: number } | null {
-  const s = dayjs.utc(params.startAt);
-  const e = dayjs.utc(params.endAt);
+  const mode = params.timeMode ?? "UTC";
+  const s = timelineDate(params.startAt, mode);
+  const e = timelineDate(params.endAt, mode);
   if (!s.isValid() || !e.isValid()) return null;
   if (e.valueOf() <= s.valueOf()) return null;
 
@@ -451,6 +464,7 @@ function renderTowBreaks(params: {
   from: dayjs.Dayjs;
   dayWidth: number;
   canvasWidth: number;
+  timeMode: TimelineTimeMode;
 }) {
   const segs = params.ev.towSegments ?? [];
   if (segs.length === 0) return null;
@@ -462,7 +476,8 @@ function renderTowBreaks(params: {
       endAt: s.endAt,
       from: params.from,
       dayWidth: params.dayWidth,
-      canvasWidth: params.canvasWidth
+      canvasWidth: params.canvasWidth,
+      timeMode: params.timeMode
     });
     if (!seg) continue;
     const left = clamp(seg.x - params.barX, 0, params.barW);
@@ -497,6 +512,7 @@ function renderPlacementBreaks(params: {
   from: dayjs.Dayjs;
   dayWidth: number;
   canvasWidth: number;
+  timeMode: TimelineTimeMode;
 }) {
   const placements = params.ev.placements ?? [];
   if (placements.length < 2) return null;
@@ -508,7 +524,8 @@ function renderPlacementBreaks(params: {
         endAt: p.endAt,
         from: params.from,
         dayWidth: params.dayWidth,
-        canvasWidth: params.canvasWidth
+        canvasWidth: params.canvasWidth,
+        timeMode: params.timeMode
       });
       if (!seg) return null;
       const left = clamp(seg.x - params.barX, 0, params.barW);
@@ -578,12 +595,14 @@ function canShowExitTimeLabel(zoom: ZoomLevel) {
   return zoom === "hour" || zoom === "day";
 }
 
-function exitTimeLabel(ev: EventRow) {
-  return dayjs(ev.actualEndAt ?? ev.endAt).format("HH:mm");
+function exitTimeLabel(ev: EventRow, mode: TimelineTimeMode) {
+  return timelineDate(ev.actualEndAt ?? ev.endAt, mode).format("HH:mm");
 }
 
-function exitTimeTitle(ev: EventRow) {
-  return ev.actualEndAt ? `Фактическое время выхода: ${formatExportDate(ev.actualEndAt)}` : `Плановое время выхода: ${formatExportDate(ev.endAt)}`;
+function exitTimeTitle(ev: EventRow, mode: TimelineTimeMode) {
+  return ev.actualEndAt
+    ? `Фактическое время выхода: ${formatTimelineDate(ev.actualEndAt, mode)}`
+    : `Плановое время выхода: ${formatTimelineDate(ev.endAt, mode)}`;
 }
 
 // Образец бара статуса для легенды — использует тот же barVisualStyle,
@@ -686,12 +705,12 @@ function BarLabel(props: { tat: { label: string; source: string }; parts: string
   );
 }
 
-function eventTooltip(ev: EventRow) {
+function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "UTC") {
   const base = `${eventAircraftLabel(ev)} • ${ev.title}`;
-  const period = `Опер.: ${dayjs(ev.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ev.endAt).format("DD.MM.YYYY HH:mm")}`;
+  const period = `Опер.: ${formatTimelineDate(ev.startAt, mode)} – ${formatTimelineDate(ev.endAt, mode)}`;
   const place = placementLabel(ev);
-  const plan = ev.budgetStartAt && ev.budgetEndAt ? `\nПлан: ${formatExportDate(ev.budgetStartAt)} – ${formatExportDate(ev.budgetEndAt)}` : "";
-  const fact = ev.actualStartAt && ev.actualEndAt ? `\nФакт: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}` : "";
+  const plan = ev.budgetStartAt && ev.budgetEndAt ? `\nПлан: ${formatTimelineDate(ev.budgetStartAt, mode)} – ${formatTimelineDate(ev.budgetEndAt, mode)}` : "";
+  const fact = ev.actualStartAt && ev.actualEndAt ? `\nФакт: ${formatTimelineDate(ev.actualStartAt, mode)} – ${formatTimelineDate(ev.actualEndAt, mode)}` : "";
   const planningKind = `\nТип: ${PLANNING_KIND_LABEL[eventPlanningKind(ev)]}`;
   const prefix = ev.segmentKey ? `Этап: ${place}\n` : "";
   return `${prefix}${base}\n${period}${planningKind}${plan}${fact}`;
@@ -863,7 +882,7 @@ const ZOOM_LABEL: Record<TimeScale, string> = {
 // умный зум: чем крупнее группировка, тем меньше px приходится на 1 день,
 // и тем короче общая горизонтальная полоса при том же диапазоне дат.
 const ZOOM_PX_PER_DAY: Record<TimeScale, number> = {
-  hour: 360,     // 15 px / час
+  hour: 480,     // 20 px / час
   day: 24,
   week: 10,      // ~70 px / неделя
   month: 3,      // ~90 px / месяц
@@ -969,7 +988,7 @@ function buildGanttTicks(from: dayjs.Dayjs, to: dayjs.Dayjs, majorScale: TimeSca
   return out;
 }
 
-function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: number; currentMinute: dayjs.Dayjs }) {
+function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: number; currentMinute: dayjs.Dayjs; timeMode: TimelineTimeMode }) {
   const now = props.currentMinute;
   if (now.valueOf() < props.from.valueOf() || now.valueOf() >= props.to.valueOf()) return null;
   const totalDays = Math.max(1 / 1440, props.to.diff(props.from, "day", true));
@@ -986,7 +1005,7 @@ function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: num
         zIndex: 5,
         pointerEvents: "none"
       }}
-      title={`Текущее время: ${now.format("DD.MM.YYYY HH:mm")}`}
+      title={`Текущее время (${props.timeMode}): ${now.format("DD.MM.YYYY HH:mm")}`}
     />
   );
 }
@@ -1061,10 +1080,13 @@ export function GanttView() {
     return Number.isFinite(raw) ? clamp(raw, MIN_GANTT_LABEL_WIDTH, MAX_GANTT_LABEL_WIDTH) : 220;
   });
   const [currentMinute, setCurrentMinute] = useState(() => dayjs().second(0).millisecond(0));
+  const [timelineTimeMode, setTimelineTimeMode] = useState<TimelineTimeMode>(() =>
+    savedUi?.timelineTimeMode === "LOCAL" ? "LOCAL" : "UTC"
+  );
 
-  const from = useMemo(() => dayjs.utc(rangeFromApplied).startOf("day"), [rangeFromApplied]);
+  const from = useMemo(() => timelineDate(rangeFromApplied, timelineTimeMode).startOf("day"), [rangeFromApplied, timelineTimeMode]);
   // полузакрытый интервал [from, to)
-  const to = useMemo(() => dayjs.utc(rangeToApplied).add(1, "day").startOf("day"), [rangeToApplied]);
+  const to = useMemo(() => timelineDate(rangeToApplied, timelineTimeMode).add(1, "day").startOf("day"), [rangeToApplied, timelineTimeMode]);
   const days = useMemo(() => {
     const d = to.diff(from, "day");
     if (!Number.isFinite(d) || d <= 0) return 1;
@@ -1281,6 +1303,7 @@ export function GanttView() {
       ganttDisplayMode,
       majorScale,
       minorScale,
+      timelineTimeMode,
       selectedHangarIds,
       filterAircraftTypeIds,
       filterOperatorIds,
@@ -1300,6 +1323,7 @@ export function GanttView() {
     ganttDisplayMode,
     majorScale,
     minorScale,
+    timelineTimeMode,
     selectedHangarIds,
     filterAircraftTypeIds,
     filterOperatorIds,
@@ -1354,11 +1378,11 @@ export function GanttView() {
   }, [ganttLabelWidth]);
 
   useEffect(() => {
-    const update = () => setCurrentMinute(dayjs().second(0).millisecond(0));
+    const update = () => setCurrentMinute((timelineTimeMode === "UTC" ? dayjs.utc() : dayjs()).second(0).millisecond(0));
     update();
     const timer = window.setInterval(update, 60_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [timelineTimeMode]);
 
   useEffect(() => {
     // при изменении диапазона/ширины синхронизируем заголовок с текущим scrollLeft тела
@@ -1925,7 +1949,8 @@ export function GanttView() {
             endAt: new Date(endMs).toISOString(),
             from,
             dayWidth,
-            canvasWidth
+            canvasWidth,
+            timeMode: timelineTimeMode
           });
           if (g) {
             const pv = { startAt: new Date(startMs).toISOString(), endAt: new Date(endMs).toISOString(), x: g.x, w: g.w };
@@ -2043,7 +2068,7 @@ export function GanttView() {
       window.removeEventListener("pointermove", onMove as any);
       window.removeEventListener("pointerup", onUp as any);
     };
-  }, [dndActive, ptrDrag, ptrTarget, dndHoverKey, dndHoverBarIds, dndHoverIntent, dndBlockedReason, findDndLayoutLock]);
+  }, [dndActive, ptrDrag, ptrTarget, dndHoverKey, dndHoverBarIds, dndHoverIntent, dndBlockedReason, findDndLayoutLock, timelineTimeMode]);
 
   const addTowM = useMutation({
     mutationFn: async () => {
@@ -2330,8 +2355,8 @@ export function GanttView() {
         const ar = bySegmentKey.get(ak);
         const br = bySegmentKey.get(bk);
         if (!ar || !br) continue;
-        const ag = calcBarXW({ startAt: a.startAt, endAt: a.endAt, from, dayWidth, canvasWidth });
-        const bg = calcBarXW({ startAt: b.startAt, endAt: b.endAt, from, dayWidth, canvasWidth });
+        const ag = calcBarXW({ startAt: a.startAt, endAt: a.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
+        const bg = calcBarXW({ startAt: b.startAt, endAt: b.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
         if (!ag || !bg) continue;
         links.push({
           key: `${ak}->${bk}`,
@@ -2344,7 +2369,7 @@ export function GanttView() {
       }
     }
     return links;
-  }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap, ganttRowHeight]);
+  }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap, ganttRowHeight, timelineTimeMode]);
 
   const exportEvents = useMemo(() => {
     const getHangarId = (e: EventRow) => (e.hangar as any)?.id ?? (e.layout as any)?.hangarId ?? "";
@@ -2401,8 +2426,8 @@ export function GanttView() {
               }
             ];
         const overlapsBucket = placements.some((p) => {
-          const startMs = dayjs(p.startAt).valueOf();
-          const endMs = dayjs(p.endAt).valueOf();
+          const startMs = timelineDate(p.startAt, timelineTimeMode).valueOf();
+          const endMs = timelineDate(p.endAt, timelineTimeMode).valueOf();
           return Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < bucketEndMs && endMs > bucketStartMs;
         });
         if (overlapsBucket) occupied += 1;
@@ -2422,7 +2447,7 @@ export function GanttView() {
       cursor = bucketEnd;
     }
     return buckets;
-  }, [groupMode, minorScale, visibleEvents, from, to, dayWidth]);
+  }, [groupMode, minorScale, visibleEvents, from, to, dayWidth, timelineTimeMode]);
 
   const slotHistogramMaxOccupied = useMemo(
     () => Math.max(1, ...slotHistogram.map((bucket) => bucket.occupied)),
@@ -2445,14 +2470,14 @@ export function GanttView() {
             interval.startAt === targetStartAt &&
             interval.endAt === targetEndAt;
           if (isTarget) continue;
-          const seg = calcBarXW({ startAt: interval.startAt, endAt: interval.endAt, from, dayWidth, canvasWidth });
+          const seg = calcBarXW({ startAt: interval.startAt, endAt: interval.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
           if (!seg) continue;
           if (labelRight > seg.x - 2 && labelLeft < seg.x + seg.w + 2) return true;
         }
       }
       return false;
     },
-    [canvasWidth, dayWidth, dndActive, from, ganttDisplayMode]
+    [canvasWidth, dayWidth, dndActive, from, ganttDisplayMode, timelineTimeMode]
   );
 
   const renderExitTimeLabel = useCallback(
@@ -2467,13 +2492,13 @@ export function GanttView() {
         <span
           className={`exitTimeLabel${targetIsFact ? " exitTimeLabelFact" : ""}`}
           style={{ left: labelLeft, top, width: EXIT_TIME_LABEL_WIDTH }}
-          title={exitTimeTitle(ev)}
+          title={exitTimeTitle(ev, timelineTimeMode)}
         >
-          {exitTimeLabel(ev)}
+          {exitTimeLabel(ev, timelineTimeMode)}
         </span>
       );
     },
-    [canvasWidth, ganttDisplayMode, hasExitLabelCollision, minorScale]
+    [canvasWidth, ganttDisplayMode, hasExitLabelCollision, minorScale, timelineTimeMode]
   );
 
   const cancelledAircraftRows = useMemo(() => {
@@ -2588,8 +2613,9 @@ export function GanttView() {
 
   const exportBaseName = `gantt-${rangeFromApplied}-${rangeToApplied}`;
   const reportMeta = [
-    `Период: ${dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – ${dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}`,
+    `Период: ${timelineDate(rangeFromApplied, timelineTimeMode).format("DD.MM.YYYY")} – ${timelineDate(rangeToApplied, timelineTimeMode).format("DD.MM.YYYY")}`,
     `Шкала: ${ZOOM_LABEL[majorScale]} / ${ZOOM_LABEL[minorScale]}`,
+    `Время: ${timelineTimeMode}`,
     `Вид: ${ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт"}`,
     `Группировка: ${groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}`,
     `Контур: ${activeSandbox ? `песочница «${activeSandbox.name}»` : "рабочий контур"}`,
@@ -2656,7 +2682,7 @@ export function GanttView() {
     const height = headerH + rowsWithEvents.length * rowH + 22;
     const width = labelW + chartW + 24;
     const rangeMs = Math.max(1, to.valueOf() - from.valueOf());
-    const xFor = (v: string) => labelW + ((dayjs.utc(v).valueOf() - from.valueOf()) / rangeMs) * chartW;
+    const xFor = (v: string) => labelW + ((timelineDate(v, timelineTimeMode).valueOf() - from.valueOf()) / rangeMs) * chartW;
     const tickStep = Math.max(1, Math.ceil(ticks.length / 18));
 
     const grid = ticks
@@ -3052,6 +3078,13 @@ export function GanttView() {
                 ))}
               </select>
             </label>
+            <label className="tgField" title="Часовой режим отображения таймлайна">
+              <span className="tgFieldLabel">Время</span>
+              <select value={timelineTimeMode} onChange={(e) => setTimelineTimeMode(e.target.value as TimelineTimeMode)}>
+                <option value="UTC">UTC</option>
+                <option value="LOCAL">Local</option>
+              </select>
+            </label>
             <button
               type="button"
               className={`tgLockBtn${dndEnabled ? " tgLockBtnActive" : ""}${!canDnd ? " tgLockBtnDisabled" : ""}`}
@@ -3418,7 +3451,7 @@ export function GanttView() {
           </div>
           <div className="ganttHeaderRightViewport" ref={headerViewportRef}>
             <div className="ganttCanvas" style={{ width: canvasWidth, height: 44 }}>
-              <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} />
+              <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} timeMode={timelineTimeMode} />
               <div className="ganttTimelineMinorRow">
                 {ticks.map((t, i) => {
                   const nextAt = ticks[i + 1]?.at ?? to;
@@ -3438,7 +3471,7 @@ export function GanttView() {
                         bottom: 0,
                         borderRight: "1px solid rgba(148,163,184,0.18)",
                         background: majorIdx % 2 ? "rgba(148, 163, 184, 0.08)" : "transparent",
-                        padding: "2px 4px",
+                        padding: minorScale === "hour" ? "2px 1px" : "2px 4px",
                         overflow: "hidden",
                         boxSizing: "border-box"
                       }}
@@ -3446,10 +3479,11 @@ export function GanttView() {
                     >
                       <div
                         style={{
-                          fontSize: 12,
+                          fontSize: minorScale === "hour" ? 10 : 12,
                           lineHeight: "18px",
                           color: "#64748b",
-                          whiteSpace: "nowrap"
+                          whiteSpace: "nowrap",
+                          textAlign: minorScale === "hour" ? "center" : "left"
                         }}
                       >
                         {t.minorLabel}
@@ -3529,18 +3563,18 @@ export function GanttView() {
                 {groupMode === "AIRCRAFT"
                   ? aircraftRows.map((r, rowIdx) => (
                       <div className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ width: canvasWidth, minHeight: ganttRowHeight }}>
-                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} />
+                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} timeMode={timelineTimeMode} />
                         {r.events.map((p) => {
                           const ev = p.ev;
                           const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
-                          const g = calcBarXW({ startAt: displayPeriod.startAt, endAt: displayPeriod.endAt, from, dayWidth, canvasWidth });
+                          const g = calcBarXW({ startAt: displayPeriod.startAt, endAt: displayPeriod.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
                           if (!g) return null;
                           const { x, w } = g;
                           const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
                           const visual = barVisualStyle(ev.status, color);
                           const actualSeg =
                             ganttDisplayMode === "PLAN_FACT" && ev.actualStartAt && ev.actualEndAt
-                              ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth })
+                              ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode })
                               : null;
                           const actualTone = factTone(ev);
                           const exitTargetIsFact = Boolean(actualSeg) || displayPeriod.source === "Факт";
@@ -3560,10 +3594,10 @@ export function GanttView() {
                                   ...barPaddingStyle(w)
                                 }}
                                 onClick={() => pickEvent(ev)}
-                                title={`${eventTooltip(ev)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
+                                title={`${eventTooltip(ev, timelineTimeMode)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
                               >
-                                {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth }) : null}
-                                {displayPeriod.source === "Опер." ? renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth }) : null}
+                                {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
+                                {displayPeriod.source === "Опер." ? renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
                                 {canShowBarTitle(w) ? (
                                   <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
                                     <BarLabel {...aircraftBarText(ev, w, ganttDisplayMode)} />
@@ -3574,7 +3608,7 @@ export function GanttView() {
                                 <div
                                   className={`factBar factBar${actualTone[0].toUpperCase()}${actualTone.slice(1)}`}
                                   style={{ left: actualSeg.x, width: actualSeg.w }}
-                                  title={`${factToneLabel(actualTone)}: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}`}
+                                  title={`${factToneLabel(actualTone)}: ${formatTimelineDate(ev.actualStartAt, timelineTimeMode)} – ${formatTimelineDate(ev.actualEndAt, timelineTimeMode)}`}
                                 />
                               ) : null}
                               {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
@@ -3601,7 +3635,7 @@ export function GanttView() {
                         data-stand-id={r.standId ?? ""}
                         data-layout-id={r.layoutId ?? ""}
                       >
-                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} />
+                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} timeMode={timelineTimeMode} />
                         {dndActive && ptrPreview && ptrTarget?.rowKey === r.key ? (
                           <div
                             className="bar"
@@ -3625,14 +3659,14 @@ export function GanttView() {
                         {r.events.map((p) => {
                           const ev = p.ev;
                           const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
-                          const g = calcBarXW({ startAt: displayPeriod.startAt, endAt: displayPeriod.endAt, from, dayWidth, canvasWidth });
+                          const g = calcBarXW({ startAt: displayPeriod.startAt, endAt: displayPeriod.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
                           if (!g) return null;
                           const { x, w } = g;
                           const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
                           const visual = barVisualStyle(ev.status, color);
                           const actualSeg =
                             ganttDisplayMode === "PLAN_FACT" && ev.actualStartAt && ev.actualEndAt
-                              ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth })
+                              ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode })
                               : null;
                           const actualTone = factTone(ev);
                           const exitTargetIsFact = Boolean(actualSeg) || displayPeriod.source === "Факт";
@@ -3697,7 +3731,7 @@ export function GanttView() {
                                 if (dndActive) return;
                                 pickEvent(ev);
                               }}
-                              title={`${eventTooltip(ev)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
+                              title={`${eventTooltip(ev, timelineTimeMode)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
                             >
                               {/* Ручки ресайза (чтобы "по краям" работало стабильно) */}
                               {dndActive ? (
@@ -3782,7 +3816,7 @@ export function GanttView() {
                                   />
                                 </>
                               ) : null}
-                              {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth }) : null}
+                              {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
                               {canShowBarTitle(w) ? (
                                 <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
                                   <BarLabel {...hangarBarText(ev, w, ganttDisplayMode)} />
@@ -3793,7 +3827,7 @@ export function GanttView() {
                               <div
                                 className={`factBar factBar${actualTone[0].toUpperCase()}${actualTone.slice(1)}`}
                                 style={{ left: actualSeg.x, width: actualSeg.w }}
-                                title={`${factToneLabel(actualTone)}: ${formatExportDate(ev.actualStartAt)} – ${formatExportDate(ev.actualEndAt)}`}
+                                title={`${factToneLabel(actualTone)}: ${formatTimelineDate(ev.actualStartAt, timelineTimeMode)} – ${formatTimelineDate(ev.actualEndAt, timelineTimeMode)}`}
                               />
                             ) : null}
                             {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
