@@ -12,10 +12,11 @@ import { LoginView } from "./pages/LoginView";
 import { ProfileView } from "./pages/ProfileView";
 import { AdminView } from "./pages/AdminView";
 import { SandboxesView } from "./pages/SandboxesView";
+import { HelpView } from "./pages/HelpView";
 import { SandboxSwitcher, useActiveSandbox } from "./components/SandboxSwitcher";
 import { authMe } from "./auth/authApi";
 
-type Page = "gantt" | "hangar" | "import" | "mass" | "itp" | "ref" | "profile" | "admin" | "sandboxes";
+type Page = "gantt" | "hangar" | "import" | "mass" | "itp" | "ref" | "profile" | "admin" | "sandboxes" | "help";
 
 function isPage(value: string): value is Page {
   return (
@@ -27,7 +28,8 @@ function isPage(value: string): value is Page {
     value === "itp" ||
     value === "profile" ||
     value === "admin" ||
-    value === "sandboxes"
+    value === "sandboxes" ||
+    value === "help"
   );
 }
 
@@ -113,6 +115,13 @@ const ICONS = {
       <path d="M3 7l9-4 9 4-9 4-9-4z" />
       <path d="M3 7v10l9 4 9-4V7" />
       <path d="M3 12l9 4 9-4" />
+    </svg>
+  ),
+  help: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.2 9.2a2.8 2.8 0 0 1 5.4 1c0 1.8-2.6 2.2-2.6 3.8" />
+      <path d="M12 17.5h.01" />
     </svg>
   )
 } as const;
@@ -215,6 +224,7 @@ function AppShell(props: {
         </div>
 
         <div className="navGroup navGroupBottom">
+          <NavIcon active={page === "help"} onClick={() => setPage("help")} label="Инструкция" icon={ICONS.help} />
           <NavIcon active={page === "profile"} onClick={() => setPage("profile")} label="Профиль" icon={ICONS.profile} />
           {canAdmin ? (
             <NavIcon active={page === "admin"} onClick={() => setPage("admin")} label="Админка" icon={ICONS.admin} />
@@ -250,6 +260,7 @@ function AppShell(props: {
         {page === "profile" && <ProfileView me={me} />}
         {page === "admin" && <AdminView permissions={permissions} />}
         {page === "sandboxes" && <SandboxesView />}
+        {page === "help" && <HelpView permissions={permissions} onNavigate={(p) => setPage(p as Page)} />}
       </main>
     </div>
   );
