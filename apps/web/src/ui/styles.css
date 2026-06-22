@@ -5504,3 +5504,423 @@ textarea.refInput {
   font-weight: 500;
 }
 
+/* ===== Инструкция (Help) ===== */
+
+.helpPage {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.helpHero {
+  background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 58%, #7c3aed 100%);
+}
+
+.helpSearchRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.helpSearchIcon {
+  color: #64748b;
+  display: inline-flex;
+}
+
+.helpSearchRow input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  padding: 9px 12px;
+  font: inherit;
+  color: #0f172a;
+  background: #fff;
+}
+
+.helpSearchRow input:focus {
+  outline: none;
+  border-color: rgba(37, 99, 235, 0.7);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.helpLayout {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.helpNav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: calc(var(--topbar-sticky-height) + 12px);
+  background: #fff;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 14px;
+  padding: 8px;
+}
+
+.helpNavItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: #334155;
+}
+
+.helpNavItem:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.helpNavItemActive {
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.helpNavIcon {
+  display: inline-flex;
+  color: inherit;
+  flex: 0 0 auto;
+}
+
+.helpContent {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.helpSectionHead h2 {
+  margin: 0 0 2px;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.helpSectionHead p {
+  margin: 0;
+}
+
+.helpSectionIntro {
+  font-size: 13px;
+  color: #475569;
+  padding: 2px 2px 6px;
+}
+
+.helpTopics {
+  display: grid;
+  gap: 10px;
+}
+
+.helpTopic {
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.helpTopicOpen {
+  border-color: rgba(37, 99, 235, 0.4);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+.helpTopicHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 13px 14px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.helpTopicTitle {
+  font-weight: 600;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.helpTopicCrumb {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.1);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.helpTopicHeadRight {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.helpChevron {
+  font-size: 18px;
+  color: #94a3b8;
+  width: 18px;
+  text-align: center;
+}
+
+.helpPerm {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+
+.helpPermOk {
+  color: #166534;
+  background: rgba(34, 197, 94, 0.14);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.helpPermLock {
+  color: #9a3412;
+  background: rgba(249, 115, 22, 0.12);
+  border: 1px solid rgba(249, 115, 22, 0.3);
+}
+
+.helpTopicBody {
+  padding: 0 16px 16px;
+  display: grid;
+  gap: 10px;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.helpTopicBody p {
+  margin: 0;
+}
+
+.helpBullets,
+.helpSteps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.helpSteps {
+  counter-reset: helpstep;
+  list-style: none;
+  padding-left: 0;
+  gap: 8px;
+}
+
+.helpSteps li {
+  position: relative;
+  padding-left: 34px;
+  min-height: 24px;
+}
+
+.helpSteps li::before {
+  counter-increment: helpstep;
+  content: counter(helpstep);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.helpStepLabel {
+  display: block;
+}
+
+.helpStepDetail {
+  display: block;
+  font-size: 13px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.helpNote {
+  border-left: 3px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 9px 12px;
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+  color: #78350f;
+}
+
+.helpGoBtn {
+  justify-self: start;
+  margin-top: 2px;
+}
+
+.helpScenarioGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.helpScenario {
+  display: grid;
+  gap: 12px;
+}
+
+.helpScenarioHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.helpScenarioHead h3 {
+  margin: 4px 0 2px;
+  font-size: 16px;
+}
+
+.helpScenarioHead p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.helpScenarioAudience {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #7c3aed;
+}
+
+.helpScenarioCounter {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.helpProgress {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.25);
+  overflow: hidden;
+}
+
+.helpProgressBar {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #7c3aed);
+  transition: width 0.2s ease;
+}
+
+.helpScenarioStep {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: rgba(37, 99, 235, 0.05);
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 12px;
+  padding: 12px;
+  min-height: 76px;
+}
+
+.helpScenarioStepNo {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #1d4ed8;
+  color: #fff;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.helpScenarioStepText {
+  display: grid;
+  gap: 8px;
+}
+
+.helpScenarioStepText p {
+  margin: 0;
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.helpScenarioDots {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+
+.helpDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(148, 163, 184, 0.4);
+  cursor: pointer;
+  padding: 0;
+}
+
+.helpDotActive {
+  background: #2563eb;
+  transform: scale(1.2);
+}
+
+.helpDotDone {
+  background: #7c3aed;
+}
+
+.helpScenarioNav {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.helpScenarioNav .btn {
+  flex: 1 1 0;
+}
+
+.helpScenarioNav .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 880px) {
+  .helpLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .helpNav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .helpNavItem {
+    width: auto;
+  }
+}
+
