@@ -129,6 +129,38 @@ function eventOperatorId(ev: EventRow): string {
   return ev.aircraft?.operatorId ?? ev.aircraft?.operator?.id ?? ev.virtualAircraft?.operatorId ?? "";
 }
 
+function eventAircraftTypeId(ev: EventRow): string {
+  return String(
+    (ev.aircraft as any)?.typeId ??
+      (ev.aircraft as any)?.type?.id ??
+      (ev.virtualAircraft as any)?.aircraftTypeId ??
+      ""
+  );
+}
+
+function eventAircraftId(ev: EventRow): string {
+  return String((ev.aircraft as any)?.id ?? (ev as any).aircraftId ?? "");
+}
+
+function eventEventTypeId(ev: EventRow): string {
+  return String((ev.eventType as any)?.id ?? (ev as any).eventTypeId ?? "");
+}
+
+function eventPrimaryHangarId(ev: EventRow): string {
+  return String((ev.hangar as any)?.id ?? (ev.layout as any)?.hangarId ?? "");
+}
+
+function eventHangarIds(ev: EventRow): string[] {
+  const ids = new Set<string>();
+  const primary = eventPrimaryHangarId(ev);
+  if (primary) ids.add(primary);
+  for (const p of ev.placements ?? []) {
+    const hid = String(p.hangarId ?? (p.hangar as any)?.id ?? "");
+    if (hid) ids.add(hid);
+  }
+  return Array.from(ids);
+}
+
 function eventOperatorLabel(ev: EventRow, operatorNameById?: Map<string, string>): string {
   const opId = eventOperatorId(ev);
   return ev.aircraft?.operator?.name ?? (opId ? operatorNameById?.get(opId) : undefined) ?? "—";
@@ -349,6 +381,17 @@ type GanttDisplayMode = "CURRENT" | "PLAN_FACT";
 type TimelineTimeMode = "UTC" | "LOCAL";
 type PlanningKindFilter = "ALL" | "PLANNED" | "UNPLANNED";
 
+type GanttFilters = {
+  hangarIds: string[];
+  operatorIds: string[];
+  aircraftTypeIds: string[];
+  aircraftIds: string[];
+  eventTypeIds: string[];
+  planningKind: PlanningKindFilter;
+};
+
+type GanttFilterKey = keyof GanttFilters;
+
 type TowSegment = { id: string; eventId: string; startAt: string; endAt: string };
 
 type DndMoveRequest = { eventId: string; layoutId: string; standId: string; bumpOnConflict: boolean; bumpedEventId?: string };
@@ -551,6 +594,34 @@ function renderPlacementBreaks(params: {
 function eventPlanningKind(ev: EventRow): "PLANNED" | "UNPLANNED" {
   if (ev.planningKind === "PLANNED" || ev.planningKind === "UNPLANNED") return ev.planningKind;
   return ev.budgetStartAt && ev.budgetEndAt ? "PLANNED" : "UNPLANNED";
+}
+
+function eventMatchesGanttFilters(ev: EventRow, filters: GanttFilters, skip?: GanttFilterKey): boolean {
+  if (skip !== "hangarIds") {
+    const hangarIds = eventHangarIds(ev);
+    const isUnassigned = hangarIds.length === 0;
+    const okHangar =
+      filters.hangarIds.length === 0 ||
+      hangarIds.some((id) => filters.hangarIds.includes(id)) ||
+      isUnassigned;
+    if (!okHangar) return false;
+  }
+  if (skip !== "aircraftTypeIds") {
+    if (filters.aircraftTypeIds.length > 0 && !filters.aircraftTypeIds.includes(eventAircraftTypeId(ev))) return false;
+  }
+  if (skip !== "operatorIds") {
+    if (filters.operatorIds.length > 0 && !filters.operatorIds.includes(String(eventOperatorId(ev)))) return false;
+  }
+  if (skip !== "aircraftIds") {
+    if (filters.aircraftIds.length > 0 && !filters.aircraftIds.includes(eventAircraftId(ev))) return false;
+  }
+  if (skip !== "eventTypeIds") {
+    if (filters.eventTypeIds.length > 0 && !filters.eventTypeIds.includes(eventEventTypeId(ev))) return false;
+  }
+  if (skip !== "planningKind") {
+    if (filters.planningKind !== "ALL" && eventPlanningKind(ev) !== filters.planningKind) return false;
+  }
+  return true;
 }
 
 function displayPeriodForMode(ev: EventRow, mode: GanttDisplayMode): { startAt: string; endAt: string; source: "Опер." | "Факт" } {
@@ -1257,12 +1328,19 @@ export function GanttView() {
     queryKey: ["ref", "dnd-stands", selectedHangarIds.slice().sort().join(",")],
     enabled: dndActive,
     queryFn: async () => {
-      // если выбран ровно один ангар — тянем стоянки по нему; иначе всё, а фильтрацию делаем клиентом
-      const layouts = await apiGet<Layout[]>(
-        selectedHangarIds.length === 1
-          ? `/api/ref/layouts?hangarId=${encodeURIComponent(selectedHangarIds[0]!)}`
-          : "/api/ref/layouts"
-      );
+      let layouts: Layout[];
+      if (selectedHangarIds.length === 0) {
+        layouts = await apiGet<Layout[]>("/api/ref/layouts");
+      } else {
+        const chunks = await Promise.all(
+          selectedHangarIds.map((hid) => apiGet<Layout[]>(`/api/ref/layouts?hangarId=${encodeURIComponent(hid)}`))
+        );
+        const layoutById = new Map<string, Layout>();
+        for (const chunk of chunks) {
+          for (const l of chunk) layoutById.set(l.id, l);
+        }
+        layouts = Array.from(layoutById.values());
+      }
       const standsPerLayout = await Promise.all(
         layouts.map((l) => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(l.id)}`))
       );
@@ -1335,6 +1413,118 @@ export function GanttView() {
   ]);
 
   const events = q.data ?? [];
+
+  const ganttFilters = useMemo<GanttFilters>(
+    () => ({
+      hangarIds: selectedHangarIds,
+      operatorIds: filterOperatorIds,
+      aircraftTypeIds: filterAircraftTypeIds,
+      aircraftIds: filterAircraftIds,
+      eventTypeIds: filterEventTypeIds,
+      planningKind: filterPlanningKind
+    }),
+    [selectedHangarIds, filterOperatorIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds, filterPlanningKind]
+  );
+
+  const smartFilterOptions = useMemo(() => {
+    const hangarIdSet = new Set<string>();
+    const operatorIdSet = new Set<string>();
+    const aircraftTypeIdSet = new Set<string>();
+    const aircraftIdSet = new Set<string>();
+    const eventTypeIdSet = new Set<string>();
+    const planningKindSet = new Set<"PLANNED" | "UNPLANNED">();
+
+    for (const e of events) {
+      if (eventMatchesGanttFilters(e, ganttFilters, "hangarIds")) {
+        for (const id of eventHangarIds(e)) if (id) hangarIdSet.add(id);
+      }
+      if (eventMatchesGanttFilters(e, ganttFilters, "operatorIds")) {
+        const opId = eventOperatorId(e);
+        if (opId) operatorIdSet.add(String(opId));
+      }
+      if (eventMatchesGanttFilters(e, ganttFilters, "aircraftTypeIds")) {
+        const tid = eventAircraftTypeId(e);
+        if (tid) aircraftTypeIdSet.add(tid);
+      }
+      if (eventMatchesGanttFilters(e, ganttFilters, "aircraftIds")) {
+        const aid = eventAircraftId(e);
+        if (aid) aircraftIdSet.add(aid);
+      }
+      if (eventMatchesGanttFilters(e, ganttFilters, "eventTypeIds")) {
+        const etid = eventEventTypeId(e);
+        if (etid) eventTypeIdSet.add(etid);
+      }
+      if (eventMatchesGanttFilters(e, ganttFilters, "planningKind")) {
+        planningKindSet.add(eventPlanningKind(e));
+      }
+    }
+
+    const hangars = (hangarsQ.data ?? [])
+      .filter((h) => events.length === 0 || hangarIdSet.has(h.id))
+      .map((h) => ({ id: h.id, label: h.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    const operators = (operatorsQ.data ?? [])
+      .filter((o) => events.length === 0 || operatorIdSet.has(o.id))
+      .map((o) => ({ id: o.id, label: o.code ? `${o.code} • ${o.name}` : o.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    const aircraftTypes = (aircraftTypesQ.data ?? [])
+      .filter((t) => events.length === 0 || aircraftTypeIdSet.has(t.id))
+      .map((t) => ({ id: t.id, label: t.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    const aircraft = (aircraftQ.data ?? [])
+      .filter((a) => events.length === 0 || aircraftIdSet.has(String(a.id)))
+      .map((a) => ({ id: a.id, label: a.tailNumber }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    const eventTypes = (eventTypesQ.data ?? [])
+      .filter((t) => events.length === 0 || eventTypeIdSet.has(t.id))
+      .map((t) => ({ id: t.id, label: t.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    return { hangars, operators, aircraftTypes, aircraft, eventTypes, planningKinds: planningKindSet };
+  }, [events, ganttFilters, hangarsQ.data, operatorsQ.data, aircraftTypesQ.data, aircraftQ.data, eventTypesQ.data]);
+
+  useEffect(() => {
+    if (events.length === 0) return;
+
+    const prune = (selected: string[], available: Set<string>) => selected.filter((id) => available.has(id));
+    const hangarAvail = new Set(smartFilterOptions.hangars.map((o) => o.id));
+    const operatorAvail = new Set(smartFilterOptions.operators.map((o) => o.id));
+    const typeAvail = new Set(smartFilterOptions.aircraftTypes.map((o) => o.id));
+    const aircraftAvail = new Set(smartFilterOptions.aircraft.map((o) => o.id));
+    const eventTypeAvail = new Set(smartFilterOptions.eventTypes.map((o) => o.id));
+
+    const nextHangars = prune(selectedHangarIds, hangarAvail);
+    if (nextHangars.length !== selectedHangarIds.length) setSelectedHangarIds(nextHangars);
+
+    const nextOperators = prune(filterOperatorIds, operatorAvail);
+    if (nextOperators.length !== filterOperatorIds.length) setFilterOperatorIds(nextOperators);
+
+    const nextTypes = prune(filterAircraftTypeIds, typeAvail);
+    if (nextTypes.length !== filterAircraftTypeIds.length) setFilterAircraftTypeIds(nextTypes);
+
+    const nextAircraft = prune(filterAircraftIds, aircraftAvail);
+    if (nextAircraft.length !== filterAircraftIds.length) setFilterAircraftIds(nextAircraft);
+
+    const nextEventTypes = prune(filterEventTypeIds, eventTypeAvail);
+    if (nextEventTypes.length !== filterEventTypeIds.length) setFilterEventTypeIds(nextEventTypes);
+
+    if (filterPlanningKind !== "ALL" && !smartFilterOptions.planningKinds.has(filterPlanningKind)) {
+      setFilterPlanningKind("ALL");
+    }
+  }, [
+    smartFilterOptions,
+    selectedHangarIds,
+    filterOperatorIds,
+    filterAircraftTypeIds,
+    filterAircraftIds,
+    filterEventTypeIds,
+    filterPlanningKind
+  ]);
+
   const dayWidth = ZOOM_PX_PER_DAY[minorScale];
   const canvasWidth = Math.max(1, Math.round(days * dayWidth));
   const ganttRowHeight = ganttDisplayMode === "PLAN_FACT" ? 56 : 44;
@@ -2157,48 +2347,14 @@ export function GanttView() {
   const hangarStandRows = useMemo(() => {
     if (groupMode !== "HANGAR_STAND") return [];
 
-    const getHangarId = (e: EventRow) => (e.hangar as any)?.id ?? (e.layout as any)?.hangarId ?? "";
+    const getHangarId = (e: EventRow) => eventPrimaryHangarId(e);
     const getHangarName = (e: EventRow) => (e.hangar as any)?.name ?? "Ангар";
     const getStandId = (e: EventRow) => (e.reservation?.stand as any)?.id ?? "";
     const getStandCode = (e: EventRow) => (e.reservation?.stand as any)?.code ?? "";
 
-    const inSelected = (e: EventRow) => {
-      if (selectedHangarIds.length === 0) return true;
-      const hid = getHangarId(e);
-      const isUnassigned = !hid && !e.reservation?.stand;
-      return selectedHangarIds.includes(hid) || isUnassigned;
-    };
-
-    const byTypeFilter = (e: EventRow) => {
-      if (filterAircraftTypeIds.length === 0) return true;
-      const tid =
-        (e.aircraft as any)?.typeId ??
-        (e.aircraft as any)?.type?.id ??
-        (e.virtualAircraft as any)?.aircraftTypeId ??
-        "";
-      return filterAircraftTypeIds.includes(String(tid));
-    };
-    const byOperatorFilter = (e: EventRow) => {
-      if (filterOperatorIds.length === 0) return true;
-      const opId = eventOperatorId(e);
-      return filterOperatorIds.includes(String(opId));
-    };
-    const byAircraftFilter = (e: EventRow) => {
-      if (filterAircraftIds.length === 0) return true;
-      const aid = (e.aircraft as any)?.id ?? (e as any).aircraftId ?? "";
-      return filterAircraftIds.includes(String(aid));
-    };
-    const byEventTypeFilter = (e: EventRow) => {
-      if (filterEventTypeIds.length === 0) return true;
-      const id = (e.eventType as any)?.id ?? (e as any).eventTypeId ?? "";
-      return filterEventTypeIds.includes(String(id));
-    };
-    const byPlanningKindFilter = (e: EventRow) => filterPlanningKind === "ALL" || eventPlanningKind(e) === filterPlanningKind;
-
     const visible = events
-      .filter((e) => byTypeFilter(e) && byOperatorFilter(e) && byAircraftFilter(e) && byEventTypeFilter(e) && byPlanningKindFilter(e))
-      .flatMap(eventSegmentsForHangarRows)
-      .filter((e) => inSelected(e));
+      .filter((e) => eventMatchesGanttFilters(e, ganttFilters))
+      .flatMap(eventSegmentsForHangarRows);
     const activeVisible = visible.filter((e) => e.status !== "CANCELLED");
     const cancelledVisible = visible.filter((e) => e.status === "CANCELLED");
 
@@ -2262,6 +2418,7 @@ export function GanttView() {
     // Добавим пустые стоянки как drop-зоны только в режиме DnD
     if (dndActive) {
       for (const s of dndStandsQ.data ?? []) {
+        if (selectedHangarIds.length > 0 && !selectedHangarIds.includes(s.hangarId)) continue;
         if (!byStandId.has(s.id)) {
           byStandId.set(s.id, {
             standId: s.id,
@@ -2314,7 +2471,7 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, selectedHangarIds, filterAircraftTypeIds, filterOperatorIds, filterAircraftIds, filterEventTypeIds, filterPlanningKind, events, dndActive, dndStandsQ.data, dndStandById]);
+  }, [groupMode, ganttFilters, events, dndActive, dndStandsQ.data, dndStandById, selectedHangarIds]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -2372,31 +2529,8 @@ export function GanttView() {
   }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap, ganttRowHeight, timelineTimeMode]);
 
   const exportEvents = useMemo(() => {
-    const getHangarId = (e: EventRow) => (e.hangar as any)?.id ?? (e.layout as any)?.hangarId ?? "";
-    return events.filter((e) => {
-      const hid = getHangarId(e);
-      const isUnassigned = !hid;
-      const okHangar =
-        selectedHangarIds.length === 0 ||
-        selectedHangarIds.includes(hid) ||
-        (e.placements ?? []).some((p) => selectedHangarIds.includes(String(p.hangarId ?? (p.hangar as any)?.id ?? ""))) ||
-        isUnassigned;
-      const tid =
-        (e.aircraft as any)?.typeId ??
-        (e.aircraft as any)?.type?.id ??
-        (e.virtualAircraft as any)?.aircraftTypeId ??
-        "";
-      const okType = filterAircraftTypeIds.length === 0 || filterAircraftTypeIds.includes(String(tid));
-      const opId = eventOperatorId(e);
-      const okOperator = filterOperatorIds.length === 0 || filterOperatorIds.includes(String(opId));
-      const aid = (e.aircraft as any)?.id ?? (e as any).aircraftId ?? "";
-      const okAcft = filterAircraftIds.length === 0 || filterAircraftIds.includes(String(aid));
-      const eventTypeId = (e.eventType as any)?.id ?? (e as any).eventTypeId ?? "";
-      const okEventType = filterEventTypeIds.length === 0 || filterEventTypeIds.includes(String(eventTypeId));
-      const okPlanningKind = filterPlanningKind === "ALL" || eventPlanningKind(e) === filterPlanningKind;
-      return okHangar && okType && okOperator && okAcft && okEventType && okPlanningKind;
-    });
-  }, [events, selectedHangarIds, filterAircraftTypeIds, filterOperatorIds, filterAircraftIds, filterEventTypeIds, filterPlanningKind]);
+    return events.filter((e) => eventMatchesGanttFilters(e, ganttFilters));
+  }, [events, ganttFilters]);
 
   const visibleEvents = useMemo(() => exportEvents.filter((e) => e.status !== "CANCELLED"), [exportEvents]);
 
@@ -3126,12 +3260,12 @@ export function GanttView() {
             <label className="tgField">
               <span className="tgFieldLabel">Ангар</span>
               <MultiSelectDropdown
-                options={(hangarsQ.data ?? []).map((h) => ({ id: h.id, label: h.name }))}
+                options={smartFilterOptions.hangars}
                 value={selectedHangarIds}
                 onChange={setSelectedHangarIds}
                 placeholder="все"
                 width={150}
-                maxHeight={260}
+                maxHeight={320}
                 searchable
                 searchPlaceholder="Найти ангар"
                 compact
@@ -3140,26 +3274,12 @@ export function GanttView() {
             <label className="tgField">
               <span className="tgFieldLabel">Оператор</span>
               <MultiSelectDropdown
-                options={(operatorsQ.data ?? []).map((o) => ({
-                  id: o.id,
-                  label: o.code ? `${o.code} • ${o.name}` : o.name
-                }))}
+                options={smartFilterOptions.operators}
                 value={filterOperatorIds}
-                onChange={(next) => {
-                  setFilterOperatorIds(next);
-                  if (next.length > 0 && filterAircraftIds.length > 0) {
-                    const allowed = new Set(
-                      (aircraftQ.data ?? [])
-                        .filter((a: any) => next.includes(String(a.operatorId ?? a.operator?.id ?? "")))
-                        .map((a) => String(a.id))
-                    );
-                    const pruned = filterAircraftIds.filter((id) => allowed.has(String(id)));
-                    if (pruned.length !== filterAircraftIds.length) setFilterAircraftIds(pruned);
-                  }
-                }}
+                onChange={setFilterOperatorIds}
                 placeholder="все"
                 width={160}
-                maxHeight={320}
+                maxHeight={360}
                 searchable
                 searchPlaceholder="Найти оператора"
                 compact
@@ -3168,26 +3288,12 @@ export function GanttView() {
             <label className="tgField">
               <span className="tgFieldLabel">Тип ВС</span>
               <MultiSelectDropdown
-                options={(aircraftTypesQ.data ?? []).map((t) => ({
-                  id: t.id,
-                  label: t.name
-                }))}
+                options={smartFilterOptions.aircraftTypes}
                 value={filterAircraftTypeIds}
-                onChange={(next) => {
-                  setFilterAircraftTypeIds(next);
-                  if (next.length > 0 && filterAircraftIds.length > 0) {
-                    const allowed = new Set(
-                      (aircraftQ.data ?? [])
-                        .filter((a: any) => next.includes(String(a.typeId ?? "")))
-                        .map((a) => String(a.id))
-                    );
-                    const pruned = filterAircraftIds.filter((id) => allowed.has(String(id)));
-                    if (pruned.length !== filterAircraftIds.length) setFilterAircraftIds(pruned);
-                  }
-                }}
+                onChange={setFilterAircraftTypeIds}
                 placeholder="все"
                 width={150}
-                maxHeight={320}
+                maxHeight={360}
                 searchable
                 searchPlaceholder="Найти тип ВС"
                 compact
@@ -3196,23 +3302,12 @@ export function GanttView() {
             <label className="tgField">
               <span className="tgFieldLabel">Борт</span>
               <MultiSelectDropdown
-                options={(aircraftQ.data ?? [])
-                  .filter((a: any) =>
-                    filterAircraftTypeIds.length === 0
-                      ? true
-                      : filterAircraftTypeIds.includes(String(a.typeId ?? ""))
-                  )
-                  .filter((a: any) =>
-                    filterOperatorIds.length === 0
-                      ? true
-                      : filterOperatorIds.includes(String(a.operatorId ?? a.operator?.id ?? ""))
-                  )
-                  .map((a: any) => ({ id: a.id, label: a.tailNumber }))}
+                options={smartFilterOptions.aircraft}
                 value={filterAircraftIds}
                 onChange={setFilterAircraftIds}
                 placeholder="все"
                 width={140}
-                maxHeight={320}
+                maxHeight={360}
                 searchable
                 searchPlaceholder="Найти борт"
                 compact
@@ -3221,15 +3316,12 @@ export function GanttView() {
             <label className="tgField">
               <span className="tgFieldLabel">Тип события</span>
               <MultiSelectDropdown
-                options={(eventTypesQ.data ?? []).map((t) => ({
-                  id: t.id,
-                  label: t.name
-                }))}
+                options={smartFilterOptions.eventTypes}
                 value={filterEventTypeIds}
                 onChange={setFilterEventTypeIds}
                 placeholder="все"
                 width={160}
-                maxHeight={260}
+                maxHeight={320}
                 searchable
                 searchPlaceholder="Найти тип события"
                 compact
@@ -3239,8 +3331,12 @@ export function GanttView() {
               <span className="tgFieldLabel">Планирование</span>
               <select value={filterPlanningKind} onChange={(e) => setFilterPlanningKind(e.target.value as PlanningKindFilter)}>
                 <option value="ALL">все</option>
-                <option value="PLANNED">плановые</option>
-                <option value="UNPLANNED">внеплановые</option>
+                <option value="PLANNED" disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("PLANNED")}>
+                  плановые
+                </option>
+                <option value="UNPLANNED" disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("UNPLANNED")}>
+                  внеплановые
+                </option>
               </select>
             </label>
           </div>

@@ -2428,6 +2428,56 @@ textarea {
   font-size: 12px;
 }
 
+.msdCompact .msdPanel {
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.msdCompact .msdPanelHeader {
+  top: -4px;
+  gap: 4px;
+  margin: -4px -4px 0;
+  padding: 4px;
+}
+
+.msdCompact .msdActions {
+  gap: 4px;
+}
+
+.msdCompact .msdActions button,
+.msdCompact .msdOptionActions button {
+  padding: 3px 7px;
+  font-size: 10px;
+}
+
+.msdCompact .msdSearch input {
+  min-height: 26px;
+  padding: 4px 7px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.msdCompact .msdOption {
+  gap: 6px;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.msdCompact .msdOption input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.msdCompact .msdEmpty {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 .msdBtnText {
   text-align: left;
   overflow: hidden;
