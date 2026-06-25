@@ -187,10 +187,6 @@ function normalizeBodyType(v: unknown): "NARROW_BODY" | "WIDE_BODY" | null {
   return null;
 }
 
-function aircraftTypeLabel(t: Pick<AircraftType, "icaoType" | "name">): string {
-  return t.icaoType ? `${t.icaoType} • ${t.name}` : t.name;
-}
-
 function aircraftTypeNameLabel(t: Pick<AircraftType, "name">): string {
   return t.name;
 }
