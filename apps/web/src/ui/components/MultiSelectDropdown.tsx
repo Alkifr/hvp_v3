@@ -12,6 +12,7 @@ export function MultiSelectDropdown(props: {
   searchable?: boolean;
   searchPlaceholder?: string;
   compact?: boolean;
+  selectedLabelMode?: "count" | "labels";
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -41,12 +42,18 @@ export function MultiSelectDropdown(props: {
   }, [props.options, search]);
   const selectedLabel = useMemo(() => {
     if (props.value.length === 0) return props.placeholder ?? "не выбрано";
+    if (props.selectedLabelMode === "labels") {
+      const labels = props.value
+        .map((id) => props.options.find((o) => o.id === id)?.label)
+        .filter(Boolean);
+      return labels.length > 0 ? labels.join(", ") : `${props.value.length} выбрано`;
+    }
     if (props.value.length === 1) {
       const one = props.options.find((o) => o.id === props.value[0]);
       return one?.label ?? "1 выбрано";
     }
     return `${props.value.length} выбрано`;
-  }, [props.value, props.options, props.placeholder]);
+  }, [props.value, props.options, props.placeholder, props.selectedLabelMode]);
 
   const toggle = (id: string) => {
     const next = new Set(props.value);

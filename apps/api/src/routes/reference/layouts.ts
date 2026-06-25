@@ -4,18 +4,23 @@ import { z } from "zod";
 import { zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 
-function capacitySummaryFromStands(stands: { bodyType: string | null }[]): string {
-  const narrow = stands.filter((s) => s.bodyType === "NARROW_BODY").length;
-  const wide = stands.filter((s) => s.bodyType === "WIDE_BODY").length;
-  const any = stands.filter((s) => s.bodyType == null).length;
+function capacitySummaryFromStands(stands: { allowedAircraftTypes?: unknown[] }[]): string {
+  const any = stands.filter((s) => (s.allowedAircraftTypes?.length ?? 0) === 0).length;
+  const specific = stands.length - any;
   const parts: string[] = [];
-  if (narrow) parts.push(`${narrow} узк.`);
-  if (wide) parts.push(`${wide} шир.`);
+  if (specific) parts.push(`${specific} типиз.`);
   if (any) parts.push(`${any} люб.`);
   return parts.length ? parts.join(", ") : "нет мест";
 }
 
+function standAcceptsAircraftType(stand: { allowedAircraftTypes?: Array<{ aircraftTypeId: string }> }, aircraftTypeId?: string): boolean {
+  if (!aircraftTypeId) return true;
+  const allowed = stand.allowedAircraftTypes ?? [];
+  return allowed.length === 0 || allowed.some((link) => link.aircraftTypeId === aircraftTypeId);
+}
+
 const zBodyType = z.enum(["NARROW_BODY", "WIDE_BODY"]).optional().nullable();
+const zAircraftTypeIcaoTypes = z.array(z.string().trim().min(1).max(32)).optional().default([]);
 
 const zLayoutImport = z.object({
   hangars: z
@@ -40,6 +45,7 @@ const zLayoutImport = z.object({
                     code: z.string().trim().min(1).max(32),
                     name: z.string().trim().min(1).max(200),
                     bodyType: zBodyType,
+                    aircraftTypeIcaoTypes: zAircraftTypeIcaoTypes,
                     x: z.number(),
                     y: z.number(),
                     w: z.number().positive(),
@@ -61,14 +67,23 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
     assertPermission(req as any, "ref:read");
     const hangarId = zUuid.optional().parse((req.query as any)?.hangarId);
+    const activeOnly = ["1", "true", "yes"].includes(String((req.query as any)?.activeOnly ?? "").toLowerCase());
+    const aircraftTypeId = zUuid.optional().parse((req.query as any)?.aircraftTypeId);
     const rows = await app.prisma.hangarLayout.findMany({
-      where: hangarId ? { hangarId } : undefined,
+      where: {
+        ...(hangarId ? { hangarId } : {}),
+        ...(activeOnly ? { isActive: true } : {})
+      },
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
-      include: { stands: { where: { isActive: true }, select: { bodyType: true } } }
+      include: { stands: { where: { isActive: true }, select: { allowedAircraftTypes: { select: { aircraftTypeId: true } } } } }
     });
     return rows.map((r) => {
       const { stands, ...rest } = r;
-      return { ...rest, capacitySummary: capacitySummaryFromStands(stands) };
+      return {
+        ...rest,
+        capacitySummary: capacitySummaryFromStands(stands),
+        isCompatible: stands.some((stand) => standAcceptsAircraftType(stand, aircraftTypeId))
+      };
     });
   });
 
@@ -77,7 +92,19 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
     const id = zUuid.parse((req.params as any).id);
     const row = await app.prisma.hangarLayout.findUniqueOrThrow({
       where: { id },
-      include: { stands: { where: { isActive: true }, orderBy: { code: "asc" } }, hangar: true }
+      include: {
+        stands: {
+          where: { isActive: true },
+          orderBy: { code: "asc" },
+          include: {
+            allowedAircraftTypes: {
+              include: { aircraftType: { select: { id: true, icaoType: true, name: true } } },
+              orderBy: { aircraftType: { name: "asc" } }
+            }
+          }
+        },
+        hangar: true
+      }
     });
     return {
       ...row,
@@ -150,7 +177,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
           }
 
           for (const s of l.stands) {
-            await tx.hangarStand.upsert({
+            const stand = await tx.hangarStand.upsert({
               where: { layoutId_code: { layoutId: layout.id, code: s.code } },
               update: {
                 name: s.name,
@@ -175,6 +202,22 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
                 isActive: s.isActive ?? true
               }
             });
+            await tx.hangarStandAircraftType.deleteMany({ where: { standId: stand.id } });
+            if (s.aircraftTypeIcaoTypes.length > 0) {
+              const aircraftTypes = await tx.aircraftType.findMany({
+                where: { icaoType: { in: s.aircraftTypeIcaoTypes } },
+                select: { id: true, icaoType: true }
+              });
+              const found = new Set(aircraftTypes.map((t: any) => t.icaoType));
+              const missing = s.aircraftTypeIcaoTypes.filter((icaoType) => !found.has(icaoType));
+              if (missing.length > 0) {
+                throw new Error(`Не найдены типы ВС для места ${s.code}: ${missing.join(", ")}`);
+              }
+              await tx.hangarStandAircraftType.createMany({
+                data: aircraftTypes.map((aircraftType: any) => ({ standId: stand.id, aircraftTypeId: aircraftType.id })),
+                skipDuplicates: true
+              });
+            }
             summary.stands += 1;
           }
         }

@@ -29,6 +29,19 @@ function getActor(req: any) {
   return String(h["x-actor"] ?? h["x-user"] ?? "browser").slice(0, 80);
 }
 
+function eventAircraftTypeId(event: any): string | null {
+  return event.aircraft?.typeId ?? event.virtualAircraft?.aircraftTypeId ?? null;
+}
+
+function allowedAircraftTypeIds(stand: any): string[] {
+  return (stand.allowedAircraftTypes ?? []).map((link: any) => String(link.aircraftTypeId));
+}
+
+function standAccepts(stand: any, aircraftTypeId: string | null): boolean {
+  const allowed = allowedAircraftTypeIds(stand);
+  return allowed.length === 0 || !aircraftTypeId || allowed.includes(aircraftTypeId);
+}
+
 export const reservationsRoutes: FastifyPluginAsync = async (app) => {
   const replaceSingleReservation = async (
     tx: any,
@@ -644,6 +657,179 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return { ok: true, reservation, bumpedEventIds };
+    });
+
+    return moved;
+  });
+
+  // Drag&Drop на строку ангара: система сама выбирает активную/подходящую схему и место.
+  app.post("/dnd-place-hangar", async (req) => {
+    assertCanWriteEvent(req);
+    const roles = ((req as any).auth?.roles ?? []) as string[];
+    if (!req.sandbox && !roles.includes("ADMIN") && !roles.includes("PLANNER")) {
+      const err: any = new Error("FORBIDDEN");
+      err.statusCode = 403;
+      throw err;
+    }
+
+    const body = z
+      .object({
+        eventId: zUuid,
+        hangarId: zUuid,
+        startAt: zDateTime,
+        endAt: zDateTime,
+        changeReason: z.string().trim().min(1).max(1000)
+      })
+      .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .parse(req.body);
+
+    const sbId = sandboxIdFor(req);
+
+    const moved = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const event = await tx.maintenanceEvent.findFirst({
+        where: { id: body.eventId, sandboxId: sbId },
+        include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
+      });
+      if (!event) throw app.httpErrors.notFound("Event not found");
+
+      const [layouts, overlapping] = await Promise.all([
+        tx.hangarLayout.findMany({
+          where: { hangarId: body.hangarId, isActive: true },
+          include: {
+            hangar: true,
+            stands: {
+              where: { isActive: true },
+              include: { allowedAircraftTypes: { select: { aircraftTypeId: true } } },
+              orderBy: [{ code: "asc" }]
+            }
+          },
+          orderBy: [{ code: "asc" }, { name: "asc" }]
+        }),
+        tx.standReservation.findMany({
+          where: {
+            sandboxId: sbId,
+            eventId: { not: body.eventId },
+            layout: { hangarId: body.hangarId },
+            startAt: { lt: body.endAt },
+            endAt: { gt: body.startAt },
+            event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+          },
+          include: { layout: { select: { id: true, name: true } }, event: { include: { aircraft: true } } },
+          orderBy: [{ startAt: "asc" }]
+        })
+      ]);
+
+      if (layouts.length === 0) throw app.httpErrors.conflict("В ангаре нет активных схем расстановки");
+
+      const activeLayoutIds = Array.from(new Set(overlapping.map((r: any) => r.layoutId)));
+      const allowedLayoutIds = new Set(activeLayoutIds.length > 0 ? activeLayoutIds : layouts.map((layout: any) => layout.id));
+      const aircraftTypeId = eventAircraftTypeId(event);
+      const currentReservation = event.reservations[0] ?? null;
+      const currentStand = currentReservation
+        ? layouts.flatMap((layout: any) => layout.stands ?? []).find((stand: any) => stand.id === currentReservation.standId)
+        : null;
+      const currentStandCode = currentStand?.code ?? null;
+
+      const candidates = layouts
+        .filter((layout: any) => allowedLayoutIds.has(layout.id))
+        .flatMap((layout: any) =>
+          (layout.stands ?? []).flatMap((stand: any) => {
+            if (!standAccepts(stand, aircraftTypeId)) return [];
+            const standBusy = overlapping.some((reservation: any) => reservation.standId === stand.id);
+            if (standBusy) return [];
+            const sameStandCode = Boolean(currentStandCode && stand.code === currentStandCode);
+            const activeLayout = activeLayoutIds.includes(layout.id);
+            const score = (activeLayout ? 1000 : 0) + (sameStandCode ? 100 : 0) + (allowedAircraftTypeIds(stand).length > 0 ? 10 : 0);
+            return [{ layout, stand, score }];
+          })
+        )
+        .sort((a: any, b: any) => b.score - a.score || a.layout.name.localeCompare(b.layout.name, "ru") || a.stand.code.localeCompare(b.stand.code, "ru"));
+
+      const candidate = candidates[0];
+      if (!candidate) {
+        const activeNames = activeLayoutIds.length
+          ? overlapping.map((reservation: any) => reservation.layout?.name).filter(Boolean).join(", ")
+          : "";
+        throw app.httpErrors.conflict(
+          activeNames
+            ? `Нет свободного подходящего места в активной схеме периода: ${activeNames}`
+            : "Нет свободного подходящего места в активных схемах ангара"
+        );
+      }
+
+      const prev = {
+        startAt: event.startAt.toISOString(),
+        endAt: event.endAt.toISOString(),
+        hangarId: event.hangarId ?? null,
+        layoutId: event.layoutId ?? null,
+        reservation: event.reservations[0]
+          ? {
+              layoutId: event.reservations[0].layoutId,
+              standId: event.reservations[0].standId,
+              startAt: event.reservations[0].startAt.toISOString(),
+              endAt: event.reservations[0].endAt.toISOString()
+            }
+          : null
+      };
+
+      await tx.maintenanceEvent.update({
+        where: { id: body.eventId },
+        data: { startAt: body.startAt, endAt: body.endAt, layoutId: candidate.layout.id, hangarId: body.hangarId }
+      });
+
+      const reservation = await replaceSingleReservation(tx, {
+        eventId: body.eventId,
+        sandboxId: sbId,
+        hangarId: body.hangarId,
+        layoutId: candidate.layout.id,
+        standId: candidate.stand.id,
+        startAt: body.startAt,
+        endAt: body.endAt,
+        budgetStartAt: (event as any).budgetStartAt ?? null,
+        budgetEndAt: (event as any).budgetEndAt ?? null,
+        actualStartAt: (event as any).actualStartAt ?? null,
+        actualEndAt: (event as any).actualEndAt ?? null
+      });
+
+      await tx.maintenanceEventAudit.create({
+        data: {
+          eventId: body.eventId,
+          sandboxId: sbId,
+          action: EventAuditAction.UPDATE,
+          actor: getActor(req),
+          reason: body.changeReason,
+          changes: {
+            dnd: { mode: "hangar-auto-placement" },
+            from: prev,
+            to: {
+              startAt: body.startAt.toISOString(),
+              endAt: body.endAt.toISOString(),
+              hangarId: body.hangarId,
+              layoutId: candidate.layout.id,
+              standId: candidate.stand.id,
+              reservation: {
+                layoutId: reservation.layoutId,
+                standId: reservation.standId,
+                startAt: reservation.startAt.toISOString(),
+                endAt: reservation.endAt.toISOString()
+              }
+            }
+          }
+        }
+      });
+
+      return {
+        ok: true,
+        reservation,
+        bumpedEventIds: [],
+        placement: {
+          hangarId: body.hangarId,
+          layoutId: candidate.layout.id,
+          layoutName: candidate.layout.name,
+          standId: candidate.stand.id,
+          standCode: candidate.stand.code
+        }
+      };
     });
 
     return moved;

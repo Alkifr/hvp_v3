@@ -337,7 +337,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           include: {
             stands: {
               where: { isActive: true },
-              select: { id: true, bodyType: true, code: true },
+              select: { id: true, bodyType: true, code: true, allowedAircraftTypes: { select: { aircraftTypeId: true } } },
               orderBy: [{ code: "asc" }]
             },
             hangar: { select: { id: true } }
@@ -363,13 +363,13 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       })
     ]);
 
-    const bodyType = aircraftType.bodyType ?? null;
     const standOrder: StandEntry[] = [];
     const hangarIdSet = new Set(hangarsOrdered.map((h) => h.id));
     for (const lay of layoutsWithStands) {
       if (!hangarIdSet.has(lay.hangarId)) continue;
       for (const s of lay.stands) {
-        if (bodyType && s.bodyType != null && s.bodyType !== bodyType) continue;
+        const allowedAircraftTypeIds = s.allowedAircraftTypes.map((link) => link.aircraftTypeId);
+        if (allowedAircraftTypeIds.length > 0 && !allowedAircraftTypeIds.includes(aircraftType.id)) continue;
         standOrder.push({ hangarId: lay.hangarId, layoutId: lay.id, standId: s.id });
       }
     }

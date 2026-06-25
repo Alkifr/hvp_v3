@@ -471,6 +471,7 @@ model AircraftType {
 
   aircraft  Aircraft[]
   palettes  AircraftTypePalette[]
+  hangarStandRules HangarStandAircraftType[]
 }
 
 // Палитра: цвет для связки "оператор + тип ВС"
@@ -568,7 +569,7 @@ model HangarStand {
   layoutId  String
   code      String
   name      String
-  // Какое ВС может стоять на этом месте (null = любое)
+  // Deprecated: совместимость теперь задаётся через HangarStandAircraftType.
   bodyType  BodyType?
 
   // Прямоугольник места в координатах "метры" (простой SVG план)
@@ -583,11 +584,24 @@ model HangarStand {
   updatedAt DateTime @updatedAt
 
   layout HangarLayout @relation(fields: [layoutId], references: [id])
+  allowedAircraftTypes HangarStandAircraftType[]
   reservations StandReservation[]
   placements EventPlacement[]
 
   @@unique([layoutId, code])
   @@index([layoutId])
+}
+
+model HangarStandAircraftType {
+  standId        String
+  aircraftTypeId String
+  createdAt      DateTime @default(now())
+
+  stand        HangarStand  @relation(fields: [standId], references: [id], onDelete: Cascade)
+  aircraftType AircraftType @relation(fields: [aircraftTypeId], references: [id], onDelete: Cascade)
+
+  @@id([standId, aircraftTypeId])
+  @@index([aircraftTypeId])
 }
 
 model MaintenanceEvent {

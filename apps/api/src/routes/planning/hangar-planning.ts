@@ -13,6 +13,7 @@ type SummaryEvent = {
   title: string;
   status: string;
   aircraftLabel: string;
+  aircraftTypeId: string | null;
   bodyType: BodyType;
   eventTypeName: string | null;
   startAt: Date;
@@ -51,8 +52,34 @@ function eventBodyType(event: any, bodyTypeByAircraftTypeId: Map<string, BodyTyp
   return virtualTypeId ? (bodyTypeByAircraftTypeId.get(virtualTypeId) ?? null) : null;
 }
 
-function standAccepts(standBodyType: BodyType, eventBodyTypeValue: BodyType): boolean {
-  return !standBodyType || !eventBodyTypeValue || standBodyType === eventBodyTypeValue;
+function eventAircraftTypeId(event: any): string | null {
+  const realTypeId = event.aircraft?.typeId ? String(event.aircraft.typeId) : null;
+  if (realTypeId) return realTypeId;
+  const virtualTypeId = event.virtualAircraft?.aircraftTypeId ? String(event.virtualAircraft.aircraftTypeId) : null;
+  return virtualTypeId;
+}
+
+function allowedAircraftTypeIds(stand: any): string[] {
+  return (stand.allowedAircraftTypes ?? []).map((link: any) => String(link.aircraftTypeId));
+}
+
+function standAccepts(standAircraftTypeIds: string[], eventAircraftTypeIdValue: string | null): boolean {
+  return standAircraftTypeIds.length === 0 || !eventAircraftTypeIdValue || standAircraftTypeIds.includes(eventAircraftTypeIdValue);
+}
+
+function buildSummaryEvent(event: any, bodyTypeByAircraftTypeId: Map<string, BodyType>): SummaryEvent {
+  return {
+    id: event.id,
+    title: event.title,
+    status: event.status,
+    aircraftLabel: aircraftLabel(event),
+    aircraftTypeId: eventAircraftTypeId(event),
+    bodyType: eventBodyType(event, bodyTypeByAircraftTypeId),
+    eventTypeName: event.eventType?.name ?? null,
+    startAt: event.startAt,
+    endAt: event.endAt,
+    reservation: null
+  };
 }
 
 function buildHangarEfficiency(params: {
@@ -165,7 +192,11 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
         where: { isActive: true },
         include: {
           hangar: true,
-          stands: { where: { isActive: true }, orderBy: { code: "asc" } }
+          stands: {
+            where: { isActive: true },
+            include: { allowedAircraftTypes: { select: { aircraftTypeId: true } } },
+            orderBy: { code: "asc" }
+          }
         },
         orderBy: [{ hangar: { name: "asc" } }, { name: "asc" }]
       }),
@@ -203,6 +234,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
           title: e.title,
           status: e.status,
           aircraftLabel: aircraftLabel(e),
+          aircraftTypeId: eventAircraftTypeId(e),
           bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
           eventTypeName: e.eventType?.name ?? null,
           startAt: reservation?.startAt ?? e.startAt,
@@ -215,6 +247,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
         title: e.title,
         status: e.status,
         aircraftLabel: aircraftLabel(e),
+        aircraftTypeId: eventAircraftTypeId(e),
         bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
         eventTypeName: e.eventType?.name ?? null,
         startAt: p.startAt,
@@ -244,6 +277,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
           code: stand.code,
           name: stand.name,
           bodyType: stand.bodyType,
+          aircraftTypeIds: allowedAircraftTypeIds(stand),
           x: stand.x,
           y: stand.y,
           w: stand.w,
@@ -263,6 +297,10 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
         wide: stands.filter((s: any) => s.bodyType === "WIDE_BODY").length,
         any: stands.filter((s: any) => !s.bodyType).length
       };
+      const capacityByAircraftTypeRule = {
+        specific: stands.filter((s: any) => allowedAircraftTypeIds(s).length > 0).length,
+        any: stands.filter((s: any) => allowedAircraftTypeIds(s).length === 0).length
+      };
       return {
         hangar: layout.hangar,
         layout: {
@@ -273,7 +311,8 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
           widthMeters: layout.widthMeters,
           heightMeters: layout.heightMeters,
           obstacles: layout.obstacles,
-          capacityByBodyType
+          capacityByBodyType,
+          capacityByAircraftTypeRule
         },
         utilizationPct: efficiencyByHangarId.get(layout.hangarId)?.capacityUtilizationPct ?? (stands.length ? Math.min(100, (occupiedMsTotal / (stands.length * periodMs)) * 100) : 0),
         timeUtilizationPct: efficiencyByHangarId.get(layout.hangarId)?.timeUtilizationPct ?? 0,
@@ -295,7 +334,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     const incompatible = unplaced.map((e) => ({
       event: e,
       suitableStandCount: selectedLayouts.reduce((sum: number, l: any) => {
-        return sum + (l.stands ?? []).filter((s: any) => standAccepts((s.bodyType ?? null) as BodyType, e.bodyType)).length;
+        return sum + (l.stands ?? []).filter((s: any) => standAccepts(allowedAircraftTypeIds(s), e.aircraftTypeId)).length;
       }, 0)
     }));
 
@@ -313,6 +352,137 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       hangars: byLayout,
       unplaced,
       incompatible
+    };
+  });
+
+  app.post("/suggest-placement", async (req) => {
+    assertPermission(req as any, "events:read");
+    const body = z
+      .object({
+        eventId: zUuid,
+        hangarId: zUuid
+      })
+      .parse(req.body);
+
+    const [event, layouts, aircraftTypes, reservations] = await Promise.all([
+      app.prisma.maintenanceEvent.findFirst({
+        where: {
+          id: body.eventId,
+          ...sandboxFilter(req as any),
+          status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] }
+        },
+        include: {
+          aircraft: { include: { type: true } },
+          eventType: true,
+          reservations: { orderBy: [{ startAt: "asc" }] },
+          placements: { orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] }
+        }
+      }),
+      app.prisma.hangarLayout.findMany({
+        where: { hangarId: body.hangarId, isActive: true },
+        include: {
+          hangar: true,
+          stands: {
+            where: { isActive: true },
+            include: { allowedAircraftTypes: { select: { aircraftTypeId: true } } },
+            orderBy: { code: "asc" }
+          }
+        },
+        orderBy: [{ code: "asc" }, { name: "asc" }]
+      }),
+      app.prisma.aircraftType.findMany({ select: { id: true, bodyType: true } }),
+      app.prisma.standReservation.findMany({
+        where: {
+          ...sandboxFilter(req as any),
+          layout: { hangarId: body.hangarId },
+          event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+        },
+        include: { layout: { select: { id: true, name: true, hangarId: true } }, event: { select: { id: true } } },
+        orderBy: [{ startAt: "asc" }]
+      })
+    ]);
+
+    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (layouts.length === 0) {
+      return { ok: true, event: null, candidates: [], blockedLayouts: [], summary: { candidates: 0, activeLayoutIds: [] } };
+    }
+
+    const bodyTypeByAircraftTypeId = new Map<string, BodyType>(
+      aircraftTypes.map((t: any) => [t.id, (t.bodyType ?? null) as BodyType])
+    );
+    const summaryEvent = buildSummaryEvent(event, bodyTypeByAircraftTypeId);
+    const startAt = event.startAt;
+    const endAt = event.endAt;
+    const currentReservation = event.reservations?.[0] ?? null;
+    const currentStandById = currentReservation
+      ? layouts.flatMap((layout: any) => layout.stands ?? []).find((stand: any) => stand.id === currentReservation.standId)
+      : null;
+    const currentStandCode = currentStandById?.code ?? null;
+
+    const overlapping = reservations.filter(
+      (reservation: any) =>
+        reservation.eventId !== event.id &&
+        reservation.startAt < endAt &&
+        reservation.endAt > startAt
+    );
+    const activeLayoutIds = Array.from(new Set(overlapping.map((reservation: any) => reservation.layoutId)));
+    const allowedLayoutIds = new Set(activeLayoutIds.length > 0 ? activeLayoutIds : layouts.map((layout: any) => layout.id));
+    const blockedLayouts = layouts
+      .filter((layout: any) => !allowedLayoutIds.has(layout.id))
+      .map((layout: any) => ({ layoutId: layout.id, layoutName: layout.name }));
+
+    const candidates = layouts
+      .filter((layout: any) => allowedLayoutIds.has(layout.id))
+      .flatMap((layout: any) =>
+        (layout.stands ?? []).flatMap((stand: any) => {
+          const aircraftTypeIds = allowedAircraftTypeIds(stand);
+          if (!standAccepts(aircraftTypeIds, summaryEvent.aircraftTypeId)) return [];
+
+          const standConflicts = overlapping.filter((reservation: any) => reservation.standId === stand.id);
+          if (standConflicts.length > 0) return [];
+
+          const utilizationInPeriod = reservations
+            .filter((reservation: any) => reservation.standId === stand.id)
+            .reduce((sum: number, reservation: any) => sum + overlapMs(reservation.startAt, reservation.endAt, startAt, endAt), 0);
+          const sameStandCode = Boolean(currentStandCode && stand.code === currentStandCode);
+          const activeLayout = activeLayoutIds.includes(layout.id);
+          const score =
+            (activeLayout ? 1000 : 0) +
+            (sameStandCode ? 100 : 0) +
+            (aircraftTypeIds.length > 0 ? 10 : 0) -
+            utilizationInPeriod / (60 * 60 * 1000);
+
+          return [{
+            hangarId: layout.hangarId,
+            hangarName: layout.hangar.name,
+            layoutId: layout.id,
+            layoutName: layout.name,
+            layoutCode: layout.code,
+            standId: stand.id,
+            standCode: stand.code,
+            score: Number(score.toFixed(2)),
+            reason: activeLayout
+              ? sameStandCode
+                ? "активная схема периода, тот же код места"
+                : "активная схема периода"
+              : sameStandCode
+                ? "свободный ангар, тот же код места"
+                : "свободный ангар"
+          }];
+        })
+      )
+      .sort((a: any, b: any) => b.score - a.score || a.layoutName.localeCompare(b.layoutName, "ru") || a.standCode.localeCompare(b.standCode, "ru"))
+      .slice(0, 20);
+
+    return {
+      ok: true,
+      event: summaryEvent,
+      candidates,
+      blockedLayouts,
+      summary: {
+        candidates: candidates.length,
+        activeLayoutIds
+      }
     };
   });
 
@@ -336,7 +506,14 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     const [layouts, events, aircraftTypes, reservations] = await Promise.all([
       app.prisma.hangarLayout.findMany({
         where: { id: { in: body.layouts.map((l) => l.layoutId) } },
-        include: { hangar: true, stands: { where: { isActive: true }, orderBy: { code: "asc" } } }
+        include: {
+          hangar: true,
+          stands: {
+            where: { isActive: true },
+            include: { allowedAircraftTypes: { select: { aircraftTypeId: true } } },
+            orderBy: { code: "asc" }
+          }
+        }
       }),
       app.prisma.maintenanceEvent.findMany({
         where: {
@@ -382,6 +559,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
         layoutName: layout.name,
         standId: stand.id,
         standCode: stand.code,
+        aircraftTypeIds: allowedAircraftTypeIds(stand),
         bodyType: (stand.bodyType ?? null) as BodyType
       }))
     );
@@ -394,6 +572,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
         id: e.id,
         title: e.title,
         aircraftLabel: aircraftLabel(e),
+        aircraftTypeId: eventAircraftTypeId(e),
         bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
         startAt: e.startAt,
         endAt: e.endAt
@@ -403,7 +582,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     const unplaced: any[] = [];
     for (const event of candidates) {
       const stand = standOptions.find((s) => {
-        if (!standAccepts(s.bodyType, event.bodyType)) return false;
+        if (!standAccepts(s.aircraftTypeIds, event.aircraftTypeId)) return false;
         const layoutLocks = layoutLocksByHangar.get(s.hangarId) ?? [];
         const incompatibleLayout = layoutLocks.some(
           (l) => l.layoutId !== s.layoutId && l.startAt < event.endAt && l.endAt > event.startAt

@@ -18,7 +18,7 @@ export const aircraftTypesRoutes: FastifyPluginAsync = async (app) => {
     assertPermission(req as any, "ref:write");
     const body = z
       .object({
-        icaoType: z.string().trim().min(2).max(8).optional(),
+        icaoType: z.string().trim().min(2).max(25).optional(),
         name: z.string().trim().min(1).max(200),
         manufacturer: z.string().trim().min(1).max(200).optional(),
         bodyType: zBodyType,
@@ -34,7 +34,7 @@ export const aircraftTypesRoutes: FastifyPluginAsync = async (app) => {
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
-        icaoType: z.string().trim().min(2).max(8).nullable().optional(),
+        icaoType: z.string().trim().min(2).max(25).nullable().optional(),
         name: z.string().trim().min(1).max(200).optional(),
         manufacturer: z.string().trim().min(1).max(200).nullable().optional(),
         bodyType: zBodyType,

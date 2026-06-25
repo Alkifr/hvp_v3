@@ -22,6 +22,7 @@ type SummaryEvent = {
   title: string;
   status: string;
   aircraftLabel: string;
+  aircraftTypeId: string | null;
   bodyType: BodyType;
   eventTypeName: string | null;
   startAt: string;
@@ -33,6 +34,7 @@ type SummaryStand = {
   code: string;
   name: string;
   bodyType: BodyType;
+  aircraftTypeIds?: string[];
   x: number;
   y: number;
   w: number;
@@ -53,6 +55,7 @@ type SummaryHangar = {
     heightMeters?: number | null;
     obstacles?: Array<{ type: string; x: number; y: number; w: number; h: number }> | null;
     capacityByBodyType: { narrow: number; wide: number; any: number };
+    capacityByAircraftTypeRule?: { specific: number; any: number };
   };
   utilizationPct: number;
   timeUtilizationPct: number;
@@ -98,6 +101,24 @@ type AutoFitResponse = {
   unplaced: Array<{ event: SummaryEvent; reason: string }>;
   summary: { candidates: number; placed: number; unplaced: number };
 };
+type PlacementCandidate = {
+  hangarId: string;
+  hangarName: string;
+  layoutId: string;
+  layoutName: string;
+  layoutCode: string;
+  standId: string;
+  standCode: string;
+  score: number;
+  reason: string;
+};
+type SuggestPlacementResponse = {
+  ok: boolean;
+  event: SummaryEvent | null;
+  candidates: PlacementCandidate[];
+  blockedLayouts: Array<{ layoutId: string; layoutName: string }>;
+  summary: { candidates: number; activeLayoutIds: string[] };
+};
 
 function bodyTypeLabel(v: BodyType) {
   if (v === "NARROW_BODY") return "узкий";
@@ -118,7 +139,8 @@ function overlaps(aStart: string, aEnd: string, bStart: string, bEnd: string) {
 }
 
 function standAccepts(stand: SummaryStand, event: SummaryEvent) {
-  return !stand.bodyType || !event.bodyType || stand.bodyType === event.bodyType;
+  const allowed = stand.aircraftTypeIds ?? [];
+  return allowed.length === 0 || !event.aircraftTypeId || allowed.includes(event.aircraftTypeId);
 }
 
 function formatEventPeriod(e: SummaryEvent) {
@@ -233,6 +255,7 @@ export function HangarView() {
   const [layoutIdByHangarId, setLayoutIdByHangarId] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<Map<string, { layoutId: string; standId: string }>>(new Map());
   const [fitResult, setFitResult] = useState<AutoFitResponse | null>(null);
+  const [suggestResult, setSuggestResult] = useState<SuggestPlacementResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const from = useMemo(() => dayjs(fromDate).startOf("day"), [fromDate]);
@@ -507,6 +530,37 @@ export function HangarView() {
     }
   });
 
+  const applyCandidateToDraft = (eventId: string, candidate: PlacementCandidate) => {
+    setDraft((prev) => {
+      const next = new Map(prev);
+      next.set(eventId, { layoutId: candidate.layoutId, standId: candidate.standId });
+      return next;
+    });
+    setLayoutIdByHangarId((prev) => ({ ...prev, [candidate.hangarId]: candidate.layoutId }));
+    setExpandedHangarId(candidate.hangarId);
+    setSuggestResult(null);
+    setNotice(`В draft: ${candidate.hangarName} · ${candidate.layoutName} · ${candidate.standCode}.`);
+  };
+
+  const suggestM = useMutation({
+    mutationFn: (payload: { eventId: string; hangarId: string }) =>
+      apiPost<SuggestPlacementResponse>("/api/hangar-planning/suggest-placement", payload),
+    onSuccess: (res, variables) => {
+      if (res.candidates.length === 0) {
+        setSuggestResult(res);
+        setNotice("Для выбранного события нет свободного подходящего места в этом ангаре.");
+        return;
+      }
+      if (res.candidates.length === 1) {
+        applyCandidateToDraft(variables.eventId, res.candidates[0]!);
+        return;
+      }
+      setSuggestResult(res);
+      setNotice(`Найдено вариантов: ${res.candidates.length}. Выберите место.`);
+    },
+    onError: (err) => setNotice(`Подбор места не выполнен: ${String((err as any)?.message ?? err)}`)
+  });
+
   const applyDraft = async () => {
     const entries = Array.from(draft.entries());
     for (const [eventId, placement] of entries) {
@@ -515,14 +569,25 @@ export function HangarView() {
     setDraft(new Map());
     setSelectedEventId(null);
     setFitResult(null);
+    setSuggestResult(null);
     setNotice(`Применено размещений: ${entries.length}.`);
+  };
+
+  const placeInHangar = (hangar: SummaryHangar, eventId = selectedEventId) => {
+    if (!eventId) {
+      setNotice("Сначала выберите или перетащите событие.");
+      return;
+    }
+    setSelectedEventId(eventId);
+    setNotice(null);
+    suggestM.mutate({ eventId, hangarId: hangar.hangar.id });
   };
 
   const placeOnStand = (hangar: SummaryHangar, stand: SummaryStand) => {
     if (!selectedEvent) return;
     setNotice(null);
     if (!standAccepts(stand, selectedEvent)) {
-      setNotice(`Место ${stand.code} рассчитано на ${bodyTypeLabel(stand.bodyType)}, событие требует ${bodyTypeLabel(selectedEvent.bodyType)}.`);
+      setNotice(`Место ${stand.code} не разрешено для типа ВС выбранного события.`);
       return;
     }
     const layoutLock = hasLayoutLock(hangar, hangar.layout.id, selectedEvent);
@@ -540,6 +605,7 @@ export function HangarView() {
       next.set(selectedEvent.id, { layoutId: hangar.layout.id, standId: stand.id });
       return next;
     });
+    setSuggestResult(null);
   };
 
   const renderScheme = (hangar: SummaryHangar, compact: boolean) => {
@@ -597,7 +663,7 @@ export function HangarView() {
 
   const renderHangarCard = (hangar: SummaryHangar, expanded: boolean) => {
     const layouts = layoutsByHangar[hangar.hangar.id] ?? [];
-    const cap = hangar.layout.capacityByBodyType;
+    const cap = hangar.layout.capacityByAircraftTypeRule;
     const efficiencyTooltip =
       `Эффективность активной схемы за выбранный период.\n` +
       `Формула: ВС-часы / доступные место-часы активной схемы.\n` +
@@ -605,7 +671,19 @@ export function HangarView() {
       `Доступные место-часы: ${hangar.capacityHours.toFixed(2)}.\n` +
       `Занятость ангара по времени: ${hangar.timeUtilizationPct.toFixed(2)}%.`;
     return (
-      <section key={hangar.hangar.id} className={expanded ? "hangarPlanCard hangarPlanCardExpanded" : "hangarPlanCard"}>
+      <section
+        key={hangar.hangar.id}
+        className={expanded ? "hangarPlanCard hangarPlanCardExpanded" : "hangarPlanCard"}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("text/plain")) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const eventId = e.dataTransfer.getData("text/plain");
+          if (!eventId) return;
+          e.preventDefault();
+          placeInHangar(hangar, eventId);
+        }}
+      >
         <header className="hangarPlanCardHead">
           <div>
             <div className="hangarPlanTitle">{hangar.hangar.name}</div>
@@ -617,25 +695,40 @@ export function HangarView() {
             {hangar.utilizationPct.toFixed(0)}%
           </div>
         </header>
-        <select
-          className="refInput"
-          value={hangar.layout.id}
-          onChange={(e) => {
-            setLayoutIdByHangarId((prev) => ({ ...prev, [hangar.hangar.id]: e.target.value }));
-            setDraft(new Map());
-            setFitResult(null);
-          }}
-        >
-          {layouts.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name}{l.capacitySummary ? ` · ${l.capacitySummary}` : ""}
-            </option>
-          ))}
-        </select>
+        <div className="row" style={{ gap: 8, alignItems: "end" }}>
+          <label className="refLabel" style={{ flex: "1 1 auto", margin: 0 }}>
+            <span>Схема для просмотра</span>
+            <select
+              className="refInput"
+              value={hangar.layout.id}
+              onChange={(e) => {
+                setLayoutIdByHangarId((prev) => ({ ...prev, [hangar.hangar.id]: e.target.value }));
+                setDraft(new Map());
+                setFitResult(null);
+                setSuggestResult(null);
+              }}
+            >
+              {layouts.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}{l.capacitySummary ? ` · ${l.capacitySummary}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="btn btnPrimary"
+            type="button"
+            disabled={!selectedEventId || suggestM.isPending}
+            onClick={() => placeInHangar(hangar)}
+            title="Подобрать подходящую схему и место внутри ангара"
+          >
+            {suggestM.isPending ? "Подбор…" : "Разместить в ангар"}
+          </button>
+        </div>
         <div className="hangarMetrics">
           <span>Событий: <b>{hangar.eventCount}</b></span>
           <span>{viewMode === "moment" ? <>Свободно сейчас: <b>{hangar.freeAtCount ?? "—"}</b></> : <>Занят по времени: <b>{hangar.timeUtilizationPct.toFixed(0)}%</b></>}</span>
-          <span>Узк./шир./люб.: <b>{cap.narrow}/{cap.wide}/{cap.any}</b></span>
+          <span>Типиз./люб.: <b>{cap?.specific ?? 0}/{cap?.any ?? hangar.standCount}</b></span>
           <span>ВС-часы: <b>{hangar.aircraftHours.toFixed(0)}</b></span>
         </div>
         <div className="hangarEfficiencyTimeline" aria-label={`Эффективность использования ${hangar.hangar.name}`}>
@@ -741,7 +834,7 @@ export function HangarView() {
         <button className="btn btnPrimary" type="button" onClick={applyDraft} disabled={draftCount === 0 || reserveM.isPending}>
           Применить draft ({draftCount})
         </button>
-        <button className="btn" type="button" onClick={() => { setDraft(new Map()); setFitResult(null); }} disabled={draftCount === 0}>
+        <button className="btn" type="button" onClick={() => { setDraft(new Map()); setFitResult(null); setSuggestResult(null); }} disabled={draftCount === 0}>
           Очистить draft
         </button>
       </section>
@@ -768,11 +861,12 @@ export function HangarView() {
       {notice ? <div className="contextNotice">{notice}</div> : null}
       {summaryQ.error ? <div className="errorMsg">{String((summaryQ.error as any)?.message ?? summaryQ.error)}</div> : null}
       {autoFitM.error ? <div className="errorMsg">{String((autoFitM.error as any)?.message ?? autoFitM.error)}</div> : null}
+      {suggestM.error ? <div className="errorMsg">{String((suggestM.error as any)?.message ?? suggestM.error)}</div> : null}
 
       <div className="hangarWorkspace">
         <aside className="hangarSidePanel">
           <h3>События для размещения</h3>
-          <div className="muted small">Выберите событие, затем место на схеме.</div>
+          <div className="muted small">Перетащите событие на ангар или выберите его и нажмите «Разместить в ангар».</div>
           <div className="hangarEventList">
             {(summary?.unplaced ?? []).length === 0 ? <div className="muted">Нет неразмещённых событий.</div> : null}
             {(summary?.unplaced ?? []).map((event) => (
@@ -780,6 +874,12 @@ export function HangarView() {
                 key={event.id}
                 className={selectedEventId === event.id ? "hangarEventItem active" : "hangarEventItem"}
                 type="button"
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("text/plain", event.id);
+                  e.dataTransfer.effectAllowed = "copy";
+                  setSelectedEventId(event.id);
+                }}
                 onClick={() => setSelectedEventId(event.id)}
               >
                 <b>{event.aircraftLabel}</b>
@@ -788,6 +888,51 @@ export function HangarView() {
               </button>
             ))}
           </div>
+
+          {suggestResult ? (
+            <div className="hangarFitBox">
+              <div className="hangarFitHead">
+                <b>Варианты в ангаре</b>
+                <span>{suggestResult.candidates.length}</span>
+              </div>
+              {suggestResult.event ? (
+                <div className="muted small" style={{ marginBottom: 8 }}>
+                  {suggestResult.event.aircraftLabel} · {suggestResult.event.title}
+                </div>
+              ) : null}
+              {suggestResult.candidates.length === 0 ? (
+                <div className="muted small">Подходящих свободных мест не найдено.</div>
+              ) : (
+                <div className="hangarFitList">
+                  {suggestResult.candidates.map((candidate) => (
+                    <button
+                      key={`${candidate.layoutId}-${candidate.standId}`}
+                      className="hangarFitItem"
+                      type="button"
+                      onClick={() => {
+                        if (!suggestResult.event) return;
+                        applyCandidateToDraft(suggestResult.event.id, candidate);
+                      }}
+                    >
+                      <span>
+                        <b>{candidate.standCode}</b> · {candidate.layoutName}
+                      </span>
+                      <small>{candidate.hangarName} · {candidate.layoutCode}</small>
+                      <small>{candidate.reason}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {suggestResult.blockedLayouts.length > 0 ? (
+                <details className="hangarFitUnplaced">
+                  <summary>Недоступные схемы периода: {suggestResult.blockedLayouts.length}</summary>
+                  <div className="muted small">
+                    В этот период в ангаре уже используется другая схема, поэтому переключение схемы требует отдельного перепланирования.
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
 
           {fitResult ? (
             <div className="hangarFitBox">

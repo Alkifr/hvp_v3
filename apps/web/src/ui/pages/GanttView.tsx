@@ -371,8 +371,8 @@ type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
 type EventType = { id: string; code: string; name: string; color?: string | null };
 type OperatorRef = { id: string; code?: string | null; name: string; isActive?: boolean };
 type Hangar = { id: string; name: string };
-type Layout = { id: string; name: string; hangarId: string; code?: string; capacitySummary?: string };
-type Stand = { id: string; layoutId: string; code: string; name: string; isActive?: boolean };
+type Layout = { id: string; name: string; hangarId: string; code?: string; capacitySummary?: string; isCompatible?: boolean };
+type Stand = { id: string; layoutId: string; code: string; name: string; isActive?: boolean; isCompatible?: boolean };
 type AircraftTypePaletteRow = { id: string; operatorId: string; aircraftTypeId: string; color: string; isActive: boolean };
 type DndStand = Stand & { hangarId: string; hangarName: string; layoutName: string };
 
@@ -394,7 +394,7 @@ type GanttFilterKey = keyof GanttFilters;
 
 type TowSegment = { id: string; eventId: string; startAt: string; endAt: string };
 
-type DndMoveRequest = { eventId: string; layoutId: string; standId: string; bumpOnConflict: boolean; bumpedEventId?: string };
+type DndMoveRequest = { eventId: string; hangarId: string; bumpOnConflict: boolean; bumpedEventId?: string };
 type DndPlaceRequest = DndMoveRequest & { startAt: string; endAt: string };
 
 type EditorDraft = {
@@ -1018,6 +1018,27 @@ function labelForScale(d: dayjs.Dayjs, scale: TimeScale) {
   }
 }
 
+function majorLabelForScale(d: dayjs.Dayjs, scale: TimeScale) {
+  switch (scale) {
+    case "hour":
+      return d.format("DD.MM.YYYY HH:00");
+    case "day":
+      return d.format("DD.MM.YYYY");
+    case "week": {
+      const end = d.add(6, "day");
+      return `${d.format("D MMM YYYY")}–${end.format("D MMM YYYY")}`;
+    }
+    case "month":
+      return d.format("MMM YYYY");
+    case "quarter": {
+      const q = Math.floor(d.month() / 3) + 1;
+      return `Q${q} ${d.format("YYYY")}`;
+    }
+    case "year":
+      return d.format("YYYY");
+  }
+}
+
 function histogramLabelForScale(d: dayjs.Dayjs, scale: TimeScale) {
   switch (scale) {
     case "hour":
@@ -1132,7 +1153,7 @@ export function GanttView() {
 
   const ptrPreviewRef = useRef<null | { startAt: string; endAt: string; x: number; w: number }>(null);
   const ptrTargetRef = useRef<
-    null | { layoutId: string; standId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string }
+    null | { hangarId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string }
   >(null);
   const hangarStandRowsRef = useRef<any[]>([]);
   const initialFrom = useMemo(() => dayjs().add(-20, "day").format("YYYY-MM-DD"), []);
@@ -1543,7 +1564,7 @@ export function GanttView() {
       if (right <= 0 || left >= canvasWidth) continue;
       out.push({
         key: tick.majorKey,
-        label: labelForScale(start, majorScale),
+        label: majorLabelForScale(start, majorScale),
         left,
         width: Math.max(1, right - left),
         alt: out.length % 2 === 1
@@ -1634,6 +1655,7 @@ export function GanttView() {
     if (!id) return null;
     return (aircraftQ.data ?? []).find((a) => a.id === id) ?? null;
   }, [draft?.aircraftId, aircraftQ.data]);
+  const selectedAircraftTypeId = selectedAircraft?.typeId ?? "";
 
   // подтверждение изменения
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1760,25 +1782,41 @@ export function GanttView() {
   };
 
   const layoutsForEditorQ = useQuery({
-    queryKey: ["ref", "layouts", "editor", draft?.hangarId ?? ""],
-    queryFn: () => apiGet<Layout[]>(`/api/ref/layouts?hangarId=${encodeURIComponent(draft!.hangarId)}`),
+    queryKey: ["ref", "layouts", "editor", draft?.hangarId ?? "", selectedAircraftTypeId],
+    queryFn: () =>
+      apiGet<Layout[]>(
+        `/api/ref/layouts?hangarId=${encodeURIComponent(draft!.hangarId)}&activeOnly=1${
+          selectedAircraftTypeId ? `&aircraftTypeId=${encodeURIComponent(selectedAircraftTypeId)}` : ""
+        }`
+      ),
     enabled: !!draft?.hangarId
   });
 
   const allLayoutsQ = useQuery({
-    queryKey: ["ref", "layouts", "all"],
-    queryFn: () => apiGet<Layout[]>("/api/ref/layouts")
+    queryKey: ["ref", "layouts", "all", selectedAircraftTypeId],
+    queryFn: () =>
+      apiGet<Layout[]>(
+        `/api/ref/layouts?activeOnly=1${selectedAircraftTypeId ? `&aircraftTypeId=${encodeURIComponent(selectedAircraftTypeId)}` : ""}`
+      )
   });
 
   const standsForEditorQ = useQuery({
-    queryKey: ["ref", "stands", "editor", draft?.layoutId ?? ""],
-    queryFn: () => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(draft!.layoutId)}`),
+    queryKey: ["ref", "stands", "editor", draft?.layoutId ?? "", selectedAircraftTypeId],
+    queryFn: () =>
+      apiGet<Stand[]>(
+        `/api/ref/stands?layoutId=${encodeURIComponent(draft!.layoutId)}&activeOnly=1${
+          selectedAircraftTypeId ? `&aircraftTypeId=${encodeURIComponent(selectedAircraftTypeId)}` : ""
+        }`
+      ),
     enabled: !!draft?.layoutId
   });
 
   const allStandsQ = useQuery({
-    queryKey: ["ref", "stands", "all"],
-    queryFn: () => apiGet<Stand[]>("/api/ref/stands")
+    queryKey: ["ref", "stands", "all", selectedAircraftTypeId],
+    queryFn: () =>
+      apiGet<Stand[]>(
+        `/api/ref/stands?activeOnly=1${selectedAircraftTypeId ? `&aircraftTypeId=${encodeURIComponent(selectedAircraftTypeId)}` : ""}`
+      )
   });
 
   const historyQ = useQuery({
@@ -2019,29 +2057,22 @@ export function GanttView() {
     }
   >(null);
   const [ptrPreview, setPtrPreview] = useState<null | { startAt: string; endAt: string; x: number; w: number }>(null);
-  const [ptrTarget, setPtrTarget] = useState<null | { layoutId: string; standId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string }>(
+  const [ptrTarget, setPtrTarget] = useState<null | { hangarId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string }>(
     null
   );
 
   const findDndLayoutLock = useCallback((
-    target: { layoutId: string; standId: string; rowKey: string },
+    target: { hangarId: string; rowKey: string },
     eventId: string,
     startAt: string,
     endAt: string
   ) => {
-    const row = (hangarStandRowsRef.current ?? []).find((r: any) => r?.key === target.rowKey);
-    const targetHangarId = String(row?.hangarId ?? "");
-    if (!targetHangarId || !target.layoutId) return null;
-    const startMs = dayjs(startAt).valueOf();
-    const endMs = dayjs(endAt).valueOf();
-    return events.find((ev) => {
-      if (ev.id === eventId || ev.status === "CANCELLED" || ev.status === "DELETED") return false;
-      const hangarId = String((ev.hangar as any)?.id ?? (ev.layout as any)?.hangarId ?? "");
-      const layoutId = String((ev.layout as any)?.id ?? "");
-      if (!hangarId || !layoutId || hangarId !== targetHangarId || layoutId === target.layoutId) return false;
-      return dayjs(ev.startAt).valueOf() < endMs && dayjs(ev.endAt).valueOf() > startMs;
-    });
-  }, [events]);
+    void target;
+    void eventId;
+    void startAt;
+    void endAt;
+    return null;
+  }, []);
 
   useEffect(() => {
     ptrPreviewRef.current = ptrPreview;
@@ -2065,26 +2096,24 @@ export function GanttView() {
 
       let nextTarget:
         | null
-        | { layoutId: string; standId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string } = null;
+        | { hangarId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string } = null;
 
       // Цель (строка) берём по тому, где находится курсор, а вот "вытеснение" будем определять ОТ GHOST.
       // Поэтому здесь от barEl мы используем только rowKey/layout/stand (не bump).
       if (barEl) {
         const rowEl = (barEl.closest?.("[data-dnd-drop='1']") as HTMLElement | null) ?? null;
-        const layoutId = rowEl?.dataset?.layoutId ?? "";
-        const standId = rowEl?.dataset?.standId ?? "";
+        const hangarId = rowEl?.dataset?.hangarId ?? "";
         const rowKey = rowEl?.dataset?.rowKey ?? "";
-        if (layoutId && standId && rowKey) {
-          nextTarget = { layoutId, standId, rowKey, intent: "move" };
+        if (hangarId && rowKey) {
+          nextTarget = { hangarId, rowKey, intent: "move" };
         }
       }
 
       if (!nextTarget && dropEl) {
-        const layoutId = dropEl.dataset?.layoutId ?? "";
-        const standId = dropEl.dataset?.standId ?? "";
+        const hangarId = dropEl.dataset?.hangarId ?? "";
         const rowKey = dropEl.dataset?.rowKey ?? "";
-        if (layoutId && standId && rowKey) {
-          nextTarget = { layoutId, standId, rowKey, intent: "move" };
+        if (hangarId && rowKey) {
+          nextTarget = { hangarId, rowKey, intent: "move" };
         }
       }
 
@@ -2145,65 +2174,15 @@ export function GanttView() {
           if (g) {
             const pv = { startAt: new Date(startMs).toISOString(), endAt: new Date(endMs).toISOString(), x: g.x, w: g.w };
 
-            const layoutLock = findDndLayoutLock(nextTarget, d.eventId, pv.startAt, pv.endAt);
-            if (layoutLock) {
-              const reason = `Недоступно: в этом периоде уже используется другая схема расстановки (${(layoutLock.layout as any)?.name ?? "другая схема"}, ${eventAircraftLabel(layoutLock)} • ${layoutLock.title}).`;
-              ptrTargetRef.current = null;
-              setPtrTarget(null);
-              setDndHoverKey(nextTarget.rowKey);
-              setDndHoverIntent(null);
-              if (dndHoverBarIds.length) setDndHoverBarIds([]);
-              setDndBlockedReason(reason);
-              ptrPreviewRef.current = pv;
-              setPtrPreview(pv);
-              return;
-            }
             if (dndBlockedReason) setDndBlockedReason(null);
 
-            // Определяем "вытеснение" по GHOST: если период ghost пересекается с любыми событиями на целевой строке
-            // (кроме перетаскиваемого), то intent=bump и подсвечиваем все такие события.
-            const pvStart = startMs;
-            const pvEnd = endMs;
-            const targetRowKey = nextTarget.rowKey;
-            const row = (hangarStandRowsRef.current ?? []).find((r: any) => r?.key === targetRowKey);
-            const bumped: Array<{ id: string; startMs: number }> = [];
-            if (row && row.kind === "stand") {
-              for (const it of row.events) {
-                const ev = it.ev;
-                if (ev.id === d.eventId) continue;
-                const s = dayjs(ev.startAt).valueOf();
-                const en = dayjs(ev.endAt).valueOf();
-                if (s < pvEnd && en > pvStart) {
-                  bumped.push({ id: ev.id, startMs: s });
-                }
-              }
+            if (nextTarget.intent !== "move") {
+              nextTarget = { ...nextTarget, intent: "move" };
+              ptrTargetRef.current = nextTarget;
+              setPtrTarget(nextTarget);
             }
-
-            bumped.sort((a, b) => a.startMs - b.startMs);
-            const bumpedIds = bumped.map((x) => x.id);
-
-            if (bumpedIds.length) {
-              if (nextTarget.intent !== "bump") {
-                nextTarget = { ...nextTarget, intent: "bump" };
-                ptrTargetRef.current = nextTarget;
-                setPtrTarget(nextTarget);
-                setDndHoverIntent("bump");
-              }
-              if (
-                bumpedIds.length !== dndHoverBarIds.length ||
-                bumpedIds.some((id, idx) => id !== dndHoverBarIds[idx])
-              ) {
-                setDndHoverBarIds(bumpedIds);
-              }
-            } else {
-              if (nextTarget.intent !== "move") {
-                nextTarget = { ...nextTarget, intent: "move" };
-                ptrTargetRef.current = nextTarget;
-                setPtrTarget(nextTarget);
-                setDndHoverIntent("move");
-              }
-              if (dndHoverBarIds.length) setDndHoverBarIds([]);
-            }
+            if (dndHoverIntent !== "move") setDndHoverIntent("move");
+            if (dndHoverBarIds.length) setDndHoverBarIds([]);
 
             ptrPreviewRef.current = pv;
             setPtrPreview(pv);
@@ -2235,8 +2214,7 @@ export function GanttView() {
       // размещение с временем
       setPendingDnd({
         eventId: d.eventId,
-        layoutId: t.layoutId,
-        standId: t.standId,
+        hangarId: t.hangarId,
         bumpOnConflict: t.intent === "bump",
         startAt: preview.startAt,
         endAt: preview.endAt
@@ -2307,8 +2285,8 @@ export function GanttView() {
     mutationFn: async () => {
       if (!pendingDnd) throw new Error("Нет данных переноса");
       const hasTime = (pendingDnd as any).startAt && (pendingDnd as any).endAt;
-      const path = hasTime ? "/api/reservations/dnd-place" : "/api/reservations/dnd-move";
-      return await apiPost<{ ok: boolean; bumpedEventIds: string[] }>(path, {
+      const path = hasTime ? "/api/reservations/dnd-place-hangar" : "/api/reservations/dnd-move";
+      return await apiPost<{ ok: boolean; bumpedEventIds: string[]; placement?: { layoutName?: string; standCode?: string } }>(path, {
         ...pendingDnd,
         bumpOnConflict: pendingDnd.bumpOnConflict,
         changeReason: changeReason.trim()
@@ -2323,7 +2301,8 @@ export function GanttView() {
       setDndHoverBarIds([]);
       setDndHoverIntent(null);
       const bumped = (res?.bumpedEventIds ?? []).length;
-      setDndNotice(bumped ? `Перенос выполнен. Вытеснено событий: ${bumped}.` : "Перенос выполнен.");
+      const autoPlace = res?.placement ? ` Схема: ${res.placement.layoutName ?? "—"}, место: ${res.placement.standCode ?? "—"}.` : "";
+      setDndNotice(bumped ? `Перенос выполнен. Вытеснено событий: ${bumped}.${autoPlace}` : `Перенос выполнен.${autoPlace}`);
       setChangeReason("");
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
       if (draft?.id) void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
@@ -2361,7 +2340,7 @@ export function GanttView() {
     const unassigned = activeVisible.filter((e) => !getHangarId(e) && !e.reservation?.stand);
 
     const noStandByHangar = new Map<string, { hangarId: string; hangarName: string; events: EventRow[] }>();
-    const byStandId = new Map<string, { standId: string; layoutId: string; hangarId: string; label: string; events: EventRow[] }>();
+    const byStandId = new Map<string, { standId: string; layoutId: string; hangarId: string; label: string; subLabel?: string; events: EventRow[] }>();
 
     for (const e of activeVisible) {
       const hid = getHangarId(e);
@@ -2384,7 +2363,8 @@ export function GanttView() {
         const label = meta
           ? `${hangarAxisLabel(meta.hangarName)} / ${compactStandLabel(meta.code)}`
           : `${hangarAxisLabel(hname)} / ${compactStandLabel(scode)}`;
-        const rec = byStandId.get(sid) ?? { standId: sid, layoutId, hangarId, label, events: [] as EventRow[] };
+        const subLabel = meta?.layoutName ?? String((e.layout as any)?.name ?? "");
+        const rec = byStandId.get(sid) ?? { standId: sid, layoutId, hangarId, label, subLabel, events: [] as EventRow[] };
         rec.events.push(e);
         byStandId.set(sid, rec);
       }
@@ -2393,7 +2373,8 @@ export function GanttView() {
     type Row = {
       key: string;
       label: string;
-      kind: "unassigned" | "hangarNoStand" | "stand" | "cancelled";
+      subLabel?: string;
+      kind: "unassigned" | "hangarNoStand" | "hangar" | "stand" | "cancelled";
       hangarId?: string;
       layoutId?: string;
       standId?: string;
@@ -2425,6 +2406,7 @@ export function GanttView() {
             layoutId: s.layoutId,
             hangarId: s.hangarId,
             label: `${hangarAxisLabel(s.hangarName)} / ${compactStandLabel(s.code)}`,
+            subLabel: s.layoutName,
             events: []
           });
         }
@@ -2436,6 +2418,7 @@ export function GanttView() {
       rows.push({
         key: `stand:${s.hangarId}|${s.standId}`,
         label: s.label,
+        subLabel: s.subLabel,
         kind: "stand",
         hangarId: s.hangarId,
         layoutId: s.layoutId,
@@ -2444,16 +2427,16 @@ export function GanttView() {
       });
     }
 
-    const laneRows: Array<{ key: string; label: string; kind: Row["kind"]; hangarId?: string; layoutId?: string; standId?: string; events: PlacedEvent[] }> = [];
+    const laneRows: Array<{ key: string; label: string; subLabel?: string; kind: Row["kind"]; hangarId?: string; layoutId?: string; standId?: string; events: PlacedEvent[] }> = [];
     for (const r of rows) {
       if (r.events.length === 0) {
         // пустая строка — drop-зона
-        laneRows.push({ key: `${r.key}:lane:0`, label: r.label, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: [] });
+        laneRows.push({ key: `${r.key}:lane:0`, label: r.label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: [] });
       } else {
         const lanes = packOverlapsIntoLanes(r.events);
         for (let i = 0; i < lanes.length; i++) {
           const label = i === 0 ? r.label : `${r.label} (нахлёст)`;
-          laneRows.push({ key: `${r.key}:lane:${i}`, label, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: lanes[i]! });
+          laneRows.push({ key: `${r.key}:lane:${i}`, label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: lanes[i]! });
         }
       }
     }
@@ -2471,7 +2454,7 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, ganttFilters, events, dndActive, dndStandsQ.data, dndStandById, selectedHangarIds]);
+  }, [groupMode, ganttFilters, events, dndActive, dndStandsQ.data, dndStandById, selectedHangarIds, hangarsQ.data]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -3571,7 +3554,7 @@ export function GanttView() {
                         overflow: "hidden",
                         boxSizing: "border-box"
                       }}
-                      title={`${labelForScale(startOfScale(t.at, majorScale), majorScale)} • ${t.minorLabel}`}
+                      title={`${majorLabelForScale(startOfScale(t.at, majorScale), majorScale)} • ${t.minorLabel}`}
                     >
                       <div
                         style={{
@@ -3626,7 +3609,9 @@ export function GanttView() {
                     <div>
                       <strong>{r.label}</strong>
                     </div>
-                    <div className="muted" style={{ fontSize: 12 }} />
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {(r as any).subLabel ?? ""}
+                    </div>
                   </div>
                 ))}
           </div>
@@ -3726,10 +3711,9 @@ export function GanttView() {
                               : undefined,
                           outlineOffset: -2
                         }}
-                        data-dnd-drop={dndActive && r.kind === "stand" && r.standId && r.layoutId ? "1" : undefined}
+                        data-dnd-drop={dndActive && r.kind === "stand" && r.hangarId ? "1" : undefined}
                         data-row-key={r.key}
-                        data-stand-id={r.standId ?? ""}
-                        data-layout-id={r.layoutId ?? ""}
+                        data-hangar-id={r.hangarId ?? ""}
                       >
                         <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} timeMode={timelineTimeMode} />
                         {dndActive && ptrPreview && ptrTarget?.rowKey === r.key ? (
@@ -4267,9 +4251,10 @@ export function GanttView() {
                     >
                       <option value="">— не задан —</option>
                       {(layoutsForEditorQ.data ?? []).map((l) => (
-                        <option key={l.id} value={l.id}>
+                        <option key={l.id} value={l.id} disabled={l.isCompatible === false}>
                           {l.name}
                           {l.capacitySummary ? ` — ${l.capacitySummary}` : ""}
+                          {l.isCompatible === false ? " — недоступно для типа ВС" : ""}
                         </option>
                       ))}
                     </select>
@@ -4284,8 +4269,9 @@ export function GanttView() {
                     >
                       <option value="">— не выбрано —</option>
                       {(standsForEditorQ.data ?? []).map((s) => (
-                        <option key={s.id} value={s.id}>
+                        <option key={s.id} value={s.id} disabled={s.isCompatible === false}>
                           {s.code} • {s.name}
+                          {s.isCompatible === false ? " — недоступно для типа ВС" : ""}
                         </option>
                       ))}
                     </select>
@@ -4386,7 +4372,11 @@ export function GanttView() {
                               >
                                 <option value="">— не задан —</option>
                                 {layoutOptions.map((l) => (
-                                  <option key={l.id} value={l.id}>{l.name}{l.capacitySummary ? ` — ${l.capacitySummary}` : ""}</option>
+                                  <option key={l.id} value={l.id} disabled={l.isCompatible === false}>
+                                    {l.name}
+                                    {l.capacitySummary ? ` — ${l.capacitySummary}` : ""}
+                                    {l.isCompatible === false ? " — недоступно для типа ВС" : ""}
+                                  </option>
                                 ))}
                               </select>
                             </label>
@@ -4400,7 +4390,10 @@ export function GanttView() {
                               >
                                 <option value="">— не выбрано —</option>
                                 {standOptions.map((s) => (
-                                  <option key={s.id} value={s.id}>{s.code} • {s.name}</option>
+                                  <option key={s.id} value={s.id} disabled={s.isCompatible === false}>
+                                    {s.code} • {s.name}
+                                    {s.isCompatible === false ? " — недоступно для типа ВС" : ""}
+                                  </option>
                                 ))}
                               </select>
                             </label>

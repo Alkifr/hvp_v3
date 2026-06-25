@@ -12,6 +12,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
+    "import:hangar-layouts": "tsx scripts/importHangarAircraftTypeLayouts.ts",
+    "reselect:event-layouts": "tsx scripts/reselectEventLayoutsForAircraftTypeSchemes.ts",
     "demo:export": "tsx scripts/demoDataExport.ts",
     "db:counts": "tsx scripts/dbCounts.ts",
     "db:clone:cloud": "tsx scripts/cloneToCloud.ts"

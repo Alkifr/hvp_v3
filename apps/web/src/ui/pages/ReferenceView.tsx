@@ -123,6 +123,8 @@ type LayoutDetail = Layout & {
     code: string;
     name: string;
     bodyType?: string | null;
+    allowedAircraftTypes?: Array<{ aircraftTypeId?: string; aircraftType?: Pick<AircraftType, "id" | "icaoType" | "name"> }>;
+    aircraftTypeIds?: string[];
     x: number;
     y: number;
     w: number;
@@ -134,8 +136,8 @@ type LayoutDetail = Layout & {
 };
 type Skill = { id: string; code: string; name: string; isActive: boolean };
 
-function TextInput(props: { value: string; onChange: (v: string) => void; placeholder?: string; style?: React.CSSProperties }) {
-  return <input value={props.value} placeholder={props.placeholder} onChange={(e) => props.onChange(e.target.value)} style={props.style} />;
+function TextInput(props: { value: string; onChange: (v: string) => void; placeholder?: string; style?: React.CSSProperties; maxLength?: number }) {
+  return <input value={props.value} placeholder={props.placeholder} maxLength={props.maxLength} onChange={(e) => props.onChange(e.target.value)} style={props.style} />;
 }
 
 function NumberInput(props: { value: number; onChange: (v: number) => void; step?: number; style?: React.CSSProperties }) {
@@ -183,6 +185,31 @@ function normalizeBodyType(v: unknown): "NARROW_BODY" | "WIDE_BODY" | null {
   if (s.includes("wide") || s.includes("шир")) return "WIDE_BODY";
   if (s.includes("narrow") || s.includes("узк")) return "NARROW_BODY";
   return null;
+}
+
+function aircraftTypeLabel(t: Pick<AircraftType, "icaoType" | "name">): string {
+  return t.icaoType ? `${t.icaoType} • ${t.name}` : t.name;
+}
+
+function aircraftTypeNameLabel(t: Pick<AircraftType, "name">): string {
+  return t.name;
+}
+
+function standAllowedAircraftTypeIds(row: any): string[] {
+  if (Array.isArray(row.aircraftTypeIds)) return row.aircraftTypeIds.map(String);
+  if (!Array.isArray(row.allowedAircraftTypes)) return [];
+  return row.allowedAircraftTypes
+    .map((link: any) => String(link.aircraftType?.id ?? link.aircraftTypeId ?? ""))
+    .filter(Boolean);
+}
+
+function standAllowedAircraftTypeLabel(row: any): string {
+  if (!Array.isArray(row.allowedAircraftTypes) || row.allowedAircraftTypes.length === 0) return "Любой ВС";
+  return row.allowedAircraftTypes
+    .map((link: any) => link.aircraftType)
+    .filter(Boolean)
+    .map((t: AircraftType) => aircraftTypeNameLabel(t))
+    .join(", ");
 }
 
 function buildLayoutImportPayload(rows: Array<Record<string, unknown>>) {
@@ -254,10 +281,11 @@ function LayoutSchemePreview(props: { detail?: LayoutDetail | null; selectedStan
           )}
           {detail.stands.map((s) => {
             const selected = s.id === props.selectedStandId;
-            const fill = s.bodyType === "WIDE_BODY" ? "rgba(249,115,22,0.78)" : s.bodyType === "NARROW_BODY" ? "rgba(37,99,235,0.78)" : "rgba(34,197,94,0.72)";
+            const hasSpecificAircraftTypes = standAllowedAircraftTypeIds(s).length > 0;
+            const fill = hasSpecificAircraftTypes ? "rgba(37,99,235,0.78)" : "rgba(34,197,94,0.72)";
             return (
               <g key={s.id} transform={`rotate(${s.rotate ?? 0} ${s.x + s.w / 2} ${s.y + s.h / 2})`}>
-                <title>{s.code} · {s.name} · {bodyTypeLabel(s.bodyType) ?? "Любой"}</title>
+                <title>{s.code} · {s.name} · {standAllowedAircraftTypeLabel(s)}</title>
                 <rect
                   x={s.x + 0.08}
                   y={s.y + 0.08}
@@ -318,6 +346,7 @@ export function ReferenceView() {
   const listUrl = useMemo(() => {
     if (kind === "layouts" && filterHangarId) return `/api/ref/layouts?hangarId=${encodeURIComponent(filterHangarId)}`;
     if (kind === "stands" && filterLayoutId) return `/api/ref/stands?layoutId=${encodeURIComponent(filterLayoutId)}`;
+    if (kind === "stands" && filterHangarId) return `/api/ref/stands?hangarId=${encodeURIComponent(filterHangarId)}`;
     return url;
   }, [kind, filterHangarId, filterLayoutId, url]);
 
@@ -331,6 +360,10 @@ export function ReferenceView() {
     queryFn: () => apiGet<Layout[]>(filterHangarId ? `/api/ref/layouts?hangarId=${encodeURIComponent(filterHangarId)}` : "/api/ref/layouts"),
     enabled: kind === "stands" || kind === "layouts"
   });
+  const aircraftTypeOptions = useMemo(
+    () => (aircraftTypesQ.data ?? []).map((t) => ({ id: t.id, label: aircraftTypeNameLabel(t) })),
+    [aircraftTypesQ.data]
+  );
 
   const createM = useMutation({
     mutationFn: (payload: any) => apiPost<any>(url, payload),
@@ -506,6 +539,7 @@ export function ReferenceView() {
   const [fEndMin, setFEndMin] = useState(20 * 60);
   const [fUom, setFUom] = useState("EA");
   const [fPersonSkillIds, setFPersonSkillIds] = useState<string[]>([]);
+  const [fStandAircraftTypeIds, setFStandAircraftTypeIds] = useState<string[]>([]);
 
   const resetFormForKind = (k: RefKind) => {
     setFIsActive(true);
@@ -532,6 +566,7 @@ export function ReferenceView() {
     setFEndMin(20 * 60);
     setFUom("EA");
     setFPersonSkillIds([]);
+    setFStandAircraftTypeIds([]);
     setFBodyType("");
 
     if (k === "operators") {
@@ -620,7 +655,15 @@ export function ReferenceView() {
     setFPersonSkillIds(
       Array.isArray(row.skills) ? row.skills.map((s: any) => String(s.skill?.id ?? s.skillId ?? "")).filter(Boolean) : []
     );
+    setFStandAircraftTypeIds(standAllowedAircraftTypeIds(row));
   };
+
+  useEffect(() => {
+    if (mode !== "edit" || !editId) return;
+    window.setTimeout(() => {
+      document.getElementById("ref-editor-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 0);
+  }, [editId, mode]);
 
   const buildPayload = () => {
     if (kind === "operators") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
@@ -676,6 +719,7 @@ export function ReferenceView() {
         code: fCode.trim(),
         name: fName.trim(),
         bodyType: fBodyType === "NARROW_BODY" || fBodyType === "WIDE_BODY" ? fBodyType : null,
+        aircraftTypeIds: fStandAircraftTypeIds,
         x: fX,
         y: fY,
         w: fW,
@@ -714,10 +758,8 @@ export function ReferenceView() {
   const totalCount = listQ.data?.length ?? 0;
   const effectivePreviewLayoutId = useMemo(() => {
     if (previewLayoutId) return previewLayoutId;
-    if (kind === "layouts") return String(filteredRows[0]?.id ?? "");
-    if (kind === "stands") return filterLayoutId || String(filteredRows[0]?.layoutId ?? "");
     return "";
-  }, [filteredRows, filterLayoutId, kind, previewLayoutId]);
+  }, [previewLayoutId]);
   const previewQ = useQuery({
     queryKey: ["layout", "preview", effectivePreviewLayoutId],
     queryFn: () => apiGet<LayoutDetail>(`/api/ref/layouts/${effectivePreviewLayoutId}`),
@@ -816,7 +858,13 @@ export function ReferenceView() {
               <>
                 <label className="refHeaderFilter">
                   <span className="muted">Ангар</span>
-                  <select value={filterHangarId} onChange={(e) => setFilterHangarId(e.target.value)}>
+                  <select
+                    value={filterHangarId}
+                    onChange={(e) => {
+                      setFilterHangarId(e.target.value);
+                      setFilterLayoutId("");
+                    }}
+                  >
                     <option value="">все</option>
                     {(hangarsQ.data ?? []).map((h) => (
                       <option key={h.id} value={h.id}>
@@ -999,15 +1047,19 @@ export function ReferenceView() {
       ) : null}
 
       {(kind === "layouts" || kind === "stands") && canWrite ? (
-        <div className="card refSection">
-          <div className="refSectionHeader">
+        <details className="card refSection refCollapsibleSection">
+          <summary className="refCollapsibleSummary">
             <div>
               <strong>Импорт схем из Excel / CSV</strong>
               <div className="muted refSectionHint">
                 Каждая строка — одно место стоянки. Обязательные колонки: hangarCode, layoutCode, standCode, x, y, w, h.
               </div>
             </div>
-          </div>
+            <span className="btn btnGhost refDisclosureButton">
+              <span className="refDisclosureClosed">Открыть форму</span>
+              <span className="refDisclosureOpen">Скрыть форму</span>
+            </span>
+          </summary>
           <div className="refLayoutImportGrid">
             <label className="refLabel">
               <span>Файл Excel / CSV</span>
@@ -1080,37 +1132,46 @@ export function ReferenceView() {
           {layoutImportError || layoutImportM.error ? (
             <div className="error">{layoutImportError || String((layoutImportM.error as any)?.message ?? layoutImportM.error)}</div>
           ) : null}
-        </div>
+        </details>
       ) : null}
 
-      {kind === "layouts" || kind === "stands" ? (
+      {(kind === "layouts" || kind === "stands") && effectivePreviewLayoutId ? (
         <div className="card refSection">
           <div className="refSectionHeader">
             <div>
               <strong>Визуальная схема</strong>
               <div className="muted refSectionHint">Предпросмотр выбранного варианта расстановки и его мест стоянки.</div>
             </div>
-            {effectivePreviewLayoutId ? (
+            <div className="row" style={{ gap: 8 }}>
               <span className="muted small">layout: {previewQ.data?.code ?? "…"}</span>
-            ) : null}
+              <button className="btn btnGhost" type="button" onClick={() => {
+                setPreviewLayoutId("");
+                setPreviewStandId("");
+              }}>
+                Скрыть
+              </button>
+            </div>
           </div>
           <LayoutSchemePreview detail={previewQ.data ?? null} selectedStandId={previewStandId} />
         </div>
       ) : null}
 
       {mode ? (
-        <div className="card refSection">
+        <div id="ref-editor-panel" className="card refSection refEditorPanel">
           <div className="refSectionHeader">
             <div>
               <strong>{mode === "create" ? "Создание" : "Редактирование"}</strong>
-              <div className="muted refSectionHint">{REF_SINGULAR[kind]}</div>
+              <div className="muted refSectionHint">
+                {REF_SINGULAR[kind]}
+                {mode === "edit" ? " · выбранная строка подсвечена в списке" : ""}
+              </div>
             </div>
             <button className="btn" onClick={() => setMode(null)}>
               Закрыть
             </button>
           </div>
 
-          <div className="refForm">
+          <div className={`refForm refForm_${kind}`}>
             {kind === "operators" ||
             kind === "event-types" ||
             kind === "hangars" ||
@@ -1130,7 +1191,7 @@ export function ReferenceView() {
             {kind === "aircraft-types" ? (
               <label style={{ display: "grid", gap: 6 }}>
                 <span className="muted">ICAO</span>
-                <TextInput value={fIcaoType} onChange={setFIcaoType} style={{ width: 220 }} />
+                <TextInput value={fIcaoType} onChange={setFIcaoType} maxLength={25} style={{ width: 220 }} />
               </label>
             ) : null}
 
@@ -1294,16 +1355,20 @@ export function ReferenceView() {
                   </select>
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">Тип фюзеляжа (места)</span>
-                  <select value={fBodyType} onChange={(e) => setFBodyType(e.target.value)} style={{ width: 220 }}>
-                    <option value="">— любой —</option>
-                    <option value="NARROW_BODY">Узкий</option>
-                    <option value="WIDE_BODY">Широкий</option>
-                  </select>
-                </label>
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span className="muted">Название</span>
-                  <TextInput value={fName} onChange={setFName} style={{ width: 240 }} />
+                  <span className="muted">Типы ВС</span>
+                  <MultiSelectDropdown
+                    options={aircraftTypeOptions}
+                    value={fStandAircraftTypeIds}
+                    onChange={setFStandAircraftTypeIds}
+                    placeholder="любой ВС"
+                    width={320}
+                    maxHeight={340}
+                    searchable
+                    selectedLabelMode="labels"
+                  />
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    Если типы не выбраны, место доступно для любого ВС.
+                  </span>
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span className="muted">X (м)</span>
@@ -1426,7 +1491,7 @@ export function ReferenceView() {
                 const bodyLabel = bodyTypeLabel(row.bodyType);
 
                 return (
-                  <tr key={row.id}>
+                  <tr key={row.id} className={mode === "edit" && editId === row.id ? "refRowEditing" : undefined}>
                     <td>
                       <div className="refCellTitle">
                         {row.color ? (
@@ -1473,14 +1538,17 @@ export function ReferenceView() {
                         {row.manufacturer ? (
                           <span className="refLink">Производитель: <strong>{row.manufacturer}</strong></span>
                         ) : null}
-                        {row.hangar?.name ? (
-                          <span className="refLink">Ангар: <strong>{row.hangar.name}</strong></span>
+                        {row.hangar?.name || row.layout?.hangar?.name ? (
+                          <span className="refLink">Ангар: <strong>{row.hangar?.name ?? row.layout?.hangar?.name}</strong></span>
                         ) : null}
                         {row.layout?.name ? (
                           <span className="refLink">Вариант: <strong>{row.layout.name}</strong></span>
                         ) : null}
                         {(row as any).capacitySummary ? (
                           <span className="refLink">Вместимость: <strong>{(row as any).capacitySummary}</strong></span>
+                        ) : null}
+                        {kind === "stands" ? (
+                          <span className="refLink">Типы ВС: <strong>{standAllowedAircraftTypeLabel(row)}</strong></span>
                         ) : null}
                         {bodyLabel ? (
                           <span className="refLink">Фюзеляж: <strong>{bodyLabel}</strong></span>
@@ -1544,39 +1612,49 @@ export function ReferenceView() {
                       <div className="refRowActions">
                         {canWrite ? (
                           <>
-                            <button className="btn btnGhost" onClick={() => openEdit(row)} title="Редактировать">
-                              Изменить
+                            <button className="btn btnGhost refIconButton" onClick={() => openEdit(row)} title="Редактировать" aria-label="Редактировать">
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M4 20h4.4L18.7 9.7a2.1 2.1 0 0 0 0-3L17.3 5.3a2.1 2.1 0 0 0-3 0L4 15.6V20Z" />
+                                <path d="m13.5 6.1 4.4 4.4" />
+                              </svg>
                             </button>
                             {(kind === "layouts" || kind === "stands") ? (
                               <button
-                                className="btn btnGhost"
+                                className="btn btnGhost refIconButton"
                                 onClick={() => {
                                   setPreviewLayoutId(String(kind === "layouts" ? row.id : row.layoutId ?? ""));
                                   setPreviewStandId(String(kind === "stands" ? row.id : ""));
                                 }}
                                 title="Показать на схеме"
+                                aria-label="Показать на схеме"
                               >
-                                Схема
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                  <path d="M4 6.5 9.5 4l5 2.5L20 4v13.5L14.5 20l-5-2.5L4 20V6.5Z" />
+                                  <path d="M9.5 4v13.5M14.5 6.5V20" />
+                                </svg>
                               </button>
                             ) : null}
                             <button
-                              className="btn btnGhost refBtnDanger"
+                              className="btn btnGhost refIconButton refBtnDanger"
                               onClick={() => {
                                 if (confirm("Удалить запись?")) deleteM.mutate(row.id);
                               }}
                               disabled={deleteM.isPending}
                               title="Удалить запись"
+                              aria-label="Удалить запись"
                             >
-                              Удалить
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M5 7h14" />
+                                <path d="M10 11v6M14 11v6" />
+                                <path d="M8 7l1-3h6l1 3" />
+                                <path d="M7 7l1 13h8l1-13" />
+                              </svg>
                             </button>
                           </>
                         ) : (
                           <span className="muted">только просмотр</span>
                         )}
                       </div>
-                      {deleteM.error ? (
-                        <div className="error refCellHint">{String(deleteM.error.message || deleteM.error)}</div>
-                      ) : null}
                     </td>
                   </tr>
                 );
