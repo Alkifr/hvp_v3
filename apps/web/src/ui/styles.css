@@ -666,13 +666,13 @@ a {
 
 .massBatchBox {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
 }
 
 .massBatchRows {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .massBatchToolbar {
@@ -697,10 +697,10 @@ a {
 
 .massBatchRowCard {
   display: grid;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 9px 10px;
   border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 14px;
+  border-radius: 12px;
   background: #fff;
 }
 
@@ -713,8 +713,8 @@ a {
 
 .massBatchRowGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
   align-items: end;
 }
 
@@ -724,6 +724,27 @@ a {
 
 .massBatchTitleField {
   grid-column: span 2;
+}
+
+.massBatchDeleteButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 9px;
+  color: #991b1b;
+}
+
+.massBatchDeleteButton svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 @media (max-width: 760px) {

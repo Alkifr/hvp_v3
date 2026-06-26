@@ -105,6 +105,36 @@ function makeClientId(): string {
   return `row-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+function normalizeImportToken(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/ё/g, "е")
+    .replace(/[‐‑‒–—−_]+/g, "")
+    .replace(/[^a-zа-я0-9]+/gi, "");
+}
+
+function parseImportDate(value: unknown, fallback: string): string {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return dayjs(value).format("YYYY-MM-DD");
+  }
+  if (typeof value === "number") {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+  }
+  const raw = String(value ?? "").trim();
+  const iso = raw.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2]!.padStart(2, "0")}-${iso[3]!.padStart(2, "0")}`;
+  const ru = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if (ru) {
+    const year = ru[3]!.length === 2 ? `20${ru[3]}` : ru[3]!;
+    return `${year}-${ru[2]!.padStart(2, "0")}-${ru[1]!.padStart(2, "0")}`;
+  }
+  const parsed = dayjs(raw);
+  return parsed.isValid() ? parsed.format("YYYY-MM-DD") : fallback;
+}
+
 export function MassPlanView() {
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
@@ -287,28 +317,28 @@ export function MassPlanView() {
   };
 
   const resolveOperator = (value: unknown) => {
-    const q = String(value ?? "").trim().toLowerCase();
-    return operators.find((o) => o.id === q || o.code.toLowerCase() === q || o.name.toLowerCase() === q)?.id ?? "";
+    const q = normalizeImportToken(value);
+    return operators.find((o) => normalizeImportToken(o.id) === q || normalizeImportToken(o.code) === q || normalizeImportToken(o.name) === q)?.id ?? "";
   };
   const resolveAircraftType = (value: unknown) => {
-    const q = String(value ?? "").trim().toLowerCase();
-    return aircraftTypes.find((t) => t.id === q || t.name.toLowerCase() === q || String(t.icaoType ?? "").toLowerCase() === q)?.id ?? "";
+    const q = normalizeImportToken(value);
+    return aircraftTypes.find((t) => normalizeImportToken(t.id) === q || normalizeImportToken(t.name) === q || normalizeImportToken(t.icaoType) === q)?.id ?? "";
   };
   const resolveEventType = (value: unknown) => {
-    const q = String(value ?? "").trim().toLowerCase();
-    return eventTypes.find((t) => t.id === q || t.code.toLowerCase() === q || t.name.toLowerCase() === q)?.id ?? "";
+    const q = normalizeImportToken(value);
+    return eventTypes.find((t) => normalizeImportToken(t.id) === q || normalizeImportToken(t.code) === q || normalizeImportToken(t.name) === q)?.id ?? "";
   };
 
   const importBatchRows = async (file: File) => {
     setBatchImportError(null);
     try {
-      const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]!];
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "", raw: false, dateNF: "yyyy-mm-dd" });
       const pick = (row: Record<string, unknown>, keys: string[]) => {
-        const normalized = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase().replace(/[\s_-]+/g, ""), v]));
+        const normalized = new Map(Object.entries(row).map(([k, v]) => [normalizeImportToken(k), v]));
         for (const key of keys) {
-          const value = normalized.get(key.toLowerCase().replace(/[\s_-]+/g, ""));
+          const value = normalized.get(normalizeImportToken(key));
           if (value != null && String(value).trim() !== "") return value;
         }
         return "";
@@ -323,8 +353,8 @@ export function MassPlanView() {
           aircraftTypeId: resolveAircraftType(pick(row, ["aircraftType", "тип вс", "тип"])),
           eventTypeId: resolveEventType(pick(row, ["eventType", "тип события", "событие"])),
           count: Number(pick(row, ["count", "количество", "qty"])) || 1,
-          startFrom: dayjs(start as any).isValid() ? dayjs(start as any).format("YYYY-MM-DD") : startFrom,
-          endTo: dayjs(end as any).isValid() ? dayjs(end as any).format("YYYY-MM-DD") : endTo,
+          startFrom: parseImportDate(start, startFrom),
+          endTo: parseImportDate(end, endTo),
           titleTemplate: String(pick(row, ["titleTemplate", "название", "шаблон"]) || ""),
           scheduleMode: "compact" as const,
           spacingHours: Number(pick(row, ["spacingHours", "пауза"])) || 0,
@@ -511,8 +541,19 @@ export function MassPlanView() {
                     <div className="massBatchRowCard" key={row.id}>
                       <div className="massBatchRowHead">
                         <strong>Строка {idx + 1}</strong>
-                        <button type="button" className="btn btnGhost" onClick={() => setBatchRows((rows) => rows.filter((x) => x.id !== row.id))}>
-                          Удалить
+                        <button
+                          type="button"
+                          className="btn btnGhost massBatchDeleteButton"
+                          onClick={() => setBatchRows((rows) => rows.filter((x) => x.id !== row.id))}
+                          title="Удалить строку"
+                          aria-label="Удалить строку"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M5 7h14" />
+                            <path d="M10 11v6M14 11v6" />
+                            <path d="M8 7l1-3h6l1 3" />
+                            <path d="M7 7l1 13h8l1-13" />
+                          </svg>
                         </button>
                       </div>
                       <div className="massBatchRowGrid">
