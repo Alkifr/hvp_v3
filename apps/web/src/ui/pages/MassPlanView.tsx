@@ -99,6 +99,12 @@ function fromInputLocalOptional(value: string): string | null {
   return d.isValid() ? d.toISOString() : null;
 }
 
+function makeClientId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  if (typeof randomUUID === "function") return randomUUID.call(globalThis.crypto);
+  return `row-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function MassPlanView() {
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
@@ -169,7 +175,7 @@ export function MassPlanView() {
   });
 
   const newBatchRow = (): BatchRow => ({
-    id: crypto.randomUUID(),
+    id: makeClientId(),
     tatHours: Number(tatHours) || 72,
     operatorId,
     aircraftTypeId,
@@ -311,7 +317,7 @@ export function MassPlanView() {
         const start = pick(row, ["startFrom", "начало периода", "дата начала", "start"]);
         const end = pick(row, ["endTo", "конец периода", "дата окончания", "end"]);
         return {
-          id: crypto.randomUUID(),
+          id: makeClientId(),
           tatHours: Number(pick(row, ["tatHours", "tat", "тат", "TAT"])) || 72,
           operatorId: resolveOperator(pick(row, ["operator", "оператор"])),
           aircraftTypeId: resolveAircraftType(pick(row, ["aircraftType", "тип вс", "тип"])),
