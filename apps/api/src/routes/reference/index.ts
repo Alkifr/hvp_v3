@@ -13,6 +13,8 @@ import { personsRoutes } from "./persons.js";
 import { shiftsRoutes } from "./shifts.js";
 import { materialsRoutes } from "./materials.js";
 import { warehousesRoutes } from "./warehouses.js";
+import { placementPrioritiesRoutes } from "./placement-priorities.js";
+import { optimizationProfilesRoutes, optimizationScoreRulesRoutes } from "./optimization.js";
 
 export const referenceRoutes: FastifyPluginAsync = async (app) => {
   await app.register(operatorsRoutes, { prefix: "/operators" });
@@ -28,5 +30,8 @@ export const referenceRoutes: FastifyPluginAsync = async (app) => {
   await app.register(shiftsRoutes, { prefix: "/shifts" });
   await app.register(materialsRoutes, { prefix: "/materials" });
   await app.register(warehousesRoutes, { prefix: "/warehouses" });
+  await app.register(placementPrioritiesRoutes, { prefix: "/placement-priorities" });
+  await app.register(optimizationProfilesRoutes, { prefix: "/optimization-profiles" });
+  await app.register(optimizationScoreRulesRoutes, { prefix: "/optimization-score-rules" });
 };
 

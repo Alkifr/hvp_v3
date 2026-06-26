@@ -30,7 +30,7 @@ function getActor(req: any) {
   return String(h["x-actor"] ?? h["x-user"] ?? "browser").slice(0, 80);
 }
 
-type StandEntry = { hangarId: string; layoutId: string; standId: string };
+type StandEntry = { hangarId: string; layoutId: string; standId: string; priorityScore?: number; priorityRuleIds?: string[] };
 type ScheduleMode = "compact" | "sequential" | "fixedCadence";
 type PlacementMode = "auto" | "preferredHangars" | "draftOnConflict";
 
@@ -45,6 +45,9 @@ type PlacementPreview = {
   standId: string;
   scheduledBy: ScheduleMode;
   warnings: string[];
+  score?: number;
+  scoreDetails?: string[];
+  priorityRuleIds?: string[];
   towBeforeStartAt?: number;
   towBeforeEndAt?: number;
   towAfterStartAt?: number;
@@ -200,7 +203,9 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
             : null
           : findFirstEventStart(busy, intendedStart, tatMs, endToMs, blockBefore, blockAfter);
       if (slot == null || slot + tatMs > endToMs) continue;
-      if (bestStart == null || slot < bestStart) {
+      const priorityScore = entry.priorityScore ?? 0;
+      const bestPriorityScore = bestEntry?.priorityScore ?? 0;
+      if (bestStart == null || slot < bestStart || (slot === bestStart && priorityScore > bestPriorityScore)) {
         bestStart = slot;
         bestEntry = entry;
       }
@@ -227,6 +232,9 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
     if (bestStart > intendedStart && scheduleMode === "fixedCadence") {
       warnings.push("Сдвинуто относительно фиксированного шага из-за занятости");
     }
+    const scoreDetails: string[] = [];
+    const priorityScore = bestEntry.priorityScore ?? 0;
+    if (priorityScore > 0) scoreDetails.push(`Приоритет размещения: +${priorityScore}`);
     const placement = addTowFields(
       {
         index: i,
@@ -238,7 +246,10 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
         layoutId: bestEntry.layoutId,
         standId: bestEntry.standId,
         scheduledBy: scheduleMode,
-        warnings
+        warnings,
+        score: priorityScore,
+        scoreDetails,
+        priorityRuleIds: bestEntry.priorityRuleIds
       },
       towBeforeMs,
       towAfterMs,
@@ -363,14 +374,53 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       })
     ]);
 
-    const standOrder: StandEntry[] = [];
     const hangarIdSet = new Set(hangarsOrdered.map((h) => h.id));
+    const priorityRules = await app.prisma.placementPriorityRule.findMany({
+      where: {
+        isActive: true,
+        hangarId: { in: hangarsOrdered.map((h) => h.id) },
+        OR: [
+          { eventTypes: { none: {} } },
+          { eventTypes: { some: { eventTypeId: body.eventTypeId } } }
+        ],
+        AND: [
+          {
+            OR: [
+              { aircraftTypes: { none: {} } },
+              { aircraftTypes: { some: { aircraftTypeId: body.aircraftTypeId } } }
+            ]
+          }
+        ]
+      },
+      select: { id: true, hangarId: true, layoutId: true, standId: true, priorityScore: true }
+    });
+    const priorityByTarget = new Map<string, { score: number; ruleIds: string[] }>();
+    for (const rule of priorityRules) {
+      const key = `stand:${rule.standId}`;
+      const current = priorityByTarget.get(key) ?? { score: 0, ruleIds: [] };
+      current.score += rule.priorityScore;
+      current.ruleIds.push(rule.id);
+      priorityByTarget.set(key, current);
+    }
+
+    const priorityFor = (entry: Omit<StandEntry, "priorityScore" | "priorityRuleIds">) => {
+      const keys = [`stand:${entry.standId}`];
+      const matched = keys.map((key) => priorityByTarget.get(key)).filter((x): x is { score: number; ruleIds: string[] } => x != null);
+      return {
+        score: matched.reduce((sum, item) => sum + item.score, 0),
+        ruleIds: matched.flatMap((item) => item.ruleIds).filter((id, pos, arr) => arr.indexOf(id) === pos)
+      };
+    };
+
+    const standOrder: StandEntry[] = [];
     for (const lay of layoutsWithStands) {
       if (!hangarIdSet.has(lay.hangarId)) continue;
       for (const s of lay.stands) {
         const allowedAircraftTypeIds = s.allowedAircraftTypes.map((link) => link.aircraftTypeId);
         if (allowedAircraftTypeIds.length > 0 && !allowedAircraftTypeIds.includes(aircraftType.id)) continue;
-        standOrder.push({ hangarId: lay.hangarId, layoutId: lay.id, standId: s.id });
+        const baseEntry = { hangarId: lay.hangarId, layoutId: lay.id, standId: s.id };
+        const priority = priorityFor(baseEntry);
+        standOrder.push({ ...baseEntry, priorityScore: priority.score, priorityRuleIds: priority.ruleIds });
       }
     }
 
@@ -393,7 +443,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     standOrder.sort((a, b) => {
       const ai = hangarOrder.indexOf(a.hangarId);
       const bi = hangarOrder.indexOf(b.hangarId);
-      return ai - bi;
+      if (ai !== bi) return ai - bi;
+      return (b.priorityScore ?? 0) - (a.priorityScore ?? 0);
     });
 
     const titleBase = body.titleTemplate ?? eventType.name;
@@ -556,6 +607,9 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
                   budgetEndAt: body.budgetEndAt?.toISOString() ?? null,
                   actualStartAt: body.actualStartAt?.toISOString() ?? null,
                   actualEndAt: body.actualEndAt?.toISOString() ?? null,
+                  score: p.score ?? 0,
+                  scoreDetails: p.scoreDetails ?? [],
+                  priorityRuleIds: p.priorityRuleIds ?? [],
                   warnings: p.warnings
                 }
               }
@@ -672,6 +726,421 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         towAfterStartAt: r.towAfterStartAt?.toISOString(),
         towAfterEndAt: r.towAfterEndAt?.toISOString()
       }))
+    };
+  });
+
+  app.post("/batch", async (req) => {
+    assertCanWriteEvent(req);
+
+    const zBatchItem = z
+      .object({
+        tatHours: z.number().positive().max(8760),
+        operatorId: zUuid,
+        aircraftTypeId: zUuid,
+        eventTypeId: zUuid,
+        count: z.number().int().min(1).max(200),
+        startFrom: z.string().transform((s) => new Date(s)),
+        endTo: z.string().transform((s) => new Date(s)),
+        titleTemplate: z.string().trim().min(1).max(200).optional(),
+        spacingHours: z.number().min(0).max(8760).optional().default(0),
+        scheduleMode: z.enum(["compact", "sequential", "fixedCadence"]).optional().default("compact"),
+        cadenceHours: z.number().positive().max(8760).optional()
+      })
+      .refine((v) => Number.isFinite(v.startFrom.getTime()), { message: "item.startFrom must be a valid date" })
+      .refine((v) => Number.isFinite(v.endTo.getTime()), { message: "item.endTo must be a valid date" })
+      .refine((v) => v.endTo >= v.startFrom, { message: "item.endTo must be >= item.startFrom" })
+      .refine((v) => v.scheduleMode !== "fixedCadence" || (v.cadenceHours ?? 0) > 0, {
+        message: "item.cadenceHours is required for fixedCadence"
+      });
+
+    const body = z
+      .object({
+        items: z.array(zBatchItem).min(1).max(100),
+        hangarIds: z.array(zUuid).optional(),
+        placementMode: z.enum(["auto", "preferredHangars", "draftOnConflict"]).optional().default("auto"),
+        budgetStartAt: zDateTime.nullable().optional(),
+        budgetEndAt: zDateTime.nullable().optional(),
+        actualStartAt: zDateTime.nullable().optional(),
+        actualEndAt: zDateTime.nullable().optional(),
+        towBeforeMinutes: z.number().int().min(0).max(24 * 60).optional().default(0),
+        towAfterMinutes: z.number().int().min(0).max(24 * 60).optional().default(0),
+        towBlocksStand: z.boolean().optional().default(false),
+        dryRun: z.boolean().optional()
+      })
+      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: "budget period must have both dates" })
+      .refine((v) => !v.budgetStartAt || !v.budgetEndAt || v.budgetEndAt > v.budgetStartAt, {
+        message: "budgetEndAt must be after budgetStartAt"
+      })
+      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: "actual period must have both dates" })
+      .refine((v) => !v.actualStartAt || !v.actualEndAt || v.actualEndAt > v.actualStartAt, {
+        message: "actualEndAt must be after actualStartAt"
+      })
+      .parse(req.body);
+
+    const dryRun = Boolean(body.dryRun);
+    const towBeforeMs = body.towBeforeMinutes * 60 * 1000;
+    const towAfterMs = body.towAfterMinutes * 60 * 1000;
+    const blockBefore = body.towBlocksStand ? towBeforeMs : 0;
+    const blockAfter = body.towBlocksStand ? towAfterMs : 0;
+    const minStart = new Date(Math.min(...body.items.map((item) => item.startFrom.getTime())));
+    const maxEnd = new Date(Math.max(...body.items.map((item) => item.endTo.getTime() + towAfterMs)));
+    const aircraftTypeIds = Array.from(new Set(body.items.map((item) => item.aircraftTypeId)));
+    const eventTypeIds = Array.from(new Set(body.items.map((item) => item.eventTypeId)));
+
+    const [eventTypes, aircraftTypes, hangarsOrdered, layoutsWithStands, reservations, priorityRules] = await Promise.all([
+      app.prisma.eventType.findMany({ where: { id: { in: eventTypeIds } } }),
+      app.prisma.aircraftType.findMany({ where: { id: { in: aircraftTypeIds } } }),
+      body.hangarIds?.length
+        ? app.prisma.hangar
+            .findMany({
+              where: { id: { in: body.hangarIds }, isActive: true },
+              orderBy: []
+            })
+            .then((list) => {
+              const byId = new Map(list.map((h) => [h.id, h]));
+              return body.hangarIds!.map((id) => byId.get(id)).filter(Boolean) as typeof list;
+            })
+        : app.prisma.hangar.findMany({ where: { isActive: true }, orderBy: [{ name: "asc" }] }),
+      (async () => {
+        const hid = body.hangarIds?.length
+          ? body.hangarIds
+          : (await app.prisma.hangar.findMany({ where: { isActive: true }, select: { id: true }, orderBy: [{ name: "asc" }] })).map((h) => h.id);
+        const layouts = await app.prisma.hangarLayout.findMany({
+          where: { hangarId: { in: hid }, isActive: true },
+          include: {
+            stands: {
+              where: { isActive: true },
+              select: { id: true, code: true, allowedAircraftTypes: { select: { aircraftTypeId: true } } },
+              orderBy: [{ code: "asc" }]
+            }
+          }
+        });
+        const orderIdx = (id: string) => hid.indexOf(id);
+        layouts.sort((a, b) => orderIdx(a.hangarId) - orderIdx(b.hangarId));
+        return layouts;
+      })(),
+      app.prisma.standReservation.findMany({
+        where: {
+          ...sandboxFilter(req),
+          startAt: { lt: maxEnd },
+          endAt: { gt: minStart },
+          event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+        },
+        select: {
+          standId: true,
+          startAt: true,
+          endAt: true,
+          event: { select: { towSegments: { select: { startAt: true, endAt: true } } } }
+        }
+      }),
+      app.prisma.placementPriorityRule.findMany({
+        where: { isActive: true },
+        include: {
+          eventTypes: { select: { eventTypeId: true } },
+          aircraftTypes: { select: { aircraftTypeId: true } }
+        }
+      })
+    ]);
+
+    const eventTypeById = new Map(eventTypes.map((eventType) => [eventType.id, eventType]));
+    const aircraftTypeById = new Map(aircraftTypes.map((aircraftType) => [aircraftType.id, aircraftType]));
+    for (const item of body.items) {
+      if (!eventTypeById.has(item.eventTypeId)) throw app.httpErrors.badRequest(`Не найден тип события: ${item.eventTypeId}`);
+      if (!aircraftTypeById.has(item.aircraftTypeId)) throw app.httpErrors.badRequest(`Не найден тип ВС: ${item.aircraftTypeId}`);
+    }
+
+    const hangarOrder = hangarsOrdered.map((h) => h.id);
+    const hangarIdSet = new Set(hangarOrder);
+    const allStands: StandEntry[] = [];
+    for (const lay of layoutsWithStands) {
+      if (!hangarIdSet.has(lay.hangarId)) continue;
+      for (const stand of lay.stands) allStands.push({ hangarId: lay.hangarId, layoutId: lay.id, standId: stand.id });
+    }
+
+    const busyByStand = new Map<string, Array<{ start: number; end: number }>>();
+    for (const reservation of reservations) {
+      const arr = busyByStand.get(reservation.standId) ?? [];
+      const towStarts = body.towBlocksStand ? reservation.event.towSegments.map((t) => t.startAt.getTime()) : [];
+      const towEnds = body.towBlocksStand ? reservation.event.towSegments.map((t) => t.endAt.getTime()) : [];
+      arr.push({
+        start: Math.min(reservation.startAt.getTime(), ...towStarts),
+        end: Math.max(reservation.endAt.getTime(), ...towEnds)
+      });
+      busyByStand.set(reservation.standId, arr);
+    }
+    for (const arr of busyByStand.values()) arr.sort((a, b) => a.start - b.start);
+
+    const standMeta = new Map<string, { aircraftTypeIds: string[] }>();
+    for (const layout of layoutsWithStands) {
+      for (const stand of layout.stands) {
+        standMeta.set(stand.id, { aircraftTypeIds: stand.allowedAircraftTypes.map((link) => link.aircraftTypeId) });
+      }
+    }
+
+    const priorityFor = (entry: StandEntry, eventTypeId: string, aircraftTypeId: string) => {
+      const matched = priorityRules.filter((rule) => {
+        if (rule.standId !== entry.standId) return false;
+        const eventOk = rule.eventTypes.length === 0 || rule.eventTypes.some((link) => link.eventTypeId === eventTypeId);
+        const aircraftOk = rule.aircraftTypes.length === 0 || rule.aircraftTypes.some((link) => link.aircraftTypeId === aircraftTypeId);
+        return eventOk && aircraftOk;
+      });
+      return {
+        score: matched.reduce((sum, rule) => sum + rule.priorityScore, 0),
+        ruleIds: matched.map((rule) => rule.id)
+      };
+    };
+
+    const busyWork = new Map<string, Array<{ start: number; end: number }>>();
+    for (const [standId, busy] of busyByStand.entries()) busyWork.set(standId, [...busy]);
+    const addBusy = (standId: string, start: number, end: number) => {
+      const arr = busyWork.get(standId) ?? [];
+      arr.push({ start: body.towBlocksStand ? start - towBeforeMs : start, end: body.towBlocksStand ? end + towAfterMs : end });
+      arr.sort((a, b) => a.start - b.start);
+      busyWork.set(standId, arr);
+    };
+
+    const placementsPreview: Array<PlacementPreview & { rowIndex: number; itemIndex: number; operatorId: string; aircraftTypeId: string; eventTypeId: string }> = [];
+    const unplacedPreview: Array<UnplacedPreview & { rowIndex: number; itemIndex: number; operatorId: string; aircraftTypeId: string; eventTypeId: string }> = [];
+    const nextStartByItem = new Map<number, number>();
+
+    for (const [itemIndex, item] of body.items.entries()) {
+      const eventType = eventTypeById.get(item.eventTypeId)!;
+      const tatMs = item.tatHours * 60 * 60 * 1000;
+      const spacingMs = item.spacingHours * 60 * 60 * 1000;
+      const cadenceMs = item.cadenceHours ? item.cadenceHours * 60 * 60 * 1000 : null;
+      const titleBase = item.titleTemplate ?? eventType.name;
+      nextStartByItem.set(itemIndex, item.startFrom.getTime());
+
+      for (let i = 0; i < item.count; i++) {
+        const intendedStart =
+          item.scheduleMode === "fixedCadence"
+            ? item.startFrom.getTime() + i * (cadenceMs ?? tatMs + spacingMs)
+            : item.scheduleMode === "sequential"
+              ? (nextStartByItem.get(itemIndex) ?? item.startFrom.getTime())
+              : Math.max(item.startFrom.getTime(), nextStartByItem.get(itemIndex) ?? item.startFrom.getTime());
+        const title = titleBase.includes("%") ? titleBase.replace("%", String(i + 1)) : `${titleBase} #${i + 1}`;
+        const label = `— Стр. ${itemIndex + 1}.${i + 1}`;
+        const compatible = allStands
+          .filter((entry) => {
+            const allowed = standMeta.get(entry.standId)?.aircraftTypeIds ?? [];
+            return allowed.length === 0 || allowed.includes(item.aircraftTypeId);
+          })
+          .map((entry) => {
+            const priority = priorityFor(entry, item.eventTypeId, item.aircraftTypeId);
+            return { ...entry, priorityScore: priority.score, priorityRuleIds: priority.ruleIds };
+          })
+          .sort((a, b) => {
+            const ai = hangarOrder.indexOf(a.hangarId);
+            const bi = hangarOrder.indexOf(b.hangarId);
+            if (ai !== bi) return ai - bi;
+            return (b.priorityScore ?? 0) - (a.priorityScore ?? 0);
+          });
+
+        let bestStart: number | null = null;
+        let bestEntry: StandEntry | null = null;
+        for (const entry of compatible) {
+          const busy = busyWork.get(entry.standId) ?? [];
+          const slot =
+            body.placementMode === "draftOnConflict"
+              ? isEventStartFree(busy, intendedStart, tatMs, blockBefore, blockAfter)
+                ? intendedStart
+                : null
+              : findFirstEventStart(busy, intendedStart, tatMs, item.endTo.getTime(), blockBefore, blockAfter);
+          if (slot == null || slot + tatMs > item.endTo.getTime()) continue;
+          const bestPriorityScore = bestEntry?.priorityScore ?? 0;
+          const priorityScore = entry.priorityScore ?? 0;
+          if (bestStart == null || slot < bestStart || (slot === bestStart && priorityScore > bestPriorityScore)) {
+            bestStart = slot;
+            bestEntry = entry;
+          }
+        }
+
+        if (bestStart == null || bestEntry == null) {
+          unplacedPreview.push({
+            index: placementsPreview.length + unplacedPreview.length,
+            rowIndex: itemIndex,
+            itemIndex: i,
+            operatorId: item.operatorId,
+            aircraftTypeId: item.aircraftTypeId,
+            eventTypeId: item.eventTypeId,
+            title,
+            label,
+            intendedStartAt: intendedStart,
+            warnings: [
+              body.placementMode === "draftOnConflict"
+                ? "Целевой слот занят, событие будет создано черновиком"
+                : "Не найден свободный слот в выбранном периоде"
+            ]
+          });
+          if (item.scheduleMode !== "fixedCadence") nextStartByItem.set(itemIndex, intendedStart + tatMs + spacingMs);
+          continue;
+        }
+
+        const endAt = bestStart + tatMs;
+        const warnings: string[] = [];
+        if (bestStart > intendedStart && item.scheduleMode === "fixedCadence") warnings.push("Сдвинуто относительно фиксированного шага из-за занятости");
+        const priorityScore = bestEntry.priorityScore ?? 0;
+        const placement = addTowFields(
+          {
+            index: placementsPreview.length,
+            rowIndex: itemIndex,
+            itemIndex: i,
+            operatorId: item.operatorId,
+            aircraftTypeId: item.aircraftTypeId,
+            eventTypeId: item.eventTypeId,
+            title,
+            label,
+            startAt: bestStart,
+            endAt,
+            hangarId: bestEntry.hangarId,
+            layoutId: bestEntry.layoutId,
+            standId: bestEntry.standId,
+            scheduledBy: item.scheduleMode,
+            warnings,
+            score: priorityScore,
+            scoreDetails: priorityScore > 0 ? [`Приоритет размещения: +${priorityScore}`] : [],
+            priorityRuleIds: bestEntry.priorityRuleIds
+          } as any,
+          towBeforeMs,
+          towAfterMs,
+          item.startFrom.getTime(),
+          item.endTo.getTime()
+        ) as PlacementPreview & { rowIndex: number; itemIndex: number; operatorId: string; aircraftTypeId: string; eventTypeId: string };
+        placementsPreview.push(placement);
+        addBusy(bestEntry.standId, bestStart, endAt);
+        if (item.scheduleMode !== "fixedCadence") nextStartByItem.set(itemIndex, endAt + spacingMs);
+      }
+    }
+
+    const serializePlacement = (p: typeof placementsPreview[number]) => ({
+      ...p,
+      startAt: new Date(p.startAt).toISOString(),
+      endAt: new Date(p.endAt).toISOString(),
+      budgetStartAt: body.budgetStartAt?.toISOString() ?? null,
+      budgetEndAt: body.budgetEndAt?.toISOString() ?? null,
+      actualStartAt: body.actualStartAt?.toISOString() ?? null,
+      actualEndAt: body.actualEndAt?.toISOString() ?? null,
+      towBeforeStartAt: p.towBeforeStartAt ? new Date(p.towBeforeStartAt).toISOString() : undefined,
+      towBeforeEndAt: p.towBeforeEndAt ? new Date(p.towBeforeEndAt).toISOString() : undefined,
+      towAfterStartAt: p.towAfterStartAt ? new Date(p.towAfterStartAt).toISOString() : undefined,
+      towAfterEndAt: p.towAfterEndAt ? new Date(p.towAfterEndAt).toISOString() : undefined
+    });
+
+    if (dryRun) {
+      return {
+        ok: true,
+        dryRun: true,
+        batch: true,
+        placements: placementsPreview.map(serializePlacement),
+        unplaced: unplacedPreview.map((u) => ({ ...u, intendedStartAt: new Date(u.intendedStartAt).toISOString() })),
+        summary: {
+          total: body.items.reduce((sum, item) => sum + item.count, 0),
+          rows: body.items.length,
+          placed: placementsPreview.length,
+          unplaced: unplacedPreview.length,
+          createdTowsBefore: placementsPreview.filter((p) => p.towBeforeStartAt != null).length,
+          createdTowsAfter: placementsPreview.filter((p) => p.towAfterStartAt != null).length,
+          draftOnConflict: body.placementMode === "draftOnConflict"
+        }
+      };
+    }
+
+    const sbId = sandboxIdFor(req);
+    const result = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const created: Array<{
+        eventId: string;
+        label: string;
+        title: string;
+        startAt: Date;
+        endAt: Date;
+        hangarId: string | null;
+        layoutId: string | null;
+        standId: string | null;
+        status: EventStatus;
+      }> = [];
+
+      for (const p of placementsPreview) {
+        const startAt = new Date(p.startAt);
+        const endAt = new Date(p.endAt);
+        const ev = await tx.maintenanceEvent.create({
+          data: {
+            level: PlanningLevel.OPERATIONAL,
+            status: EventStatus.PLANNED,
+            planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
+            title: p.title,
+            sandboxId: sbId,
+            eventTypeId: p.eventTypeId,
+            startAt,
+            endAt,
+            budgetStartAt: body.budgetStartAt ?? null,
+            budgetEndAt: body.budgetEndAt ?? null,
+            actualStartAt: body.actualStartAt ?? null,
+            actualEndAt: body.actualEndAt ?? null,
+            hangarId: p.hangarId,
+            layoutId: p.layoutId,
+            virtualAircraft: { operatorId: p.operatorId, aircraftTypeId: p.aircraftTypeId, label: p.label } as Prisma.InputJsonValue
+          }
+        });
+        const placement = await tx.eventPlacement.create({
+          data: {
+            eventId: ev.id,
+            sandboxId: sbId,
+            startAt,
+            endAt,
+            budgetStartAt: body.budgetStartAt ?? null,
+            budgetEndAt: body.budgetEndAt ?? null,
+            actualStartAt: body.actualStartAt ?? null,
+            actualEndAt: body.actualEndAt ?? null,
+            hangarId: p.hangarId,
+            layoutId: p.layoutId,
+            standId: p.standId,
+            sortOrder: 0
+          }
+        });
+        await tx.standReservation.create({
+          data: { eventId: ev.id, placementId: placement.id, sandboxId: sbId, layoutId: p.layoutId, standId: p.standId, startAt, endAt }
+        });
+        created.push({ eventId: ev.id, label: p.label, title: ev.title, startAt, endAt, hangarId: p.hangarId, layoutId: p.layoutId, standId: p.standId, status: EventStatus.PLANNED });
+      }
+
+      for (const u of unplacedPreview) {
+        const item = body.items[u.rowIndex]!;
+        const tatMs = item.tatHours * 60 * 60 * 1000;
+        const startAt = new Date(item.endTo.getTime());
+        const endAt = new Date(item.endTo.getTime() + tatMs);
+        const ev = await tx.maintenanceEvent.create({
+          data: {
+            level: PlanningLevel.OPERATIONAL,
+            status: EventStatus.DRAFT,
+            planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
+            title: u.title,
+            sandboxId: sbId,
+            eventTypeId: u.eventTypeId,
+            startAt,
+            endAt,
+            budgetStartAt: body.budgetStartAt ?? null,
+            budgetEndAt: body.budgetEndAt ?? null,
+            actualStartAt: body.actualStartAt ?? null,
+            actualEndAt: body.actualEndAt ?? null,
+            hangarId: null,
+            layoutId: null,
+            virtualAircraft: { operatorId: u.operatorId, aircraftTypeId: u.aircraftTypeId, label: u.label } as Prisma.InputJsonValue
+          }
+        });
+        created.push({ eventId: ev.id, label: u.label, title: ev.title, startAt, endAt, hangarId: null, layoutId: null, standId: null, status: EventStatus.DRAFT });
+      }
+
+      return created;
+    });
+
+    return {
+      ok: true,
+      dryRun: false,
+      batch: true,
+      created: result.length,
+      placed: result.filter((r) => r.status === EventStatus.PLANNED).length,
+      unplaced: result.filter((r) => r.status === EventStatus.DRAFT).length,
+      events: result.map((r) => ({ ...r, startAt: r.startAt.toISOString(), endAt: r.endAt.toISOString() }))
     };
   });
 };

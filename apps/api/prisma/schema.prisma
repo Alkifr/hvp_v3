@@ -84,6 +84,30 @@ enum BodyType {
   WIDE_BODY     // широкий (A330, B777, …)
 }
 
+enum OptimizationScoreCategory {
+  REWARD
+  PENALTY
+  LIMIT
+}
+
+enum OptimizationScoreUnit {
+  POINTS
+  POINTS_PER_HOUR
+  HOURS
+  BOOLEAN
+  MULTIPLIER
+}
+
+enum OptimizationScoreScope {
+  NEW_EVENT
+  EXISTING_EVENT
+  PLACEMENT
+  LAYOUT
+  STAND
+  TOW
+  PRIORITY
+}
+
 // Роль пользователя в песочнице плана
 enum SandboxMemberRole {
   OWNER
@@ -472,6 +496,7 @@ model AircraftType {
   aircraft  Aircraft[]
   palettes  AircraftTypePalette[]
   hangarStandRules HangarStandAircraftType[]
+  placementPriorityRules PlacementPriorityRuleAircraftType[]
 }
 
 // Палитра: цвет для связки "оператор + тип ВС"
@@ -523,6 +548,7 @@ model EventType {
   updatedAt DateTime @updatedAt
 
   events MaintenanceEvent[]
+  placementPriorityRules PlacementPriorityRuleEventType[]
 }
 
 model Hangar {
@@ -536,6 +562,7 @@ model Hangar {
   layouts HangarLayout[]
   events  MaintenanceEvent[]
   placements EventPlacement[]
+  placementPriorityRules PlacementPriorityRule[]
 }
 
 model HangarLayout {
@@ -559,6 +586,7 @@ model HangarLayout {
   reservations StandReservation[]
   events       MaintenanceEvent[]
   placements  EventPlacement[]
+  placementPriorityRules PlacementPriorityRule[]
 
   @@unique([hangarId, code])
   @@index([hangarId])
@@ -587,6 +615,7 @@ model HangarStand {
   allowedAircraftTypes HangarStandAircraftType[]
   reservations StandReservation[]
   placements EventPlacement[]
+  placementPriorityRules PlacementPriorityRule[]
 
   @@unique([layoutId, code])
   @@index([layoutId])
@@ -602,6 +631,96 @@ model HangarStandAircraftType {
 
   @@id([standId, aircraftTypeId])
   @@index([aircraftTypeId])
+}
+
+model PlacementPriorityRule {
+  id            String   @id @default(uuid())
+  hangarId      String
+  layoutId      String
+  standId       String
+  priorityScore Int      @default(500)
+  sourceEventName String?
+  sourceAircraftTypeText String?
+  conditionText String?
+  comment       String?
+  source        String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  hangar Hangar       @relation(fields: [hangarId], references: [id])
+  layout HangarLayout @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  stand  HangarStand  @relation(fields: [standId], references: [id], onDelete: Cascade)
+
+  eventTypes    PlacementPriorityRuleEventType[]
+  aircraftTypes PlacementPriorityRuleAircraftType[]
+
+  @@index([hangarId])
+  @@index([layoutId])
+  @@index([standId])
+  @@index([isActive])
+}
+
+model PlacementPriorityRuleEventType {
+  ruleId      String
+  eventTypeId String
+  createdAt   DateTime @default(now())
+
+  rule      PlacementPriorityRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  eventType EventType             @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, eventTypeId])
+  @@index([eventTypeId])
+}
+
+model PlacementPriorityRuleAircraftType {
+  ruleId         String
+  aircraftTypeId String
+  createdAt      DateTime @default(now())
+
+  rule         PlacementPriorityRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  aircraftType AircraftType          @relation(fields: [aircraftTypeId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, aircraftTypeId])
+  @@index([aircraftTypeId])
+}
+
+model OptimizationProfile {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+  isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rules OptimizationScoreRule[]
+
+  @@index([isActive])
+  @@index([isDefault])
+}
+
+model OptimizationScoreRule {
+  id        String                    @id @default(uuid())
+  profileId String
+  code      String
+  name      String
+  category  OptimizationScoreCategory
+  scope     OptimizationScoreScope
+  value     Float
+  unit      OptimizationScoreUnit
+  isActive  Boolean                   @default(true)
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+
+  profile OptimizationProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, code])
+  @@index([profileId])
+  @@index([category])
+  @@index([scope])
+  @@index([isActive])
 }
 
 model MaintenanceEvent {

@@ -664,6 +664,85 @@ a {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
 }
 
+.massBatchBox {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.massBatchRows {
+  display: grid;
+  gap: 12px;
+}
+
+.massBatchToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.massBatchToolbarActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.massBatchToolbarActions input[type="file"] {
+  max-width: 280px;
+}
+
+.massBatchRowCard {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.massBatchRowHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.massBatchRowGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.massBatchNumberField {
+  max-width: 130px;
+}
+
+.massBatchTitleField {
+  grid-column: span 2;
+}
+
+@media (max-width: 760px) {
+  .massSectionHead,
+  .massBatchToolbar,
+  .massBatchRowHead {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .massBatchTitleField {
+    grid-column: auto;
+  }
+
+  .massBatchNumberField {
+    max-width: none;
+  }
+}
+
 .massAdvanced {
   padding: 0;
   overflow: hidden;

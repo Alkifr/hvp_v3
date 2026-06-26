@@ -15,6 +15,9 @@ type RefKind =
   | "hangars"
   | "layouts"
   | "stands"
+  | "placement-priorities"
+  | "optimization-profiles"
+  | "optimization-score-rules"
   | "skills"
   | "persons"
   | "shifts"
@@ -46,6 +49,14 @@ const REF_GROUPS: RefGroup[] = [
     items: [{ kind: "event-types", title: "Типы событий" }]
   },
   {
+    label: "Планирование",
+    items: [
+      { kind: "placement-priorities", title: "Приоритеты размещения", hint: "ангар × вариант × место" },
+      { kind: "optimization-profiles", title: "Профили оптимизации", hint: "наборы весов" },
+      { kind: "optimization-score-rules", title: "Правила scoring", hint: "штрафы и поощрения" }
+    ]
+  },
+  {
     label: "Персонал",
     items: [
       { kind: "skills", title: "Квалификации" },
@@ -75,6 +86,9 @@ const REF_SINGULAR: Record<RefKind, string> = {
   hangars: "Ангар",
   layouts: "Вариант расстановки",
   stands: "Место (стоянка)",
+  "placement-priorities": "Приоритет размещения",
+  "optimization-profiles": "Профиль оптимизации",
+  "optimization-score-rules": "Правило scoring",
   skills: "Квалификация",
   persons: "Сотрудник",
   shifts: "Смена",
@@ -102,6 +116,7 @@ function bodyTypeLabel(v: unknown): string | null {
 
 type Operator = { id: string; code: string; name: string; isActive: boolean };
 type AircraftType = { id: string; icaoType?: string | null; name: string; manufacturer?: string | null; isActive: boolean };
+type EventType = { id: string; code: string; name: string; isActive: boolean };
 type Hangar = { id: string; code: string; name: string; isActive: boolean };
 type Layout = {
   id: string;
@@ -135,6 +150,7 @@ type LayoutDetail = Layout & {
   hangar?: Hangar;
 };
 type Skill = { id: string; code: string; name: string; isActive: boolean };
+type OptimizationProfile = { id: string; code: string; name: string; isDefault?: boolean; isActive: boolean };
 
 function TextInput(props: { value: string; onChange: (v: string) => void; placeholder?: string; style?: React.CSSProperties; maxLength?: number }) {
   return <input value={props.value} placeholder={props.placeholder} maxLength={props.maxLength} onChange={(e) => props.onChange(e.target.value)} style={props.style} />;
@@ -206,6 +222,38 @@ function standAllowedAircraftTypeLabel(row: any): string {
     .filter(Boolean)
     .map((t: AircraftType) => aircraftTypeNameLabel(t))
     .join(", ");
+}
+
+function priorityLinkedEventTypes(row: any): string {
+  const items = Array.isArray(row.eventTypes) ? row.eventTypes : [];
+  if (items.length === 0) return "Любой тип события";
+  return items.map((link: any) => link.eventType?.name || link.eventType?.code).filter(Boolean).join(", ");
+}
+
+function priorityLinkedAircraftTypes(row: any): string {
+  const items = Array.isArray(row.aircraftTypes) ? row.aircraftTypes : [];
+  if (items.length === 0) return "Любой тип ВС";
+  return items.map((link: any) => link.aircraftType?.name || link.aircraftType?.icaoType).filter(Boolean).join(", ");
+}
+
+function scoreCategoryLabel(v: unknown): string {
+  if (v === "REWARD") return "Поощрение";
+  if (v === "PENALTY") return "Штраф";
+  if (v === "LIMIT") return "Ограничение";
+  return "—";
+}
+
+function scoreScopeLabel(v: unknown): string {
+  const map: Record<string, string> = {
+    NEW_EVENT: "Новое событие",
+    EXISTING_EVENT: "Существующее событие",
+    PLACEMENT: "Размещение",
+    LAYOUT: "Вариант",
+    STAND: "Место",
+    TOW: "Буксировка",
+    PRIORITY: "Приоритет"
+  };
+  return map[String(v)] ?? "—";
 }
 
 function buildLayoutImportPayload(rows: Array<Record<string, unknown>>) {
@@ -322,8 +370,13 @@ export function ReferenceView() {
     queryKey: ["ref", "aircraft-types"],
     queryFn: () => apiGet<AircraftType[]>("/api/ref/aircraft-types")
   });
+  const eventTypesQ = useQuery({ queryKey: ["ref", "event-types"], queryFn: () => apiGet<EventType[]>("/api/ref/event-types") });
   const hangarsQ = useQuery({ queryKey: ["ref", "hangars"], queryFn: () => apiGet<Hangar[]>("/api/ref/hangars") });
   const skillsQ = useQuery({ queryKey: ["ref", "skills"], queryFn: () => apiGet<Skill[]>("/api/ref/skills") });
+  const optimizationProfilesQ = useQuery({
+    queryKey: ["ref", "optimization-profiles"],
+    queryFn: () => apiGet<OptimizationProfile[]>("/api/ref/optimization-profiles")
+  });
 
   const [filterHangarId, setFilterHangarId] = useState<string>("");
   const [filterLayoutId, setFilterLayoutId] = useState<string>("");
@@ -343,6 +396,8 @@ export function ReferenceView() {
     if (kind === "layouts" && filterHangarId) return `/api/ref/layouts?hangarId=${encodeURIComponent(filterHangarId)}`;
     if (kind === "stands" && filterLayoutId) return `/api/ref/stands?layoutId=${encodeURIComponent(filterLayoutId)}`;
     if (kind === "stands" && filterHangarId) return `/api/ref/stands?hangarId=${encodeURIComponent(filterHangarId)}`;
+    if (kind === "placement-priorities" && filterLayoutId) return `/api/ref/placement-priorities?layoutId=${encodeURIComponent(filterLayoutId)}`;
+    if (kind === "placement-priorities" && filterHangarId) return `/api/ref/placement-priorities?hangarId=${encodeURIComponent(filterHangarId)}`;
     return url;
   }, [kind, filterHangarId, filterLayoutId, url]);
 
@@ -354,11 +409,15 @@ export function ReferenceView() {
   const layoutsForStandsQ = useQuery({
     queryKey: ["ref", "layouts", filterHangarId],
     queryFn: () => apiGet<Layout[]>(filterHangarId ? `/api/ref/layouts?hangarId=${encodeURIComponent(filterHangarId)}` : "/api/ref/layouts"),
-    enabled: kind === "stands" || kind === "layouts"
+    enabled: kind === "stands" || kind === "layouts" || kind === "placement-priorities"
   });
   const aircraftTypeOptions = useMemo(
     () => (aircraftTypesQ.data ?? []).map((t) => ({ id: t.id, label: aircraftTypeNameLabel(t) })),
     [aircraftTypesQ.data]
+  );
+  const eventTypeOptions = useMemo(
+    () => (eventTypesQ.data ?? []).map((t) => ({ id: t.id, label: `${t.code} • ${t.name}` })),
+    [eventTypesQ.data]
   );
 
   const createM = useMutation({
@@ -410,6 +469,10 @@ export function ReferenceView() {
   const [layoutImportRows, setLayoutImportRows] = useState<Array<Record<string, unknown>>>([]);
   const [layoutImportError, setLayoutImportError] = useState<string | null>(null);
   const [layoutImportResult, setLayoutImportResult] = useState<any>(null);
+  const [priorityImportFile, setPriorityImportFile] = useState<File | null>(null);
+  const [priorityImportRows, setPriorityImportRows] = useState<Array<Record<string, unknown>>>([]);
+  const [priorityImportError, setPriorityImportError] = useState<string | null>(null);
+  const [priorityImportResult, setPriorityImportResult] = useState<any>(null);
   const [previewLayoutId, setPreviewLayoutId] = useState<string>("");
   const [previewStandId, setPreviewStandId] = useState<string>("");
 
@@ -506,6 +569,18 @@ export function ReferenceView() {
     onError: (err) => showFeedback("error", `Импорт схем не выполнен: ${String((err as any)?.message ?? err)}`)
   });
 
+  const priorityImportM = useMutation({
+    mutationFn: async (payload: any) => apiPost("/api/ref/placement-priorities/import", payload),
+    onSuccess: async (res) => {
+      setPriorityImportResult(res);
+      await qc.invalidateQueries({ queryKey: ["ref", "placement-priorities"] });
+      await qc.invalidateQueries({ queryKey: ["ref", "placement-priorities", filterHangarId, filterLayoutId] });
+      const warnings = (res as any)?.warnings?.length ?? 0;
+      showFeedback("success", `Импорт приоритетов завершён: загружено ${(res as any)?.imported ?? 0}, предупреждений ${warnings}.`);
+    },
+    onError: (err) => showFeedback("error", `Импорт приоритетов не выполнен: ${String((err as any)?.message ?? err)}`)
+  });
+
   const [mode, setMode] = useState<"create" | "edit" | null>(null);
   const [editId, setEditId] = useState<string>("");
 
@@ -536,6 +611,26 @@ export function ReferenceView() {
   const [fUom, setFUom] = useState("EA");
   const [fPersonSkillIds, setFPersonSkillIds] = useState<string[]>([]);
   const [fStandAircraftTypeIds, setFStandAircraftTypeIds] = useState<string[]>([]);
+  const [fPriorityScore, setFPriorityScore] = useState(500);
+  const [fPriorityEventTypeIds, setFPriorityEventTypeIds] = useState<string[]>([]);
+  const [fPriorityAircraftTypeIds, setFPriorityAircraftTypeIds] = useState<string[]>([]);
+  const [fSourceEventName, setFSourceEventName] = useState("");
+  const [fSourceAircraftTypeText, setFSourceAircraftTypeText] = useState("");
+  const [fConditionText, setFConditionText] = useState("");
+  const [fComment, setFComment] = useState("");
+  const [fSource, setFSource] = useState("");
+  const [fIsDefault, setFIsDefault] = useState(false);
+  const [fProfileId, setFProfileId] = useState("");
+  const [fScoreCategory, setFScoreCategory] = useState("REWARD");
+  const [fScoreScope, setFScoreScope] = useState("PLACEMENT");
+  const [fScoreValue, setFScoreValue] = useState(0);
+  const [fScoreUnit, setFScoreUnit] = useState("POINTS");
+
+  const standsForPriorityQ = useQuery({
+    queryKey: ["ref", "stands", "priority-form", fLayoutId],
+    queryFn: () => apiGet<any[]>(fLayoutId ? `/api/ref/stands?layoutId=${encodeURIComponent(fLayoutId)}` : "/api/ref/stands"),
+    enabled: kind === "placement-priorities"
+  });
 
   const resetFormForKind = (k: RefKind) => {
     setFIsActive(true);
@@ -563,6 +658,20 @@ export function ReferenceView() {
     setFUom("EA");
     setFPersonSkillIds([]);
     setFStandAircraftTypeIds([]);
+    setFPriorityScore(500);
+    setFPriorityEventTypeIds([]);
+    setFPriorityAircraftTypeIds([]);
+    setFSourceEventName("");
+    setFSourceAircraftTypeText("");
+    setFConditionText("");
+    setFComment("");
+    setFSource("");
+    setFIsDefault(false);
+    setFProfileId(optimizationProfilesQ.data?.[0]?.id ?? "");
+    setFScoreCategory("REWARD");
+    setFScoreScope("PLACEMENT");
+    setFScoreValue(0);
+    setFScoreUnit("POINTS");
     setFBodyType("");
 
     if (k === "operators") {
@@ -611,6 +720,22 @@ export function ReferenceView() {
     } else if (k === "warehouses") {
       setFCode("MAIN");
       setFName("Склад");
+    } else if (k === "placement-priorities") {
+      setFPriorityScore(500);
+      setFHangarId(hangarsQ.data?.[0]?.id ?? "");
+      setFLayoutId(layoutsForStandsQ.data?.[0]?.id ?? "");
+      setFSource("manual");
+    } else if (k === "optimization-profiles") {
+      setFCode("PROFILE");
+      setFName("Профиль оптимизации");
+    } else if (k === "optimization-score-rules") {
+      setFProfileId(optimizationProfilesQ.data?.[0]?.id ?? "");
+      setFCode("rule_code");
+      setFName("Правило scoring");
+      setFScoreCategory("REWARD");
+      setFScoreScope("PLACEMENT");
+      setFScoreValue(100);
+      setFScoreUnit("POINTS");
     }
   };
 
@@ -632,7 +757,7 @@ export function ReferenceView() {
     setFTailNumber(String(row.tailNumber ?? ""));
     setFSerialNumber(String(row.serialNumber ?? ""));
     setFOperatorId(String(row.operatorId ?? ""));
-    setFTypeId(String(row.typeId ?? row.aircraftTypeId ?? ""));
+    setFTypeId(String(kind === "placement-priorities" ? row.standId ?? "" : row.typeId ?? row.aircraftTypeId ?? ""));
     setFColor(String(row.color ?? "#3b82f6"));
     setFHangarId(String(row.hangarId ?? ""));
     setFLayoutId(String(row.layoutId ?? ""));
@@ -648,6 +773,24 @@ export function ReferenceView() {
     setFStartMin(Number(row.startMin ?? 8 * 60));
     setFEndMin(Number(row.endMin ?? 20 * 60));
     setFUom(String(row.uom ?? "EA"));
+    setFPriorityScore(Number(row.priorityScore ?? 500));
+    setFPriorityEventTypeIds(
+      Array.isArray(row.eventTypes) ? row.eventTypes.map((link: any) => String(link.eventType?.id ?? link.eventTypeId ?? "")).filter(Boolean) : []
+    );
+    setFPriorityAircraftTypeIds(
+      Array.isArray(row.aircraftTypes) ? row.aircraftTypes.map((link: any) => String(link.aircraftType?.id ?? link.aircraftTypeId ?? "")).filter(Boolean) : []
+    );
+    setFSourceEventName(String(row.sourceEventName ?? ""));
+    setFSourceAircraftTypeText(String(row.sourceAircraftTypeText ?? ""));
+    setFConditionText(String(row.conditionText ?? ""));
+    setFComment(String(row.comment ?? ""));
+    setFSource(String(row.source ?? ""));
+    setFIsDefault(Boolean(row.isDefault ?? false));
+    setFProfileId(String(row.profileId ?? row.profile?.id ?? optimizationProfilesQ.data?.[0]?.id ?? ""));
+    setFScoreCategory(String(row.category ?? "REWARD"));
+    setFScoreScope(String(row.scope ?? "PLACEMENT"));
+    setFScoreValue(Number(row.value ?? 0));
+    setFScoreUnit(String(row.unit ?? "POINTS"));
     setFPersonSkillIds(
       Array.isArray(row.skills) ? row.skills.map((s: any) => String(s.skill?.id ?? s.skillId ?? "")).filter(Boolean) : []
     );
@@ -696,6 +839,40 @@ export function ReferenceView() {
     if (kind === "shifts") return { code: fCode.trim(), name: fName.trim(), startMin: fStartMin, endMin: fEndMin, isActive: fIsActive };
     if (kind === "materials") return { code: fCode.trim(), name: fName.trim(), uom: fUom.trim() ? fUom.trim() : "EA", isActive: fIsActive };
     if (kind === "warehouses") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
+    if (kind === "placement-priorities")
+      return {
+        hangarId: fHangarId,
+        layoutId: fLayoutId,
+        standId: fTypeId,
+        priorityScore: fPriorityScore,
+        sourceEventName: fSourceEventName.trim() ? fSourceEventName.trim() : null,
+        sourceAircraftTypeText: fSourceAircraftTypeText.trim() ? fSourceAircraftTypeText.trim() : null,
+        conditionText: fConditionText.trim() ? fConditionText.trim() : null,
+        comment: fComment.trim() ? fComment.trim() : null,
+        source: fSource.trim() ? fSource.trim() : null,
+        isActive: fIsActive,
+        eventTypeIds: fPriorityEventTypeIds,
+        aircraftTypeIds: fPriorityAircraftTypeIds
+      };
+    if (kind === "optimization-profiles")
+      return {
+        code: fCode.trim(),
+        name: fName.trim(),
+        description: fDescription.trim() ? fDescription.trim() : null,
+        isDefault: fIsDefault,
+        isActive: fIsActive
+      };
+    if (kind === "optimization-score-rules")
+      return {
+        profileId: fProfileId,
+        code: fCode.trim(),
+        name: fName.trim(),
+        category: fScoreCategory,
+        scope: fScoreScope,
+        value: fScoreValue,
+        unit: fScoreUnit,
+        isActive: fIsActive
+      };
     if (kind === "event-types")
       return { code: fCode.trim(), name: fName.trim(), color: fColor.trim() ? fColor.trim() : undefined, isActive: fIsActive };
     if (kind === "hangars") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
@@ -745,7 +922,16 @@ export function ReferenceView() {
         row.aircraftType?.icaoType,
         row.color,
         row.manufacturer,
-        row.description
+        row.description,
+        row.conditionText,
+        row.comment,
+        row.sourceEventName,
+        row.sourceAircraftTypeText,
+        row.source,
+        row.profile?.name,
+        row.hangar?.name,
+        row.layout?.name,
+        row.stand?.name
       ];
       return fields.some((f) => f != null && String(f).toLowerCase().includes(q));
     });
@@ -850,7 +1036,7 @@ export function ReferenceView() {
                 </select>
               </label>
             ) : null}
-            {kind === "stands" ? (
+            {kind === "stands" || kind === "placement-priorities" ? (
               <>
                 <label className="refHeaderFilter">
                   <span className="muted">Ангар</span>
@@ -1131,6 +1317,83 @@ export function ReferenceView() {
         </details>
       ) : null}
 
+      {kind === "placement-priorities" && canWrite ? (
+        <details className="card refSection refCollapsibleSection">
+          <summary className="refCollapsibleSummary">
+            <div>
+              <strong>Импорт приоритетов из Excel</strong>
+              <div className="muted refSectionHint">Источник: лист «Список_приоритетов_в_ангарах» из файла планировщиков.</div>
+            </div>
+            <span className="btn btnGhost refDisclosureButton">
+              <span className="refDisclosureClosed">Открыть форму</span>
+              <span className="refDisclosureOpen">Скрыть форму</span>
+            </span>
+          </summary>
+          <div className="refLayoutImportGrid">
+            <label className="refLabel">
+              <span>Файл Excel</span>
+              <input
+                className="refInput"
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  setPriorityImportFile(file);
+                  setPriorityImportRows([]);
+                  setPriorityImportError(null);
+                  setPriorityImportResult(null);
+                  if (!file) return;
+                  try {
+                    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+                    const sheetName = wb.SheetNames.find((name) => name.trim().toLowerCase() === "список_приоритетов_в_ангарах") ?? wb.SheetNames[0]!;
+                    const sheet = wb.Sheets[sheetName];
+                    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+                    setPriorityImportRows(rows);
+                  } catch (err: any) {
+                    const msg = String(err?.message ?? err);
+                    setPriorityImportError(msg);
+                    showFeedback("error", `Не удалось прочитать файл приоритетов: ${msg}`);
+                  }
+                }}
+              />
+            </label>
+            <button
+              className="btn btnPrimary"
+              disabled={priorityImportRows.length === 0 || priorityImportM.isPending}
+              onClick={() =>
+                priorityImportM.mutate({
+                  rows: priorityImportRows,
+                  replace: true,
+                  source: "Список_приоритетов_в_ангарах"
+                })
+              }
+            >
+              {priorityImportM.isPending ? "Импорт…" : "Заменить и импортировать"}
+            </button>
+          </div>
+          <div className="muted small">Ожидаемые колонки: Номер ангара, Вариант расстановки, Номер стоянки, Наименование события, Тип ВС, Комментарий.</div>
+          {priorityImportFile ? (
+            <div className="muted">
+              Файл: <strong>{priorityImportFile.name}</strong> · строк: {priorityImportRows.length}
+            </div>
+          ) : null}
+          {priorityImportResult ? (
+            <div className="refImportResult">
+              <span className="gpChip gpChipInfo">загружено: {priorityImportResult.imported ?? 0}</span>
+              <span className="gpChip">предупреждений: {(priorityImportResult.warnings ?? []).length}</span>
+              {(priorityImportResult.warnings ?? []).slice(0, 8).map((w: string, i: number) => (
+                <span key={i} className="muted small">
+                  {w}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {priorityImportError || priorityImportM.error ? (
+            <div className="error">{priorityImportError || String((priorityImportM.error as any)?.message ?? priorityImportM.error)}</div>
+          ) : null}
+        </details>
+      ) : null}
+
       {(kind === "layouts" || kind === "stands") && effectivePreviewLayoutId ? (
         <div className="card refSection">
           <div className="refSectionHeader">
@@ -1177,7 +1440,9 @@ export function ReferenceView() {
             kind === "persons" ||
             kind === "shifts" ||
             kind === "materials" ||
-            kind === "warehouses" ? (
+            kind === "warehouses" ||
+            kind === "optimization-profiles" ||
+            kind === "optimization-score-rules" ? (
               <label style={{ display: "grid", gap: 6 }}>
                 <span className="muted">Код</span>
                 <TextInput value={fCode} onChange={setFCode} style={{ width: 220 }} />
@@ -1198,7 +1463,7 @@ export function ReferenceView() {
               </label>
             ) : null}
 
-            {kind !== "aircraft" && kind !== "persons" && kind !== "aircraft-type-palette" ? (
+            {kind !== "aircraft" && kind !== "persons" && kind !== "aircraft-type-palette" && kind !== "placement-priorities" ? (
               <label style={{ display: "grid", gap: 6 }}>
                 <span className="muted">Название</span>
                 <TextInput value={fName} onChange={setFName} style={{ width: 320 }} />
@@ -1389,6 +1654,171 @@ export function ReferenceView() {
               </>
             ) : null}
 
+            {kind === "placement-priorities" ? (
+              <>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Ангар</span>
+                  <select
+                    value={fHangarId}
+                    onChange={(e) => {
+                      setFHangarId(e.target.value);
+                      setFLayoutId("");
+                      setFTypeId("");
+                    }}
+                    style={{ width: 240 }}
+                  >
+                    {(hangarsQ.data ?? []).map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Вариант</span>
+                  <select
+                    value={fLayoutId}
+                    onChange={(e) => {
+                      setFLayoutId(e.target.value);
+                      setFTypeId("");
+                    }}
+                    style={{ width: 280 }}
+                  >
+                    <option value="">— выберите —</option>
+                    {(layoutsForStandsQ.data ?? [])
+                      .filter((l) => !fHangarId || l.hangarId === fHangarId)
+                      .map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Место</span>
+                  <select value={fTypeId} onChange={(e) => setFTypeId(e.target.value)} style={{ width: 220 }}>
+                    <option value="">— выберите —</option>
+                    {(standsForPriorityQ.data ?? []).map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.code} · {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Балл приоритета</span>
+                  <NumberInput value={fPriorityScore} onChange={setFPriorityScore} step={50} style={{ width: 140 }} />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Типы событий (ИЛИ)</span>
+                  <MultiSelectDropdown
+                    options={eventTypeOptions}
+                    value={fPriorityEventTypeIds}
+                    onChange={setFPriorityEventTypeIds}
+                    placeholder="любой тип события"
+                    width={320}
+                    searchable
+                    selectedLabelMode="labels"
+                  />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Типы ВС (ИЛИ)</span>
+                  <MultiSelectDropdown
+                    options={aircraftTypeOptions}
+                    value={fPriorityAircraftTypeIds}
+                    onChange={setFPriorityAircraftTypeIds}
+                    placeholder="любой ВС"
+                    width={320}
+                    searchable
+                    selectedLabelMode="labels"
+                  />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Исходное событие</span>
+                  <TextInput value={fSourceEventName} onChange={setFSourceEventName} style={{ width: 220 }} />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Исходный тип ВС</span>
+                  <TextInput value={fSourceAircraftTypeText} onChange={setFSourceAircraftTypeText} style={{ width: 220 }} />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Условие</span>
+                  <TextInput value={fConditionText} onChange={setFConditionText} style={{ width: 360 }} />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Комментарий</span>
+                  <TextInput value={fComment} onChange={setFComment} style={{ width: 360 }} />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Источник</span>
+                  <TextInput value={fSource} onChange={setFSource} style={{ width: 220 }} />
+                </label>
+              </>
+            ) : null}
+
+            {kind === "optimization-profiles" ? (
+              <>
+                <label style={{ display: "grid", gap: 6, flex: "1 1 auto" }}>
+                  <span className="muted">Описание</span>
+                  <TextInput value={fDescription} onChange={setFDescription} style={{ width: 360 }} />
+                </label>
+                <label className="row" style={{ gap: 6 }}>
+                  <input type="checkbox" checked={fIsDefault} onChange={(e) => setFIsDefault(e.target.checked)} />
+                  <span className="muted">профиль по умолчанию</span>
+                </label>
+              </>
+            ) : null}
+
+            {kind === "optimization-score-rules" ? (
+              <>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Профиль</span>
+                  <select value={fProfileId} onChange={(e) => setFProfileId(e.target.value)} style={{ width: 260 }}>
+                    {(optimizationProfilesQ.data ?? []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                        {p.isDefault ? " · по умолчанию" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Категория</span>
+                  <select value={fScoreCategory} onChange={(e) => setFScoreCategory(e.target.value)} style={{ width: 180 }}>
+                    <option value="REWARD">Поощрение</option>
+                    <option value="PENALTY">Штраф</option>
+                    <option value="LIMIT">Ограничение</option>
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Область</span>
+                  <select value={fScoreScope} onChange={(e) => setFScoreScope(e.target.value)} style={{ width: 220 }}>
+                    <option value="NEW_EVENT">Новое событие</option>
+                    <option value="EXISTING_EVENT">Существующее событие</option>
+                    <option value="PLACEMENT">Размещение</option>
+                    <option value="LAYOUT">Вариант</option>
+                    <option value="STAND">Место</option>
+                    <option value="TOW">Буксировка</option>
+                    <option value="PRIORITY">Приоритет</option>
+                  </select>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Значение</span>
+                  <NumberInput value={fScoreValue} onChange={setFScoreValue} step={10} style={{ width: 140 }} />
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Единица</span>
+                  <select value={fScoreUnit} onChange={(e) => setFScoreUnit(e.target.value)} style={{ width: 180 }}>
+                    <option value="POINTS">Баллы</option>
+                    <option value="POINTS_PER_HOUR">Баллы/час</option>
+                    <option value="HOURS">Часы</option>
+                    <option value="BOOLEAN">Да/нет</option>
+                    <option value="MULTIPLIER">Множитель</option>
+                  </select>
+                </label>
+              </>
+            ) : null}
+
             <BoolToggle value={fIsActive} onChange={setFIsActive} />
 
             <button
@@ -1478,12 +1908,18 @@ export function ReferenceView() {
                 const displayName =
                   kind === "aircraft-type-palette"
                     ? `${row.operator?.name ?? "Оператор"} × ${row.aircraftType?.icaoType ? `${row.aircraftType.icaoType} • ` : ""}${row.aircraftType?.name ?? "Тип ВС"}`
+                    : kind === "placement-priorities"
+                      ? `${row.hangar?.name ?? "Ангар"} · ${row.stand?.code ?? "место"}`
+                      : kind === "optimization-score-rules"
+                        ? row.name ?? row.code ?? "Правило scoring"
                     : row.name ?? row.tailNumber ?? "—";
                 const idCodeLines: string[] = [];
                 if (row.code) idCodeLines.push(String(row.code));
                 if (row.icaoType) idCodeLines.push(`ICAO ${row.icaoType}`);
                 if (row.tailNumber && kind !== "aircraft") idCodeLines.push(String(row.tailNumber));
                 if (row.serialNumber) idCodeLines.push(`S/N ${row.serialNumber}`);
+                if (kind === "placement-priorities") idCodeLines.push(`score ${row.priorityScore ?? 0}`);
+                if (kind === "optimization-score-rules" && row.code) idCodeLines.push(String(row.code));
                 const bodyLabel = bodyTypeLabel(row.bodyType);
 
                 return (
@@ -1539,6 +1975,28 @@ export function ReferenceView() {
                         ) : null}
                         {row.layout?.name ? (
                           <span className="refLink">Вариант: <strong>{row.layout.name}</strong></span>
+                        ) : null}
+                        {row.stand?.name ? (
+                          <span className="refLink">Место: <strong>{row.stand.code ? `${row.stand.code} · ` : ""}{row.stand.name}</strong></span>
+                        ) : null}
+                        {kind === "placement-priorities" ? (
+                          <>
+                            <span className="refLink">События: <strong>{priorityLinkedEventTypes(row)}</strong></span>
+                            <span className="refLink">Типы ВС: <strong>{priorityLinkedAircraftTypes(row)}</strong></span>
+                            {row.conditionText ? <span className="refLink">Условие: <strong>{row.conditionText}</strong></span> : null}
+                            {row.comment ? <span className="refLink">Комментарий: <strong>{row.comment}</strong></span> : null}
+                          </>
+                        ) : null}
+                        {kind === "optimization-profiles" ? (
+                          <span className="refLink">Роль: <strong>{row.isDefault ? "по умолчанию" : "обычный профиль"}</strong></span>
+                        ) : null}
+                        {kind === "optimization-score-rules" ? (
+                          <>
+                            <span className="refLink">Профиль: <strong>{row.profile?.name ?? row.profileId}</strong></span>
+                            <span className="refLink">Категория: <strong>{scoreCategoryLabel(row.category)}</strong></span>
+                            <span className="refLink">Область: <strong>{scoreScopeLabel(row.scope)}</strong></span>
+                            <span className="refLink">Значение: <strong>{row.value} · {row.unit}</strong></span>
+                          </>
                         ) : null}
                         {(row as any).capacitySummary ? (
                           <span className="refLink">Вместимость: <strong>{(row as any).capacitySummary}</strong></span>
