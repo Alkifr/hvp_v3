@@ -672,7 +672,7 @@ a {
 
 .massBatchRows {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .massBatchToolbar {
@@ -697,29 +697,33 @@ a {
 
 .massBatchRowCard {
   display: grid;
-  gap: 8px;
-  padding: 9px 10px;
+  gap: 6px;
+  padding: 7px 8px;
   border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 12px;
+  border-radius: 10px;
   background: #fff;
 }
 
-.massBatchRowHead {
+.massBatchRowIndex {
+  align-self: end;
+  min-height: 32px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .massBatchRowGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
+  grid-template-columns: 72px repeat(auto-fit, minmax(132px, 1fr)) 34px;
+  gap: 6px;
   align-items: end;
 }
 
 .massBatchNumberField {
-  max-width: 130px;
+  max-width: 96px;
 }
 
 .massBatchTitleField {
@@ -730,10 +734,11 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  align-self: end;
+  width: 32px;
+  height: 32px;
   padding: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   color: #991b1b;
 }
 
@@ -749,10 +754,13 @@ a {
 
 @media (max-width: 760px) {
   .massSectionHead,
-  .massBatchToolbar,
-  .massBatchRowHead {
+  .massBatchToolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .massBatchRowGrid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   }
 
   .massBatchTitleField {

@@ -126,10 +126,19 @@ function parseImportDate(value: unknown, fallback: string): string {
   const raw = String(value ?? "").trim();
   const iso = raw.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
   if (iso) return `${iso[1]}-${iso[2]!.padStart(2, "0")}-${iso[3]!.padStart(2, "0")}`;
-  const ru = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  const ru = raw.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2,4})$/);
   if (ru) {
     const year = ru[3]!.length === 2 ? `20${ru[3]}` : ru[3]!;
     return `${year}-${ru[2]!.padStart(2, "0")}-${ru[1]!.padStart(2, "0")}`;
+  }
+  const dashed = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
+  if (dashed) {
+    const [, a, b, c] = dashed;
+    const year = c!.length === 2 ? `20${c}` : c!;
+    const first = Number(a);
+    const second = Number(b);
+    if (first > 12 || second <= 12) return `${year}-${b!.padStart(2, "0")}-${a!.padStart(2, "0")}`;
+    return `${year}-${a!.padStart(2, "0")}-${b!.padStart(2, "0")}`;
   }
   const parsed = dayjs(raw);
   return parsed.isValid() ? parsed.format("YYYY-MM-DD") : fallback;
@@ -332,9 +341,9 @@ export function MassPlanView() {
   const importBatchRows = async (file: File) => {
     setBatchImportError(null);
     try {
-      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
       const ws = wb.Sheets[wb.SheetNames[0]!];
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "", raw: false, dateNF: "yyyy-mm-dd" });
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "", raw: true });
       const pick = (row: Record<string, unknown>, keys: string[]) => {
         const normalized = new Map(Object.entries(row).map(([k, v]) => [normalizeImportToken(k), v]));
         for (const key of keys) {
@@ -539,24 +548,8 @@ export function MassPlanView() {
                 <div className="massBatchRows">
                   {batchRows.map((row, idx) => (
                     <div className="massBatchRowCard" key={row.id}>
-                      <div className="massBatchRowHead">
-                        <strong>Строка {idx + 1}</strong>
-                        <button
-                          type="button"
-                          className="btn btnGhost massBatchDeleteButton"
-                          onClick={() => setBatchRows((rows) => rows.filter((x) => x.id !== row.id))}
-                          title="Удалить строку"
-                          aria-label="Удалить строку"
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M5 7h14" />
-                            <path d="M10 11v6M14 11v6" />
-                            <path d="M8 7l1-3h6l1 3" />
-                            <path d="M7 7l1 13h8l1-13" />
-                          </svg>
-                        </button>
-                      </div>
                       <div className="massBatchRowGrid">
+                        <div className="massBatchRowIndex">Строка {idx + 1}</div>
                         <label className="massField">
                           <span className="muted">Оператор</span>
                           <select value={row.operatorId} onChange={(e) => updateBatchRow(row.id, { operatorId: e.target.value })} required>
@@ -612,6 +605,20 @@ export function MassPlanView() {
                             <option value="fixedCadence">Фиксированный шаг</option>
                           </select>
                         </label>
+                        <button
+                          type="button"
+                          className="btn btnGhost massBatchDeleteButton"
+                          onClick={() => setBatchRows((rows) => rows.filter((x) => x.id !== row.id))}
+                          title="Удалить строку"
+                          aria-label="Удалить строку"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M5 7h14" />
+                            <path d="M10 11v6M14 11v6" />
+                            <path d="M8 7l1-3h6l1 3" />
+                            <path d="M7 7l1 13h8l1-13" />
+                          </svg>
+                        </button>
                       </div>
                     </div>
                   ))}
