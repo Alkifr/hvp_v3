@@ -31,11 +31,15 @@ function getActor(req: any) {
   return String(h["x-actor"] ?? h["x-user"] ?? "browser").slice(0, 80);
 }
 
-type StandEntry = { hangarId: string; layoutId: string; standId: string; priorityScore?: number; priorityRuleIds?: string[] };
+type StandEntry = { hangarId: string; layoutId: string; standId: string; priorityScore?: number; priorityRuleIds?: string[]; scoreDetails?: string[] };
 type ScheduleMode = "compact" | "sequential" | "fixedCadence";
 type PlacementMode = "auto" | "preferredHangars" | "draftOnConflict";
 
 const MASS_PLAN_TRANSACTION_OPTIONS = { timeout: 120_000, maxWait: 15_000 };
+const BODY_TYPE_SCORE_FALLBACK: Record<"NARROW_BODY" | "WIDE_BODY", number> = {
+  NARROW_BODY: 50,
+  WIDE_BODY: 150
+};
 
 type PlacementPreview = {
   index: number;
@@ -140,6 +144,16 @@ function addTowFields(
     if (next.towAfterEndAt > endToMs) next.warnings.push("Буксировка после события выходит за конец периода");
   }
   return next;
+}
+
+function bodyTypeScore(bodyType: unknown, scoreByCode: Map<string, number>): { score: number; label: string | null } {
+  if (bodyType === "WIDE_BODY") {
+    return { score: scoreByCode.get("wide_body_placement_priority") ?? BODY_TYPE_SCORE_FALLBACK.WIDE_BODY, label: "Широкий фюзеляж" };
+  }
+  if (bodyType === "NARROW_BODY") {
+    return { score: scoreByCode.get("narrow_body_placement_priority") ?? BODY_TYPE_SCORE_FALLBACK.NARROW_BODY, label: "Узкий фюзеляж" };
+  }
+  return { score: 0, label: null };
 }
 
 function buildMassPlanPlacements(params: BuildPlacementsParams): {
@@ -253,9 +267,8 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
     if (bestStart > intendedStart && scheduleMode === "fixedCadence") {
       warnings.push("Сдвинуто относительно фиксированного шага из-за занятости");
     }
-    const scoreDetails: string[] = [];
     const priorityScore = bestEntry.priorityScore ?? 0;
-    if (priorityScore > 0) scoreDetails.push(`Приоритет размещения: +${priorityScore}`);
+    const scoreDetails = bestEntry.scoreDetails ?? [];
     const placement = addTowFields(
       {
         index: i,
@@ -345,7 +358,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     const endToMs = body.endTo.getTime();
     const windowEnd = new Date(Math.max(endToMs + towAfterMs, startFromMs + body.count * (tatMs + spacingMs)));
 
-    const [eventType, aircraftType, hangarsOrdered, layoutsWithStands, reservations] = await Promise.all([
+    const [eventType, aircraftType, hangarsOrdered, layoutsWithStands, reservations, bodyTypeScoreRules] = await Promise.all([
       app.prisma.eventType.findUniqueOrThrow({ where: { id: body.eventTypeId } }),
       app.prisma.aircraftType.findUniqueOrThrow({ where: { id: body.aircraftTypeId } }),
       body.hangarIds?.length
@@ -395,8 +408,17 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           layout: { select: { hangarId: true } },
           event: { select: { towSegments: { select: { startAt: true, endAt: true } } } }
         }
+      }),
+      app.prisma.optimizationScoreRule.findMany({
+        where: {
+          isActive: true,
+          code: { in: ["wide_body_placement_priority", "narrow_body_placement_priority"] },
+          profile: { isDefault: true, isActive: true }
+        },
+        select: { code: true, value: true }
       })
     ]);
+    const bodyTypeScoreByCode = new Map(bodyTypeScoreRules.map((rule) => [rule.code, rule.value]));
 
     const hangarIdSet = new Set(hangarsOrdered.map((h) => h.id));
     const priorityRules = await app.prisma.placementPriorityRule.findMany({
@@ -444,7 +466,16 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         if (allowedAircraftTypeIds.length > 0 && !allowedAircraftTypeIds.includes(aircraftType.id)) continue;
         const baseEntry = { hangarId: lay.hangarId, layoutId: lay.id, standId: s.id };
         const priority = priorityFor(baseEntry);
-        standOrder.push({ ...baseEntry, priorityScore: priority.score, priorityRuleIds: priority.ruleIds });
+        const bodyScore = bodyTypeScore(aircraftType.bodyType, bodyTypeScoreByCode);
+        standOrder.push({
+          ...baseEntry,
+          priorityScore: priority.score + bodyScore.score,
+          priorityRuleIds: priority.ruleIds,
+          scoreDetails: [
+            ...(priority.score > 0 ? [`Приоритет размещения: +${priority.score}`] : []),
+            ...(bodyScore.score > 0 && bodyScore.label ? [`${bodyScore.label}: +${bodyScore.score}`] : [])
+          ]
+        });
       }
     }
 
@@ -789,7 +820,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
 
     const body = z
       .object({
-        items: z.array(zBatchItem).min(1).max(100),
+        items: z.array(zBatchItem).min(1),
         hangarIds: z.array(zUuid).optional(),
         placementMode: z.enum(["auto", "preferredHangars", "draftOnConflict"]).optional().default("auto"),
         budgetStartAt: zDateTime.nullable().optional(),
@@ -821,7 +852,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     const aircraftTypeIds = Array.from(new Set(body.items.map((item) => item.aircraftTypeId)));
     const eventTypeIds = Array.from(new Set(body.items.map((item) => item.eventTypeId)));
 
-    const [eventTypes, aircraftTypes, hangarsOrdered, layoutsWithStands, reservations, priorityRules] = await Promise.all([
+    const [eventTypes, aircraftTypes, hangarsOrdered, layoutsWithStands, reservations, priorityRules, bodyTypeScoreRules] = await Promise.all([
       app.prisma.eventType.findMany({ where: { id: { in: eventTypeIds } } }),
       app.prisma.aircraftType.findMany({ where: { id: { in: aircraftTypeIds } } }),
       body.hangarIds?.length
@@ -875,8 +906,17 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           eventTypes: { select: { eventTypeId: true } },
           aircraftTypes: { select: { aircraftTypeId: true } }
         }
+      }),
+      app.prisma.optimizationScoreRule.findMany({
+        where: {
+          isActive: true,
+          code: { in: ["wide_body_placement_priority", "narrow_body_placement_priority"] },
+          profile: { isDefault: true, isActive: true }
+        },
+        select: { code: true, value: true }
       })
     ]);
+    const bodyTypeScoreByCode = new Map(bodyTypeScoreRules.map((rule) => [rule.code, rule.value]));
 
     const eventTypeById = new Map(eventTypes.map((eventType) => [eventType.id, eventType]));
     const aircraftTypeById = new Map(aircraftTypes.map((aircraftType) => [aircraftType.id, aircraftType]));
@@ -975,7 +1015,16 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           })
           .map((entry) => {
             const priority = priorityFor(entry, item.eventTypeId, item.aircraftTypeId);
-            return { ...entry, priorityScore: priority.score, priorityRuleIds: priority.ruleIds };
+            const bodyScore = bodyTypeScore(aircraftTypeById.get(item.aircraftTypeId)?.bodyType, bodyTypeScoreByCode);
+            return {
+              ...entry,
+              priorityScore: priority.score + bodyScore.score,
+              priorityRuleIds: priority.ruleIds,
+              scoreDetails: [
+                ...(priority.score > 0 ? [`Приоритет размещения: +${priority.score}`] : []),
+                ...(bodyScore.score > 0 && bodyScore.label ? [`${bodyScore.label}: +${bodyScore.score}`] : [])
+              ]
+            };
           })
           .sort((a, b) => {
             const ai = hangarOrder.indexOf(a.hangarId);
@@ -1048,7 +1097,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             scheduledBy: item.scheduleMode,
             warnings,
             score: priorityScore,
-            scoreDetails: priorityScore > 0 ? [`Приоритет размещения: +${priorityScore}`] : [],
+            scoreDetails: bestEntry.scoreDetails ?? [],
             priorityRuleIds: bestEntry.priorityRuleIds
           } as any,
           towBeforeMs,
