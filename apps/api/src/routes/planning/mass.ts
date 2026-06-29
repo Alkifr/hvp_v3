@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { EventAuditAction, EventStatus, PlanningLevel } from "@prisma/client";
@@ -33,6 +34,8 @@ function getActor(req: any) {
 type StandEntry = { hangarId: string; layoutId: string; standId: string; priorityScore?: number; priorityRuleIds?: string[] };
 type ScheduleMode = "compact" | "sequential" | "fixedCadence";
 type PlacementMode = "auto" | "preferredHangars" | "draftOnConflict";
+
+const MASS_PLAN_TRANSACTION_OPTIONS = { timeout: 120_000, maxWait: 15_000 };
 
 type PlacementPreview = {
   index: number;
@@ -506,26 +509,27 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     };
     const sbId = sandboxIdFor(req);
 
-    const result = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const created: Array<{
-        eventId: string;
-        label: string;
-        title: string;
-        startAt: Date;
-        endAt: Date;
-        budgetStartAt: Date | null;
-        budgetEndAt: Date | null;
-        actualStartAt: Date | null;
-        actualEndAt: Date | null;
-        hangarId: string | null;
-        layoutId: string | null;
-        standId: string | null;
-        status: EventStatus;
-        towBeforeStartAt?: Date;
-        towBeforeEndAt?: Date;
-        towAfterStartAt?: Date;
-        towAfterEndAt?: Date;
-      }> = [];
+    const result = await app.prisma.$transaction(
+      async (tx: Prisma.TransactionClient) => {
+        const created: Array<{
+          eventId: string;
+          label: string;
+          title: string;
+          startAt: Date;
+          endAt: Date;
+          budgetStartAt: Date | null;
+          budgetEndAt: Date | null;
+          actualStartAt: Date | null;
+          actualEndAt: Date | null;
+          hangarId: string | null;
+          layoutId: string | null;
+          standId: string | null;
+          status: EventStatus;
+          towBeforeStartAt?: Date;
+          towBeforeEndAt?: Date;
+          towAfterStartAt?: Date;
+          towAfterEndAt?: Date;
+        }> = [];
 
       for (let i = 0; i < body.count; i++) {
         const title = titleBase.includes("%") ? titleBase.replace("%", String(i + 1)) : `${titleBase} #${i + 1}`;
@@ -703,7 +707,9 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       }
 
       return created;
-    });
+      },
+      MASS_PLAN_TRANSACTION_OPTIONS
+    );
 
     return {
       ok: true,
@@ -1046,92 +1052,108 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const sbId = sandboxIdFor(req);
-    const result = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const created: Array<{
-        eventId: string;
-        label: string;
-        title: string;
-        startAt: Date;
-        endAt: Date;
-        hangarId: string | null;
-        layoutId: string | null;
-        standId: string | null;
-        status: EventStatus;
-      }> = [];
+    const result = await app.prisma.$transaction(
+      async (tx: Prisma.TransactionClient) => {
+        const created: Array<{
+          eventId: string;
+          label: string;
+          title: string;
+          startAt: Date;
+          endAt: Date;
+          hangarId: string | null;
+          layoutId: string | null;
+          standId: string | null;
+          status: EventStatus;
+        }> = [];
+      const eventRows: Prisma.MaintenanceEventCreateManyInput[] = [];
+      const placementRows: Prisma.EventPlacementCreateManyInput[] = [];
+      const reservationRows: Prisma.StandReservationCreateManyInput[] = [];
 
       for (const p of placementsPreview) {
+        const eventId = randomUUID();
+        const placementId = randomUUID();
         const startAt = new Date(p.startAt);
         const endAt = new Date(p.endAt);
-        const ev = await tx.maintenanceEvent.create({
-          data: {
-            level: PlanningLevel.OPERATIONAL,
-            status: EventStatus.PLANNED,
-            planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
-            title: p.title,
-            sandboxId: sbId,
-            eventTypeId: p.eventTypeId,
-            startAt,
-            endAt,
-            budgetStartAt: body.budgetStartAt ?? null,
-            budgetEndAt: body.budgetEndAt ?? null,
-            actualStartAt: body.actualStartAt ?? null,
-            actualEndAt: body.actualEndAt ?? null,
-            hangarId: p.hangarId,
-            layoutId: p.layoutId,
-            virtualAircraft: { operatorId: p.operatorId, aircraftTypeId: p.aircraftTypeId, label: p.label } as Prisma.InputJsonValue
-          }
+        eventRows.push({
+          id: eventId,
+          level: PlanningLevel.OPERATIONAL,
+          status: EventStatus.PLANNED,
+          planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
+          title: p.title,
+          sandboxId: sbId,
+          eventTypeId: p.eventTypeId,
+          startAt,
+          endAt,
+          budgetStartAt: body.budgetStartAt ?? null,
+          budgetEndAt: body.budgetEndAt ?? null,
+          actualStartAt: body.actualStartAt ?? null,
+          actualEndAt: body.actualEndAt ?? null,
+          hangarId: p.hangarId,
+          layoutId: p.layoutId,
+          virtualAircraft: { operatorId: p.operatorId, aircraftTypeId: p.aircraftTypeId, label: p.label } as Prisma.InputJsonValue
         });
-        const placement = await tx.eventPlacement.create({
-          data: {
-            eventId: ev.id,
-            sandboxId: sbId,
-            startAt,
-            endAt,
-            budgetStartAt: body.budgetStartAt ?? null,
-            budgetEndAt: body.budgetEndAt ?? null,
-            actualStartAt: body.actualStartAt ?? null,
-            actualEndAt: body.actualEndAt ?? null,
-            hangarId: p.hangarId,
-            layoutId: p.layoutId,
-            standId: p.standId,
-            sortOrder: 0
-          }
+        placementRows.push({
+          id: placementId,
+          eventId,
+          sandboxId: sbId,
+          startAt,
+          endAt,
+          budgetStartAt: body.budgetStartAt ?? null,
+          budgetEndAt: body.budgetEndAt ?? null,
+          actualStartAt: body.actualStartAt ?? null,
+          actualEndAt: body.actualEndAt ?? null,
+          hangarId: p.hangarId,
+          layoutId: p.layoutId,
+          standId: p.standId,
+          sortOrder: 0
         });
-        await tx.standReservation.create({
-          data: { eventId: ev.id, placementId: placement.id, sandboxId: sbId, layoutId: p.layoutId, standId: p.standId, startAt, endAt }
+        reservationRows.push({
+          eventId,
+          placementId,
+          sandboxId: sbId,
+          layoutId: p.layoutId,
+          standId: p.standId,
+          startAt,
+          endAt
         });
-        created.push({ eventId: ev.id, label: p.label, title: ev.title, startAt, endAt, hangarId: p.hangarId, layoutId: p.layoutId, standId: p.standId, status: EventStatus.PLANNED });
+        created.push({ eventId, label: p.label, title: p.title, startAt, endAt, hangarId: p.hangarId, layoutId: p.layoutId, standId: p.standId, status: EventStatus.PLANNED });
       }
 
       for (const u of unplacedPreview) {
+        const eventId = randomUUID();
         const item = body.items[u.rowIndex]!;
         const tatMs = item.tatHours * 60 * 60 * 1000;
         const startAt = new Date(item.endTo.getTime());
         const endAt = new Date(item.endTo.getTime() + tatMs);
-        const ev = await tx.maintenanceEvent.create({
-          data: {
-            level: PlanningLevel.OPERATIONAL,
-            status: EventStatus.DRAFT,
-            planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
-            title: u.title,
-            sandboxId: sbId,
-            eventTypeId: u.eventTypeId,
-            startAt,
-            endAt,
-            budgetStartAt: body.budgetStartAt ?? null,
-            budgetEndAt: body.budgetEndAt ?? null,
-            actualStartAt: body.actualStartAt ?? null,
-            actualEndAt: body.actualEndAt ?? null,
-            hangarId: null,
-            layoutId: null,
-            virtualAircraft: { operatorId: u.operatorId, aircraftTypeId: u.aircraftTypeId, label: u.label } as Prisma.InputJsonValue
-          }
+        eventRows.push({
+          id: eventId,
+          level: PlanningLevel.OPERATIONAL,
+          status: EventStatus.DRAFT,
+          planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
+          title: u.title,
+          sandboxId: sbId,
+          eventTypeId: u.eventTypeId,
+          startAt,
+          endAt,
+          budgetStartAt: body.budgetStartAt ?? null,
+          budgetEndAt: body.budgetEndAt ?? null,
+          actualStartAt: body.actualStartAt ?? null,
+          actualEndAt: body.actualEndAt ?? null,
+          hangarId: null,
+          layoutId: null,
+          virtualAircraft: { operatorId: u.operatorId, aircraftTypeId: u.aircraftTypeId, label: u.label } as Prisma.InputJsonValue
         });
-        created.push({ eventId: ev.id, label: u.label, title: ev.title, startAt, endAt, hangarId: null, layoutId: null, standId: null, status: EventStatus.DRAFT });
+        created.push({ eventId, label: u.label, title: u.title, startAt, endAt, hangarId: null, layoutId: null, standId: null, status: EventStatus.DRAFT });
       }
 
-      return created;
-    });
+      if (eventRows.length > 0) await tx.maintenanceEvent.createMany({ data: eventRows });
+      if (placementRows.length > 0) await tx.eventPlacement.createMany({ data: placementRows });
+      if (reservationRows.length > 0) await tx.standReservation.createMany({ data: reservationRows });
+
+        return created;
+      },
+      MASS_PLAN_TRANSACTION_OPTIONS
+    );
 
     return {
       ok: true,

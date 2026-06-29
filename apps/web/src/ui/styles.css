@@ -666,13 +666,13 @@ a {
 
 .massBatchBox {
   display: grid;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
 }
 
 .massBatchRows {
   display: grid;
-  gap: 6px;
+  gap: 2px;
 }
 
 .massBatchToolbar {
@@ -697,33 +697,45 @@ a {
 
 .massBatchRowCard {
   display: grid;
-  gap: 6px;
-  padding: 7px 8px;
+  gap: 2px;
+  padding: 3px 4px;
   border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fff;
 }
 
 .massBatchRowIndex {
   align-self: end;
-  min-height: 32px;
+  min-height: 28px;
   display: flex;
   align-items: center;
   color: #475569;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
 }
 
 .massBatchRowGrid {
   display: grid;
-  grid-template-columns: 72px repeat(auto-fit, minmax(132px, 1fr)) 34px;
-  gap: 6px;
+  grid-template-columns: 60px repeat(auto-fit, minmax(112px, 1fr)) 30px;
+  gap: 3px;
   align-items: end;
 }
 
+.massBatchRowGrid .massField {
+  gap: 2px;
+  font-size: 11px;
+}
+
+.massBatchRowGrid .massField input,
+.massBatchRowGrid .massField select {
+  min-height: 28px;
+  border-radius: 7px;
+  padding: 4px 6px;
+}
+
 .massBatchNumberField {
-  max-width: 96px;
+  max-width: 78px;
 }
 
 .massBatchTitleField {
@@ -735,16 +747,16 @@ a {
   align-items: center;
   justify-content: center;
   align-self: end;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   color: #991b1b;
 }
 
 .massBatchDeleteButton svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
