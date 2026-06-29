@@ -862,14 +862,29 @@ export function MassPlanView() {
           {preview.unplaced.length > 0 && (
             <div className="massDraftBox">
               <strong>Черновики без места</strong>
-              <div>
-                {preview.unplaced
-                  .map((u) =>
-                    `${u.label}${u.intendedStartAt ? ` (${dayjs(u.intendedStartAt).format("DD.MM HH:mm")})` : ""}${
-                      u.warnings?.length ? ` — ${u.warnings.join("; ")}` : ""
-                    }`
-                  )
-                  .join(", ")}
+              <div className="massTableWrap">
+                <table className="massTable">
+                  <thead>
+                    <tr>
+                      <th>Вирт. борт</th>
+                      <th>Название</th>
+                      <th>Плановое начало</th>
+                      <th>Ангар / место</th>
+                      <th>Причина</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.unplaced.map((u) => (
+                      <tr key={`unplaced-${u.index}`}>
+                        <td>{u.label}</td>
+                        <td>{u.title}</td>
+                        <td>{u.intendedStartAt ? dayjs(u.intendedStartAt).format("DD.MM.YYYY HH:mm") : "—"}</td>
+                        <td><span className="muted">Без ангара</span></td>
+                        <td>{u.warnings?.length ? u.warnings.join("; ") : <span className="muted">Не найдено свободное место</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

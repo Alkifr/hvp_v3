@@ -668,8 +668,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           });
         } else {
           const u = unplacedPreview.find((x) => x.index === i);
-          const startAt = new Date(endToMs);
-          const endAt = new Date(endToMs + tatMs);
+          const startAt = new Date(u?.intendedStartAt ?? startFromMs + i * (tatMs + spacingMs));
+          const endAt = new Date(startAt.getTime() + tatMs);
           const ev = await tx.maintenanceEvent.create({
             data: {
               level: PlanningLevel.OPERATIONAL,
@@ -1175,8 +1175,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         const eventId = randomUUID();
         const item = body.items[u.rowIndex]!;
         const tatMs = item.tatHours * 60 * 60 * 1000;
-        const startAt = new Date(item.endTo.getTime());
-        const endAt = new Date(item.endTo.getTime() + tatMs);
+        const startAt = new Date(u.intendedStartAt);
+        const endAt = new Date(u.intendedStartAt + tatMs);
         eventRows.push({
           id: eventId,
           level: PlanningLevel.OPERATIONAL,
