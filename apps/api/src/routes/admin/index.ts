@@ -13,11 +13,12 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       eventTypeId: zUuid.optional(),
       aircraftTypeId: zUuid.optional(),
       aircraftId: zUuid.optional(),
+      sandboxId: zUuid.nullable().optional(),
       from: zDateTime.optional(),
       to: zDateTime.optional(),
       confirmBulk: z.boolean().optional()
     })
-    .refine((v) => Boolean(v.eventId || v.eventTypeId || v.aircraftTypeId || v.aircraftId || v.from || v.to), {
+    .refine((v) => Boolean(v.eventId || v.eventTypeId || v.aircraftTypeId || v.aircraftId || v.from || v.to || v.confirmBulk), {
       message: "Нужно указать хотя бы один фильтр очистки"
     })
     .refine((v) => Boolean(v.eventId || v.from || v.to || v.confirmBulk), {
@@ -28,12 +29,19 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     });
 
   const buildCleanupWhere = (filters: z.infer<typeof zCleanupFilters>) => ({
-    sandboxId: null,
+    sandboxId: filters.sandboxId ?? null,
     status: { not: EventStatus.DELETED },
     ...(filters.eventId ? { id: filters.eventId } : {}),
     ...(filters.eventTypeId ? { eventTypeId: filters.eventTypeId } : {}),
     ...(filters.aircraftId ? { aircraftId: filters.aircraftId } : {}),
-    ...(filters.aircraftTypeId ? { aircraft: { typeId: filters.aircraftTypeId } } : {}),
+    ...(filters.aircraftTypeId
+      ? {
+          OR: [
+            { aircraft: { typeId: filters.aircraftTypeId } },
+            { virtualAircraft: { path: ["aircraftTypeId"], equals: filters.aircraftTypeId } }
+          ]
+        }
+      : {}),
     ...(filters.from || filters.to
       ? {
           ...(filters.to ? { startAt: { lt: filters.to } } : {}),
@@ -49,6 +57,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     startAt: true,
     endAt: true,
     aircraft: { select: { id: true, tailNumber: true, type: { select: { id: true, name: true, icaoType: true } } } },
+    virtualAircraft: true,
     eventType: { select: { id: true, name: true, code: true } }
   };
 
@@ -257,6 +266,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       eventTypeId: body.eventTypeId,
       aircraftTypeId: body.aircraftTypeId,
       aircraftId: body.aircraftId,
+      sandboxId: body.sandboxId,
       from: body.from,
       to: body.to,
       confirmBulk: body.confirmBulk
@@ -272,19 +282,19 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
     await app.prisma.$transaction(async (tx) => {
       await tx.maintenanceEvent.updateMany({
-        where: { id: { in: events.map((e) => e.id) }, sandboxId: null },
+        where: { id: { in: events.map((e) => e.id) }, sandboxId: filters.sandboxId ?? null },
         data: { status: EventStatus.DELETED }
       });
       await tx.maintenanceEventAudit.createMany({
         data: events.map((event) => ({
           eventId: event.id,
-          sandboxId: null,
+          sandboxId: filters.sandboxId ?? null,
           action: EventAuditAction.UPDATE,
           actor: currentUser.email,
-          reason: reason || "Очистка рабочего контура",
+          reason: reason || (filters.sandboxId ? "Очистка песочницы" : "Очистка рабочего контура"),
           changes: {
             status: { from: event.status, to: EventStatus.DELETED },
-            cleanup: { mode: "logical-delete", title: event.title }
+            cleanup: { mode: "logical-delete", title: event.title, sandboxId: filters.sandboxId ?? null }
           }
         }))
       });

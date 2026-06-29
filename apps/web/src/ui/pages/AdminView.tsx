@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 
 import { apiGet, apiPatch, apiPost } from "../../lib/api";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
+import type { SandboxSummary } from "../components/SandboxSwitcher";
 
 type Role = { id: string; code: string; name: string; isSystem: boolean; permissions: { permission: Permission }[] };
 type Permission = { id: string; code: string; name: string };
@@ -24,6 +25,7 @@ type CleanupEventItem = {
   startAt: string;
   endAt: string;
   aircraft?: { tailNumber: string; type?: AircraftTypeRef | null } | null;
+  virtualAircraft?: { operatorId?: string; aircraftTypeId?: string; label?: string } | null;
   eventType?: { name: string; code?: string | null } | null;
 };
 type CleanupPreview = { ok: true; total: number; items: CleanupEventItem[] };
@@ -65,6 +67,11 @@ export function AdminView(props: { permissions: string[] }) {
     queryFn: () => apiGet<AircraftRef[]>("/api/ref/aircraft"),
     enabled: canCleanup
   });
+  const cleanupSandboxesQ = useQuery({
+    queryKey: ["sandboxes"],
+    queryFn: () => apiGet<SandboxSummary[]>("/api/sandboxes"),
+    enabled: canCleanup
+  });
 
   // create user
   const [uEmail, setUEmail] = useState("");
@@ -72,6 +79,8 @@ export function AdminView(props: { permissions: string[] }) {
   const [uPass, setUPass] = useState("");
   const [uRoleIds, setURoleIds] = useState<string[]>([]);
   const [cleanupEventId, setCleanupEventId] = useState("");
+  const [cleanupTarget, setCleanupTarget] = useState<"prod" | "sandbox">("prod");
+  const [cleanupSandboxId, setCleanupSandboxId] = useState("");
   const [cleanupEventTypeId, setCleanupEventTypeId] = useState("");
   const [cleanupAircraftTypeId, setCleanupAircraftTypeId] = useState("");
   const [cleanupAircraftId, setCleanupAircraftId] = useState("");
@@ -83,6 +92,7 @@ export function AdminView(props: { permissions: string[] }) {
   const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null);
 
   const cleanupPayload = () => ({
+    ...(cleanupTarget === "sandbox" && cleanupSandboxId ? { sandboxId: cleanupSandboxId } : {}),
     ...(cleanupEventId.trim() ? { eventId: cleanupEventId.trim() } : {}),
     ...(cleanupEventTypeId ? { eventTypeId: cleanupEventTypeId } : {}),
     ...(cleanupAircraftTypeId ? { aircraftTypeId: cleanupAircraftTypeId } : {}),
@@ -91,7 +101,12 @@ export function AdminView(props: { permissions: string[] }) {
     ...(cleanupTo ? { to: new Date(`${cleanupTo}T23:59:59`).toISOString() } : {}),
     ...(cleanupConfirmBulk ? { confirmBulk: true } : {})
   });
-  const cleanupHasFilters = Boolean(cleanupEventId.trim() || cleanupEventTypeId || cleanupAircraftTypeId || cleanupAircraftId || cleanupFrom || cleanupTo);
+  const cleanupHasFilters = Boolean(cleanupEventId.trim() || cleanupEventTypeId || cleanupAircraftTypeId || cleanupAircraftId || cleanupFrom || cleanupTo || cleanupConfirmBulk);
+  const cleanupTargetReady = cleanupTarget === "prod" || Boolean(cleanupSandboxId);
+  const cleanupTargetLabel =
+    cleanupTarget === "sandbox"
+      ? `песочницы «${(cleanupSandboxesQ.data ?? []).find((sandbox) => sandbox.id === cleanupSandboxId)?.name ?? "—"}»`
+      : "рабочего контура";
 
   const cleanupPreviewM = useMutation({
     mutationFn: () => apiPost<CleanupPreview>("/api/admin/cleanup/events/preview", cleanupPayload()),
@@ -168,15 +183,51 @@ export function AdminView(props: { permissions: string[] }) {
         <div className="card adminDangerZone">
           <div className="row">
             <div>
-              <strong>Очистка рабочего контура</strong>
+              <strong>Очистка событий</strong>
               <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                События не удаляются физически, а переводятся в статус «Удалено». Песочницы не затрагиваются.
+                События не удаляются физически, а переводятся в статус «Удалено». Можно выбрать рабочий контур или конкретную песочницу.
               </div>
             </div>
             <span className="gpChip gpChipError">только SUPER_ADMIN</span>
           </div>
 
           <div className="row" style={{ alignItems: "flex-end" }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">Область</span>
+              <select
+                value={cleanupTarget}
+                onChange={(e) => {
+                  const next = e.target.value === "sandbox" ? "sandbox" : "prod";
+                  setCleanupTarget(next);
+                  if (next === "prod") setCleanupSandboxId("");
+                  setCleanupPreview(null);
+                }}
+                style={{ width: 190 }}
+              >
+                <option value="prod">Рабочий контур</option>
+                <option value="sandbox">Песочница</option>
+              </select>
+            </label>
+            {cleanupTarget === "sandbox" ? (
+              <label style={{ display: "grid", gap: 6 }}>
+                <span className="muted">Песочница</span>
+                <select
+                  value={cleanupSandboxId}
+                  onChange={(e) => {
+                    setCleanupSandboxId(e.target.value);
+                    setCleanupPreview(null);
+                  }}
+                  style={{ width: 240 }}
+                >
+                  <option value="">— выберите —</option>
+                  {(cleanupSandboxesQ.data ?? []).map((sandbox) => (
+                    <option key={sandbox.id} value={sandbox.id}>
+                      {sandbox.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <label style={{ display: "grid", gap: 6 }}>
               <span className="muted">ID события</span>
               <input value={cleanupEventId} onChange={(e) => { setCleanupEventId(e.target.value); setCleanupPreview(null); }} placeholder="опционально" style={{ width: 240 }} />
@@ -218,7 +269,7 @@ export function AdminView(props: { permissions: string[] }) {
               <span className="muted">по</span>
               <input type="date" value={cleanupTo} onChange={(e) => { setCleanupTo(e.target.value); setCleanupPreview(null); }} />
             </label>
-            <button className="btn" disabled={!cleanupHasFilters || cleanupPreviewM.isPending} onClick={() => cleanupPreviewM.mutate()}>
+            <button className="btn" disabled={!cleanupTargetReady || !cleanupHasFilters || cleanupPreviewM.isPending} onClick={() => cleanupPreviewM.mutate()}>
               Предпросмотр
             </button>
           </div>
@@ -257,7 +308,7 @@ export function AdminView(props: { permissions: string[] }) {
                         <strong>{item.title}</strong>
                         <div className="muted" style={{ fontSize: 12 }}>{item.id}</div>
                       </td>
-                      <td>{item.aircraft?.tailNumber ?? "—"}</td>
+                      <td>{item.aircraft?.tailNumber ?? item.virtualAircraft?.label ?? "—"}</td>
                       <td>{item.eventType?.name ?? "—"}</td>
                       <td>
                         {new Date(item.startAt).toLocaleString("ru-RU")}
@@ -271,7 +322,7 @@ export function AdminView(props: { permissions: string[] }) {
               <div className="row" style={{ alignItems: "flex-end" }}>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span className="muted">Причина</span>
-                  <input value={cleanupReason} onChange={(e) => setCleanupReason(e.target.value)} placeholder="Очистка рабочего контура" style={{ width: 320 }} />
+                  <input value={cleanupReason} onChange={(e) => setCleanupReason(e.target.value)} placeholder={`Очистка ${cleanupTargetLabel}`} style={{ width: 320 }} />
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span className="muted">Пароль текущего пользователя</span>
@@ -281,7 +332,7 @@ export function AdminView(props: { permissions: string[] }) {
                   className="btn btnDanger"
                   disabled={cleanupPreview.total === 0 || !cleanupPassword || cleanupApplyM.isPending}
                   onClick={() => {
-                    if (!confirm(`Перевести в статус «Удалено» ${cleanupPreview.total} событий рабочего контура?`)) return;
+                    if (!confirm(`Перевести в статус «Удалено» ${cleanupPreview.total} событий ${cleanupTargetLabel}?`)) return;
                     cleanupApplyM.mutate();
                   }}
                 >
