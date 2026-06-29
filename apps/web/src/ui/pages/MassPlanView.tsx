@@ -239,7 +239,7 @@ export function MassPlanView() {
       endTo: dayjs(row.endTo).endOf("day").toISOString(),
       titleTemplate: row.titleTemplate.trim() || undefined,
       scheduleMode: row.scheduleMode,
-      spacingHours: Math.max(0, Number(row.spacingHours) || 0),
+      spacingHours: Math.max(0, Number(row.spacingHours || spacingHours) || 0),
       cadenceHours: row.scheduleMode === "fixedCadence" ? Math.max(1, Number(row.cadenceHours) || 1) : undefined
     })),
     hangarIds: hangarPriority.length > 0 ? hangarPriority : undefined,

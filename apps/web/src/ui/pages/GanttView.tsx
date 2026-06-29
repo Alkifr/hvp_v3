@@ -1655,7 +1655,18 @@ export function GanttView() {
     if (!id) return null;
     return (aircraftQ.data ?? []).find((a) => a.id === id) ?? null;
   }, [draft?.aircraftId, aircraftQ.data]);
-  const selectedAircraftTypeId = selectedAircraft?.typeId ?? "";
+  const selectedDraftEvent = useMemo(() => {
+    if (!draft?.id) return null;
+    return events.find((ev) => ev.id === draft.id) ?? null;
+  }, [draft?.id, events]);
+  const selectedVirtualAircraft = selectedDraftEvent?.virtualAircraft ?? null;
+  const selectedVirtualOperatorName = selectedVirtualAircraft?.operatorId
+    ? ((operatorsQ.data ?? []).find((operator) => operator.id === selectedVirtualAircraft.operatorId)?.name ?? "—")
+    : "—";
+  const selectedVirtualAircraftType = selectedVirtualAircraft?.aircraftTypeId
+    ? ((aircraftTypesQ.data ?? []).find((type) => type.id === selectedVirtualAircraft.aircraftTypeId) ?? null)
+    : null;
+  const selectedAircraftTypeId = selectedAircraft?.typeId ?? selectedVirtualAircraft?.aircraftTypeId ?? "";
 
   // подтверждение изменения
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1899,7 +1910,8 @@ export function GanttView() {
   const saveEventM = useMutation({
     mutationFn: async () => {
       if (!draft) throw new Error("Нет данных формы");
-      if (!draft.aircraftId || !draft.eventTypeId) throw new Error("Заполните борт и тип события");
+      if (!draft.eventTypeId) throw new Error("Заполните тип события");
+      if (!draft.aircraftId && !selectedVirtualAircraft) throw new Error("Заполните борт");
       const startAt = dayjs(draft.startAtLocal).second(0).millisecond(0).toISOString();
       const endAt = dayjs(draft.endAtLocal).second(0).millisecond(0).toISOString();
       if (dayjs(endAt).valueOf() <= dayjs(startAt).valueOf()) throw new Error("Дата окончания должна быть позже начала");
@@ -1949,7 +1961,8 @@ export function GanttView() {
         status: draft.status,
         planningKind: draft.planningKind,
         title: draft.title,
-        aircraftId: draft.aircraftId,
+        ...(draft.aircraftId ? { aircraftId: draft.aircraftId } : {}),
+        ...(!draft.aircraftId && selectedVirtualAircraft ? { virtualAircraft: selectedVirtualAircraft } : {}),
         eventTypeId: draft.eventTypeId,
         startAt,
         endAt,
@@ -1986,6 +1999,21 @@ export function GanttView() {
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
       const histId = nextDraft?.id;
       if (histId) void qc.invalidateQueries({ queryKey: ["event-history", histId] });
+    }
+  });
+
+  const deleteEventM = useMutation({
+    mutationFn: async () => {
+      if (!draft?.id) throw new Error("Нет события");
+      return await apiDelete(`/api/events/${draft.id}`);
+    },
+    onSuccess: () => {
+      setEditorOpen(false);
+      setDraft(null);
+      setOriginal(null);
+      setCopyFromTitle(null);
+      setChangeReason("");
+      void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
     }
   });
 
@@ -4077,18 +4105,22 @@ export function GanttView() {
                   </label>
                   <label className="evField">
                     <span className="evFieldLabel">Борт</span>
-                    <select
-                      className="evInput"
-                      value={draft.aircraftId}
-                      onChange={(e) => setDraft({ ...draft, aircraftId: e.target.value })}
-                    >
-                      <option value="">— выберите —</option>
-                      {(aircraftQ.data ?? []).map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.tailNumber}
-                        </option>
-                      ))}
-                    </select>
+                    {selectedVirtualAircraft && !draft.aircraftId ? (
+                      <input className="evInput evInputReadonly" value={selectedVirtualAircraft.label ?? "—"} readOnly />
+                    ) : (
+                      <select
+                        className="evInput"
+                        value={draft.aircraftId}
+                        onChange={(e) => setDraft({ ...draft, aircraftId: e.target.value })}
+                      >
+                        <option value="">— выберите —</option>
+                        {(aircraftQ.data ?? []).map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.tailNumber}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </label>
                   <label className="evField">
                     <span className="evFieldLabel">Тип события</span>
@@ -4122,6 +4154,25 @@ export function GanttView() {
                           value={
                             selectedAircraft?.type
                               ? `${selectedAircraft.type.icaoType ? `${selectedAircraft.type.icaoType} • ` : ""}${selectedAircraft.type.name}`
+                              : "—"
+                          }
+                          readOnly
+                        />
+                      </label>
+                    </>
+                  ) : selectedVirtualAircraft ? (
+                    <>
+                      <label className="evField">
+                        <span className="evFieldLabel">Оператор</span>
+                        <input className="evInput evInputReadonly" value={selectedVirtualOperatorName} readOnly />
+                      </label>
+                      <label className="evField">
+                        <span className="evFieldLabel">Тип ВС</span>
+                        <input
+                          className="evInput evInputReadonly"
+                          value={
+                            selectedVirtualAircraftType
+                              ? `${selectedVirtualAircraftType.icaoType ? `${selectedVirtualAircraftType.icaoType} • ` : ""}${selectedVirtualAircraftType.name}`
                               : "—"
                           }
                           readOnly
@@ -4586,9 +4637,9 @@ export function GanttView() {
 
             <footer className="evFooter">
               <div className="evFooterInfo">
-                {saveEventM.error || reserveM.error || unreserveM.error ? (
+                {saveEventM.error || reserveM.error || unreserveM.error || deleteEventM.error ? (
                   <span className="error">
-                    {String((saveEventM.error ?? reserveM.error ?? unreserveM.error)?.message ?? "")}
+                    {String((saveEventM.error ?? reserveM.error ?? unreserveM.error ?? deleteEventM.error)?.message ?? "")}
                   </span>
                 ) : saveEventM.isPending ? (
                   <span className="muted">Сохраняем…</span>
@@ -4627,6 +4678,19 @@ export function GanttView() {
                     type="button"
                   >
                     Открыть в РМ ИТП
+                  </button>
+                ) : null}
+                {draft.id && activeSandbox ? (
+                  <button
+                    className="btn btnDanger"
+                    onClick={() => {
+                      if (!confirm(`Удалить событие «${draft.title}» из песочницы «${activeSandbox.name}»?`)) return;
+                      deleteEventM.mutate();
+                    }}
+                    disabled={!canEditEvents || deleteEventM.isPending}
+                    type="button"
+                  >
+                    {deleteEventM.isPending ? "Удаляем…" : "Удалить из песочницы"}
                   </button>
                 ) : null}
                 <button

@@ -71,6 +71,7 @@ type BuildPlacementsParams = {
   virtualLabel: (i: number) => string;
   standOrder: StandEntry[];
   busyByStand: Map<string, Array<{ start: number; end: number }>>;
+  layoutLocksByHangar: Map<string, Array<{ layoutId: string; start: number; end: number }>>;
   startFromMs: number;
   endToMs: number;
   tatMs: number;
@@ -151,6 +152,7 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
     virtualLabel,
     standOrder,
     busyByStand,
+    layoutLocksByHangar,
     startFromMs,
     endToMs,
     tatMs,
@@ -169,6 +171,10 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
   for (const [standId, busy] of busyByStand.entries()) {
     busyByStandWork.set(standId, [...busy].sort((a, b) => a.start - b.start));
   }
+  const layoutLocksWork = new Map<string, Array<{ layoutId: string; start: number; end: number }>>();
+  for (const [hangarId, locks] of layoutLocksByHangar.entries()) {
+    layoutLocksWork.set(hangarId, [...locks].sort((a, b) => a.start - b.start));
+  }
 
   const blockBefore = towBlocksStand ? towBeforeMs : 0;
   const blockAfter = towBlocksStand ? towAfterMs : 0;
@@ -182,6 +188,16 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
     });
     arr.sort((a, b) => a.start - b.start);
     busyByStandWork.set(standId, arr);
+  };
+  const addLayoutLock = (entry: StandEntry, start: number, end: number) => {
+    const arr = layoutLocksWork.get(entry.hangarId) ?? [];
+    arr.push({
+      layoutId: entry.layoutId,
+      start: towBlocksStand ? start - towBeforeMs : start,
+      end: towBlocksStand ? end + towAfterMs : end
+    });
+    arr.sort((a, b) => a.start - b.start);
+    layoutLocksWork.set(entry.hangarId, arr);
   };
 
   for (let i = 0; i < count; i++) {
@@ -198,7 +214,9 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
     let bestEntry: StandEntry | null = null;
 
     for (const entry of standOrder) {
-      const busy = busyByStandWork.get(entry.standId) ?? [];
+      const standBusy = busyByStandWork.get(entry.standId) ?? [];
+      const incompatibleLayoutLocks = (layoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
+      const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
       const slot =
         placementMode === "draftOnConflict"
           ? isEventStartFree(busy, intendedStart, tatMs, blockBefore, blockAfter)
@@ -261,6 +279,7 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
     );
     placements.push(placement);
     addBusy(bestEntry.standId, bestStart, endAt);
+    addLayoutLock(bestEntry, bestStart, endAt);
     if (scheduleMode !== "fixedCadence") nextSequentialStart = endAt + spacingMs;
   }
 
@@ -370,8 +389,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         },
         select: {
           standId: true,
+          layoutId: true,
           startAt: true,
           endAt: true,
+          layout: { select: { hangarId: true } },
           event: { select: { towSegments: { select: { startAt: true, endAt: true } } } }
         }
       })
@@ -428,17 +449,23 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const busyByStand = new Map<string, Array<{ start: number; end: number }>>();
+    const layoutLocksByHangar = new Map<string, Array<{ layoutId: string; start: number; end: number }>>();
     for (const r of reservations) {
       const arr = busyByStand.get(r.standId) ?? [];
       const towStarts = body.towBlocksStand ? r.event.towSegments.map((t) => t.startAt.getTime()) : [];
       const towEnds = body.towBlocksStand ? r.event.towSegments.map((t) => t.endAt.getTime()) : [];
-      arr.push({
-        start: Math.min(r.startAt.getTime(), ...towStarts),
-        end: Math.max(r.endAt.getTime(), ...towEnds)
-      });
+      const start = Math.min(r.startAt.getTime(), ...towStarts);
+      const end = Math.max(r.endAt.getTime(), ...towEnds);
+      arr.push({ start, end });
       busyByStand.set(r.standId, arr);
+      const locks = layoutLocksByHangar.get(r.layout.hangarId) ?? [];
+      locks.push({ layoutId: r.layoutId, start, end });
+      layoutLocksByHangar.set(r.layout.hangarId, locks);
     }
     for (const arr of busyByStand.values()) {
+      arr.sort((a, b) => a.start - b.start);
+    }
+    for (const arr of layoutLocksByHangar.values()) {
       arr.sort((a, b) => a.start - b.start);
     }
 
@@ -459,6 +486,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       virtualLabel,
       standOrder,
       busyByStand,
+      layoutLocksByHangar,
       startFromMs,
       endToMs,
       tatMs,
@@ -834,8 +862,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         },
         select: {
           standId: true,
+          layoutId: true,
           startAt: true,
           endAt: true,
+          layout: { select: { hangarId: true } },
           event: { select: { towSegments: { select: { startAt: true, endAt: true } } } }
         }
       }),
@@ -864,17 +894,21 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const busyByStand = new Map<string, Array<{ start: number; end: number }>>();
+    const layoutLocksByHangar = new Map<string, Array<{ layoutId: string; start: number; end: number }>>();
     for (const reservation of reservations) {
       const arr = busyByStand.get(reservation.standId) ?? [];
       const towStarts = body.towBlocksStand ? reservation.event.towSegments.map((t) => t.startAt.getTime()) : [];
       const towEnds = body.towBlocksStand ? reservation.event.towSegments.map((t) => t.endAt.getTime()) : [];
-      arr.push({
-        start: Math.min(reservation.startAt.getTime(), ...towStarts),
-        end: Math.max(reservation.endAt.getTime(), ...towEnds)
-      });
+      const start = Math.min(reservation.startAt.getTime(), ...towStarts);
+      const end = Math.max(reservation.endAt.getTime(), ...towEnds);
+      arr.push({ start, end });
       busyByStand.set(reservation.standId, arr);
+      const locks = layoutLocksByHangar.get(reservation.layout.hangarId) ?? [];
+      locks.push({ layoutId: reservation.layoutId, start, end });
+      layoutLocksByHangar.set(reservation.layout.hangarId, locks);
     }
     for (const arr of busyByStand.values()) arr.sort((a, b) => a.start - b.start);
+    for (const arr of layoutLocksByHangar.values()) arr.sort((a, b) => a.start - b.start);
 
     const standMeta = new Map<string, { aircraftTypeIds: string[] }>();
     for (const layout of layoutsWithStands) {
@@ -898,11 +932,19 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
 
     const busyWork = new Map<string, Array<{ start: number; end: number }>>();
     for (const [standId, busy] of busyByStand.entries()) busyWork.set(standId, [...busy]);
+    const layoutLocksWork = new Map<string, Array<{ layoutId: string; start: number; end: number }>>();
+    for (const [hangarId, locks] of layoutLocksByHangar.entries()) layoutLocksWork.set(hangarId, [...locks]);
     const addBusy = (standId: string, start: number, end: number) => {
       const arr = busyWork.get(standId) ?? [];
       arr.push({ start: body.towBlocksStand ? start - towBeforeMs : start, end: body.towBlocksStand ? end + towAfterMs : end });
       arr.sort((a, b) => a.start - b.start);
       busyWork.set(standId, arr);
+    };
+    const addLayoutLock = (entry: StandEntry, start: number, end: number) => {
+      const arr = layoutLocksWork.get(entry.hangarId) ?? [];
+      arr.push({ layoutId: entry.layoutId, start: body.towBlocksStand ? start - towBeforeMs : start, end: body.towBlocksStand ? end + towAfterMs : end });
+      arr.sort((a, b) => a.start - b.start);
+      layoutLocksWork.set(entry.hangarId, arr);
     };
 
     const placementsPreview: Array<PlacementPreview & { rowIndex: number; itemIndex: number; operatorId: string; aircraftTypeId: string; eventTypeId: string }> = [];
@@ -945,7 +987,9 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         let bestStart: number | null = null;
         let bestEntry: StandEntry | null = null;
         for (const entry of compatible) {
-          const busy = busyWork.get(entry.standId) ?? [];
+          const standBusy = busyWork.get(entry.standId) ?? [];
+          const incompatibleLayoutLocks = (layoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
+          const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
           const slot =
             body.placementMode === "draftOnConflict"
               ? isEventStartFree(busy, intendedStart, tatMs, blockBefore, blockAfter)
@@ -1014,6 +1058,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         ) as PlacementPreview & { rowIndex: number; itemIndex: number; operatorId: string; aircraftTypeId: string; eventTypeId: string };
         placementsPreview.push(placement);
         addBusy(bestEntry.standId, bestStart, endAt);
+        addLayoutLock(bestEntry, bestStart, endAt);
         if (item.scheduleMode !== "fixedCadence") nextStartByItem.set(itemIndex, endAt + spacingMs);
       }
     }
@@ -1068,6 +1113,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       const eventRows: Prisma.MaintenanceEventCreateManyInput[] = [];
       const placementRows: Prisma.EventPlacementCreateManyInput[] = [];
       const reservationRows: Prisma.StandReservationCreateManyInput[] = [];
+      const towRows: Prisma.EventTowCreateManyInput[] = [];
 
       for (const p of placementsPreview) {
         const eventId = randomUUID();
@@ -1116,6 +1162,12 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           startAt,
           endAt
         });
+        if (p.towBeforeStartAt != null && p.towBeforeEndAt != null) {
+          towRows.push({ eventId, sandboxId: sbId, startAt: new Date(p.towBeforeStartAt), endAt: new Date(p.towBeforeEndAt) });
+        }
+        if (p.towAfterStartAt != null && p.towAfterEndAt != null) {
+          towRows.push({ eventId, sandboxId: sbId, startAt: new Date(p.towAfterStartAt), endAt: new Date(p.towAfterEndAt) });
+        }
         created.push({ eventId, label: p.label, title: p.title, startAt, endAt, hangarId: p.hangarId, layoutId: p.layoutId, standId: p.standId, status: EventStatus.PLANNED });
       }
 
@@ -1149,6 +1201,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       if (eventRows.length > 0) await tx.maintenanceEvent.createMany({ data: eventRows });
       if (placementRows.length > 0) await tx.eventPlacement.createMany({ data: placementRows });
       if (reservationRows.length > 0) await tx.standReservation.createMany({ data: reservationRows });
+      if (towRows.length > 0) await tx.eventTow.createMany({ data: towRows });
 
         return created;
       },
