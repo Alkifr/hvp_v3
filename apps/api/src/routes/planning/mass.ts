@@ -301,7 +301,6 @@ const BODY_TYPE_SCORE_FALLBACK: Record<"NARROW_BODY" | "WIDE_BODY", number> = {
 const NARROW_BODY_ON_WIDE_CAPABLE_STAND_PENALTY = -75;
 const OR_TOOLS_SOLVER_TIME_LIMIT_SECONDS = 5;
 const OR_TOOLS_FULL_SOLVER_TIME_LIMIT_SECONDS = 45;
-const OR_TOOLS_SEQUENTIAL_TIME_LIMIT_SECONDS = 2;
 const OR_TOOLS_MAX_OPTIMIZED_JOBS = 420;
 const OR_TOOLS_SCHEDULING_MAX_STANDS_PER_JOB = 24;
 const OR_TOOLS_SCHEDULING_LARGE_BATCH_MAX_STANDS_PER_JOB = 8;
@@ -718,8 +717,7 @@ function addTowFields<T extends Omit<PlacementPreview, "towBeforeStartAt" | "tow
   placement: T,
   towBeforeMs: number,
   towAfterMs: number,
-  startFromMs: number,
-  endToMs: number
+  startFromMs: number
 ): T & PlacementPreview {
   const next = { ...placement } as T & PlacementPreview;
   if (towBeforeMs > 0) {
@@ -809,8 +807,7 @@ function buildBatchPlacement(
     },
     towBeforeMs,
     towAfterMs,
-    job.startFromMs,
-    job.endToMs
+    job.startFromMs
   ) as BatchPlacementPreview;
 }
 
@@ -953,8 +950,7 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
       },
       towBeforeMs,
       towAfterMs,
-      startFromMs,
-      endToMs
+      startFromMs
     );
     placements.push(placement);
     addBusy(bestEntry.standId, bestStart, endAt);
@@ -2005,123 +2001,6 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           assignmentCount: 0,
           layoutPairChecks: 0,
           heuristicOnlyJobs: jobs.length,
-          placements,
-          unplaced,
-          candidateMetaByJob
-        })
-      };
-    };
-
-    const runSequentialOrToolsSolver = async (
-      solverMode: BatchSolverMode,
-      optimizedJobs: BatchPlanningJob[],
-      heuristicOnlyJobs: BatchPlanningJob[],
-      useHeuristicFallback: boolean
-    ): Promise<BatchSolverResult> => {
-      const placements: BatchPlacementPreview[] = [];
-      const unplaced: BatchUnplacedPreview[] = [];
-      const localBusyWork = new Map<string, Array<{ start: number; end: number }>>();
-      for (const [standId, busy] of busyByStand.entries()) localBusyWork.set(standId, [...busy]);
-      const localLayoutLocksWork = new Map<string, Array<{ layoutId: string; start: number; end: number }>>();
-      for (const [hangarId, locks] of layoutLocksByHangar.entries()) localLayoutLocksWork.set(hangarId, [...locks]);
-      const candidateMetaByJob = new Map<number, ReturnType<typeof selectOrToolsCandidateEntries>>();
-
-      const addLocalBusy = (standId: string, start: number, end: number) => {
-        const arr = localBusyWork.get(standId) ?? [];
-        arr.push({ start: body.towBlocksStand ? start - towBeforeMs : start, end: body.towBlocksStand ? end + towAfterMs : end });
-        arr.sort((a, b) => a.start - b.start);
-        localBusyWork.set(standId, arr);
-      };
-      const addLocalLayoutLock = (entry: StandEntry, start: number, end: number) => {
-        const arr = localLayoutLocksWork.get(entry.hangarId) ?? [];
-        arr.push({ layoutId: entry.layoutId, start: body.towBlocksStand ? start - towBeforeMs : start, end: body.towBlocksStand ? end + towAfterMs : end });
-        arr.sort((a, b) => a.start - b.start);
-        localLayoutLocksWork.set(entry.hangarId, arr);
-      };
-      const markUnplaced = (job: BatchPlanningJob, warning: string) => {
-        const scoreSummary = unplacedScoreSummary(job, { busyByStand: localBusyWork, layoutLocksByHangar: localLayoutLocksWork, blockBefore, blockAfter });
-        const intendedStartAt = batchJobIntendedStartMs(job);
-        const draftStartAt = batchJobDraftStartMs(job, intendedStartAt);
-        unplaced.push({
-          index: job.flatIndex,
-          rowIndex: job.rowIndex,
-          itemIndex: job.itemIndex,
-          operatorId: job.operatorId,
-          aircraftTypeId: job.aircraftTypeId,
-          eventTypeId: job.eventTypeId,
-          title: job.title,
-          label: job.label,
-          intendedStartAt: draftStartAt,
-          warnings: draftStartAt === intendedStartAt ? [warning] : [warning, "Время черновика назначено внутри выбранного периода"],
-          ...scoreSummary
-        });
-      };
-      const placeHeuristically = (job: BatchPlanningJob) => {
-        const intendedStart = batchJobIntendedStartMs(job);
-        const decisionCtx = { busyByStand: localBusyWork, layoutLocksByHangar: localLayoutLocksWork, blockBefore, blockAfter };
-        candidateMetaByJob.set(job.flatIndex, selectOrToolsCandidateEntries(job, decisionCtx, OR_TOOLS_SCHEDULING_MAX_STANDS_PER_JOB));
-        const picked = pickBestPlacementCandidate(job.compatibleEntries, (entry) => {
-          const standBusy = localBusyWork.get(entry.standId) ?? [];
-          const incompatibleLayoutLocks = (localLayoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
-          const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
-          const slot = findFirstEventStart(busy, intendedStart, job.tatMs, job.endToMs, blockBefore, blockAfter);
-          if (slot == null || slot > job.endToMs) return null;
-          return slot;
-        });
-        if (picked != null) {
-          const endAt = picked.slot + job.tatMs;
-          placements.push(buildBatchPlacement(job, picked.entry, picked.slot, towBeforeMs, towAfterMs));
-          addLocalBusy(picked.entry.standId, picked.slot, endAt);
-          addLocalLayoutLock(picked.entry, picked.slot, endAt);
-          return;
-        }
-        markUnplaced(job, "Не найден свободный слот в выбранном периоде");
-      };
-
-      for (const job of [...optimizedJobs].sort((a, b) => a.flatIndex - b.flatIndex)) {
-        const intendedStart = batchJobIntendedStartMs(job);
-        const decisionCtx = { busyByStand: localBusyWork, layoutLocksByHangar: localLayoutLocksWork, blockBefore, blockAfter };
-        candidateMetaByJob.set(job.flatIndex, selectOrToolsCandidateEntries(job, decisionCtx, OR_TOOLS_SCHEDULING_MAX_STANDS_PER_JOB));
-        const picked = pickBestPlacementCandidate(job.compatibleEntries, (entry) => {
-          const standBusy = localBusyWork.get(entry.standId) ?? [];
-          const incompatibleLayoutLocks = (localLayoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
-          const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
-          const slot = findFirstEventStart(busy, intendedStart, job.tatMs, job.endToMs, blockBefore, blockAfter);
-          if (slot == null || slot > job.endToMs) return null;
-          return slot;
-        });
-        if (picked == null) {
-          markUnplaced(job, "OR-Tools (последовательный): не найден свободный слот");
-          continue;
-        }
-        const endAt = picked.slot + job.tatMs;
-        placements.push(buildBatchPlacement(job, picked.entry, picked.slot, towBeforeMs, towAfterMs));
-        addLocalBusy(picked.entry.standId, picked.slot, endAt);
-        addLocalLayoutLock(picked.entry, picked.slot, endAt);
-      }
-
-      for (const job of heuristicOnlyJobs) {
-        if (useHeuristicFallback) placeHeuristically(job);
-        else markUnplaced(job, "Событие не передавалось в OR-Tools");
-      }
-
-      placements.sort((a, b) => a.index - b.index);
-      unplaced.sort((a, b) => a.index - b.index);
-      const optimizedJobIds = new Set(optimizedJobs.map((job) => job.flatIndex));
-      return {
-        placements,
-        unplaced,
-        solver: "heuristic",
-        fallbackReason: `Аварийный последовательный fallback (${optimizedJobs.length} событий)`,
-        diagnostics: assembleDiagnostics({
-          solverMode,
-          solverEngine: "heuristic",
-          solverStatus: "SEQUENTIAL_FALLBACK",
-          fallbackReason: "Аварийный последовательный fallback",
-          optimizedJobIds,
-          assignmentCount: 0,
-          layoutPairChecks: 0,
-          heuristicOnlyJobs: heuristicOnlyJobs.length,
           placements,
           unplaced,
           candidateMetaByJob
