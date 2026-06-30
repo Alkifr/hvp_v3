@@ -10,6 +10,89 @@ type Hangar = { id: string; name: string; code: string };
 type Operator = { id: string; name: string; code: string };
 type AircraftType = { id: string; name: string; icaoType?: string | null; bodyType?: string | null };
 type EventType = { id: string; name: string; code: string };
+type BatchSolverMode = "ortools" | "hybrid" | "heuristic";
+
+type SolverDiagnostics = {
+  solverMode: BatchSolverMode;
+  solverEngine: "heuristic" | "ortools";
+  solverStatus: string | null;
+  fallbackReason: string | null;
+  optimizedJobs: number;
+  heuristicOnlyJobs: number;
+  assignmentCount: number;
+  layoutPairChecks: number;
+  jobs: Array<{
+    flatIndex: number;
+    label: string;
+    title: string;
+    aircraftType: string;
+    eventType: string;
+    scheduleMode: string;
+    periodFrom: string;
+    periodTo: string;
+    tatHours: number;
+    intendedStartAt: string;
+    compatibleStandsTotal: number;
+    feasibleStandsTotal: number;
+    orToolsCandidates: number;
+    sentToOrTools: boolean;
+    placed: boolean;
+    placementHangar: string | null;
+    placementStand: string | null;
+    placementScore: number | null;
+    bestCandidateScore: number | null;
+    bestFreeCandidateScore: number | null;
+    selectedCandidateRank: number | null;
+    betterFreeCandidates: number;
+    decisionReason: string;
+    topAlternatives: string;
+    solverOutcome: string;
+    unplacedReason: string | null;
+  }>;
+  standCandidates: Array<{
+    flatIndex: number;
+    label: string;
+    hangarName: string;
+    layoutName: string;
+    standCode: string;
+    priorityScore: number;
+    slotInWindow: boolean;
+    firstFreeAt: string | null;
+    inOrToolsModel: boolean;
+    excludedReason: string | null;
+    orToolsSelected: boolean | null;
+    layoutLockBlocks: boolean;
+    standBusyBlocksInWindow: number;
+  }>;
+  layoutSwitchSuggestions: Array<{
+    eventId: string;
+    eventTitle: string;
+    aircraftLabel: string;
+    hangarName: string;
+    fromLayoutName: string;
+    fromStandCode: string;
+    toLayoutName: string;
+    toStandCode: string;
+    startAt: string;
+    endAt: string;
+    unlocksLayoutName: string;
+    note: string;
+  }>;
+  alternativeScenarios: Array<{
+    scenarioId: string;
+    scenarioType: "layout_switch";
+    hangarName: string;
+    targetLayoutName: string;
+    feasible: boolean;
+    requiredMoves: number;
+    additionalPlacements: number;
+    affectedEvents: string;
+    unlockedJobs: string;
+    score: number;
+    reason: string;
+    moves: string;
+  }>;
+};
 
 type MassPreview = {
   ok: boolean;
@@ -38,15 +121,27 @@ type MassPreview = {
     score?: number;
     scoreDetails?: string[];
   }>;
-  unplaced: Array<{ index: number; title: string; label: string; intendedStartAt?: string; warnings?: string[] }>;
+  unplaced: Array<{
+    index: number;
+    title: string;
+    label: string;
+    intendedStartAt?: string;
+    warnings?: string[];
+    bestCandidateScore?: number;
+    bestFreeCandidateScore?: number;
+    bestCandidateDetails?: string[];
+  }>;
   summary: {
     total: number;
     placed: number;
     unplaced: number;
     createdTowsBefore?: number;
     createdTowsAfter?: number;
+    solver?: "heuristic" | "ortools";
+    solverFallbackReason?: string | null;
     draftOnConflict?: boolean;
   };
+  solverDiagnostics?: SolverDiagnostics | null;
 };
 
 type MassResult = {
@@ -55,6 +150,8 @@ type MassResult = {
   created: number;
   placed: number;
   unplaced: number;
+  solver?: "heuristic" | "ortools";
+  solverFallbackReason?: string | null;
   events: Array<{
     eventId: string;
     label: string;
@@ -124,24 +221,142 @@ function parseImportDate(value: unknown, fallback: string): string {
     if (parsed) return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
   }
   const raw = String(value ?? "").trim();
-  const iso = raw.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  const datePart = raw.split(/[ T]/)[0] ?? raw;
+  const iso = datePart.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
   if (iso) return `${iso[1]}-${iso[2]!.padStart(2, "0")}-${iso[3]!.padStart(2, "0")}`;
-  const ru = raw.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2,4})$/);
+  const ru = datePart.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2,4})$/);
   if (ru) {
     const year = ru[3]!.length === 2 ? `20${ru[3]}` : ru[3]!;
-    return `${year}-${ru[2]!.padStart(2, "0")}-${ru[1]!.padStart(2, "0")}`;
+    const day = Number(ru[1]);
+    const month = Number(ru[2]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
   }
-  const dashed = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
+  const dashed = datePart.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
   if (dashed) {
     const [, a, b, c] = dashed;
     const year = c!.length === 2 ? `20${c}` : c!;
     const first = Number(a);
     const second = Number(b);
-    if (first > 12 || second <= 12) return `${year}-${b!.padStart(2, "0")}-${a!.padStart(2, "0")}`;
-    return `${year}-${a!.padStart(2, "0")}-${b!.padStart(2, "0")}`;
+    if (first > 12) return `${year}-${String(second).padStart(2, "0")}-${String(first).padStart(2, "0")}`;
+    if (second > 12) return `${year}-${String(second).padStart(2, "0")}-${String(first).padStart(2, "0")}`;
+    return `${year}-${String(second).padStart(2, "0")}-${String(first).padStart(2, "0")}`;
   }
-  const parsed = dayjs(raw);
+  const parsed = dayjs(datePart, ["DD.MM.YYYY", "D.M.YYYY", "YYYY-MM-DD"], true);
   return parsed.isValid() ? parsed.format("YYYY-MM-DD") : fallback;
+}
+
+function exportSolverDiagnosticsXlsx(diagnostics: SolverDiagnostics) {
+  const summaryRows = [
+    { Параметр: "Режим solver", Значение: diagnostics.solverMode },
+    { Параметр: "Движок", Значение: diagnostics.solverEngine },
+    { Параметр: "Статус OR-Tools", Значение: diagnostics.solverStatus ?? "—" },
+    { Параметр: "Fallback", Значение: diagnostics.fallbackReason ?? "—" },
+    { Параметр: "Событий в OR-Tools", Значение: diagnostics.optimizedJobs },
+    { Параметр: "Событий только эвристика", Значение: diagnostics.heuristicOnlyJobs },
+    { Параметр: "Event-stand интервалов", Значение: diagnostics.assignmentCount },
+    { Параметр: "Layout-конфликтов", Значение: diagnostics.layoutPairChecks }
+  ];
+  const jobRows = diagnostics.jobs.map((job) => ({
+    "№": job.flatIndex + 1,
+    "Вирт. борт": job.label,
+    Название: job.title,
+    "Тип ВС": job.aircraftType,
+    "Тип события": job.eventType,
+    Режим: job.scheduleMode,
+    "Период с": dayjs(job.periodFrom).format("DD.MM.YYYY HH:mm"),
+    "Период по": dayjs(job.periodTo).format("DD.MM.YYYY HH:mm"),
+    "TAT, ч": job.tatHours,
+    "Плановое начало": dayjs(job.intendedStartAt).format("DD.MM.YYYY HH:mm"),
+    "Совместимых стоянок": job.compatibleStandsTotal,
+    "Свободных в окне": job.feasibleStandsTotal,
+    "Кандидатов OR-Tools": job.orToolsCandidates,
+    "В OR-Tools": job.sentToOrTools ? "да" : "нет",
+    Размещено: job.placed ? "да" : "нет",
+    "Ангар (факт)": job.placementHangar ?? "—",
+    "Стоянка (факт)": job.placementStand ?? "—",
+    "Score размещения": job.placementScore ?? "—",
+    "Лучший совместимый score": job.bestCandidateScore ?? "—",
+    "Лучший свободный score": job.bestFreeCandidateScore ?? "—",
+    "Ранг выбранного кандидата": job.selectedCandidateRank ?? "—",
+    "Свободных кандидатов лучше": job.betterFreeCandidates,
+    "Почему принято решение": job.decisionReason,
+    "Топ альтернатив": job.topAlternatives || "—",
+    "Итог solver": job.solverOutcome,
+    "Причина черновика": job.unplacedReason ?? "—"
+  }));
+  const decisionRows = diagnostics.jobs.map((job) => ({
+    "№": job.flatIndex + 1,
+    "Вирт. борт": job.label,
+    Название: job.title,
+    Размещено: job.placed ? "да" : "нет",
+    "Ангар": job.placementHangar ?? "—",
+    "Стоянка": job.placementStand ?? "—",
+    "Score размещения": job.placementScore ?? "—",
+    "Лучший свободный score": job.bestFreeCandidateScore ?? "—",
+    "Ранг выбранного кандидата": job.selectedCandidateRank ?? "—",
+    "Свободных кандидатов лучше": job.betterFreeCandidates,
+    "Почему принято решение": job.decisionReason,
+    "Топ альтернатив": job.topAlternatives || "—",
+    "Итог solver": job.solverOutcome,
+    "Причина черновика": job.unplacedReason ?? "—"
+  }));
+  const candidateRows = diagnostics.standCandidates.map((row) => ({
+    "№ события": row.flatIndex + 1,
+    "Вирт. борт": row.label,
+    Ангар: row.hangarName,
+    "Схема (layout)": row.layoutName,
+    Стоянка: row.standCode,
+    Приоритет: row.priorityScore,
+    "Слот в окне": row.slotInWindow ? "да" : "нет",
+    "Первый свободный слот": row.firstFreeAt ? dayjs(row.firstFreeAt).format("DD.MM.YYYY HH:mm") : "—",
+    "В модели OR-Tools": row.inOrToolsModel ? "да" : "нет",
+    "Причина исключения": row.excludedReason ?? "—",
+    "OR-Tools выбрал": row.orToolsSelected == null ? "—" : row.orToolsSelected ? "да" : "нет",
+    "Блокировка схемой": row.layoutLockBlocks ? "да" : "нет",
+    "Занятостей на стоянке": row.standBusyBlocksInWindow
+  }));
+  const layoutSwitchRows = (diagnostics.layoutSwitchSuggestions ?? []).map((row) => ({
+    Борт: row.aircraftLabel,
+    Событие: row.eventTitle,
+    Ангар: row.hangarName,
+    "Схема сейчас": row.fromLayoutName,
+    "Стоянка сейчас": row.fromStandCode,
+    "Предложить схему": row.toLayoutName,
+    "Предложить стоянку": row.toStandCode,
+    "Освободит схему": row.unlocksLayoutName,
+    "Начало": dayjs(row.startAt).format("DD.MM.YYYY HH:mm"),
+    "Окончание": dayjs(row.endAt).format("DD.MM.YYYY HH:mm"),
+    Комментарий: row.note
+  }));
+  const alternativeRows = (diagnostics.alternativeScenarios ?? []).map((row, idx) => ({
+    "№ варианта": idx + 1,
+    "Тип": row.scenarioType === "layout_switch" ? "Смена схемы ангара" : row.scenarioType,
+    Ангар: row.hangarName,
+    "Целевая схема": row.targetLayoutName,
+    Допустим: row.feasible ? "да" : "нет",
+    "Нужно переносов": row.requiredMoves,
+    "Доп. размещений": row.additionalPlacements,
+    Score: row.score,
+    "Причина / эффект": row.reason,
+    "Какие черновики может открыть": row.unlockedJobs || "—",
+    "Затронутые существующие события": row.affectedEvents || "—",
+    "Предлагаемые переносы": row.moves || "—"
+  }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "Сводка");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(jobRows), "События");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(decisionRows), "Решения");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(candidateRows), "Кандидаты");
+  if (alternativeRows.length > 0) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(alternativeRows), "Альтернативы");
+  }
+  if (layoutSwitchRows.length > 0) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(layoutSwitchRows), "Смена схем");
+  }
+  XLSX.writeFile(wb, `mass-plan-solver-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`);
 }
 
 export function MassPlanView() {
@@ -168,6 +383,7 @@ export function MassPlanView() {
   const [towAfterMinutes, setTowAfterMinutes] = useState(0);
   const [towBlocksStand, setTowBlocksStand] = useState(false);
   const [inputMode, setInputMode] = useState<"single" | "batch">("single");
+  const [batchSolverMode, setBatchSolverMode] = useState<BatchSolverMode>("ortools");
   const [batchRows, setBatchRows] = useState<BatchRow[]>([]);
   const [batchImportError, setBatchImportError] = useState<string | null>(null);
   const [preview, setPreview] = useState<MassPreview | null>(null);
@@ -210,7 +426,8 @@ export function MassPlanView() {
     actualEndAt: fromInputLocalOptional(actualEndAtLocal),
     towBeforeMinutes: Math.max(0, Math.min(24 * 60, Number(towBeforeMinutes) || 0)),
     towAfterMinutes: Math.max(0, Math.min(24 * 60, Number(towAfterMinutes) || 0)),
-    towBlocksStand
+    towBlocksStand,
+    solverMode: batchSolverMode
   });
 
   const newBatchRow = (): BatchRow => ({
@@ -280,7 +497,16 @@ export function MassPlanView() {
   const eventTypes = eventTypesQ.data ?? [];
   const hangarById = new Map(hangars.map((h) => [h.id, h]));
   const availableHangarIds = hangars.map((h) => h.id).filter((id) => !hangarPriority.includes(id));
+  const decisionByIndex = new Map((preview?.solverDiagnostics?.jobs ?? []).map((job) => [job.flatIndex, job]));
   const isBatchReady = batchRows.length > 0 && batchRows.every((row) => row.operatorId && row.aircraftTypeId && row.eventTypeId && row.startFrom && row.endTo);
+  const plannedEventsCount = inputMode === "batch" ? batchRows.reduce((sum, row) => sum + row.count, 0) : count;
+  const isCalculating = previewM.isPending || applyM.isPending;
+  const calculationTitle = applyM.isPending ? "Создание событий" : "Расчёт размещения";
+  const calculationText = applyM.isPending
+    ? `Создаём ${plannedEventsCount} событий и резервов. Не закрывайте страницу до завершения.`
+    : inputMode === "batch"
+      ? `Анализируем ${batchRows.length} строк и ${plannedEventsCount} событий. Режим solver: ${batchSolverMode === "ortools" ? "только OR-Tools" : batchSolverMode === "hybrid" ? "гибрид" : "эвристика"}.`
+      : `Подбираем места для ${plannedEventsCount} событий.`;
 
   const handlePreview = (e: React.FormEvent) => {
     e.preventDefault();
@@ -318,6 +544,12 @@ export function MassPlanView() {
     from && to ? `${dayjs(from).format("DD.MM HH:mm")} → ${dayjs(to).format("DD.MM HH:mm")}` : "—";
 
   const formatPeriod = (from?: string | null, to?: string | null) => formatRange(from ?? undefined, to ?? undefined);
+
+  const solverLabel = (solver?: string | null) => (solver === "ortools" ? "OR-Tools" : solver === "heuristic" ? "Эвристика" : "—");
+  const solverFallbackText = (solver?: string | null, reason?: string | null) => {
+    if (!reason) return null;
+    return solver === "ortools" ? reason : `Использована эвристика: ${reason}`;
+  };
 
   const updateBatchRow = (id: string, patch: Partial<BatchRow>) => {
     setBatchRows((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
@@ -507,12 +739,13 @@ export function MassPlanView() {
               />
             </label>
             <label className="massField">
-              <span className="muted">Конец периода</span>
+              <span className="muted">Конец периода (крайний старт)</span>
               <input
                 type="date"
                 value={endTo}
                 onChange={(e) => setEndTo(e.target.value)}
               />
+              <span className="muted massFieldHint">Событие может заканчиваться позже этой даты</span>
             </label>
             <label className="massField massFieldWide">
               <span className="muted">Шаблон названия (опц., % = номер)</span>
@@ -590,7 +823,7 @@ export function MassPlanView() {
                           <input type="date" value={row.startFrom} onChange={(e) => updateBatchRow(row.id, { startFrom: e.target.value })} />
                         </label>
                         <label className="massField">
-                          <span className="muted">Конец периода</span>
+                          <span className="muted">Конец периода (крайний старт)</span>
                           <input type="date" value={row.endTo} onChange={(e) => updateBatchRow(row.id, { endTo: e.target.value })} />
                         </label>
                         <label className="massField massBatchTitleField">
@@ -686,6 +919,24 @@ export function MassPlanView() {
                   <option value="draftOnConflict">Создавать черновик, если целевой слот занят</option>
                 </select>
               </label>
+
+              {inputMode === "batch" ? (
+                <label className="massField">
+                  <span className="muted">Solver для batch</span>
+                  <select
+                    value={batchSolverMode}
+                    onChange={(e) => {
+                      setBatchSolverMode(e.target.value as BatchSolverMode);
+                      setPreview(null);
+                      setResult(null);
+                    }}
+                  >
+                    <option value="ortools">Только OR-Tools</option>
+                    <option value="hybrid">OR-Tools + эвристика</option>
+                    <option value="heuristic">Только эвристика</option>
+                  </select>
+                </label>
+              ) : null}
 
               <label className="massField">
                 <span className="muted">Бюджетное начало</span>
@@ -801,6 +1052,22 @@ export function MassPlanView() {
               <span className="error">{String((previewM.error as Error)?.message ?? (applyM.error as Error)?.message)}</span>
             )}
           </div>
+          {isCalculating && (
+            <div className="massCalculationPanel" role="status" aria-live="polite">
+              <div className="massCalculationIcon" aria-hidden="true" />
+              <div className="massCalculationText">
+                <strong>{calculationTitle}</strong>
+                <span>{calculationText}</span>
+              </div>
+              <div className="massCalculationMeta">
+                <span>{plannedEventsCount} событий</span>
+                {inputMode === "batch" ? <span>{batchRows.length} строк</span> : null}
+              </div>
+              <div className="massProgressTrack" aria-hidden="true">
+                <div className="massProgressBar" />
+              </div>
+            </div>
+          )}
         </form>
       </div>
 
@@ -815,8 +1082,49 @@ export function MassPlanView() {
               <span><b>{preview.summary.placed}</b> размещено</span>
               <span><b>{preview.summary.unplaced}</b> черновиков</span>
               <span><b>{(preview.summary.createdTowsBefore ?? 0) + (preview.summary.createdTowsAfter ?? 0)}</b> буксировок</span>
+              <span><b>{solverLabel(preview.summary.solver)}</b> solver</span>
+              {preview.solverDiagnostics?.solverStatus ? <span><b>{preview.solverDiagnostics.solverStatus}</b> статус</span> : null}
             </div>
           </div>
+          {preview.summary.solverFallbackReason ? (
+            <div className="massSolverNotice">
+              {solverFallbackText(preview.summary.solver, preview.summary.solverFallbackReason)}
+            </div>
+          ) : null}
+          {preview.solverDiagnostics?.alternativeScenarios?.length ? (
+            <div className="massDraftBox">
+              <strong>Альтернативные варианты решения (решение за пользователем)</strong>
+              <p className="muted">
+                Сценарии показывают, какие ограничения можно снять и сколько черновиков потенциально разместится после изменения схемы.
+              </p>
+              <div className="massTableWrap">
+                <table className="massTable">
+                  <thead>
+                    <tr>
+                      <th>Ангар</th>
+                      <th>Целевая схема</th>
+                      <th>Доп. размещений</th>
+                      <th>Переносов</th>
+                      <th>Score</th>
+                      <th>Объяснение</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.solverDiagnostics.alternativeScenarios.map((row) => (
+                      <tr key={row.scenarioId}>
+                        <td>{row.hangarName}</td>
+                        <td>{row.targetLayoutName}</td>
+                        <td>{row.additionalPlacements}</td>
+                        <td>{row.requiredMoves}</td>
+                        <td>{row.score}</td>
+                        <td>{row.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
           {preview.placements.length > 0 && (
             <div className="massTableWrap">
               <table className="massTable">
@@ -831,6 +1139,7 @@ export function MassPlanView() {
                     <th>Ангар</th>
                     <th>Режим</th>
                     <th>Score</th>
+                    <th>Почему</th>
                     <th>Буксировка до</th>
                     <th>Буксировка после</th>
                     <th>Предупреждения</th>
@@ -848,6 +1157,7 @@ export function MassPlanView() {
                       <td>{hangarById.get(p.hangarId)?.name ?? p.hangarId}</td>
                       <td><span className="massModeBadge">{scheduleLabel(p.scheduledBy)}</span></td>
                       <td>{p.score ? `${p.score} (${p.scoreDetails?.join("; ") || "приоритет"})` : <span className="muted">—</span>}</td>
+                      <td>{decisionByIndex.get(p.index)?.decisionReason ?? <span className="muted">—</span>}</td>
                       <td>{formatRange(p.towBeforeStartAt, p.towBeforeEndAt)}</td>
                       <td>{formatRange(p.towAfterStartAt, p.towAfterEndAt)}</td>
                       <td>
@@ -869,6 +1179,8 @@ export function MassPlanView() {
                       <th>Вирт. борт</th>
                       <th>Название</th>
                       <th>Плановое начало</th>
+                      <th>Лучший score</th>
+                      <th>Лучший свободный score</th>
                       <th>Ангар / место</th>
                       <th>Причина</th>
                     </tr>
@@ -879,6 +1191,8 @@ export function MassPlanView() {
                         <td>{u.label}</td>
                         <td>{u.title}</td>
                         <td>{u.intendedStartAt ? dayjs(u.intendedStartAt).format("DD.MM.YYYY HH:mm") : "—"}</td>
+                        <td>{u.bestCandidateScore ?? <span className="muted">—</span>}</td>
+                        <td>{u.bestFreeCandidateScore ?? <span className="muted">—</span>}</td>
                         <td><span className="muted">Без ангара</span></td>
                         <td>{u.warnings?.length ? u.warnings.join("; ") : <span className="muted">Не найдено свободное место</span>}</td>
                       </tr>
@@ -889,6 +1203,11 @@ export function MassPlanView() {
             </div>
           )}
           <div className="massActions">
+            {preview.solverDiagnostics ? (
+              <button type="button" className="btn" onClick={() => exportSolverDiagnosticsXlsx(preview.solverDiagnostics!)}>
+                Диагностика solver (XLSX)
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btnPrimary"
@@ -898,6 +1217,21 @@ export function MassPlanView() {
               {applyM.isPending ? "Создание…" : activeSandbox ? "Создать в песочнице" : "Перенести в план"}
             </button>
           </div>
+          {applyM.isPending && (
+            <div className="massCalculationPanel" role="status" aria-live="polite">
+              <div className="massCalculationIcon" aria-hidden="true" />
+              <div className="massCalculationText">
+                <strong>{calculationTitle}</strong>
+                <span>{calculationText}</span>
+              </div>
+              <div className="massCalculationMeta">
+                <span>{plannedEventsCount} событий</span>
+              </div>
+              <div className="massProgressTrack" aria-hidden="true">
+                <div className="massProgressBar" />
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -912,8 +1246,14 @@ export function MassPlanView() {
               <span><b>{result.placed}</b> в плане</span>
               <span><b>{result.unplaced}</b> черновиков</span>
               <span><b>{(result.createdTowsBefore ?? 0) + (result.createdTowsAfter ?? 0)}</b> буксировок</span>
+              <span><b>{solverLabel(result.solver)}</b> solver</span>
             </div>
           </div>
+          {result.solverFallbackReason ? (
+            <div className="massSolverNotice">
+              {solverFallbackText(result.solver, result.solverFallbackReason)}
+            </div>
+          ) : null}
           <div className="massTableWrap">
             <table className="massTable">
               <thead>

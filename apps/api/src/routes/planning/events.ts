@@ -249,7 +249,10 @@ async function assertPlacementConflicts(tx: any, params: {
   standId: string | null;
   startAt: Date;
   endAt: Date;
+  allowOverlap?: boolean;
 }) {
+  if (params.allowOverlap) return;
+
   if (params.standId) {
     const conflict = await tx.standReservation.findFirst({
       where: {
@@ -295,6 +298,7 @@ async function replaceEventPlacements(tx: any, params: {
   eventStart: Date;
   eventEnd: Date;
   placements: PlacementInput[];
+  allowOverlap?: boolean;
 }) {
   const placements = params.placements.length
     ? [...params.placements].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.startAt.getTime() - b.startAt.getTime())
@@ -327,7 +331,8 @@ async function replaceEventPlacements(tx: any, params: {
       layoutId: location.layoutId,
       standId: location.standId,
       startAt: p.startAt,
-      endAt: p.endAt
+      endAt: p.endAt,
+      allowOverlap: params.allowOverlap
     });
 
     const placement = await tx.eventPlacement.create({
@@ -511,7 +516,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const body = z
       .object({
         placements: z.array(zPlacementInput).min(1).max(50),
-        changeReason: z.string().trim().min(1).max(1000)
+        changeReason: z.string().trim().min(1).max(1000),
+        allowOverlap: z.boolean().optional().default(false)
       })
       .parse(req.body);
 
@@ -540,7 +546,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         sandboxId: sbId,
         eventStart: event.startAt,
         eventEnd: event.endAt,
-        placements: body.placements
+        placements: body.placements,
+        allowOverlap: body.allowOverlap
       });
       await tx.maintenanceEventAudit.create({
         data: {
@@ -1114,6 +1121,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         layoutId: zUuid.optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
+        allowOverlap: z.boolean().optional().default(false),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
@@ -1128,7 +1136,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: "aircraftId or virtualAircraft required" })
       .parse(req.body);
 
-    const { changeReason, placements, ...data } = body;
+    const { changeReason, placements, allowOverlap, ...data } = body;
     const sbId = sandboxIdFor(req);
     const planning = normalizeCreatePlanningPeriod({
       planningKind: data.planningKind,
@@ -1170,7 +1178,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                 standId: null,
                 sortOrder: 0
               }
-            ]
+            ],
+        allowOverlap
       });
 
       await tx.maintenanceEventAudit.create({
@@ -1239,6 +1248,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         layoutId: zUuid.nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
+        allowOverlap: z.boolean().optional().default(false),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .parse(req.body);
@@ -1253,7 +1263,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!existing) throw app.httpErrors.notFound("Event not found");
 
-    const { changeReason, placements, ...patch } = body;
+    const { changeReason, placements, allowOverlap, ...patch } = body;
     const nextStatus = body.status ?? existing.status;
     const nextStart = body.startAt ?? existing.startAt;
     const nextEnd = body.endAt ?? existing.endAt;
@@ -1330,7 +1340,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: sandboxIdFor(req),
           eventStart: nextStart,
           eventEnd: nextEnd,
-          placements: placements ?? []
+          placements: placements ?? [],
+          allowOverlap
         });
       } else if (singlePlacementSyncNeeded) {
         await replaceEventPlacements(tx, {
@@ -1352,7 +1363,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               standId: body.layoutId === null ? null : defaultPlacementFromEvent(existing).standId,
               sortOrder: 0
             }
-          ]
+          ],
+          allowOverlap
         });
       }
 

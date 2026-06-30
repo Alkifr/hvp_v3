@@ -415,6 +415,7 @@ type EditorDraft = {
   hangarId: string; // optional, "" means null
   layoutId: string; // optional, "" means null
   standId: string; // optional, "" means no reservation
+  allowOverlap: boolean;
   multiPlacement: boolean;
   placements: PlacementDraft[];
 };
@@ -1695,6 +1696,7 @@ export function GanttView() {
       hangarId: "",
       layoutId: "",
       standId: "",
+      allowOverlap: false,
       multiPlacement: false,
       placements: [
         {
@@ -1739,6 +1741,7 @@ export function GanttView() {
       hangarId: (ev.hangar as any)?.id ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
+      allowOverlap: false,
       multiPlacement: placements.length > 1,
       placements
     };
@@ -1773,6 +1776,7 @@ export function GanttView() {
       hangarId: (ev.hangar as any)?.id ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
+      allowOverlap: false,
       multiPlacement: placements.length > 1,
       placements: placements.map((p) => ({ ...p, id: undefined, actualStartAtLocal: "", actualEndAtLocal: "" }))
     };
@@ -1974,6 +1978,7 @@ export function GanttView() {
         layoutId: draft.layoutId || null,
         placements: placementsPayload,
         notes: draft.notes?.trim() ? draft.notes : null,
+        allowOverlap: draft.allowOverlap,
         ...(reason ? { changeReason: reason } : {})
       };
 
@@ -2024,6 +2029,7 @@ export function GanttView() {
       return await apiPut(`/api/reservations/by-event/${draft.id}`, {
         layoutId: draft.layoutId,
         standId: draft.standId,
+        allowOverlap: draft.allowOverlap,
         changeReason: changeReason.trim()
       });
     },
@@ -4336,6 +4342,19 @@ export function GanttView() {
                   />
                   <span>Событие в нескольких ангарах</span>
                 </label>
+                <label className="evCheckRow">
+                  <input
+                    type="checkbox"
+                    checked={draft.allowOverlap}
+                    onChange={(e) => setDraft({ ...draft, allowOverlap: e.target.checked })}
+                  />
+                  <span>Разрешить нахлёст при сохранении</span>
+                </label>
+                {draft.allowOverlap ? (
+                  <div className="muted">
+                    Сохранение не будет блокироваться занятостью места или другой активной схемой ангара.
+                  </div>
+                ) : null}
                 {draft.multiPlacement ? (
                   <div className="evPlacementList">
                     {draft.placements.map((p, idx) => {

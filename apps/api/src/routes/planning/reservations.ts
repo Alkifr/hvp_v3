@@ -157,6 +157,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         standId: zUuid,
         startAt: zDateTime.optional(),
         endAt: zDateTime.optional(),
+        allowOverlap: z.boolean().optional().default(false),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .parse(req.body);
@@ -177,23 +178,25 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("endAt must be after startAt");
     }
 
-    // Проверка конфликтов: любое пересечение по времени на том же месте
-    const conflict = await app.prisma.standReservation.findFirst({
-      where: {
-        ...sandboxFilter(req),
-        standId: body.standId,
-        eventId: { not: eventId },
-        startAt: { lt: endAt },
-        endAt: { gt: startAt },
-        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
-      },
-      include: { event: { include: { aircraft: true, eventType: true } } }
-    });
+    if (!body.allowOverlap) {
+      // Проверка конфликтов: любое пересечение по времени на том же месте
+      const conflict = await app.prisma.standReservation.findFirst({
+        where: {
+          ...sandboxFilter(req),
+          standId: body.standId,
+          eventId: { not: eventId },
+          startAt: { lt: endAt },
+          endAt: { gt: startAt },
+          event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+        },
+        include: { event: { include: { aircraft: true, eventType: true } } }
+      });
 
-    if (conflict) {
-      throw app.httpErrors.conflict(
-        `Место уже занято: ${conflict.event.title} (${conflict.event.aircraft?.tailNumber ?? (conflict.event as any).virtualAircraft?.label ?? "—"})`
-      );
+      if (conflict) {
+        throw app.httpErrors.conflict(
+          `Место уже занято: ${conflict.event.title} (${conflict.event.aircraft?.tailNumber ?? (conflict.event as any).virtualAircraft?.label ?? "—"})`
+        );
+      }
     }
 
     const layout = await app.prisma.hangarLayout.findUniqueOrThrow({
@@ -206,16 +209,18 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!stand) throw app.httpErrors.badRequest("Stand does not belong to selected layout");
 
-    const layoutConflict = await findLayoutConflict(app.prisma, {
-      sandboxId: sandboxIdFor(req),
-      eventId,
-      hangarId: layout.hangarId,
-      layoutId: layout.id,
-      startAt,
-      endAt
-    });
-    if (layoutConflict) {
-      throw app.httpErrors.conflict(layoutConflictMessage(layoutConflict));
+    if (!body.allowOverlap) {
+      const layoutConflict = await findLayoutConflict(app.prisma, {
+        sandboxId: sandboxIdFor(req),
+        eventId,
+        hangarId: layout.hangarId,
+        layoutId: layout.id,
+        startAt,
+        endAt
+      });
+      if (layoutConflict) {
+        throw app.httpErrors.conflict(layoutConflictMessage(layoutConflict));
+      }
     }
 
     const sbId = sandboxIdFor(req);
