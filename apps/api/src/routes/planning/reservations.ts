@@ -840,6 +840,236 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     return moved;
   });
 
+  // Массовый DnD: те же правила, что /dnd-place-hangar, для списка событий.
+  app.post("/dnd-place-hangar/batch", async (req) => {
+    assertCanWriteEvent(req);
+    const roles = ((req as any).auth?.roles ?? []) as string[];
+    if (!req.sandbox && !roles.includes("ADMIN") && !roles.includes("PLANNER")) {
+      const err: any = new Error("FORBIDDEN");
+      err.statusCode = 403;
+      throw err;
+    }
+
+    const body = z
+      .object({
+        eventIds: z.array(zUuid).min(1).max(200),
+        hangarId: zUuid,
+        startAt: zDateTime,
+        endAt: zDateTime,
+        /** Смещение длительности сохраняется per-event; startAt/endAt — якорь лидера. */
+        changeReason: z.string().trim().min(1).max(1000)
+      })
+      .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .parse(req.body);
+
+    const sbId = sandboxIdFor(req);
+    const uniqueIds = Array.from(new Set(body.eventIds));
+    const leaderDurationMs = body.endAt.valueOf() - body.startAt.valueOf();
+
+    const result = await app.prisma.$transaction(
+      async (tx: Prisma.TransactionClient) => {
+        const events = await tx.maintenanceEvent.findMany({
+          where: { id: { in: uniqueIds }, sandboxId: sbId },
+          include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
+        });
+        if (events.length === 0) throw app.httpErrors.notFound("Events not found");
+
+        const byId = new Map(events.map((e) => [e.id, e]));
+        const ordered = uniqueIds.map((id) => byId.get(id)).filter(Boolean) as typeof events;
+        const leader = ordered[0]!;
+        const leaderOrigStart = leader.startAt.valueOf();
+
+        const placements: Array<{
+          eventId: string;
+          hangarId: string;
+          layoutId: string;
+          layoutName: string;
+          standId: string;
+          standCode: string;
+          startAt: string;
+          endAt: string;
+        }> = [];
+        const errors: Array<{ eventId: string; message: string }> = [];
+        const overlaps = (aStart: Date | string, aEnd: Date | string, bStart: Date | string, bEnd: Date | string) =>
+          new Date(aStart).valueOf() < new Date(bEnd).valueOf() && new Date(aEnd).valueOf() > new Date(bStart).valueOf();
+
+        for (const event of ordered) {
+          const delta = event.startAt.valueOf() - leaderOrigStart;
+          const startAt = new Date(body.startAt.valueOf() + delta);
+          const duration = event.endAt.valueOf() - event.startAt.valueOf();
+          const endAt = new Date(startAt.valueOf() + (duration > 0 ? duration : leaderDurationMs));
+          const eventLabel =
+            `${event.title ?? "событие"} (${(event as any).aircraft?.tailNumber ?? (event as any).virtualAircraft?.label ?? event.id})`;
+
+          try {
+            const [layouts, overlapping] = await Promise.all([
+              tx.hangarLayout.findMany({
+                where: { hangarId: body.hangarId, isActive: true },
+                include: {
+                  hangar: true,
+                  stands: {
+                    where: { isActive: true },
+                    include: { allowedAircraftTypes: { select: { aircraftTypeId: true } } },
+                    orderBy: [{ code: "asc" }]
+                  }
+                },
+                orderBy: [{ code: "asc" }, { name: "asc" }]
+              }),
+              tx.standReservation.findMany({
+                where: {
+                  sandboxId: sbId,
+                  eventId: { notIn: uniqueIds },
+                  layout: { hangarId: body.hangarId },
+                  startAt: { lt: endAt },
+                  endAt: { gt: startAt },
+                  event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+                },
+                include: { layout: { select: { id: true, name: true } }, event: { include: { aircraft: true } } },
+                orderBy: [{ startAt: "asc" }]
+              })
+            ]);
+
+            if (layouts.length === 0) throw new Error("В ангаре нет активных схем расстановки");
+
+            // Уже размещённые в этом batch события не видны в overlapping (исключены notIn uniqueIds) —
+            // учитываем их отдельно: занятость мест и блокировку схемы по пересечению времени.
+            const batchOverlapping = placements.filter((p) => overlaps(p.startAt, p.endAt, startAt, endAt));
+            const activeLayoutIds = Array.from(
+              new Set([
+                ...overlapping.map((r: any) => r.layoutId as string),
+                ...batchOverlapping.map((p) => p.layoutId)
+              ])
+            );
+            const allowedLayoutIds = new Set(activeLayoutIds.length > 0 ? activeLayoutIds : layouts.map((layout: any) => layout.id));
+            const aircraftTypeId = eventAircraftTypeId(event);
+            const currentReservation = event.reservations[0] ?? null;
+            const currentStand = currentReservation
+              ? layouts.flatMap((layout: any) => layout.stands ?? []).find((stand: any) => stand.id === currentReservation.standId)
+              : null;
+            const currentStandCode = currentStand?.code ?? null;
+
+            const candidates = layouts
+              .filter((layout: any) => allowedLayoutIds.has(layout.id))
+              .flatMap((layout: any) =>
+                (layout.stands ?? []).flatMap((stand: any) => {
+                  if (!standAccepts(stand, aircraftTypeId)) return [];
+                  const standBusyExternal = overlapping.some((reservation: any) => reservation.standId === stand.id);
+                  if (standBusyExternal) return [];
+                  const standBusyInBatch = batchOverlapping.some((p) => p.standId === stand.id);
+                  if (standBusyInBatch) return [];
+                  const sameStandCode = Boolean(currentStandCode && stand.code === currentStandCode);
+                  const activeLayout = activeLayoutIds.includes(layout.id);
+                  const score =
+                    (activeLayout ? 1000 : 0) + (sameStandCode ? 100 : 0) + (allowedAircraftTypeIds(stand).length > 0 ? 10 : 0);
+                  return [{ layout, stand, score }];
+                })
+              )
+              .sort(
+                (a: any, b: any) =>
+                  b.score - a.score || a.layout.name.localeCompare(b.layout.name, "ru") || a.stand.code.localeCompare(b.stand.code, "ru")
+              );
+
+            const candidate = candidates[0];
+            if (!candidate) {
+              const activeNames = activeLayoutIds.length
+                ? layouts.filter((l: any) => activeLayoutIds.includes(l.id)).map((l: any) => l.name).filter(Boolean).join(", ")
+                : "";
+              throw new Error(
+                activeNames
+                  ? `${eventLabel}: нет свободного подходящего места в активной схеме периода (${activeNames})`
+                  : `${eventLabel}: нет свободного подходящего места в активных схемах ангара`
+              );
+            }
+
+            const prev = {
+              startAt: event.startAt.toISOString(),
+              endAt: event.endAt.toISOString(),
+              hangarId: event.hangarId ?? null,
+              layoutId: event.layoutId ?? null
+            };
+
+            await tx.maintenanceEvent.update({
+              where: { id: event.id },
+              data: { startAt, endAt, layoutId: candidate.layout.id, hangarId: body.hangarId }
+            });
+
+            const reservation = await replaceSingleReservation(tx, {
+              eventId: event.id,
+              sandboxId: sbId,
+              hangarId: body.hangarId,
+              layoutId: candidate.layout.id,
+              standId: candidate.stand.id,
+              startAt,
+              endAt,
+              budgetStartAt: (event as any).budgetStartAt ?? null,
+              budgetEndAt: (event as any).budgetEndAt ?? null,
+              actualStartAt: (event as any).actualStartAt ?? null,
+              actualEndAt: (event as any).actualEndAt ?? null
+            });
+
+            await tx.maintenanceEventAudit.create({
+              data: {
+                eventId: event.id,
+                sandboxId: sbId,
+                action: EventAuditAction.UPDATE,
+                actor: getActor(req),
+                reason: body.changeReason,
+                changes: {
+                  dnd: { mode: "hangar-auto-placement-batch", batchSize: ordered.length },
+                  from: prev,
+                  to: {
+                    startAt: startAt.toISOString(),
+                    endAt: endAt.toISOString(),
+                    hangarId: body.hangarId,
+                    layoutId: candidate.layout.id,
+                    standId: candidate.stand.id,
+                    reservation: {
+                      layoutId: reservation.layoutId,
+                      standId: reservation.standId,
+                      startAt: reservation.startAt.toISOString(),
+                      endAt: reservation.endAt.toISOString()
+                    }
+                  }
+                }
+              }
+            });
+
+            placements.push({
+              eventId: event.id,
+              hangarId: body.hangarId,
+              layoutId: candidate.layout.id,
+              layoutName: candidate.layout.name,
+              standId: candidate.stand.id,
+              standCode: candidate.stand.code,
+              startAt: startAt.toISOString(),
+              endAt: endAt.toISOString()
+            });
+          } catch (err: any) {
+            const msg = String(err?.message ?? err);
+            errors.push({
+              eventId: event.id,
+              message: msg.includes(eventLabel) ? msg : `${eventLabel}: ${msg}`
+            });
+          }
+        }
+
+        if (placements.length === 0) {
+          throw app.httpErrors.conflict(errors.map((e) => e.message).join("; ") || "Не удалось перенести события");
+        }
+
+        return {
+          ok: true,
+          moved: placements.length,
+          placements,
+          errors
+        };
+      },
+      { timeout: 120_000, maxWait: 15_000 }
+    );
+
+    return result;
+  });
+
   app.delete("/by-event/:eventId", async (req) => {
     assertCanWriteEvent(req);
     const eventId = zUuid.parse((req.params as any).eventId);

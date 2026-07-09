@@ -751,6 +751,15 @@ model MaintenanceEvent {
   layoutId      String?
 
   notes         String?
+
+  // Lineage: связь копии с источником (для merge/dedup между песочницами)
+  // originEventId — корень в рабочем контуре (null = событие создано с нуля или само является корнем в prod)
+  // sourceEventId — непосредственный родитель при копировании
+  // sourceSandboxId — песочница-источник (null = скопировано из рабочего контура)
+  originEventId   String?
+  sourceEventId   String?
+  sourceSandboxId String?
+
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -781,6 +790,8 @@ model MaintenanceEvent {
   @@index([hangarId])
   @@index([layoutId])
   @@index([sandboxId])
+  @@index([originEventId, sandboxId])
+  @@index([sourceEventId])
 }
 
 model EventTechnicalPlan {

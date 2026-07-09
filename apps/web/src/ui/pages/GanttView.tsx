@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -7,8 +8,10 @@ import * as XLSX from "xlsx";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { authMe } from "../auth/authApi";
 import { EventResourcesPanel } from "../components/EventResourcesPanel";
+import { GanttEventsTable } from "../components/GanttEventsTable";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
+import { ToolbarPopover } from "../components/ToolbarPopover";
 
 dayjs.extend(utc);
 
@@ -86,6 +89,7 @@ type EventRow = {
   level: "STRATEGIC" | "OPERATIONAL";
   status: string;
   planningKind?: "PLANNED" | "UNPLANNED" | string;
+  notes?: string | null;
   aircraft?: {
     id?: string;
     tailNumber: string;
@@ -380,6 +384,7 @@ type GroupMode = "AIRCRAFT" | "HANGAR_STAND";
 type GanttDisplayMode = "CURRENT" | "PLAN_FACT";
 type TimelineTimeMode = "UTC" | "LOCAL";
 type PlanningKindFilter = "ALL" | "PLANNED" | "UNPLANNED";
+type GanttPanelView = "DIAGRAM" | "TABLE";
 
 type GanttFilters = {
   hangarIds: string[];
@@ -396,6 +401,12 @@ type TowSegment = { id: string; eventId: string; startAt: string; endAt: string 
 
 type DndMoveRequest = { eventId: string; hangarId: string; bumpOnConflict: boolean; bumpedEventId?: string };
 type DndPlaceRequest = DndMoveRequest & { startAt: string; endAt: string };
+type DndBatchPlaceRequest = {
+  eventIds: string[];
+  hangarId: string;
+  startAt: string;
+  endAt: string;
+};
 
 type EditorDraft = {
   id?: string;
@@ -661,7 +672,8 @@ function factToneLabel(tone: "good" | "warn" | "bad") {
 const EXIT_TIME_LABEL_WIDTH = 42;
 const EXIT_TIME_LABEL_GAP = 4;
 const MIN_GANTT_LABEL_WIDTH = 160;
-const MAX_GANTT_LABEL_WIDTH = 420;
+const MAX_GANTT_LABEL_WIDTH = 720;
+const MIN_FIT_DAY_WIDTH = 0.25;
 
 function canShowExitTimeLabel(zoom: ZoomLevel) {
   return zoom === "hour" || zoom === "day";
@@ -1141,7 +1153,7 @@ function Drawer(props: {
 export function GanttView() {
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0 });
-  const { active: activeSandbox } = useActiveSandbox();
+  const { active: activeSandbox, activeId: activeSandboxId } = useActiveSandbox();
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
   const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
   const canEditEvents = Boolean(me?.permissions?.includes("events:write") || canWriteSandbox);
@@ -1156,7 +1168,22 @@ export function GanttView() {
   const ptrTargetRef = useRef<
     null | { hangarId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string }
   >(null);
+  const ptrDragRef = useRef<null | {
+    eventId: string;
+    eventIds: string[];
+    mode: "move";
+    started: boolean;
+    startClientX: number;
+    startClientY: number;
+    grabOffsetPx: number;
+    origStartMs: number;
+    origEndMs: number;
+    originHangarId: string;
+    originRowKey: string;
+  }>(null);
   const hangarStandRowsRef = useRef<any[]>([]);
+  const autoScrollRafRef = useRef<number | null>(null);
+  const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
   const initialFrom = useMemo(() => dayjs().add(-20, "day").format("YYYY-MM-DD"), []);
   const initialTo = useMemo(() => dayjs().add(30, "day").format("YYYY-MM-DD"), []);
   const savedUi = useMemo(() => safeReadGanttUi(), []);
@@ -1187,6 +1214,9 @@ export function GanttView() {
   }, [from, to]);
 
   const [groupMode, setGroupMode] = useState<GroupMode>(() => (savedUi?.groupMode === "HANGAR_STAND" ? "HANGAR_STAND" : "AIRCRAFT"));
+  const [panelView, setPanelView] = useState<GanttPanelView>(() =>
+    savedUi?.panelView === "TABLE" ? "TABLE" : "DIAGRAM"
+  );
   const [ganttDisplayMode, setGanttDisplayMode] = useState<GanttDisplayMode>(() =>
     savedUi?.ganttDisplayMode === "PLAN_FACT" ? "PLAN_FACT" : "CURRENT"
   );
@@ -1204,6 +1234,10 @@ export function GanttView() {
     const z = savedUi?.minorScale ?? savedUi?.zoom;
     return (ZOOM_ORDER as string[]).includes(String(z)) ? (z as ZoomLevel) : "day";
   });
+  const [fitWidth, setFitWidth] = useState<boolean>(() => Boolean(savedUi?.fitWidth ?? false));
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState<number>(0);
+  const [timelineScaleMenu, setTimelineScaleMenu] = useState<null | { x: number; y: number }>(null);
+  const timelineScaleMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const minorIdx = ZOOM_ORDER.indexOf(minorScale);
@@ -1325,6 +1359,18 @@ export function GanttView() {
     return [];
   });
   const [dndEnabled, setDndEnabled] = useState<boolean>(() => Boolean(savedUi?.dndEnabled ?? false));
+  const [dndHangarIds, setDndHangarIds] = useState<string[]>(() => {
+    const arr = savedUi?.dndHangarIds;
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    return [];
+  });
+  const [dndLayoutIds, setDndLayoutIds] = useState<string[]>(() => {
+    const arr = savedUi?.dndLayoutIds;
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    return [];
+  });
+  const [dndZoneOnly, setDndZoneOnly] = useState<boolean>(() => Boolean(savedUi?.dndZoneOnly ?? false));
+  const [selectedDndEventIds, setSelectedDndEventIds] = useState<string[]>([]);
 
   const resetFilters = () => {
     const rf = dayjs().add(-20, "day").format("YYYY-MM-DD");
@@ -1336,6 +1382,10 @@ export function GanttView() {
     setFilterEventTypeIds([]);
     setFilterPlanningKind("ALL");
     setSelectedHangarIds([]);
+    setDndHangarIds([]);
+    setDndLayoutIds([]);
+    setDndZoneOnly(false);
+    setSelectedDndEventIds([]);
 
     setRangeFromInput(rf);
     setRangeToInput(rt);
@@ -1345,17 +1395,58 @@ export function GanttView() {
   };
 
   const dndActive = dndEnabled && canDnd && groupMode === "HANGAR_STAND";
+  const dndHangarScopeIds = dndHangarIds.length > 0 ? dndHangarIds : selectedHangarIds;
+
+  const dndLayoutsQ = useQuery({
+    queryKey: ["ref", "dnd-layouts", dndHangarScopeIds.slice().sort().join(",")],
+    enabled: dndActive,
+    queryFn: async () => {
+      if (dndHangarScopeIds.length === 0) {
+        return await apiGet<Layout[]>("/api/ref/layouts?activeOnly=1");
+      }
+      const chunks = await Promise.all(
+        dndHangarScopeIds.map((hid) =>
+          apiGet<Layout[]>(`/api/ref/layouts?hangarId=${encodeURIComponent(hid)}&activeOnly=1`)
+        )
+      );
+      const byId = new Map<string, Layout>();
+      for (const chunk of chunks) for (const l of chunk) byId.set(l.id, l);
+      return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    }
+  });
+
+  const dndLayoutOptions = useMemo(() => {
+    return (dndLayoutsQ.data ?? []).map((l) => {
+      const hangarName = (hangarsQ.data ?? []).find((h) => h.id === l.hangarId)?.name ?? "Ангар";
+      return { id: l.id, label: `${hangarName} / ${l.name}` };
+    });
+  }, [dndLayoutsQ.data, hangarsQ.data]);
+
+  useEffect(() => {
+    if (dndLayoutIds.length === 0) return;
+    const avail = new Set((dndLayoutsQ.data ?? []).map((l) => l.id));
+    if (avail.size === 0) return;
+    const next = dndLayoutIds.filter((id) => avail.has(id));
+    if (next.length !== dndLayoutIds.length) setDndLayoutIds(next);
+  }, [dndLayoutsQ.data, dndLayoutIds]);
 
   const dndStandsQ = useQuery({
-    queryKey: ["ref", "dnd-stands", selectedHangarIds.slice().sort().join(",")],
+    queryKey: [
+      "ref",
+      "dnd-stands",
+      dndHangarScopeIds.slice().sort().join(","),
+      dndLayoutIds.slice().sort().join(",")
+    ],
     enabled: dndActive,
     queryFn: async () => {
       let layouts: Layout[];
-      if (selectedHangarIds.length === 0) {
-        layouts = await apiGet<Layout[]>("/api/ref/layouts");
+      if (dndHangarScopeIds.length === 0) {
+        layouts = await apiGet<Layout[]>("/api/ref/layouts?activeOnly=1");
       } else {
         const chunks = await Promise.all(
-          selectedHangarIds.map((hid) => apiGet<Layout[]>(`/api/ref/layouts?hangarId=${encodeURIComponent(hid)}`))
+          dndHangarScopeIds.map((hid) =>
+            apiGet<Layout[]>(`/api/ref/layouts?hangarId=${encodeURIComponent(hid)}&activeOnly=1`)
+          )
         );
         const layoutById = new Map<string, Layout>();
         for (const chunk of chunks) {
@@ -1363,8 +1454,12 @@ export function GanttView() {
         }
         layouts = Array.from(layoutById.values());
       }
+      if (dndLayoutIds.length > 0) {
+        const allow = new Set(dndLayoutIds);
+        layouts = layouts.filter((l) => allow.has(l.id));
+      }
       const standsPerLayout = await Promise.all(
-        layouts.map((l) => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(l.id)}`))
+        layouts.map((l) => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(l.id)}&activeOnly=1`))
       );
       const hangarById = new Map((hangarsQ.data ?? []).map((h) => [h.id, h.name] as const));
       const out: DndStand[] = [];
@@ -1400,6 +1495,7 @@ export function GanttView() {
       rangeFromInput,
       rangeToInput,
       groupMode,
+      panelView,
       ganttDisplayMode,
       majorScale,
       minorScale,
@@ -1411,7 +1507,11 @@ export function GanttView() {
       filterEventTypeIds,
       filterPlanningKind,
       ganttLabelWidth,
+      fitWidth,
       dndEnabled,
+      dndHangarIds,
+      dndLayoutIds,
+      dndZoneOnly,
       zoom: minorScale
     });
   }, [
@@ -1420,6 +1520,7 @@ export function GanttView() {
     rangeFromInput,
     rangeToInput,
     groupMode,
+    panelView,
     ganttDisplayMode,
     majorScale,
     minorScale,
@@ -1431,7 +1532,11 @@ export function GanttView() {
     filterEventTypeIds,
     filterPlanningKind,
     ganttLabelWidth,
+    fitWidth,
     dndEnabled,
+    dndHangarIds,
+    dndLayoutIds,
+    dndZoneOnly,
   ]);
 
   const events = q.data ?? [];
@@ -1547,8 +1652,16 @@ export function GanttView() {
     filterPlanningKind
   ]);
 
-  const dayWidth = ZOOM_PX_PER_DAY[minorScale];
-  const canvasWidth = Math.max(1, Math.round(days * dayWidth));
+  const fixedDayWidth = ZOOM_PX_PER_DAY[minorScale];
+  const dayWidth = useMemo(() => {
+    if (!fitWidth || timelineViewportWidth <= 0 || days <= 0) return fixedDayWidth;
+    return Math.max(MIN_FIT_DAY_WIDTH, timelineViewportWidth / days);
+  }, [fitWidth, timelineViewportWidth, days, fixedDayWidth]);
+  // Всегда через dayWidth: при выходе из «по ширине» ширина гарантированно возвращается к зуму.
+  const canvasWidth = useMemo(() => Math.max(1, Math.round(days * dayWidth)), [days, dayWidth]);
+  // Эпоха только при смене fit — remount внутренних слоёв скролла (Chromium иначе
+  // не обновляет scrollWidth), без remount на каждый canvasWidth (это дёргало скролл).
+  const [fitLayoutEpoch, setFitLayoutEpoch] = useState(0);
   const ganttRowHeight = ganttDisplayMode === "PLAN_FACT" ? 56 : 44;
   const ticks = useMemo(() => buildGanttTicks(from, to, majorScale, minorScale), [from, to, majorScale, minorScale]);
   const showSlotHistogram = groupMode === "HANGAR_STAND";
@@ -1574,12 +1687,60 @@ export function GanttView() {
     return out;
   }, [canvasWidth, dayWidth, from, majorScale, ticks]);
 
+  useEffect(() => {
+    // Ширину viewport меряем только для «по ширине» — иначе ResizeObserver
+    // даёт лишние ререндеры и дёрганый горизонтальный скролл.
+    if (!fitWidth) return;
+    const el = bodyScrollRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = Math.floor(el.clientWidth);
+      setTimelineViewportWidth((prev) => (prev === w ? prev : w));
+    };
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [panelView, ganttLabelWidth, fitWidth]);
+
+  useEffect(() => {
+    if (!timelineScaleMenu) return;
+    const onDoc = (e: MouseEvent) => {
+      // ПКМ / auxclick не должны сразу закрывать только что открытое меню
+      if (e.button !== 0) return;
+      if (timelineScaleMenuRef.current && e.target instanceof Node && !timelineScaleMenuRef.current.contains(e.target)) {
+        setTimelineScaleMenu(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTimelineScaleMenu(null);
+    };
+    // откладываем подписку, чтобы тот же ПКМ не закрыл меню до отрисовки
+    const timer = window.setTimeout(() => {
+      document.addEventListener("mousedown", onDoc);
+      document.addEventListener("keydown", onKey);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [timelineScaleMenu]);
+
   const startGanttLabelResize = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = ganttLabelWidth;
+    const maxByViewport = Math.max(
+      MAX_GANTT_LABEL_WIDTH,
+      Math.floor((typeof window !== "undefined" ? window.innerWidth : MAX_GANTT_LABEL_WIDTH) * 0.55)
+    );
     const onMove = (ev: PointerEvent) => {
-      setGanttLabelWidth(clamp(startWidth + ev.clientX - startX, MIN_GANTT_LABEL_WIDTH, MAX_GANTT_LABEL_WIDTH));
+      setGanttLabelWidth(clamp(startWidth + ev.clientX - startX, MIN_GANTT_LABEL_WIDTH, maxByViewport));
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -1608,25 +1769,91 @@ export function GanttView() {
     if (s) s.scrollLeft = b.scrollLeft;
   }, [days, canvasWidth]);
 
-  const syncGanttScrollLeft = useCallback((scrollLeft: number, source?: "body" | "bottom") => {
+  // Блокировка обратной связи + coalesce через rAF — иначе связка body/header/bottom дёргается.
+  const scrollSyncLockRef = useRef(false);
+  const scrollRafRef = useRef<number | null>(null);
+  const pendingScrollRef = useRef<{ left: number; source: "body" | "bottom" } | null>(null);
+
+  const applyGanttScrollLeft = useCallback((scrollLeft: number, source?: "body" | "bottom") => {
     const h = headerViewportRef.current;
     const b = bodyScrollRef.current;
     const g = histogramViewportRef.current;
     const s = bottomScrollRef.current;
 
+    scrollSyncLockRef.current = true;
     if (h && h.scrollLeft !== scrollLeft) h.scrollLeft = scrollLeft;
     if (b && source !== "body" && b.scrollLeft !== scrollLeft) b.scrollLeft = scrollLeft;
     if (g && g.scrollLeft !== scrollLeft) g.scrollLeft = scrollLeft;
     if (s && source !== "bottom" && s.scrollLeft !== scrollLeft) s.scrollLeft = scrollLeft;
+    requestAnimationFrame(() => {
+      scrollSyncLockRef.current = false;
+    });
   }, []);
 
+  const syncGanttScrollLeft = useCallback(
+    (scrollLeft: number, source?: "body" | "bottom") => {
+      // DnD auto-scroll и явные сбросы — сразу; пользовательский скролл — через rAF.
+      if (!source) {
+        applyGanttScrollLeft(scrollLeft);
+        return;
+      }
+      pendingScrollRef.current = { left: scrollLeft, source };
+      if (scrollRafRef.current != null) return;
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        const pending = pendingScrollRef.current;
+        pendingScrollRef.current = null;
+        if (!pending) return;
+        applyGanttScrollLeft(pending.left, pending.source);
+      });
+    },
+    [applyGanttScrollLeft]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current != null) cancelAnimationFrame(scrollRafRef.current);
+    };
+  }, []);
+
+  // Только при переключении «по ширине»: remount слоёв скролла + принудительный пересчёт overflow.
+  const prevFitWidthRef = useRef(fitWidth);
+  useEffect(() => {
+    if (prevFitWidthRef.current === fitWidth) return;
+    prevFitWidthRef.current = fitWidth;
+    setFitLayoutEpoch((n) => n + 1);
+    const bumpOverflow = (el: HTMLElement | null) => {
+      if (!el) return;
+      const prev = el.style.overflowX;
+      el.style.overflowX = "hidden";
+      void el.offsetWidth;
+      el.style.overflowX = prev || "";
+      void el.scrollWidth;
+    };
+    const raf = window.requestAnimationFrame(() => {
+      bumpOverflow(bodyScrollRef.current);
+      bumpOverflow(bottomScrollRef.current);
+      bumpOverflow(headerViewportRef.current);
+      bumpOverflow(histogramViewportRef.current);
+      applyGanttScrollLeft(0);
+      requestAnimationFrame(() => {
+        bumpOverflow(bodyScrollRef.current);
+        bumpOverflow(bottomScrollRef.current);
+        applyGanttScrollLeft(0);
+      });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [fitWidth, applyGanttScrollLeft]);
+
   const onBodyScroll = () => {
+    if (scrollSyncLockRef.current) return;
     const b = bodyScrollRef.current;
     if (!b) return;
     syncGanttScrollLeft(b.scrollLeft, "body");
   };
 
   const onBottomScroll = () => {
+    if (scrollSyncLockRef.current) return;
     const s = bottomScrollRef.current;
     if (!s) return;
     syncGanttScrollLeft(s.scrollLeft, "bottom");
@@ -1737,7 +1964,7 @@ export function GanttView() {
       budgetEndAtLocal: toInputLocal(ev.budgetEndAt),
       actualStartAtLocal: toInputLocal(ev.actualStartAt),
       actualEndAtLocal: toInputLocal(ev.actualEndAt),
-      notes: (ev as any)?.notes ?? "",
+      notes: ev.notes ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
@@ -1772,7 +1999,7 @@ export function GanttView() {
       budgetEndAtLocal: toInputLocal(ev.budgetEndAt),
       actualStartAtLocal: "",
       actualEndAtLocal: "",
-      notes: (ev as any)?.notes ?? "",
+      notes: ev.notes ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
@@ -2069,7 +2296,7 @@ export function GanttView() {
     null
   );
 
-  const [pendingDnd, setPendingDnd] = useState<(DndMoveRequest | DndPlaceRequest) | null>(null);
+  const [pendingDnd, setPendingDnd] = useState<(DndMoveRequest | DndPlaceRequest | DndBatchPlaceRequest) | null>(null);
   const [, setDraggingEventId] = useState<string | null>(null);
   const [dndHoverKey, setDndHoverKey] = useState<string | null>(null);
   const [dndHoverBarIds, setDndHoverBarIds] = useState<string[]>([]);
@@ -2081,19 +2308,46 @@ export function GanttView() {
   const [ptrDrag, setPtrDrag] = useState<
     null | {
       eventId: string;
-      mode: "move" | "resizeL" | "resizeR";
+      eventIds: string[];
+      mode: "move";
       started: boolean;
       startClientX: number;
       startClientY: number;
       grabOffsetPx: number;
       origStartMs: number;
       origEndMs: number;
+      originHangarId: string;
+      originRowKey: string;
     }
   >(null);
   const [ptrPreview, setPtrPreview] = useState<null | { startAt: string; endAt: string; x: number; w: number }>(null);
   const [ptrTarget, setPtrTarget] = useState<null | { hangarId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string }>(
     null
   );
+
+  // При смене песочницы/контура сбрасываем DnD, чтобы «Только зона» и фильтры не ломали чужой контекст.
+  const prevSandboxIdRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevSandboxIdRef.current;
+    prevSandboxIdRef.current = activeSandboxId;
+    if (prev === undefined) return;
+    if (prev === activeSandboxId) return;
+    setDndEnabled(false);
+    setDndZoneOnly(false);
+    setDndHangarIds([]);
+    setDndLayoutIds([]);
+    setSelectedDndEventIds([]);
+    setPtrDrag(null);
+    setPtrPreview(null);
+    setPtrTarget(null);
+    setPendingDnd(null);
+    setDndNotice(null);
+    setDndBlockedReason(null);
+    setDraggingEventId(null);
+    setDndHoverKey(null);
+    setDndHoverBarIds([]);
+    setDndHoverIntent(null);
+  }, [activeSandboxId]);
 
   const findDndLayoutLock = useCallback((
     target: { hangarId: string; rowKey: string },
@@ -2114,129 +2368,189 @@ export function GanttView() {
   useEffect(() => {
     ptrTargetRef.current = ptrTarget;
   }, [ptrTarget]);
+  useEffect(() => {
+    ptrDragRef.current = ptrDrag;
+  }, [ptrDrag]);
+
+  const resolveDropTargetAtPoint = useCallback((clientX: number, clientY: number, fallback?: { hangarId: string; rowKey: string } | null) => {
+    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const barEl = (el?.closest?.("[data-dnd-bar='1']") as HTMLElement | null) ?? null;
+    const dropEl =
+      (el?.closest?.("[data-dnd-drop='1']") as HTMLElement | null) ??
+      (barEl?.closest?.("[data-dnd-drop='1']") as HTMLElement | null) ??
+      null;
+    if (dropEl?.dataset?.hangarId && dropEl?.dataset?.rowKey) {
+      return { hangarId: dropEl.dataset.hangarId, rowKey: dropEl.dataset.rowKey, intent: "move" as const };
+    }
+
+    // Fallback по Y: найти ближайшую drop-строку по вертикали (когда курсор над баром/gap).
+    const right = bodyScrollRef.current;
+    const rows = hangarStandRowsRef.current ?? [];
+    if (right && rows.length > 0) {
+      const rect = right.getBoundingClientRect();
+      const y = clientY - rect.top + right.scrollTop;
+      const rowIdx = Math.max(0, Math.min(rows.length - 1, Math.floor(y / ganttRowHeight)));
+      for (let dist = 0; dist < rows.length; dist++) {
+        for (const idx of [rowIdx - dist, rowIdx + dist]) {
+          if (idx < 0 || idx >= rows.length) continue;
+          const row = rows[idx] as any;
+          if (row?.kind === "stand" && row.hangarId) {
+            return { hangarId: String(row.hangarId), rowKey: String(row.key), intent: "move" as const };
+          }
+        }
+        if (dist === 0) continue;
+      }
+    }
+    if (fallback?.hangarId && fallback.rowKey) {
+      return { hangarId: fallback.hangarId, rowKey: fallback.rowKey, intent: "move" as const };
+    }
+    return null;
+  }, [ganttRowHeight]);
+
+  const computePreviewAtClientX = useCallback(
+    (clientX: number, d: NonNullable<typeof ptrDrag>) => {
+      const right = bodyScrollRef.current;
+      const inner = right?.querySelector?.(".ganttRightInner") as HTMLElement | null;
+      const rect = inner?.getBoundingClientRect();
+      if (!rect || !right) return null;
+      const scrollLeft = right.scrollLeft;
+      const px = clientX - rect.left + scrollLeft;
+      const msPerPx = (24 * 60 * 60 * 1000) / dayWidth;
+      const snapMs = 15 * 60 * 1000;
+      const snap = (ms: number) => Math.round(ms / snapMs) * snapMs;
+
+      const newLeftPx = px - d.grabOffsetPx;
+      const startMs = snap(from.valueOf() + newLeftPx * msPerPx);
+      const endMs = startMs + (d.origEndMs - d.origStartMs);
+
+      const startAt = new Date(startMs).toISOString();
+      const endAt = new Date(endMs).toISOString();
+      const g = calcBarXW({ startAt, endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
+      if (g) return { startAt, endAt, x: g.x, w: g.w };
+
+      // За пределами видимого диапазона — clamped ghost, чтобы горизонталь не «умирала».
+      const leftRaw = ((startMs - from.valueOf()) / (24 * 60 * 60 * 1000)) * dayWidth;
+      const rightRaw = ((endMs - from.valueOf()) / (24 * 60 * 60 * 1000)) * dayWidth;
+      const x = clamp(leftRaw, 0, canvasWidth);
+      const r = clamp(rightRaw, 0, canvasWidth);
+      const w = Math.max(6, r - x);
+      return { startAt, endAt, x, w };
+    },
+    [from, dayWidth, canvasWidth, timelineTimeMode]
+  );
 
   useEffect(() => {
     if (!dndActive) {
       setPtrDrag(null);
       setPtrTarget(null);
+      ptrDragRef.current = null;
+      if (autoScrollRafRef.current != null) {
+        cancelAnimationFrame(autoScrollRafRef.current);
+        autoScrollRafRef.current = null;
+      }
       return;
     }
     if (!ptrDrag) return;
 
-    const onMove = (e: PointerEvent) => {
-      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-      const barEl = (el?.closest?.("[data-dnd-bar='1']") as HTMLElement | null) ?? null;
-      const dropEl = (el?.closest?.("[data-dnd-drop='1']") as HTMLElement | null) ?? null;
+    const EDGE_PX = 48;
+    const MAX_SCROLL_SPEED = 28;
 
-      let nextTarget:
-        | null
-        | { hangarId: string; rowKey: string; intent: "move" | "bump"; bumpedEventId?: string } = null;
-
-      // Цель (строка) берём по тому, где находится курсор, а вот "вытеснение" будем определять ОТ GHOST.
-      // Поэтому здесь от barEl мы используем только rowKey/layout/stand (не bump).
-      if (barEl) {
-        const rowEl = (barEl.closest?.("[data-dnd-drop='1']") as HTMLElement | null) ?? null;
-        const hangarId = rowEl?.dataset?.hangarId ?? "";
-        const rowKey = rowEl?.dataset?.rowKey ?? "";
-        if (hangarId && rowKey) {
-          nextTarget = { hangarId, rowKey, intent: "move" };
-        }
-      }
-
-      if (!nextTarget && dropEl) {
-        const hangarId = dropEl.dataset?.hangarId ?? "";
-        const rowKey = dropEl.dataset?.rowKey ?? "";
-        if (hangarId && rowKey) {
-          nextTarget = { hangarId, rowKey, intent: "move" };
-        }
-      }
-
-      ptrTargetRef.current = nextTarget;
-      setPtrTarget(nextTarget);
-      if (nextTarget) {
-        if (dndHoverKey !== nextTarget.rowKey) setDndHoverKey(nextTarget.rowKey);
-        if (dndHoverIntent !== nextTarget.intent) setDndHoverIntent(nextTarget.intent);
-        // список конфликтующих баров рассчитываем отдельно (от ghost), здесь только сброс
-        if (nextTarget.intent !== "bump" && dndHoverBarIds.length) setDndHoverBarIds([]);
-      } else {
-        if (dndHoverKey) setDndHoverKey(null);
-        if (dndHoverBarIds.length) setDndHoverBarIds([]);
-        if (dndHoverIntent) setDndHoverIntent(null);
-      }
-
-      // --- предпросмотр по времени (ghost) ---
-      const d = ptrDrag;
+    const applyMoveAt = (clientX: number, clientY: number) => {
+      const d = ptrDragRef.current;
       if (!d) return;
-      const dx = e.clientX - d.startClientX;
-      const dy = e.clientY - d.startClientY;
+      lastPointerClientRef.current = { x: clientX, y: clientY };
+
+      const dx = clientX - d.startClientX;
+      const dy = clientY - d.startClientY;
       const startedNow = d.started || Math.hypot(dx, dy) >= 3;
-      if (startedNow && !d.started) setPtrDrag({ ...d, started: true });
-      if (!startedNow) return;
-
-      if (nextTarget) {
-        const right = bodyScrollRef.current;
-        const inner = right?.querySelector?.(".ganttRightInner") as HTMLElement | null;
-        const rect = inner?.getBoundingClientRect();
-        const scrollLeft = right ? right.scrollLeft : 0;
-        if (rect) {
-          const px = e.clientX - rect.left + scrollLeft;
-          const msPerPx = (24 * 60 * 60 * 1000) / dayWidth;
-          const snapMs = 15 * 60 * 1000;
-          const snap = (ms: number) => Math.round(ms / snapMs) * snapMs;
-
-          let startMs = d.origStartMs;
-          let endMs = d.origEndMs;
-          if (d.mode === "move") {
-            const newLeftPx = px - d.grabOffsetPx;
-            startMs = snap(from.valueOf() + newLeftPx * msPerPx);
-            endMs = startMs + (d.origEndMs - d.origStartMs);
-          } else if (d.mode === "resizeR") {
-            endMs = snap(from.valueOf() + px * msPerPx);
-            if (endMs <= startMs + snapMs) endMs = startMs + snapMs;
-          } else if (d.mode === "resizeL") {
-            startMs = snap(from.valueOf() + px * msPerPx);
-            if (startMs >= endMs - snapMs) startMs = endMs - snapMs;
-          }
-          const g = calcBarXW({
-            startAt: new Date(startMs).toISOString(),
-            endAt: new Date(endMs).toISOString(),
-            from,
-            dayWidth,
-            canvasWidth,
-            timeMode: timelineTimeMode
-          });
-          if (g) {
-            const pv = { startAt: new Date(startMs).toISOString(), endAt: new Date(endMs).toISOString(), x: g.x, w: g.w };
-
-            if (dndBlockedReason) setDndBlockedReason(null);
-
-            if (nextTarget.intent !== "move") {
-              nextTarget = { ...nextTarget, intent: "move" };
-              ptrTargetRef.current = nextTarget;
-              setPtrTarget(nextTarget);
-            }
-            if (dndHoverIntent !== "move") setDndHoverIntent("move");
-            if (dndHoverBarIds.length) setDndHoverBarIds([]);
-
-            ptrPreviewRef.current = pv;
-            setPtrPreview(pv);
-            return;
-          }
-        }
+      if (startedNow && !d.started) {
+        const next = { ...d, started: true };
+        ptrDragRef.current = next;
+        setPtrDrag(next);
       }
-      ptrPreviewRef.current = null;
-      setPtrPreview(null);
-      if (dndBlockedReason) setDndBlockedReason(null);
+      if (!startedNow && !d.started) return;
+
+      const fallback = d.originHangarId && d.originRowKey ? { hangarId: d.originHangarId, rowKey: d.originRowKey } : null;
+      const nextTarget = resolveDropTargetAtPoint(clientX, clientY, fallback) ?? ptrTargetRef.current;
+      if (nextTarget) {
+        ptrTargetRef.current = nextTarget;
+        setPtrTarget(nextTarget);
+        setDndHoverKey(nextTarget.rowKey);
+        setDndHoverIntent("move");
+        setDndHoverBarIds([]);
+      }
+
+      const pv = computePreviewAtClientX(clientX, d);
+      if (pv) {
+        ptrPreviewRef.current = pv;
+        setPtrPreview(pv);
+        if (dndBlockedReason) setDndBlockedReason(null);
+      }
+    };
+
+    const stopAutoScroll = () => {
+      if (autoScrollRafRef.current != null) {
+        cancelAnimationFrame(autoScrollRafRef.current);
+        autoScrollRafRef.current = null;
+      }
+    };
+
+    const tickAutoScroll = () => {
+      autoScrollRafRef.current = null;
+      const right = bodyScrollRef.current;
+      const ptr = lastPointerClientRef.current;
+      const d = ptrDragRef.current;
+      if (!right || !ptr || !d?.started) return;
+
+      const rect = right.getBoundingClientRect();
+      let delta = 0;
+      if (ptr.x < rect.left + EDGE_PX) {
+        const t = (rect.left + EDGE_PX - ptr.x) / EDGE_PX;
+        delta = -Math.ceil(MAX_SCROLL_SPEED * Math.min(1, Math.max(0.15, t)));
+      } else if (ptr.x > rect.right - EDGE_PX) {
+        const t = (ptr.x - (rect.right - EDGE_PX)) / EDGE_PX;
+        delta = Math.ceil(MAX_SCROLL_SPEED * Math.min(1, Math.max(0.15, t)));
+      }
+
+      if (delta !== 0) {
+        const prev = right.scrollLeft;
+        const next = Math.max(0, Math.min(right.scrollWidth - right.clientWidth, prev + delta));
+        if (next !== prev) {
+          right.scrollLeft = next;
+          syncGanttScrollLeft(next, "body");
+          applyMoveAt(ptr.x, ptr.y);
+        }
+        autoScrollRafRef.current = requestAnimationFrame(tickAutoScroll);
+      }
+    };
+
+    const onMove = (e: PointerEvent) => {
+      applyMoveAt(e.clientX, e.clientY);
+      const right = bodyScrollRef.current;
+      if (!right || !ptrDragRef.current?.started) {
+        stopAutoScroll();
+        return;
+      }
+      const rect = right.getBoundingClientRect();
+      const nearEdge = e.clientX < rect.left + EDGE_PX || e.clientX > rect.right - EDGE_PX;
+      if (nearEdge && autoScrollRafRef.current == null) {
+        autoScrollRafRef.current = requestAnimationFrame(tickAutoScroll);
+      } else if (!nearEdge) {
+        stopAutoScroll();
+      }
     };
 
     const onUp = () => {
-      const d = ptrDrag;
+      stopAutoScroll();
+      const d = ptrDragRef.current;
       const t = ptrTargetRef.current;
-      setPtrDrag(null);
-      setDraggingEventId(null);
       const preview = ptrPreviewRef.current;
+      ptrDragRef.current = null;
       ptrPreviewRef.current = null;
       ptrTargetRef.current = null;
+      lastPointerClientRef.current = null;
+      setPtrDrag(null);
+      setDraggingEventId(null);
       setPtrPreview(null);
       setPtrTarget(null);
       setDndBlockedReason(null);
@@ -2245,32 +2559,51 @@ export function GanttView() {
       if (!t) return;
       if (!preview) return;
 
-      // размещение с временем
-      setPendingDnd({
-        eventId: d.eventId,
-        hangarId: t.hangarId,
-        bumpOnConflict: t.intent === "bump",
-        startAt: preview.startAt,
-        endAt: preview.endAt
-      } as any);
+      const eventIds = d.eventIds.length > 0 ? d.eventIds : [d.eventId];
+      if (eventIds.length > 1) {
+        setPendingDnd({
+          eventIds,
+          hangarId: t.hangarId,
+          startAt: preview.startAt,
+          endAt: preview.endAt
+        });
+      } else {
+        setPendingDnd({
+          eventId: d.eventId,
+          hangarId: t.hangarId,
+          bumpOnConflict: false,
+          startAt: preview.startAt,
+          endAt: preview.endAt
+        } as any);
+      }
       setPendingSave("dndMove");
       setDndNotice(null);
       setChangeReason("");
       setConfirmOpen(true);
     };
 
-    // while dragging: disable selection
     const prevUserSelect = document.body.style.userSelect;
     document.body.style.userSelect = "none";
     window.addEventListener("pointermove", onMove, { passive: true });
     window.addEventListener("pointerup", onUp, { passive: true });
+    window.addEventListener("pointercancel", onUp, { passive: true });
 
     return () => {
+      stopAutoScroll();
       document.body.style.userSelect = prevUserSelect;
       window.removeEventListener("pointermove", onMove as any);
       window.removeEventListener("pointerup", onUp as any);
+      window.removeEventListener("pointercancel", onUp as any);
     };
-  }, [dndActive, ptrDrag, ptrTarget, dndHoverKey, dndHoverBarIds, dndHoverIntent, dndBlockedReason, findDndLayoutLock, timelineTimeMode]);
+  }, [
+    dndActive,
+    ptrDrag,
+    resolveDropTargetAtPoint,
+    computePreviewAtClientX,
+    syncGanttScrollLeft,
+    dndBlockedReason,
+    findDndLayoutLock
+  ]);
 
   const addTowM = useMutation({
     mutationFn: async () => {
@@ -2318,11 +2651,26 @@ export function GanttView() {
   const dndMoveM = useMutation({
     mutationFn: async () => {
       if (!pendingDnd) throw new Error("Нет данных переноса");
+      const batchIds = (pendingDnd as DndBatchPlaceRequest).eventIds;
+      if (Array.isArray(batchIds) && batchIds.length > 1) {
+        return await apiPost<{
+          ok: boolean;
+          moved: number;
+          placements?: Array<{ layoutName?: string; standCode?: string }>;
+          errors?: Array<{ eventId: string; message: string }>;
+        }>("/api/reservations/dnd-place-hangar/batch", {
+          eventIds: batchIds,
+          hangarId: (pendingDnd as DndBatchPlaceRequest).hangarId,
+          startAt: (pendingDnd as DndBatchPlaceRequest).startAt,
+          endAt: (pendingDnd as DndBatchPlaceRequest).endAt,
+          changeReason: changeReason.trim()
+        });
+      }
       const hasTime = (pendingDnd as any).startAt && (pendingDnd as any).endAt;
       const path = hasTime ? "/api/reservations/dnd-place-hangar" : "/api/reservations/dnd-move";
       return await apiPost<{ ok: boolean; bumpedEventIds: string[]; placement?: { layoutName?: string; standCode?: string } }>(path, {
         ...pendingDnd,
-        bumpOnConflict: pendingDnd.bumpOnConflict,
+        bumpOnConflict: (pendingDnd as any).bumpOnConflict,
         changeReason: changeReason.trim()
       });
     },
@@ -2334,9 +2682,31 @@ export function GanttView() {
       setDndHoverKey(null);
       setDndHoverBarIds([]);
       setDndHoverIntent(null);
+      setSelectedDndEventIds([]);
+      const moved = res?.moved ?? 1;
+      const errList = (res?.errors ?? []) as Array<{ eventId?: string; message?: string }>;
+      const errCount = errList.length;
       const bumped = (res?.bumpedEventIds ?? []).length;
-      const autoPlace = res?.placement ? ` Схема: ${res.placement.layoutName ?? "—"}, место: ${res.placement.standCode ?? "—"}.` : "";
-      setDndNotice(bumped ? `Перенос выполнен. Вытеснено событий: ${bumped}.${autoPlace}` : `Перенос выполнен.${autoPlace}`);
+      const autoPlace = res?.placement
+        ? ` Схема: ${res.placement.layoutName ?? "—"}, место: ${res.placement.standCode ?? "—"}.`
+        : res?.placements?.[0]
+          ? ` Схема: ${res.placements[0].layoutName ?? "—"}, место: ${res.placements[0].standCode ?? "—"}.`
+          : "";
+      const errDetails =
+        errCount > 0
+          ? ` ${errList
+              .map((e) => String(e?.message ?? "").trim())
+              .filter(Boolean)
+              .slice(0, 5)
+              .join(" · ")}${errCount > 5 ? ` …ещё ${errCount - 5}` : ""}`
+          : "";
+      const batchMsg =
+        moved > 1 || errCount > 0
+          ? `Перенесено событий: ${moved}${errCount ? `, ошибок: ${errCount}.` : "."}${autoPlace}${errDetails}`
+          : bumped
+            ? `Перенос выполнен. Вытеснено событий: ${bumped}.${autoPlace}`
+            : `Перенос выполнен.${autoPlace}`;
+      setDndNotice(batchMsg);
       setChangeReason("");
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
       if (draft?.id) void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
@@ -2433,7 +2803,8 @@ export function GanttView() {
     // Добавим пустые стоянки как drop-зоны только в режиме DnD
     if (dndActive) {
       for (const s of dndStandsQ.data ?? []) {
-        if (selectedHangarIds.length > 0 && !selectedHangarIds.includes(s.hangarId)) continue;
+        if (dndHangarScopeIds.length > 0 && !dndHangarScopeIds.includes(s.hangarId)) continue;
+        if (dndLayoutIds.length > 0 && !dndLayoutIds.includes(s.layoutId)) continue;
         if (!byStandId.has(s.id)) {
           byStandId.set(s.id, {
             standId: s.id,
@@ -2443,6 +2814,19 @@ export function GanttView() {
             subLabel: s.layoutName,
             events: []
           });
+        }
+      }
+    }
+
+    // Режим «только зона DnD»: скрываем строки вне выбранных ангаров/схем
+    if (dndActive && dndZoneOnly) {
+      for (const [sid, rec] of Array.from(byStandId.entries())) {
+        if (dndHangarScopeIds.length > 0 && !dndHangarScopeIds.includes(rec.hangarId)) {
+          byStandId.delete(sid);
+          continue;
+        }
+        if (dndLayoutIds.length > 0 && rec.layoutId && !dndLayoutIds.includes(rec.layoutId)) {
+          byStandId.delete(sid);
         }
       }
     }
@@ -2459,6 +2843,24 @@ export function GanttView() {
         standId: s.standId,
         events: s.events
       });
+    }
+
+    // В режиме зоны DnD не показываем unassigned / no-stand / cancelled — только рабочие drop-строки
+    if (dndActive && dndZoneOnly) {
+      const onlyStands = rows.filter((r) => r.kind === "stand");
+      const laneRows: Array<{ key: string; label: string; subLabel?: string; kind: Row["kind"]; hangarId?: string; layoutId?: string; standId?: string; events: PlacedEvent[] }> = [];
+      for (const r of onlyStands) {
+        if (r.events.length === 0) {
+          laneRows.push({ key: `${r.key}:lane:0`, label: r.label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: [] });
+        } else {
+          const lanes = packOverlapsIntoLanes(r.events);
+          for (let i = 0; i < lanes.length; i++) {
+            const label = i === 0 ? r.label : `${r.label} (нахлёст)`;
+            laneRows.push({ key: `${r.key}:lane:${i}`, label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: lanes[i]! });
+          }
+        }
+      }
+      return laneRows;
     }
 
     const laneRows: Array<{ key: string; label: string; subLabel?: string; kind: Row["kind"]; hangarId?: string; layoutId?: string; standId?: string; events: PlacedEvent[] }> = [];
@@ -2488,7 +2890,7 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, ganttFilters, events, dndActive, dndStandsQ.data, dndStandById, selectedHangarIds, hangarsQ.data]);
+  }, [groupMode, ganttFilters, events, dndActive, dndStandsQ.data, dndStandById, dndHangarScopeIds, dndLayoutIds, dndZoneOnly, hangarsQ.data]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -2756,7 +3158,7 @@ export function GanttView() {
           "Интервалы буксировок": towSegments
             .map((t) => `${formatExportDate(t.startAt)} – ${formatExportDate(t.endAt)}`)
             .join("; "),
-          "Примечание": String((ev as any).notes ?? ""),
+          "Примечание": String(ev.notes ?? ""),
           "ID события": ev.id
         };
       });
@@ -2765,7 +3167,7 @@ export function GanttView() {
   const exportBaseName = `gantt-${rangeFromApplied}-${rangeToApplied}`;
   const reportMeta = [
     `Период: ${timelineDate(rangeFromApplied, timelineTimeMode).format("DD.MM.YYYY")} – ${timelineDate(rangeToApplied, timelineTimeMode).format("DD.MM.YYYY")}`,
-    `Шкала: ${ZOOM_LABEL[majorScale]} / ${ZOOM_LABEL[minorScale]}`,
+    `Шкала: ${ZOOM_LABEL[majorScale]} / ${ZOOM_LABEL[minorScale]}${fitWidth ? " (по ширине)" : ""}`,
     `Время: ${timelineTimeMode}`,
     `Вид: ${ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт"}`,
     `Группировка: ${groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}`,
@@ -2951,6 +3353,8 @@ export function GanttView() {
     { label: "+год", days: 365 }
   ];
 
+  const periodChipLabel = `${dayjs.utc(rangeFromApplied).format("DD.MM.YY")} – ${dayjs.utc(rangeToApplied).format("DD.MM.YY")}`;
+
   const layoutsByHangar = useMemo(() => {
     const m = new Map<string, Layout[]>();
     for (const l of allLayoutsQ.data ?? []) {
@@ -3074,10 +3478,11 @@ export function GanttView() {
               {dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – {dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}
               <span className="ganttPanelDot" aria-hidden="true">·</span>
               {ZOOM_LABEL[majorScale]} / {ZOOM_LABEL[minorScale]}
+              {fitWidth ? " · по ширине" : ""}
               <span className="ganttPanelDot" aria-hidden="true">·</span>
               {ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт"}
               <span className="ganttPanelDot" aria-hidden="true">·</span>
-              {groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}
+              {panelView === "TABLE" ? "Таблица" : groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}
             </span>
           </div>
           <div className="ganttPanelActions">
@@ -3152,10 +3557,12 @@ export function GanttView() {
               type="button"
               className={`btn ganttIconBtn${copySelectMode ? " btnCopyActive" : ""}`}
               onClick={() => setCopySelectMode((v) => !v)}
-              disabled={!canEditEvents}
+              disabled={!canEditEvents || panelView !== "DIAGRAM"}
               title={
                 !canEditEvents
                   ? "Просмотрщик может смотреть события, но не создавать копии"
+                  : panelView !== "DIAGRAM"
+                  ? "Копирование доступно в режиме диаграммы"
                   : copySelectMode
                   ? "Нажмите на событие в диаграмме. Esc — отмена."
                   : "Выбрать существующее событие и создать его копию"
@@ -3184,92 +3591,83 @@ export function GanttView() {
 
           <div className="ganttToolbarGroup">
             <span className="tgLabel">Вид</span>
-            <label className="tgField" title="Как группировать строки">
-              <span className="tgFieldLabel">Группировка</span>
-              <select value={groupMode} onChange={(e) => setGroupMode(e.target.value as GroupMode)}>
-                <option value="AIRCRAFT">Борт / событие</option>
-                <option value="HANGAR_STAND">Ангар / место</option>
-              </select>
-            </label>
-            <label className="tgField" title="Текущий график показывает факт вместо плана, когда факт заполнен; План-факт показывает два бара">
-              <span className="tgFieldLabel">Отображение</span>
-              <select value={ganttDisplayMode} onChange={(e) => setGanttDisplayMode(e.target.value as GanttDisplayMode)}>
-                <option value="CURRENT">Текущий график</option>
-                <option value="PLAN_FACT">План-факт</option>
-              </select>
-            </label>
-            <label className="tgField" title="Крупные блоки шкалы времени">
-              <span className="tgFieldLabel">Major</span>
-              <select value={majorScale} onChange={(e) => setMajorScale(e.target.value as TimeScale)}>
-                {ZOOM_ORDER.filter((z) => ZOOM_ORDER.indexOf(z) > ZOOM_ORDER.indexOf(minorScale) || (minorScale === "year" && z === "year")).map((z) => (
-                  <option key={z} value={z}>
-                    {ZOOM_LABEL[z]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="tgField" title="Мелкие деления сетки, ширина канваса и шаг гистограммы">
-              <span className="tgFieldLabel">Minor</span>
-              <select
-                value={minorScale}
-                onChange={(e) => {
-                  const next = e.target.value as TimeScale;
-                  setMinorScale(next);
-                  const nextIdx = ZOOM_ORDER.indexOf(next);
-                  const majorIdx = ZOOM_ORDER.indexOf(majorScale);
-                  if (majorIdx <= nextIdx && next !== "year") {
-                    setMajorScale(ZOOM_ORDER[Math.min(nextIdx + 1, ZOOM_ORDER.length - 1)]!);
-                  }
+            <div className="ganttViewToggle" role="group" aria-label="Режим отображения плана">
+              <button
+                type="button"
+                className={`ganttViewToggleBtn${panelView === "DIAGRAM" ? " ganttViewToggleBtnActive" : ""}`}
+                aria-pressed={panelView === "DIAGRAM"}
+                onClick={() => setPanelView("DIAGRAM")}
+              >
+                Диаграмма
+              </button>
+              <button
+                type="button"
+                className={`ganttViewToggleBtn${panelView === "TABLE" ? " ganttViewToggleBtnActive" : ""}`}
+                aria-pressed={panelView === "TABLE"}
+                onClick={() => {
+                  setCopySelectMode(false);
+                  setPanelView("TABLE");
                 }}
               >
-                {ZOOM_ORDER.map((z) => (
-                  <option key={z} value={z}>
-                    {ZOOM_LABEL[z]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="tgField" title="Часовой режим отображения таймлайна">
-              <span className="tgFieldLabel">Время</span>
-              <select value={timelineTimeMode} onChange={(e) => setTimelineTimeMode(e.target.value as TimelineTimeMode)}>
-                <option value="UTC">UTC</option>
-                <option value="LOCAL">Local</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              className={`tgLockBtn${dndEnabled ? " tgLockBtnActive" : ""}${!canDnd ? " tgLockBtnDisabled" : ""}`}
-              aria-pressed={dndEnabled}
-              aria-label={dndEnabled ? "Drag&Drop включён" : "Drag&Drop выключен"}
-              title={
-                !canDnd
-                  ? activeSandbox
-                    ? "Drag&Drop доступен владельцу или редактору песочницы"
-                    : "Drag&Drop доступен только ADMIN / PLANNER"
-                  : dndEnabled
-                  ? "Drag&Drop включён — нажмите, чтобы заблокировать перетаскивание"
-                  : "Перетаскивание заблокировано — нажмите, чтобы включить Drag&Drop"
-              }
-              disabled={!canDnd}
-              onClick={() => {
-                if (!canDnd) return;
-                const v = !dndEnabled;
-                setDndEnabled(v);
-                if (v && groupMode !== "HANGAR_STAND") setGroupMode("HANGAR_STAND");
-              }}
-            >
-              {dndEnabled ? (
-                <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="4" y="10" width="12" height="8" rx="2" />
-                  <path d="M7 10V7a3 3 0 0 1 6 0" />
-                </svg>
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="4" y="10" width="12" height="8" rx="2" />
-                  <path d="M7 10V7a3 3 0 0 1 6 0v3" />
-                </svg>
-              )}
-            </button>
+                Таблица
+              </button>
+            </div>
+            {panelView === "DIAGRAM" ? (
+              <>
+                <label className="tgField" title="Как группировать строки">
+                  <span className="tgFieldLabel">Группировка</span>
+                  <select value={groupMode} onChange={(e) => setGroupMode(e.target.value as GroupMode)}>
+                    <option value="AIRCRAFT">Борт / событие</option>
+                    <option value="HANGAR_STAND">Ангар / место</option>
+                  </select>
+                </label>
+                <label className="tgField" title="Текущий график показывает факт вместо плана, когда факт заполнен; План-факт показывает два бара">
+                  <span className="tgFieldLabel">Отображение</span>
+                  <select value={ganttDisplayMode} onChange={(e) => setGanttDisplayMode(e.target.value as GanttDisplayMode)}>
+                    <option value="CURRENT">Текущий график</option>
+                    <option value="PLAN_FACT">План-факт</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className={`tgLockBtn${dndEnabled ? " tgLockBtnActive" : ""}${!canDnd ? " tgLockBtnDisabled" : ""}`}
+                  aria-pressed={dndEnabled}
+                  aria-label={dndEnabled ? "Drag&Drop включён" : "Drag&Drop выключен"}
+                  title={
+                    !canDnd
+                      ? activeSandbox
+                        ? "Drag&Drop доступен владельцу или редактору песочницы"
+                        : "Drag&Drop доступен только ADMIN / PLANNER"
+                      : dndEnabled
+                      ? "Drag&Drop включён — нажмите, чтобы заблокировать перетаскивание"
+                      : "Перетаскивание заблокировано — нажмите, чтобы включить Drag&Drop"
+                  }
+                  disabled={!canDnd}
+                  onClick={() => {
+                    if (!canDnd) return;
+                    const v = !dndEnabled;
+                    setDndEnabled(v);
+                    if (v && groupMode !== "HANGAR_STAND") setGroupMode("HANGAR_STAND");
+                    if (!v) {
+                      setSelectedDndEventIds([]);
+                      setPtrDrag(null);
+                    }
+                  }}
+                >
+                  {dndEnabled ? (
+                    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="4" y="10" width="12" height="8" rx="2" />
+                      <path d="M7 10V7a3 3 0 0 1 6 0" />
+                    </svg>
+                  ) : (
+                    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="4" y="10" width="12" height="8" rx="2" />
+                      <path d="M7 10V7a3 3 0 0 1 6 0v3" />
+                    </svg>
+                  )}
+                </button>
+              </>
+            ) : null}
           </div>
 
           <div className="ganttToolbarGroup">
@@ -3360,66 +3758,146 @@ export function GanttView() {
 
           <div className="ganttToolbarGroup">
             <span className="tgLabel">Период</span>
-            <div className="tgPresets" role="group" aria-label="Быстрый выбор прошедшего периода">
-              {pastRangePresets.map((p) => (
-                <button
-                  key={p.label}
-                  className="btn btnGhost"
-                  type="button"
-                  onClick={() => applyRangePreset("past", p.days)}
-                  title={`${p.label} до сегодняшнего дня`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-            <label className="tgField">
-              <span className="tgFieldLabel">c</span>
-              <input
-                type="date"
-                value={rangeFromInput}
-                onChange={(e) => setRangeFromInput(e.target.value)}
-                onBlur={applyManualRange}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") applyManualRange();
-                }}
-                style={{ width: 150 }}
-              />
-            </label>
-            <label className="tgField">
-              <span className="tgFieldLabel">по</span>
-              <input
-                type="date"
-                value={rangeToInput}
-                onChange={(e) => setRangeToInput(e.target.value)}
-                onBlur={applyManualRange}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") applyManualRange();
-                }}
-                style={{ width: 150 }}
-              />
-            </label>
-            <div className="tgPresets tgPresetsFuture" role="group" aria-label="Быстрый выбор будущего периода">
-              {futureRangePresets.map((p) => (
-                <button
-                  key={p.label}
-                  className="btn btnGhost"
-                  type="button"
-                  onClick={() => applyRangePreset("future", p.days)}
-                  title={`${p.label} от сегодняшнего дня`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
+            <ToolbarPopover label={periodChipLabel} title="Период диаграммы" panelClassName="tbPopoverPeriod">
+              <div className="tbPopoverPeriodBody">
+                <div className="tgPresets" role="group" aria-label="Быстрый выбор прошедшего периода">
+                  {pastRangePresets.map((p) => (
+                    <button
+                      key={p.label}
+                      className="btn btnGhost"
+                      type="button"
+                      onClick={() => applyRangePreset("past", p.days)}
+                      title={`${p.label} до сегодняшнего дня`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="tbPopoverPeriodDates">
+                  <label className="tgField">
+                    <span className="tgFieldLabel">c</span>
+                    <input
+                      type="date"
+                      value={rangeFromInput}
+                      onChange={(e) => setRangeFromInput(e.target.value)}
+                      onBlur={applyManualRange}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") applyManualRange();
+                      }}
+                      style={{ width: 150 }}
+                    />
+                  </label>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">по</span>
+                    <input
+                      type="date"
+                      value={rangeToInput}
+                      onChange={(e) => setRangeToInput(e.target.value)}
+                      onBlur={applyManualRange}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") applyManualRange();
+                      }}
+                      style={{ width: 150 }}
+                    />
+                  </label>
+                </div>
+                <div className="tgPresets tgPresetsFuture" role="group" aria-label="Быстрый выбор будущего периода">
+                  {futureRangePresets.map((p) => (
+                    <button
+                      key={p.label}
+                      className="btn btnGhost"
+                      type="button"
+                      onClick={() => applyRangePreset("future", p.days)}
+                      title={`${p.label} от сегодняшнего дня`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </ToolbarPopover>
           </div>
         </div>
 
-        {copySelectMode || (dndEnabled && !dndActive) || dndNotice || dndBlockedReason || rangeError || q.isFetching || q.error ? (
+        {panelView === "DIAGRAM" && dndActive ? (
+          <div className="ganttDndBar">
+            <span className="tgLabel">DnD</span>
+            <ToolbarPopover
+              label={dndHangarIds.length ? `Ангар · ${dndHangarIds.length}` : "Ангар DnD"}
+              title="Ангары для drop-зон"
+              active={dndHangarIds.length > 0}
+              panelClassName="tbPopoverNarrow"
+            >
+              <label className="tgField">
+                <span className="tgFieldLabel">Ангар DnD</span>
+                <MultiSelectDropdown
+                  options={(hangarsQ.data ?? []).map((h) => ({ id: h.id, label: h.name }))}
+                  value={dndHangarIds}
+                  onChange={setDndHangarIds}
+                  placeholder="как в фильтре"
+                  width={220}
+                  maxHeight={280}
+                  searchable
+                  searchPlaceholder="Найти ангар"
+                  compact
+                />
+              </label>
+            </ToolbarPopover>
+            <ToolbarPopover
+              label={dndLayoutIds.length ? `Схемы · ${dndLayoutIds.length}` : "Схемы"}
+              title="Схемы расстановки для drop-зон"
+              active={dndLayoutIds.length > 0}
+              panelClassName="tbPopoverNarrow"
+            >
+              <label className="tgField">
+                <span className="tgFieldLabel">Схемы</span>
+                <MultiSelectDropdown
+                  options={dndLayoutOptions}
+                  value={dndLayoutIds}
+                  onChange={setDndLayoutIds}
+                  placeholder="все активные"
+                  width={240}
+                  maxHeight={280}
+                  searchable
+                  searchPlaceholder="Найти схему"
+                  compact
+                />
+              </label>
+            </ToolbarPopover>
+            <button
+              type="button"
+              className={`btn${dndZoneOnly ? " btnPrimary" : ""}`}
+              aria-pressed={dndZoneOnly}
+              title="Показать только строки выбранных ангаров/схем"
+              onClick={() => setDndZoneOnly((v) => !v)}
+            >
+              Только зона
+            </button>
+            {selectedDndEventIds.length > 0 ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setSelectedDndEventIds([])}
+                title="Снять выделение событий"
+              >
+                Выбрано: {selectedDndEventIds.length} ✕
+              </button>
+            ) : (
+              <span className="muted ganttDndHint">Ctrl/⌘+клик — пачка</span>
+            )}
+          </div>
+        ) : null}
+
+        {copySelectMode || (dndEnabled && !dndActive) || dndNotice || dndBlockedReason || rangeError || q.isFetching || q.error || (dndActive && selectedDndEventIds.length > 0) ? (
           <div className="ganttNotices">
             {copySelectMode ? (
               <span className="gpChip gpChipCopy">
                 Режим копирования: выберите событие на диаграмме. <kbd>Esc</kbd> — отмена.
+              </span>
+            ) : null}
+            {dndActive && selectedDndEventIds.length > 0 ? (
+              <span className="gpChip gpChipInfo">
+                Выделено для массового DnD: {selectedDndEventIds.length}. Тяните любое из них — перенесутся все.
               </span>
             ) : null}
             {q.isFetching ? <span className="gpChip gpChipInfo">Загрузка…</span> : null}
@@ -3435,6 +3913,7 @@ export function GanttView() {
           </div>
         ) : null}
 
+        {panelView === "DIAGRAM" ? (
         <details className="ganttLegendDetails">
           <summary>Легенда</summary>
           <div className="ganttLegendBody">
@@ -3548,8 +4027,28 @@ export function GanttView() {
             </div>
           </div>
         </details>
+        ) : null}
       </div>
 
+      {panelView === "TABLE" ? (
+        <div className="card ganttTableCard">
+          <GanttEventsTable
+            events={exportEvents}
+            canEdit={canEditEvents}
+            eventsQueryFromISO={from.toISOString()}
+            eventsQueryToISO={to.toISOString()}
+            aircraft={aircraftQ.data ?? []}
+            eventTypes={eventTypesQ.data ?? []}
+            hangars={hangarsQ.data ?? []}
+            aircraftTypes={aircraftTypesQ.data ?? []}
+            operators={(operatorsQ.data ?? []).map((o) => ({ id: o.id, name: o.name }))}
+            onOpenEvent={(eventId) => {
+              const ev = events.find((e) => e.id === eventId);
+              if (ev) openEditorForExisting(ev);
+            }}
+          />
+        </div>
+      ) : (
       <div className={`ganttGrid${copySelectMode ? " ganttPickMode" : ""}`}>
         <div className="ganttHeaderRow">
           <div className="ganttLabel ganttAxisLabel" style={ganttLabelColStyle}>
@@ -3563,7 +4062,17 @@ export function GanttView() {
             />
           </div>
           <div className="ganttHeaderRightViewport" ref={headerViewportRef}>
-            <div className="ganttCanvas" style={{ width: canvasWidth, height: 44 }}>
+            <div
+              key={`gantt-header-${fitLayoutEpoch}`}
+              className="ganttCanvas"
+              style={{ width: canvasWidth, height: 44 }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setTimelineScaleMenu({ x: e.clientX, y: e.clientY });
+              }}
+              title="ПКМ — шкала времени (Major / Minor / по ширине)"
+            >
               <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} timeMode={timelineTimeMode} />
               <div className="ganttTimelineMinorRow">
                 {ticks.map((t, i) => {
@@ -3621,6 +4130,74 @@ export function GanttView() {
           </div>
         </div>
 
+        {timelineScaleMenu && typeof document !== "undefined"
+          ? createPortal(
+              <div
+                ref={timelineScaleMenuRef}
+                className="ganttTimelineScaleMenu"
+                style={{ left: timelineScaleMenu.x, top: timelineScaleMenu.y }}
+                role="dialog"
+                aria-label="Шкала времени"
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <div className="ganttTimelineScaleMenuTitle">Шкала времени</div>
+                <div className="tbPopoverGrid tbPopoverGridCompact">
+                  <label className="tgField" title="Крупные блоки шкалы времени">
+                    <span className="tgFieldLabel">Major</span>
+                    <select value={majorScale} onChange={(e) => setMajorScale(e.target.value as TimeScale)}>
+                      {ZOOM_ORDER.filter((z) => ZOOM_ORDER.indexOf(z) > ZOOM_ORDER.indexOf(minorScale) || (minorScale === "year" && z === "year")).map((z) => (
+                        <option key={z} value={z}>
+                          {ZOOM_LABEL[z]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="tgField" title="Мелкие деления сетки, ширина канваса и шаг гистограммы">
+                    <span className="tgFieldLabel">Minor</span>
+                    <select
+                      value={minorScale}
+                      onChange={(e) => {
+                        const next = e.target.value as TimeScale;
+                        setMinorScale(next);
+                        if (fitWidth) setFitWidth(false);
+                        const nextIdx = ZOOM_ORDER.indexOf(next);
+                        const majorIdx = ZOOM_ORDER.indexOf(majorScale);
+                        if (majorIdx <= nextIdx && next !== "year") {
+                          setMajorScale(ZOOM_ORDER[Math.min(nextIdx + 1, ZOOM_ORDER.length - 1)]!);
+                        }
+                      }}
+                    >
+                      {ZOOM_ORDER.map((z) => (
+                        <option key={z} value={z}>
+                          {ZOOM_LABEL[z]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="tgField" title="Часовой режим отображения таймлайна">
+                    <span className="tgFieldLabel">Время</span>
+                    <select value={timelineTimeMode} onChange={(e) => setTimelineTimeMode(e.target.value as TimelineTimeMode)}>
+                      <option value="UTC">UTC</option>
+                      <option value="LOCAL">Local</option>
+                    </select>
+                  </label>
+                  <div className="tbPopoverActions">
+                    <button
+                      type="button"
+                      className={`btn${fitWidth ? " btnPrimary" : ""}`}
+                      aria-pressed={fitWidth}
+                      title="Растянуть выбранный диапазон дат на всю ширину панели"
+                      onClick={() => setFitWidth((v) => !v)}
+                    >
+                      По ширине
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )
+          : null}
+
         <div className="ganttBody">
           <div className="ganttLeftCol" style={ganttLabelColStyle}>
             {groupMode === "AIRCRAFT"
@@ -3652,7 +4229,7 @@ export function GanttView() {
 
           <div className="ganttRightCol">
             <div className="ganttRightScroll" ref={bodyScrollRef} onScroll={onBodyScroll}>
-              <div className="ganttRightInner" style={{ width: canvasWidth }}>
+              <div key={`gantt-inner-${fitLayoutEpoch}`} className="ganttRightInner" style={{ width: canvasWidth, minWidth: canvasWidth }}>
                 {groupMode === "HANGAR_STAND" && placementLinks.length > 0 ? (
                   <svg
                     className="placementLinkLayer"
@@ -3763,12 +4340,20 @@ export function GanttView() {
                               border: "2px dashed rgba(37, 99, 235, 0.65)",
                               boxSizing: "border-box",
                               pointerEvents: "none",
-                              zIndex: 2
+                              zIndex: 2,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "#1d4ed8",
+                              fontWeight: 700,
+                              fontSize: 11
                             }}
                             title={`Предпросмотр: ${dayjs(ptrPreview.startAt).format("DD.MM.YYYY HH:mm")} – ${dayjs(ptrPreview.endAt).format(
                               "DD.MM.YYYY HH:mm"
-                            )}`}
-                          />
+                            )}${(ptrDrag?.eventIds?.length ?? 0) > 1 ? ` · ${ptrDrag!.eventIds.length} событий` : ""}`}
+                          >
+                            {(ptrDrag?.eventIds?.length ?? 0) > 1 ? `×${ptrDrag!.eventIds.length}` : null}
+                          </div>
                         ) : null}
                         {r.events.map((p) => {
                           const ev = p.ev;
@@ -3799,18 +4384,38 @@ export function GanttView() {
                                 ...visual,
                                 ...barPaddingStyle(w),
                                 outline:
-                                  dndActive && dndHoverBarIds.includes(ev.id) && dndHoverIntent === "bump"
-                                    ? "2px solid rgba(239, 68, 68, 0.95)"
-                                    : undefined,
-                                outlineOffset: 0
+                                  dndActive && selectedDndEventIds.includes(ev.id)
+                                    ? "2px solid rgba(14, 165, 233, 0.95)"
+                                    : dndActive && dndHoverBarIds.includes(ev.id) && dndHoverIntent === "bump"
+                                      ? "2px solid rgba(239, 68, 68, 0.95)"
+                                      : undefined,
+                                outlineOffset: 0,
+                                boxShadow:
+                                  dndActive && selectedDndEventIds.includes(ev.id)
+                                    ? "0 0 0 2px rgba(14, 165, 233, 0.25)"
+                                    : undefined
                               }}
                               data-dnd-bar={dndActive ? "1" : undefined}
                               data-event-id={ev.id}
                               onPointerDown={(e) => {
                                 if (!dndActive) return;
                                 if (e.button !== 0) return;
+                                // Ctrl/Cmd/Shift — мультивыбор без старта drag
+                                if (e.metaKey || e.ctrlKey || e.shiftKey) {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setSelectedDndEventIds((prev) =>
+                                    prev.includes(ev.id) ? prev.filter((id) => id !== ev.id) : [...prev, ev.id]
+                                  );
+                                  return;
+                                }
                                 e.preventDefault();
                                 e.stopPropagation();
+                                try {
+                                  (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                                } catch {
+                                  // ignore
+                                }
                                 setPtrTarget(null);
                                 setDndHoverKey(null);
                                 setDndHoverBarIds([]);
@@ -3821,115 +4426,46 @@ export function GanttView() {
                                 const scrollLeft = right ? right.scrollLeft : 0;
                                 const px = rect ? e.clientX - rect.left + scrollLeft : x;
 
-                                const barRect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-                                const offsetInBar = e.clientX - barRect.left;
-                                const edgePx = 8;
-                                const mode: "move" | "resizeL" | "resizeR" =
-                                  offsetInBar <= edgePx ? "resizeL" : offsetInBar >= barRect.width - edgePx ? "resizeR" : "move";
-
-                                ptrPreviewRef.current = null;
-                                setPtrPreview(null);
-                                setPtrDrag({
+                                const selected =
+                                  selectedDndEventIds.includes(ev.id) && selectedDndEventIds.length > 1
+                                    ? selectedDndEventIds
+                                    : [ev.id];
+                                const dragState = {
                                   eventId: ev.id,
-                                  mode,
+                                  eventIds: selected,
+                                  mode: "move" as const,
                                   started: false,
                                   startClientX: e.clientX,
                                   startClientY: e.clientY,
                                   grabOffsetPx: Math.max(0, px - x),
                                   origStartMs: dayjs(ev.startAt).valueOf(),
-                                  origEndMs: dayjs(ev.endAt).valueOf()
-                                });
+                                  origEndMs: dayjs(ev.endAt).valueOf(),
+                                  originHangarId: String(r.hangarId ?? ""),
+                                  originRowKey: String(r.key)
+                                };
+                                ptrPreviewRef.current = null;
+                                setPtrPreview(null);
+                                ptrDragRef.current = dragState;
+                                setPtrDrag(dragState);
+                                if (r.hangarId) {
+                                  const t = { hangarId: String(r.hangarId), rowKey: String(r.key), intent: "move" as const };
+                                  ptrTargetRef.current = t;
+                                  setPtrTarget(t);
+                                }
                               }}
                               onClick={() => {
                                 // В режиме DnD клик не должен открывать карточку
                                 if (dndActive) return;
                                 pickEvent(ev);
                               }}
-                              title={`${eventTooltip(ev, timelineTimeMode)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
+                              title={`${eventTooltip(ev, timelineTimeMode)}\n${
+                                dndActive
+                                  ? "Ctrl/⌘+клик — выделить · тяните для переноса"
+                                  : copySelectMode
+                                    ? "Нажмите, чтобы создать копию"
+                                    : "Нажмите, чтобы редактировать"
+                              }`}
                             >
-                              {/* Ручки ресайза (чтобы "по краям" работало стабильно) */}
-                              {dndActive ? (
-                                <>
-                                  <div
-                                    style={{
-                                      position: "absolute",
-                                      left: 0,
-                                      top: 0,
-                                      bottom: 0,
-                                      width: 10,
-                                      cursor: "ew-resize",
-                                      zIndex: 3,
-                                      pointerEvents: "auto"
-                                    }}
-                                    onPointerDown={(e) => {
-                                      if (e.button !== 0) return;
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      setPtrTarget(null);
-                                      setDndHoverKey(null);
-                                      setDndHoverBarIds([]);
-                                      setDndHoverIntent(null);
-                                      const right = bodyScrollRef.current;
-                                      const inner = right?.querySelector?.(".ganttRightInner") as HTMLElement | null;
-                                      const rect = inner?.getBoundingClientRect();
-                                      const scrollLeft = right ? right.scrollLeft : 0;
-                                      const px = rect ? e.clientX - rect.left + scrollLeft : x;
-                                      ptrPreviewRef.current = null;
-                                      setPtrPreview(null);
-                                      setPtrDrag({
-                                        eventId: ev.id,
-                                        mode: "resizeL",
-                                        started: false,
-                                        startClientX: e.clientX,
-                                        startClientY: e.clientY,
-                                        grabOffsetPx: Math.max(0, px - x),
-                                        origStartMs: dayjs(ev.startAt).valueOf(),
-                                        origEndMs: dayjs(ev.endAt).valueOf()
-                                      });
-                                    }}
-                                    title="Потяните, чтобы изменить начало"
-                                  />
-                                  <div
-                                    style={{
-                                      position: "absolute",
-                                      right: 0,
-                                      top: 0,
-                                      bottom: 0,
-                                      width: 10,
-                                      cursor: "ew-resize",
-                                      zIndex: 3,
-                                      pointerEvents: "auto"
-                                    }}
-                                    onPointerDown={(e) => {
-                                      if (e.button !== 0) return;
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      setPtrTarget(null);
-                                      setDndHoverKey(null);
-                                      setDndHoverBarIds([]);
-                                      setDndHoverIntent(null);
-                                      const right = bodyScrollRef.current;
-                                      const inner = right?.querySelector?.(".ganttRightInner") as HTMLElement | null;
-                                      const rect = inner?.getBoundingClientRect();
-                                      const scrollLeft = right ? right.scrollLeft : 0;
-                                      const px = rect ? e.clientX - rect.left + scrollLeft : x;
-                                      ptrPreviewRef.current = null;
-                                      setPtrPreview(null);
-                                      setPtrDrag({
-                                        eventId: ev.id,
-                                        mode: "resizeR",
-                                        started: false,
-                                        startClientX: e.clientX,
-                                        startClientY: e.clientY,
-                                        grabOffsetPx: Math.max(0, px - x),
-                                        origStartMs: dayjs(ev.startAt).valueOf(),
-                                        origEndMs: dayjs(ev.endAt).valueOf()
-                                      });
-                                    }}
-                                    title="Потяните, чтобы изменить конец"
-                                  />
-                                </>
-                              ) : null}
                               {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
                               {canShowBarTitle(w) ? (
                                 <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
@@ -3969,7 +4505,11 @@ export function GanttView() {
           <div className="ganttBottomScrollRow" aria-hidden="true">
             <div className="ganttBottomScrollSpacer" style={ganttLabelColStyle} />
             <div className="ganttBottomScrollViewport" ref={bottomScrollRef} onScroll={onBottomScroll}>
-              <div className="ganttBottomScrollInner" style={{ width: canvasWidth }} />
+              <div
+                key={`gantt-bottom-${fitLayoutEpoch}`}
+                className="ganttBottomScrollInner"
+                style={{ width: canvasWidth, minWidth: canvasWidth }}
+              />
             </div>
           </div>
           {showSlotHistogram ? (
@@ -3979,7 +4519,7 @@ export function GanttView() {
                 <span>кол-во в периоде</span>
               </div>
               <div className="ganttSlotHistogramViewport" ref={histogramViewportRef}>
-                <div className="ganttSlotHistogramCanvas" style={{ width: canvasWidth }}>
+                <div key={`gantt-hist-${fitLayoutEpoch}`} className="ganttSlotHistogramCanvas" style={{ width: canvasWidth, minWidth: canvasWidth }}>
                   {slotHistogram.length > 0 ? (
                     slotHistogram.map((b) => {
                       const occupiedPct = b.occupied > 0 ? (b.occupied / slotHistogramMaxOccupied) * 100 : 0;
@@ -4008,6 +4548,7 @@ export function GanttView() {
           ) : null}
         </div>
       </div>
+      )}
 
       <Drawer
         open={editorOpen}
@@ -4797,8 +5338,18 @@ export function GanttView() {
           ) : null}
           {pendingSave === "dndMove" ? (
             <div className="evDiff">
-              <div className="evDiffTitle">Перенос события</div>
-              <div className="muted">Размещение/время будут изменены согласно предпросмотру.</div>
+              <div className="evDiffTitle">
+                {Array.isArray((pendingDnd as any)?.eventIds) && (pendingDnd as any).eventIds.length > 1
+                  ? `Массовый перенос: ${(pendingDnd as any).eventIds.length} событий`
+                  : "Перенос события"}
+              </div>
+              <div className="muted">
+                Размещение/время будут изменены согласно предпросмотру
+                {Array.isArray((pendingDnd as any)?.eventIds) && (pendingDnd as any).eventIds.length > 1
+                  ? " (относительные сдвиги сохраняются)"
+                  : ""}
+                .
+              </div>
             </div>
           ) : null}
 

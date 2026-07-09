@@ -3,6 +3,75 @@ import { randomUUID } from "node:crypto";
 
 export type CopyRange = { from?: Date; to?: Date };
 
+export type CopyPlanResult = {
+  events: number;
+  reservations: number;
+  tows: number;
+  planLines: number;
+  actualLines: number;
+  timeEntries: number;
+  materialReservations: number;
+  materialIssues: number;
+  stockMovements: number;
+  auditLines: number;
+  skippedDuplicates: number;
+};
+
+type SourceEvent = {
+  id: string;
+  sandboxId: string | null;
+  level: any;
+  status: any;
+  planningKind?: any;
+  title: string;
+  aircraftId: string | null;
+  eventTypeId: string;
+  virtualAircraft: Prisma.JsonValue | null;
+  startAt: Date;
+  endAt: Date;
+  budgetStartAt?: Date | null;
+  budgetEndAt?: Date | null;
+  actualStartAt?: Date | null;
+  actualEndAt?: Date | null;
+  hangarId: string | null;
+  layoutId: string | null;
+  notes: string | null;
+  originEventId?: string | null;
+  sourceEventId?: string | null;
+  sourceSandboxId?: string | null;
+  updatedAt?: Date;
+};
+
+/** Корень lineage: origin из источника, либо сам id если событие из prod. */
+export function resolveOriginEventId(src: {
+  id: string;
+  sandboxId: string | null;
+  originEventId?: string | null;
+}): string | null {
+  if (src.originEventId) return src.originEventId;
+  if (src.sandboxId == null) return src.id;
+  return null;
+}
+
+function eventFingerprint(ev: {
+  aircraftId: string | null;
+  virtualAircraft: unknown;
+  eventTypeId: string;
+  startAt: Date;
+  endAt: Date;
+}): string {
+  const virtualLabel =
+    ev.aircraftId == null && ev.virtualAircraft && typeof ev.virtualAircraft === "object"
+      ? String((ev.virtualAircraft as any).label ?? "")
+      : "";
+  return [
+    ev.aircraftId ?? `v:${virtualLabel}`,
+    ev.eventTypeId,
+    ev.startAt.toISOString(),
+    ev.endAt.toISOString()
+  ].join("|");
+}
+
 /**
  * Копирует записи плана из исходного контекста (sourceSandboxId = null для прода) в целевой sandbox.
  * Работает в транзакции. Опциональный диапазон ограничивает копирование событий по [startAt, endAt).
@@ -17,30 +86,39 @@ export async function copyPlanToSandbox(
     targetSandboxId: string;
     range?: CopyRange;
     actor: string;
+    /** Если задано — копируются только эти события (должны принадлежать sourceSandboxId). */
+    eventIds?: string[];
+    /**
+     * Пропускать дубликаты по originEventId (и fingerprint, если origin нет).
+     * Учитывает уже существующие события в target и события, добавленные ранее в этой же операции.
+     */
+    skipDuplicates?: boolean;
+    /** Уже занятые origin/fingerprint в target (для merge нескольких источников). */
+    occupiedOrigins?: Set<string>;
+    occupiedFingerprints?: Set<string>;
   }
-): Promise<{
-  events: number;
-  reservations: number;
-  tows: number;
-  planLines: number;
-  actualLines: number;
-  timeEntries: number;
-  materialReservations: number;
-  materialIssues: number;
-  stockMovements: number;
-  auditLines: number;
-}> {
-  const { sourceSandboxId, targetSandboxId, range, actor } = params;
+): Promise<CopyPlanResult> {
+  const {
+    sourceSandboxId,
+    targetSandboxId,
+    range,
+    actor,
+    eventIds,
+    skipDuplicates = false,
+    occupiedOrigins,
+    occupiedFingerprints
+  } = params;
 
   const where: Prisma.MaintenanceEventWhereInput = { sandboxId: sourceSandboxId };
+  if (eventIds?.length) where.id = { in: eventIds };
   if (range?.from || range?.to) {
     if (range.from) where.endAt = { gt: range.from };
     if (range.to) where.startAt = { lt: range.to };
   }
 
-  const sourceEvents = await tx.maintenanceEvent.findMany({ where });
+  const sourceEvents = (await tx.maintenanceEvent.findMany({ where })) as SourceEvent[];
 
-  const counts = {
+  const counts: CopyPlanResult = {
     events: 0,
     reservations: 0,
     tows: 0,
@@ -50,37 +128,96 @@ export async function copyPlanToSandbox(
     materialReservations: 0,
     materialIssues: 0,
     stockMovements: 0,
-    auditLines: 0
+    auditLines: 0,
+    skippedDuplicates: 0
   };
   if (sourceEvents.length === 0) return counts;
 
-  const eventIdMap = new Map<string, string>();
-  for (const src of sourceEvents) eventIdMap.set(src.id, randomUUID());
+  const originSet = occupiedOrigins ?? new Set<string>();
+  const fingerprintSet = occupiedFingerprints ?? new Set<string>();
 
-  const eventRows = sourceEvents.map((src) => ({
-    id: eventIdMap.get(src.id)!,
-    sandboxId: targetSandboxId,
-    level: src.level,
-    status: src.status,
-    planningKind: (src as any).planningKind ?? ((src as any).budgetStartAt && (src as any).budgetEndAt ? "PLANNED" : "UNPLANNED"),
-    title: src.title,
-    aircraftId: src.aircraftId,
-    eventTypeId: src.eventTypeId,
-    virtualAircraft: (src.virtualAircraft as Prisma.InputJsonValue | null) ?? Prisma.JsonNull,
-    startAt: src.startAt,
-    endAt: src.endAt,
-    budgetStartAt: (src as any).budgetStartAt,
-    budgetEndAt: (src as any).budgetEndAt,
-    actualStartAt: (src as any).actualStartAt,
-    actualEndAt: (src as any).actualEndAt,
-    hangarId: src.hangarId,
-    layoutId: src.layoutId,
-    notes: src.notes
-  }));
+  if (skipDuplicates && (!occupiedOrigins || !occupiedFingerprints)) {
+    const existing = await tx.maintenanceEvent.findMany({
+      where: { sandboxId: targetSandboxId },
+      select: {
+        id: true,
+        originEventId: true,
+        aircraftId: true,
+        virtualAircraft: true,
+        eventTypeId: true,
+        startAt: true,
+        endAt: true
+      }
+    });
+    for (const e of existing) {
+      if (e.originEventId) originSet.add(e.originEventId);
+      fingerprintSet.add(eventFingerprint(e));
+    }
+  }
+
+  // При дублях по origin оставляем более свежий источник
+  const sorted = skipDuplicates
+    ? [...sourceEvents].sort((a, b) => (b.updatedAt?.valueOf() ?? 0) - (a.updatedAt?.valueOf() ?? 0))
+    : sourceEvents;
+
+  const selected: SourceEvent[] = [];
+  for (const src of sorted) {
+    if (!skipDuplicates) {
+      selected.push(src);
+      continue;
+    }
+    const origin = resolveOriginEventId(src);
+    const fp = eventFingerprint(src);
+    if (origin && originSet.has(origin)) {
+      counts.skippedDuplicates += 1;
+      continue;
+    }
+    if (!origin && fingerprintSet.has(fp)) {
+      counts.skippedDuplicates += 1;
+      continue;
+    }
+    selected.push(src);
+    if (origin) originSet.add(origin);
+    fingerprintSet.add(fp);
+  }
+
+  if (selected.length === 0) return counts;
+
+  const eventIdMap = new Map<string, string>();
+  for (const src of selected) eventIdMap.set(src.id, randomUUID());
+
+  const eventRows = selected.map((src) => {
+    const originEventId = resolveOriginEventId(src);
+    return {
+      id: eventIdMap.get(src.id)!,
+      sandboxId: targetSandboxId,
+      level: src.level,
+      status: src.status,
+      planningKind:
+        (src as any).planningKind ??
+        ((src as any).budgetStartAt && (src as any).budgetEndAt ? "PLANNED" : "UNPLANNED"),
+      title: src.title,
+      aircraftId: src.aircraftId,
+      eventTypeId: src.eventTypeId,
+      virtualAircraft: (src.virtualAircraft as Prisma.InputJsonValue | null) ?? Prisma.JsonNull,
+      startAt: src.startAt,
+      endAt: src.endAt,
+      budgetStartAt: (src as any).budgetStartAt,
+      budgetEndAt: (src as any).budgetEndAt,
+      actualStartAt: (src as any).actualStartAt,
+      actualEndAt: (src as any).actualEndAt,
+      hangarId: src.hangarId,
+      layoutId: src.layoutId,
+      notes: src.notes,
+      originEventId,
+      sourceEventId: src.id,
+      sourceSandboxId
+    };
+  });
   const evCreated = await tx.maintenanceEvent.createMany({ data: eventRows });
   counts.events = evCreated.count;
 
-  const auditRows = sourceEvents.map((src) => ({
+  const auditRows = selected.map((src) => ({
     eventId: eventIdMap.get(src.id)!,
     sandboxId: targetSandboxId,
     action: EventAuditAction.CREATE,
@@ -89,7 +226,8 @@ export async function copyPlanToSandbox(
     changes: {
       copiedFrom: {
         sourceEventId: src.id,
-        sourceSandboxId
+        sourceSandboxId,
+        originEventId: resolveOriginEventId(src)
       }
     } as Prisma.InputJsonValue
   }));
@@ -123,7 +261,6 @@ export async function copyPlanToSandbox(
     });
   }
 
-  // Резервы могут быть 1:N с событием и связаны с конкретным этапом.
   const reservations = await tx.standReservation.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -142,7 +279,6 @@ export async function copyPlanToSandbox(
     counts.reservations = resCreated.count;
   }
 
-  // Буксировки
   const tows = await tx.eventTow.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -158,7 +294,6 @@ export async function copyPlanToSandbox(
     counts.tows = towCreated.count;
   }
 
-  // Work plan lines
   const planLines = await tx.eventWorkPlanLine.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -178,7 +313,6 @@ export async function copyPlanToSandbox(
     counts.planLines = pLCreated.count;
   }
 
-  // Work actual lines
   const actualLines = await tx.eventWorkActualLine.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -197,7 +331,6 @@ export async function copyPlanToSandbox(
     counts.actualLines = aLCreated.count;
   }
 
-  // Time entries
   const timeEntries = await tx.timeEntry.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -218,7 +351,6 @@ export async function copyPlanToSandbox(
     counts.timeEntries = teCreated.count;
   }
 
-  // Material reservations
   const materialReservations = await tx.materialReservation.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -237,7 +369,6 @@ export async function copyPlanToSandbox(
     counts.materialReservations = mrCreated.count;
   }
 
-  // Material issues
   const materialIssues = await tx.materialIssue.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -256,7 +387,6 @@ export async function copyPlanToSandbox(
     counts.materialIssues = miCreated.count;
   }
 
-  // Stock movements
   const stockMovements = await tx.stockMovement.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
   });
@@ -277,3 +407,5 @@ export async function copyPlanToSandbox(
 
   return counts;
 }
+
+export { eventFingerprint };

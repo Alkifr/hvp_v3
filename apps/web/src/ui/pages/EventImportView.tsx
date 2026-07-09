@@ -21,6 +21,7 @@ type ImportPreviewRow = {
   eventTypeKey?: string;
   hangar?: string | null;
   stand?: string | null;
+  layout?: string | null;
   warnings?: string[];
   error?: string;
 };
@@ -96,6 +97,14 @@ export function EventImportView() {
     }
   });
 
+  const isBusy = previewM.isPending || importM.isPending;
+  const busyMode = importM.isPending ? "import" : previewM.isPending ? "preview" : null;
+  const busyTitle = busyMode === "import" ? "Импорт событий" : "Проверка файла";
+  const busyText =
+    busyMode === "import"
+      ? `Создаём события и резервы по ${importRows?.length ?? 0} строкам…`
+      : `Сверяем справочники и конфликты мест по ${importRows?.length ?? 0} строкам…`;
+
   return (
     <div className="eventImportPage">
       <section className="massHero">
@@ -118,6 +127,7 @@ export function EventImportView() {
         <div className="muted">
           Excel/CSV. Шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt, budgetStartAt, budgetEndAt,
           actualStartAt, actualEndAt, towStartAt, towEndAt, Hangar, HangarStand. Периоды можно оставлять пустыми.
+          Места назначаются только в активных вариантах расстановки.
         </div>
         <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>
           {activeSandbox ? (
@@ -138,6 +148,7 @@ export function EventImportView() {
             <input
               type="file"
               accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+              disabled={isBusy}
               onChange={async (e) => {
                 const f = e.target.files?.[0] ?? null;
                 setImportFile(f);
@@ -169,24 +180,28 @@ export function EventImportView() {
 
           <button
             className="btn btnPrimary"
-            disabled={!importRows?.length || previewM.isPending}
+            disabled={!importRows?.length || isBusy}
             onClick={() => {
               if (!importRows?.length) return;
               previewM.mutate(importRows);
             }}
           >
-            Предпросмотр
+            {previewM.isPending ? "Проверяем…" : "Предпросмотр"}
           </button>
 
           <button
             className="btn btnPrimary"
-            disabled={!importRows?.length || importM.isPending || !(importResult as any)?.summary?.dryRun}
+            disabled={!importRows?.length || isBusy || !(importResult as any)?.summary?.dryRun}
             onClick={() => {
               if (!importRows?.length) return;
               importM.mutate(importRows);
             }}
           >
-            {activeSandbox ? "Импортировать в песочницу" : "Импортировать"}
+            {importM.isPending
+              ? "Импортируем…"
+              : activeSandbox
+                ? "Импортировать в песочницу"
+                : "Импортировать"}
           </button>
 
           {previewM.error || importM.error ? (
@@ -195,6 +210,23 @@ export function EventImportView() {
             </span>
           ) : null}
         </div>
+
+        {isBusy ? (
+          <div className="massCalculationPanel eventImportProgress" role="status" aria-live="polite">
+            <div className="massCalculationIcon" aria-hidden="true" />
+            <div className="massCalculationText">
+              <strong>{busyTitle}</strong>
+              <span>{busyText}</span>
+            </div>
+            <div className="massCalculationMeta">
+              <span>{importRows?.length ?? 0} строк</span>
+              <span>{busyMode === "import" ? "запись в план" : "dry-run"}</span>
+            </div>
+            <div className="massProgressTrack" aria-hidden="true">
+              <div className="massProgressBar" />
+            </div>
+          </div>
+        ) : null}
 
         {importError ? <div className="error">{importError}</div> : null}
         {importFile ? (
@@ -242,6 +274,7 @@ export function EventImportView() {
                       <th>Фактический период</th>
                       <th>Буксировка</th>
                       <th>Ангар / место</th>
+                      <th>Вариант</th>
                       <th>Комментарий</th>
                     </tr>
                   </thead>
@@ -269,6 +302,7 @@ export function EventImportView() {
                           {row.hangar || "—"}
                           {row.stand ? <span className="muted"> / {row.stand}</span> : null}
                         </td>
+                        <td>{row.layout || "—"}</td>
                         <td className="eventImportMessageCell">
                           {row.error ? <div className="eventImportErrorText">{row.error}</div> : null}
                           {row.warnings?.length ? (
@@ -314,4 +348,3 @@ export function EventImportView() {
     </div>
   );
 }
-

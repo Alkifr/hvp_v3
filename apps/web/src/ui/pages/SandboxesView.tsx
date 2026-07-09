@@ -26,6 +26,7 @@ export function SandboxesView() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<"mine" | "shared">("mine");
   const [createOpen, setCreateOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [shareFor, setShareFor] = useState<SandboxSummary | null>(null);
   const [renameFor, setRenameFor] = useState<SandboxSummary | null>(null);
   const [promoteFor, setPromoteFor] = useState<SandboxSummary | null>(null);
@@ -42,6 +43,7 @@ export function SandboxesView() {
   const mine = list.filter((s) => s.isOwner);
   const shared = list.filter((s) => !s.isOwner);
   const visible = tab === "mine" ? mine : shared;
+  const editableSandboxes = list.filter((s) => s.myRole === "OWNER" || s.myRole === "EDITOR");
   const currentShareFor = shareFor ? (list.find((s) => s.id === shareFor.id) ?? shareFor) : null;
   const currentRenameFor = renameFor ? (list.find((s) => s.id === renameFor.id) ?? renameFor) : null;
   const currentPromoteFor = promoteFor ? (list.find((s) => s.id === promoteFor.id) ?? promoteFor) : null;
@@ -66,13 +68,16 @@ export function SandboxesView() {
           <div className="massEyebrow">Сценарное планирование</div>
           <h1>Песочницы плана</h1>
           <p>
-            Создавайте изолированные копии плана, проверяйте альтернативные сценарии и переносите готовые изменения
-            обратно в рабочий контур за выбранный период.
+            Создавайте изолированные копии плана, проверяйте альтернативные сценарии, объединяйте ветки без дублей
+            и переносите готовые изменения обратно в рабочий контур.
           </p>
         </div>
         <div className="massHeroStats" aria-label="Песочницы">
           <span><b>{mine.length}</b> мои</span>
           <span><b>{shared.length}</b> доступны</span>
+          <button type="button" className="btn" onClick={() => setMergeOpen(true)} disabled={editableSandboxes.length < 2}>
+            Слить песочницы
+          </button>
           <button type="button" className="btn btnPrimary" onClick={() => setCreateOpen(true)}>
             + Создать песочницу
           </button>
@@ -125,6 +130,9 @@ export function SandboxesView() {
       )}
 
       {createOpen ? <CreateSandboxModal onClose={() => setCreateOpen(false)} /> : null}
+      {mergeOpen ? (
+        <MergeSandboxesModal sandboxes={editableSandboxes} onClose={() => setMergeOpen(false)} />
+      ) : null}
       {currentShareFor ? <ShareSandboxModal sandbox={currentShareFor} onClose={() => setShareFor(null)} /> : null}
       {currentRenameFor ? <RenameSandboxModal sandbox={currentRenameFor} onClose={() => setRenameFor(null)} /> : null}
       {currentPromoteFor ? <PromoteSandboxModal sandbox={currentPromoteFor} onClose={() => setPromoteFor(null)} /> : null}
@@ -175,6 +183,231 @@ function SandboxCard(props: {
         ) : null}
       </div>
     </div>
+  );
+}
+
+function MergeSandboxesModal({
+  sandboxes,
+  onClose
+}: {
+  sandboxes: SandboxSummary[];
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState("Слияние песочниц");
+  const [description, setDescription] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [useRange, setUseRange] = useState(false);
+  const [from, setFrom] = useState<string>(() => toInputLocal(new Date()));
+  const [to, setTo] = useState<string>(() => toInputLocal(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)));
+  const [preview, setPreview] = useState<any | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  const toggleId = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setPreview(null);
+  };
+
+  const rangePayload = useRange
+    ? { from: fromInputLocal(from).toISOString(), to: fromInputLocal(to).toISOString() }
+    : undefined;
+
+  const previewM = useMutation({
+    mutationFn: () =>
+      apiPost("/api/sandboxes/merge/preview", {
+        sourceSandboxIds: selectedIds,
+        ...(rangePayload ? { range: rangePayload } : {})
+      }),
+    onSuccess: (res) => {
+      setPreview(res);
+      setPreviewError(null);
+    },
+    onError: (e: any) => {
+      setPreview(null);
+      setPreviewError(String(e?.message ?? e));
+    }
+  });
+
+  const mergeM = useMutation({
+    mutationFn: () =>
+      apiPost<{ ok: boolean; sandbox: { id: string; name: string }; totals: any }>("/api/sandboxes/merge", {
+        name: name.trim(),
+        description: description.trim() || undefined,
+        sourceSandboxIds: selectedIds,
+        ...(rangePayload ? { range: rangePayload } : {})
+      }),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
+      setActiveSandboxId(res.sandbox.id);
+      void qc.invalidateQueries();
+      onClose();
+    }
+  });
+
+  const canPreview = selectedIds.length >= 2 && !previewM.isPending && !mergeM.isPending;
+  const canMerge = canPreview && !!preview?.ok && !!name.trim();
+
+  return (
+    <ModalShell title="Слияние песочниц" onClose={() => !mergeM.isPending && onClose()}>
+      <div className="modalBody sandboxModalBody">
+        <div className="muted small">
+          Создаётся новая песочница. Дубликаты по связи с рабочим контуром (`originEventId`) и по совпадению
+          борт+тип+период пропускаются — остаётся более свежая версия. Нужны права редактора на все источники.
+        </div>
+
+        <label className="refLabel">
+          <span>Название новой песочницы</span>
+          <input className="refInput" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} />
+        </label>
+        <label className="refLabel">
+          <span>Описание (необязательно)</span>
+          <textarea
+            className="refInput"
+            rows={2}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            maxLength={1000}
+          />
+        </label>
+
+        <div className="refLabel">
+          <span>Источники (минимум 2)</span>
+          <div className="sandboxMergeList">
+            {sandboxes.map((s) => (
+              <label key={s.id} className="sandboxModeOption">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(s.id)}
+                  onChange={() => toggleId(s.id)}
+                  disabled={mergeM.isPending}
+                />
+                <div>
+                  <b>{s.name}</b>
+                  <div className="muted small">
+                    {s.eventCount} событий · {s.isOwner ? "владелец" : s.myRole === "EDITOR" ? "редактор" : s.myRole}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <label className="sandboxModeOption">
+          <input
+            type="checkbox"
+            checked={useRange}
+            onChange={(e) => {
+              setUseRange(e.target.checked);
+              setPreview(null);
+            }}
+          />
+          <div>
+            <b>Ограничить диапазоном дат</b>
+            <div className="muted small">Копируются только события, пересекающие период</div>
+          </div>
+        </label>
+        {useRange ? (
+          <div className="sandboxRangeRow">
+            <label className="refLabel">
+              <span>С</span>
+              <input className="refInput" type="datetime-local" value={from} onChange={(e) => setFrom(e.target.value)} />
+            </label>
+            <label className="refLabel">
+              <span>По</span>
+              <input className="refInput" type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)} />
+            </label>
+          </div>
+        ) : null}
+
+        {previewError ? <div className="errorMsg">{previewError}</div> : null}
+        {mergeM.isError ? <div className="errorMsg">{String((mergeM.error as Error)?.message ?? mergeM.error)}</div> : null}
+
+        {preview?.summary ? (
+          <div className="sandboxMergePreview">
+            <div className="sandboxMergeStats">
+              <span>Кандидатов: <b>{preview.summary.totalCandidates}</b></span>
+              <span>Будет скопировано: <b>{preview.summary.wouldCopy}</b></span>
+              <span>Дублей пропущено: <b>{preview.summary.wouldSkipDuplicates}</b></span>
+              <span>Конфликтов мест: <b>{preview.summary.standConflicts}</b></span>
+            </div>
+            {preview.duplicateGroups?.length > 0 ? (
+              <div className="sandboxMergeSection">
+                <strong>Дубликаты (оставляем свежую версию)</strong>
+                <div className="sandboxMergeDupList">
+                  {preview.duplicateGroups.slice(0, 12).map((g: any) => (
+                    <div key={`${g.kind}:${g.key}`} className="sandboxMergeDupItem">
+                      <div>
+                        <span className="sandboxRoleBadge">{g.kind === "origin" ? "origin" : "fingerprint"}</span>{" "}
+                        <b>{g.keep.title}</b> · {g.keep.aircraftLabel}
+                      </div>
+                      <div className="muted small">
+                        Оставляем: {g.keep.sandboxName} · пропускаем: {g.skip.map((s: any) => s.sandboxName).join(", ")}
+                      </div>
+                    </div>
+                  ))}
+                  {preview.duplicateGroups.length > 12 ? (
+                    <div className="muted small">и ещё {preview.duplicateGroups.length - 12}…</div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            {preview.standConflicts?.length > 0 ? (
+              <div className="sandboxMergeSection">
+                <strong>Предупреждение: пересечения по месту среди оставляемых</strong>
+                <div className="muted small">Слияние всё равно выполнится — проверьте после открытия новой песочницы.</div>
+                <div className="sandboxMergeDupList">
+                  {preview.standConflicts.slice(0, 8).map((c: any, idx: number) => (
+                    <div key={idx} className="sandboxMergeDupItem">
+                      <div className="muted small">
+                        {c.a.sandboxName}: {c.a.title} ↔ {c.b.sandboxName}: {c.b.title}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {(previewM.isPending || mergeM.isPending) && (
+          <div className="massCalculationPanel eventImportProgress" role="status" aria-live="polite">
+            <div className="massCalculationIcon" aria-hidden="true" />
+            <div className="massCalculationText">
+              <strong>{mergeM.isPending ? "Слияние песочниц" : "Предпросмотр слияния"}</strong>
+              <span>
+                {mergeM.isPending
+                  ? `Копируем события из ${selectedIds.length} источников…`
+                  : `Сверяем дубликаты по ${selectedIds.length} песочницам…`}
+              </span>
+            </div>
+            <div className="massProgressTrack" aria-hidden="true">
+              <div className="massProgressBar" />
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="modalFooter">
+        <button type="button" className="btn" onClick={onClose} disabled={mergeM.isPending}>
+          Отмена
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => previewM.mutate()}
+          disabled={!canPreview}
+        >
+          {previewM.isPending ? "Проверяем…" : "Предпросмотр"}
+        </button>
+        <button
+          type="button"
+          className="btn btnPrimary"
+          onClick={() => mergeM.mutate()}
+          disabled={!canMerge}
+        >
+          {mergeM.isPending ? "Сливаем…" : "Создать слияние"}
+        </button>
+      </div>
+    </ModalShell>
   );
 }
 

@@ -687,21 +687,52 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       if (h.code) hangarByKey.set(key(h.code), h);
     }
 
-    // Стенды: для указанных ангаров тащим все места, затем матчим по коду в памяти
+    // Стенды: только активные места в активных вариантах расстановки (как в mass/reservations).
+    // Неактивные подтягиваем отдельно — для понятной ошибки, если код есть только там.
     const hangarIds = Array.from(new Set(Array.from(hangarKeySet).map((k) => hangarByKey.get(k)?.id).filter(Boolean))) as string[];
-    const standAll =
+    const standSelect = {
+      id: true,
+      code: true,
+      layoutId: true,
+      isActive: true,
+      layout: { select: { hangarId: true, code: true, name: true, isActive: true } }
+    } as const;
+    const [standActiveAll, standInactiveAll] =
       hangarIds.length > 0
-        ? await app.prisma.hangarStand.findMany({
-            where: { layout: { hangarId: { in: hangarIds } } },
-            select: { id: true, code: true, layoutId: true, layout: { select: { hangarId: true } } }
-          })
-        : [];
-    const standsByHangarAndCode = new Map<string, Array<(typeof standAll)[number]>>();
-    for (const s of standAll) {
+        ? await Promise.all([
+            app.prisma.hangarStand.findMany({
+              where: {
+                isActive: true,
+                layout: { hangarId: { in: hangarIds }, isActive: true }
+              },
+              select: standSelect,
+              orderBy: [{ layout: { code: "asc" } }, { code: "asc" }]
+            }),
+            app.prisma.hangarStand.findMany({
+              where: {
+                OR: [
+                  { isActive: false, layout: { hangarId: { in: hangarIds } } },
+                  { layout: { hangarId: { in: hangarIds }, isActive: false } }
+                ]
+              },
+              select: standSelect,
+              orderBy: [{ layout: { code: "asc" } }, { code: "asc" }]
+            })
+          ])
+        : [[], []];
+    const standsByHangarAndCode = new Map<string, Array<(typeof standActiveAll)[number]>>();
+    for (const s of standActiveAll) {
       const standKey = `${s.layout.hangarId}|${upper(s.code)}`;
       const arr = standsByHangarAndCode.get(standKey) ?? [];
       arr.push(s);
       standsByHangarAndCode.set(standKey, arr);
+    }
+    const inactiveStandsByHangarAndCode = new Map<string, Array<(typeof standInactiveAll)[number]>>();
+    for (const s of standInactiveAll) {
+      const standKey = `${s.layout.hangarId}|${upper(s.code)}`;
+      const arr = inactiveStandsByHangarAndCode.get(standKey) ?? [];
+      arr.push(s);
+      inactiveStandsByHangarAndCode.set(standKey, arr);
     }
 
     // Подготовим выборку резервов по всем потенциальным стендам в общем диапазоне дат файла
@@ -768,6 +799,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       eventTypeKey?: string;
       hangar?: string | null;
       stand?: string | null;
+      layout?: string | null;
       warnings?: string[];
       error?: string;
     }> = [];
@@ -831,19 +863,31 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         const hangar = hangarStr ? hangarByKey.get(key(hangarStr)) ?? null : null;
         if (hangarStr && !hangar) throw new Error(`Не найден ангар: ${hangarStr}`);
 
-        let resolvedStand: { standId: string; layoutId: string } | null = null;
+        let resolvedStand: { standId: string; layoutId: string; layoutLabel: string } | null = null;
         if (standCode) {
           if (!hangar) throw new Error("Указано HangarStand, но не указан/не найден Hangar (нужен для поиска места)");
           const key = `${hangar.id}|${standCode}`;
           const stands = standsByHangarAndCode.get(key) ?? [];
-          if (stands.length === 0) throw new Error(`Не найдено место ${standCode} в ангаре ${hangar.name}`);
+          if (stands.length === 0) {
+            const inactive = inactiveStandsByHangarAndCode.get(key) ?? [];
+            if (inactive.length > 0) {
+              const variants = inactive
+                .map((s) => `${s.layout.name}${s.layout.isActive === false ? " (неактивная схема)" : ""}${s.isActive === false ? " (неактивное место)" : ""}`)
+                .join(", ");
+              throw new Error(
+                `Место ${standCode} в ангаре ${hangar.name} найдено только в неактивных вариантах расстановки: ${variants}`
+              );
+            }
+            throw new Error(`Не найдено активное место ${standCode} в ангаре ${hangar.name}`);
+          }
           const selectedStand = chooseFirstAvailableStand(stands, startAt, endAt);
+          const layoutLabel = selectedStand.layout.name || selectedStand.layout.code || selectedStand.layoutId;
           if (stands.length > 1) {
             warnings.push(
-              `Место ${standCode} найдено в ${stands.length} вариантах расстановки ангара ${hangar.name}; выбран первый подходящий вариант.`
+              `Место ${standCode} найдено в ${stands.length} активных вариантах расстановки ангара ${hangar.name}; выбран «${layoutLabel}».`
             );
           }
-          resolvedStand = { standId: selectedStand.id, layoutId: selectedStand.layoutId };
+          resolvedStand = { standId: selectedStand.id, layoutId: selectedStand.layoutId, layoutLabel };
 
           // конфликты с существующими резервами
           const conflict = existingStandConflict(resolvedStand.standId, startAt, endAt);
@@ -876,6 +920,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           eventTypeKey: norm(r.Event_name),
           hangar: hangar?.name ?? null,
           stand: standCode || null,
+          layout: resolvedStand?.layoutLabel ?? null,
           warnings
         });
 
@@ -1019,7 +1064,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             if (!hangar) throw new Error("Указано HangarStand, но не указан/не найден Hangar");
             const key = `${hangar.id}|${standCode}`;
             const stands = standsByHangarAndCode.get(key) ?? [];
-            if (stands.length === 0) throw new Error(`Место ${standCode} не найдено для ангара ${hangar.name}`);
+            if (stands.length === 0) {
+              const inactive = inactiveStandsByHangarAndCode.get(key) ?? [];
+              if (inactive.length > 0) {
+                const variants = inactive
+                  .map((s) => `${s.layout.name}${s.layout.isActive === false ? " (неактивная схема)" : ""}${s.isActive === false ? " (неактивное место)" : ""}`)
+                  .join(", ");
+                throw new Error(
+                  `Место ${standCode} в ангаре ${hangar.name} найдено только в неактивных вариантах расстановки: ${variants}`
+                );
+              }
+              throw new Error(`Не найдено активное место ${standCode} в ангаре ${hangar.name}`);
+            }
             const stand = chooseFirstAvailableStand(stands, startAt, endAt);
 
             // Повторно проверим конфликт на случай параллельных изменений (дешево: standId + диапазон)

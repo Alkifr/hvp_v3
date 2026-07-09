@@ -4,7 +4,7 @@ import { EventAuditAction, EventStatus, Prisma, SandboxMemberRole } from "@prism
 import { randomUUID } from "node:crypto";
 
 import { zDateTime, zUuid } from "../lib/zod.js";
-import { copyPlanToSandbox } from "../lib/sandboxCopy.js";
+import { copyPlanToSandbox, eventFingerprint, resolveOriginEventId } from "../lib/sandboxCopy.js";
 
 function getActor(req: any) {
   const auth = req.auth as { email?: string } | undefined;
@@ -151,6 +151,265 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
     );
 
     return { ok: true, sandbox: result.sandbox, copied: result.copiedCounts };
+  });
+
+  // POST /api/sandboxes/merge/preview — предпросмотр слияния нескольких песочниц
+  // Важно: регистрируем ДО /:id, иначе "merge" попадёт в param.
+  app.post("/merge/preview", async (req) => {
+    const me = assertAuthed(req);
+    const body = z
+      .object({
+        sourceSandboxIds: z.array(zUuid).min(2).max(20),
+        range: z
+          .object({
+            from: zDateTime.optional(),
+            to: zDateTime.optional()
+          })
+          .optional()
+      })
+      .parse(req.body);
+
+    const uniqueIds = Array.from(new Set(body.sourceSandboxIds));
+    if (uniqueIds.length < 2) {
+      const err: any = new Error("Нужно выбрать минимум две разные песочницы");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const sourcesMeta: Array<{ id: string; name: string; role: "OWNER" | "EDITOR" | "VIEWER"; eventCount: number }> = [];
+    for (const id of uniqueIds) {
+      const role = await assertMember(app, id, me.id);
+      if (!canWriteRole(role)) {
+        const err: any = new Error(`Нет прав на редактирование песочницы ${id}`);
+        err.statusCode = 403;
+        throw err;
+      }
+      const sb = await app.prisma.sandbox.findUnique({
+        where: { id },
+        select: { id: true, name: true, _count: { select: { events: true } } }
+      });
+      sourcesMeta.push({ id, name: sb?.name ?? id, role, eventCount: sb?._count.events ?? 0 });
+    }
+
+    const rangeWhere: Prisma.MaintenanceEventWhereInput = {};
+    if (body.range?.from) rangeWhere.endAt = { gt: body.range.from };
+    if (body.range?.to) rangeWhere.startAt = { lt: body.range.to };
+
+    type Cand = {
+      sandboxId: string;
+      sandboxName: string;
+      eventId: string;
+      title: string;
+      aircraftLabel: string;
+      eventTypeName: string | null;
+      startAt: string;
+      endAt: string;
+      updatedAt: string;
+      originEventId: string | null;
+      fingerprint: string;
+      standIds: string[];
+    };
+
+    const candidates: Cand[] = [];
+    for (const meta of sourcesMeta) {
+      const events = await app.prisma.maintenanceEvent.findMany({
+        where: { sandboxId: meta.id, ...rangeWhere },
+        include: {
+          aircraft: { select: { tailNumber: true } },
+          eventType: { select: { name: true } },
+          reservations: { select: { standId: true, startAt: true, endAt: true } }
+        },
+        orderBy: [{ updatedAt: "desc" }]
+      });
+      for (const ev of events) {
+        candidates.push({
+          sandboxId: meta.id,
+          sandboxName: meta.name,
+          eventId: ev.id,
+          title: ev.title,
+          aircraftLabel:
+            ev.aircraft?.tailNumber ?? ((ev.virtualAircraft as any)?.label as string | undefined) ?? "—",
+          eventTypeName: ev.eventType?.name ?? null,
+          startAt: ev.startAt.toISOString(),
+          endAt: ev.endAt.toISOString(),
+          updatedAt: ev.updatedAt.toISOString(),
+          originEventId: resolveOriginEventId(ev),
+          fingerprint: eventFingerprint(ev),
+          standIds: ev.reservations.map((r) => r.standId)
+        });
+      }
+    }
+
+    const byOrigin = new Map<string, Cand[]>();
+    const byFingerprint = new Map<string, Cand[]>();
+    for (const c of candidates) {
+      if (c.originEventId) {
+        const arr = byOrigin.get(c.originEventId) ?? [];
+        arr.push(c);
+        byOrigin.set(c.originEventId, arr);
+      } else {
+        const arr = byFingerprint.get(c.fingerprint) ?? [];
+        arr.push(c);
+        byFingerprint.set(c.fingerprint, arr);
+      }
+    }
+
+    type DupGroup = {
+      key: string;
+      kind: "origin" | "fingerprint";
+      keep: Cand;
+      skip: Cand[];
+    };
+    const duplicateGroups: DupGroup[] = [];
+    const keepIds = new Set<string>();
+    const skipIds = new Set<string>();
+
+    const pickNewest = (items: Cand[]) =>
+      [...items].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.eventId.localeCompare(b.eventId));
+
+    for (const [key, items] of byOrigin) {
+      if (items.length < 2) {
+        keepIds.add(items[0]!.eventId);
+        continue;
+      }
+      const ordered = pickNewest(items);
+      const keep = ordered[0]!;
+      const skip = ordered.slice(1);
+      keepIds.add(keep.eventId);
+      for (const s of skip) skipIds.add(s.eventId);
+      duplicateGroups.push({ key, kind: "origin", keep, skip });
+    }
+    for (const [key, items] of byFingerprint) {
+      if (items.length < 2) {
+        keepIds.add(items[0]!.eventId);
+        continue;
+      }
+      const ordered = pickNewest(items);
+      const keep = ordered[0]!;
+      const skip = ordered.slice(1);
+      keepIds.add(keep.eventId);
+      for (const s of skip) skipIds.add(s.eventId);
+      duplicateGroups.push({ key, kind: "fingerprint", keep, skip });
+    }
+
+    const kept = candidates.filter((c) => keepIds.has(c.eventId) && !skipIds.has(c.eventId));
+    const standConflicts: Array<{
+      a: { eventId: string; title: string; sandboxName: string; startAt: string; endAt: string };
+      b: { eventId: string; title: string; sandboxName: string; startAt: string; endAt: string };
+      standId: string;
+    }> = [];
+    for (let i = 0; i < kept.length; i++) {
+      for (let j = i + 1; j < kept.length; j++) {
+        const a = kept[i]!;
+        const b = kept[j]!;
+        if (a.startAt >= b.endAt || a.endAt <= b.startAt) continue;
+        const sharedStand = a.standIds.find((id) => b.standIds.includes(id));
+        if (!sharedStand) continue;
+        standConflicts.push({
+          standId: sharedStand,
+          a: { eventId: a.eventId, title: a.title, sandboxName: a.sandboxName, startAt: a.startAt, endAt: a.endAt },
+          b: { eventId: b.eventId, title: b.title, sandboxName: b.sandboxName, startAt: b.startAt, endAt: b.endAt }
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      sources: sourcesMeta,
+      summary: {
+        totalCandidates: candidates.length,
+        wouldCopy: kept.length,
+        wouldSkipDuplicates: skipIds.size,
+        duplicateGroups: duplicateGroups.length,
+        standConflicts: standConflicts.length
+      },
+      duplicateGroups: duplicateGroups.slice(0, 200),
+      standConflicts: standConflicts.slice(0, 200),
+      keepEventIdsBySandbox: sourcesMeta.map((s) => ({
+        sandboxId: s.id,
+        eventIds: kept.filter((c) => c.sandboxId === s.id).map((c) => c.eventId)
+      }))
+    };
+  });
+
+  // POST /api/sandboxes/merge — слияние в новую песочницу (только EDITOR+)
+  app.post("/merge", async (req) => {
+    const me = assertAuthed(req);
+    const body = z
+      .object({
+        name: z.string().trim().min(1).max(120),
+        description: z.string().trim().max(1000).optional(),
+        sourceSandboxIds: z.array(zUuid).min(2).max(20),
+        range: z
+          .object({
+            from: zDateTime.optional(),
+            to: zDateTime.optional()
+          })
+          .optional()
+      })
+      .parse(req.body);
+
+    const uniqueIds = Array.from(new Set(body.sourceSandboxIds));
+    if (uniqueIds.length < 2) {
+      const err: any = new Error("Нужно выбрать минимум две разные песочницы");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    for (const id of uniqueIds) {
+      const role = await assertMember(app, id, me.id);
+      if (!canWriteRole(role)) {
+        const err: any = new Error(`Нет прав на редактирование песочницы ${id}`);
+        err.statusCode = 403;
+        throw err;
+      }
+    }
+
+    const actor = getActor(req);
+    const result = await app.prisma.$transaction(
+      async (tx: Prisma.TransactionClient) => {
+        const sandbox = await tx.sandbox.create({
+          data: {
+            name: body.name,
+            description: body.description ?? null,
+            ownerId: me.id
+          }
+        });
+
+        const occupiedOrigins = new Set<string>();
+        const occupiedFingerprints = new Set<string>();
+        const perSource: Array<{ sandboxId: string; copied: Awaited<ReturnType<typeof copyPlanToSandbox>> }> = [];
+
+        for (const sourceId of uniqueIds) {
+          const copied = await copyPlanToSandbox(tx, {
+            sourceSandboxId: sourceId,
+            targetSandboxId: sandbox.id,
+            range: body.range,
+            actor,
+            skipDuplicates: true,
+            occupiedOrigins,
+            occupiedFingerprints
+          });
+          perSource.push({ sandboxId: sourceId, copied });
+        }
+
+        const totals = perSource.reduce(
+          (acc, s) => {
+            acc.events += s.copied.events;
+            acc.reservations += s.copied.reservations;
+            acc.tows += s.copied.tows;
+            acc.skippedDuplicates += s.copied.skippedDuplicates;
+            return acc;
+          },
+          { events: 0, reservations: 0, tows: 0, skippedDuplicates: 0 }
+        );
+
+        return { sandbox, perSource, totals };
+      },
+      { timeout: 180_000, maxWait: 20_000 }
+    );
+
+    return { ok: true, sandbox: result.sandbox, totals: result.totals, perSource: result.perSource };
   });
 
   // PATCH /api/sandboxes/:id — переименовать/обновить описание
@@ -440,7 +699,11 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
             actualEndAt: (src as any).actualEndAt,
             hangarId: src.hangarId,
             layoutId: src.layoutId,
-            notes: src.notes
+            notes: src.notes,
+            // В prod событие становится новым корнем; lineage указывает на sandbox-источник
+            originEventId: null,
+            sourceEventId: src.id,
+            sourceSandboxId: sandboxId
           }))
         });
 
@@ -454,7 +717,8 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
             changes: {
               promotedFrom: {
                 sourceSandboxId: sandboxId,
-                sourceEventId: src.id
+                sourceEventId: src.id,
+                originEventId: resolveOriginEventId(src as any)
               }
             } as Prisma.InputJsonValue
           }))
@@ -535,4 +799,5 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
 
     return { ok: true, ...result };
   });
+
 };

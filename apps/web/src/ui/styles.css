@@ -365,6 +365,10 @@ a {
   gap: 16px;
 }
 
+.eventImportProgress {
+  margin-top: 2px;
+}
+
 .massHero {
   display: flex;
   justify-content: space-between;
@@ -1322,6 +1326,290 @@ a {
   display: block;
 }
 
+.ganttViewToggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  gap: 2px;
+}
+
+.ganttViewToggleBtn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #475569;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.ganttViewToggleBtn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.ganttViewToggleBtnActive {
+  background: #0f172a;
+  color: #fff;
+}
+
+.ganttViewToggleBtnActive:hover {
+  background: #0f172a;
+  color: #fff;
+}
+
+.ganttTableCard {
+  overflow: hidden;
+}
+
+.ganttTablePanel {
+  display: grid;
+  gap: 10px;
+}
+
+.ganttTableHint {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ganttTableError {
+  margin: 0;
+}
+
+.ganttTableWrap {
+  overflow: auto;
+  max-height: min(78vh, 920px);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.ganttEventsTable {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  table-layout: fixed;
+}
+
+.ganttEventsTable th,
+.ganttEventsTable td {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  border-right: 1px solid rgba(148, 163, 184, 0.14);
+  padding: 6px 8px;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-align: left;
+  background: #fff;
+}
+
+.ganttEventsTable th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  /* relative for resize handle; sticky already establishes containing block */
+}
+
+.ganttEventsTable tbody tr {
+  cursor: pointer;
+}
+
+.ganttEventsTable tbody tr:hover td {
+  background: #f8fafc;
+}
+
+.ganttTableRowEditing td,
+.ganttTableRowEditing:hover td {
+  background: #fffbeb;
+  cursor: default;
+}
+
+.ganttTableRowDirty td,
+.ganttTableRowDirty:hover td {
+  background: #fef3c7;
+}
+
+.ganttTableStickyCol {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  box-shadow: 1px 0 0 rgba(148, 163, 184, 0.22);
+}
+
+.ganttEventsTable th.ganttTableStickyCol {
+  z-index: 3;
+  background: #f8fafc;
+}
+
+.ganttTableRowEditing .ganttTableStickyCol,
+.ganttTableRowDirty .ganttTableStickyCol {
+  background: inherit;
+}
+
+.ganttTableActionsCol {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: #fff;
+  box-shadow: -1px 0 0 rgba(148, 163, 184, 0.22);
+}
+
+.ganttEventsTable th.ganttTableActionsCol {
+  z-index: 3;
+  background: #f8fafc;
+}
+
+.ganttTableRowEditing .ganttTableActionsCol,
+.ganttTableRowDirty .ganttTableActionsCol {
+  background: inherit;
+}
+
+.ganttTableThLabel {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 8px;
+}
+
+.ganttTableColResize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 4;
+}
+
+.ganttTableColResize::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: 2px;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.ganttTableColResize:hover::after,
+.ganttTableColResize:active::after {
+  background: rgba(37, 99, 235, 0.7);
+}
+
+.ganttTableColMenu {
+  position: fixed;
+  z-index: 80;
+  min-width: 220px;
+  max-height: min(70vh, 480px);
+  overflow: auto;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+}
+
+.ganttTableColMenuTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  padding: 4px 6px 8px;
+}
+
+.ganttTableColMenuList {
+  display: grid;
+  gap: 2px;
+}
+
+.ganttTableColMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.ganttTableColMenuItem:hover {
+  background: #f1f5f9;
+}
+
+.ganttTableColMenuItemLocked {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.ganttTableColMenuReset {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.ganttTableRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.ganttTableRowHint {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.ganttTableInput {
+  min-width: 118px;
+  width: 100%;
+  padding: 4px 6px !important;
+  font-size: 12px !important;
+  height: 30px;
+}
+
+.ganttTableInput[type="datetime-local"] {
+  min-width: 168px;
+}
+
+.ganttTableReadonly {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.ganttTableNotes {
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ganttTableEmpty {
+  text-align: center !important;
+  color: #64748b;
+  padding: 24px 12px !important;
+  white-space: normal !important;
+}
+
 .ganttToolbar {
   display: flex;
   flex-wrap: wrap;
@@ -1348,6 +1636,151 @@ a {
 .ganttToolbarGroup + .ganttToolbarGroup {
   padding-left: 10px;
   border-left: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.ganttDndBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.ganttDndHint {
+  font-size: 12px;
+}
+
+.ganttTimelineScaleMenu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 300px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16);
+}
+
+.ganttTimelineScaleMenuTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  padding: 0 0 10px;
+}
+
+.tbPopover {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tbPopoverBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 9px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.tbPopoverBtnLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tbPopoverBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tbPopoverBtnActive {
+  border-color: rgba(37, 99, 235, 0.55);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+
+.tbPopoverBtnOpen {
+  border-color: rgba(37, 99, 235, 0.55);
+}
+
+.tbPopoverCaret {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.tbPopoverPanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 260px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16);
+}
+
+.tbPopoverPanelRight {
+  left: auto;
+  right: 0;
+}
+
+.tbPopoverWide {
+  min-width: 440px;
+}
+
+.tbPopoverPeriod {
+  min-width: 340px;
+}
+
+.tbPopoverScale {
+  min-width: 320px;
+}
+
+.tbPopoverNarrow {
+  min-width: 260px;
+}
+
+.tbPopoverGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.tbPopoverGridCompact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tbPopoverPeriodBody {
+  display: grid;
+  gap: 10px;
+}
+
+.tbPopoverPeriodDates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tbPopoverActions {
+  display: flex;
+  align-items: end;
 }
 
 .tgLabel {
@@ -1848,7 +2281,13 @@ textarea {
   flex: 1 1 0;
   min-width: 0;
   scrollbar-width: none; /* Firefox */
-  pointer-events: none; /* пользователь не скроллит хедер вручную */
+  /* скролл вручную отключён, но ПКМ по шкале должен работать */
+  pointer-events: none;
+}
+
+.ganttHeaderRightViewport .ganttCanvas {
+  pointer-events: auto;
+  cursor: context-menu;
 }
 
 .ganttHeaderRightViewport::-webkit-scrollbar {
@@ -4940,6 +5379,49 @@ textarea {
   gap: 12px;
 }
 
+.sandboxMergeList {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.sandboxMergePreview {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: #f8fafc;
+}
+
+.sandboxMergeStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.sandboxMergeSection {
+  display: grid;
+  gap: 6px;
+}
+
+.sandboxMergeDupList {
+  display: grid;
+  gap: 6px;
+}
+
+.sandboxMergeDupItem {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  font-size: 12px;
+}
+
 .modalFooter {
   display: flex;
   justify-content: flex-end;
@@ -5532,16 +6014,16 @@ textarea {
   }
 
   .ganttToolbar {
-    display: grid;
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 8px;
   }
 
   .ganttToolbarGroup,
   .ganttToolbarGroup + .ganttToolbarGroup {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     padding-left: 0;
     border-left: 0;
@@ -5552,8 +6034,17 @@ textarea {
     overflow-x: auto;
   }
 
+  .tbPopoverPeriod {
+    min-width: min(92vw, 340px);
+  }
+
+  .tbPopoverGrid,
+  .tbPopoverGridCompact {
+    grid-template-columns: 1fr;
+  }
+
   .tgLabel {
-    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .tgField,
