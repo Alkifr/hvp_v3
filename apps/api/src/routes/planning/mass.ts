@@ -59,10 +59,10 @@ type BatchPlanningJob = {
   maxPriorityScore: number;
   windowSlackMs: number;
 };
-function batchJobIntendedStartMs(job: BatchPlanningJob, nextStartByItem?: Map<number, number>): number {
+function batchJobIntendedStartMs(job: BatchPlanningJob, nextSequentialStart?: number | null): number {
   if (job.scheduleMode === "fixedCadence") return job.nominalStartAt;
   if (job.scheduleMode === "compact") return job.startFromMs;
-  return Math.max(job.nominalStartAt, nextStartByItem?.get(job.rowIndex) ?? job.startFromMs);
+  return Math.max(job.startFromMs, job.nominalStartAt, nextSequentialStart ?? job.startFromMs);
 }
 
 function batchJobDraftStartMs(job: BatchPlanningJob, preferredStartMs = batchJobIntendedStartMs(job)): number {
@@ -1698,6 +1698,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
 
     const jobs: BatchPlanningJob[] = [];
     let flatIndex = 0;
+    /** Цепочка «Последовательно» идёт по всем строкам batch, а не только внутри count одной строки. */
+    let sequentialCursorMs: number | null = null;
 
     for (const [itemIndex, item] of body.items.entries()) {
       const eventType = eventTypeById.get(item.eventTypeId)!;
@@ -1737,12 +1739,13 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       const maxPriorityScore = compatibleEntries.reduce((maxScore, entry) => Math.max(maxScore, entry.priorityScore ?? 0), Number.NEGATIVE_INFINITY);
 
       for (let i = 0; i < item.count; i++) {
-        const nominalStartAt =
-          item.scheduleMode === "fixedCadence"
-            ? item.startFrom.getTime() + i * (cadenceMs ?? tatMs + spacingMs)
-            : item.scheduleMode === "sequential"
-              ? item.startFrom.getTime() + i * (tatMs + spacingMs)
-              : item.startFrom.getTime();
+        let nominalStartAt = item.startFrom.getTime();
+        if (item.scheduleMode === "fixedCadence") {
+          nominalStartAt = item.startFrom.getTime() + i * (cadenceMs ?? tatMs + spacingMs);
+        } else if (item.scheduleMode === "sequential") {
+          nominalStartAt = Math.max(item.startFrom.getTime(), sequentialCursorMs ?? item.startFrom.getTime());
+          sequentialCursorMs = nominalStartAt + tatMs + spacingMs;
+        }
         jobs.push({
           flatIndex,
           rowIndex: itemIndex,
@@ -1915,8 +1918,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       for (const [standId, busy] of busyByStand.entries()) localBusyWork.set(standId, [...busy]);
       const localLayoutLocksWork = new Map<string, Array<{ layoutId: string; start: number; end: number }>>();
       for (const [hangarId, locks] of layoutLocksByHangar.entries()) localLayoutLocksWork.set(hangarId, [...locks]);
-      const nextStartByItem = new Map<number, number>();
-      for (const [itemIndex, item] of body.items.entries()) nextStartByItem.set(itemIndex, item.startFrom.getTime());
+      let nextSequentialStart: number | null = null;
 
       const addLocalBusy = (standId: string, start: number, end: number) => {
         const arr = localBusyWork.get(standId) ?? [];
@@ -1936,7 +1938,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       for (const job of [...jobs].sort((a, b) => a.flatIndex - b.flatIndex)) {
         const decisionCtx = { busyByStand: localBusyWork, layoutLocksByHangar: localLayoutLocksWork, blockBefore, blockAfter };
         candidateMetaByJob.set(job.flatIndex, selectOrToolsCandidateEntries(job, decisionCtx, OR_TOOLS_SCHEDULING_MAX_STANDS_PER_JOB));
-        const intendedStart = batchJobIntendedStartMs(job, nextStartByItem);
+        const intendedStart = batchJobIntendedStartMs(job, nextSequentialStart);
         const picked = pickBestPlacementCandidate(job.compatibleEntries, (entry) => {
           const standBusy = localBusyWork.get(entry.standId) ?? [];
           const incompatibleLayoutLocks = (localLayoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
@@ -1973,7 +1975,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           warnings,
             ...scoreSummary
           });
-          if (job.scheduleMode === "sequential") nextStartByItem.set(job.rowIndex, intendedStart + job.tatMs + job.spacingMs);
+          if (job.scheduleMode === "sequential") nextSequentialStart = intendedStart + job.tatMs + job.spacingMs;
           continue;
         }
 
@@ -1983,7 +1985,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         placements.push(buildBatchPlacement(job, bestEntry, bestStart, towBeforeMs, towAfterMs));
         addLocalBusy(bestEntry.standId, bestStart, endAt);
         addLocalLayoutLock(bestEntry, bestStart, endAt);
-        if (job.scheduleMode === "sequential") nextStartByItem.set(job.rowIndex, endAt + job.spacingMs);
+        if (job.scheduleMode === "sequential") nextSequentialStart = endAt + job.spacingMs;
       }
 
       placements.sort((a, b) => a.index - b.index);

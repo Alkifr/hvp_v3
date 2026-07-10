@@ -1,10 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import argon2 from "argon2";
-import { EventAuditAction, EventStatus } from "@prisma/client";
+import { EventAuditAction, EventStatus, UserActivityAction } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { logUserActivity } from "../../lib/userActivity.js";
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
   const zCleanupFilters = z
@@ -280,6 +281,17 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
     if (events.length === 0) return { ok: true, updated: 0 };
 
+    let sandboxName: string | null = null;
+    if (filters.sandboxId) {
+      const sb = await app.prisma.sandbox.findUnique({
+        where: { id: filters.sandboxId },
+        select: { name: true }
+      });
+      sandboxName = sb?.name ?? null;
+    }
+
+    const cleanupReason = reason || (filters.sandboxId ? "Очистка песочницы" : "Очистка рабочего контура");
+
     await app.prisma.$transaction(async (tx) => {
       await tx.maintenanceEvent.updateMany({
         where: { id: { in: events.map((e) => e.id) }, sandboxId: filters.sandboxId ?? null },
@@ -291,12 +303,35 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: filters.sandboxId ?? null,
           action: EventAuditAction.UPDATE,
           actor: currentUser.email,
-          reason: reason || (filters.sandboxId ? "Очистка песочницы" : "Очистка рабочего контура"),
+          reason: cleanupReason,
           changes: {
             status: { from: event.status, to: EventStatus.DELETED },
             cleanup: { mode: "logical-delete", title: event.title, sandboxId: filters.sandboxId ?? null }
           }
         }))
+      });
+      await logUserActivity(tx, {
+        userId: currentUser.id,
+        actor: currentUser.email,
+        action: UserActivityAction.CLEANUP,
+        title: filters.sandboxId
+          ? `Массовая очистка песочницы «${sandboxName ?? filters.sandboxId}»`
+          : "Массовая очистка рабочего контура",
+        reason: cleanupReason,
+        sourceKind: filters.sandboxId ? "sandbox" : "prod",
+        sandboxId: filters.sandboxId ?? null,
+        sandboxName,
+        changes: {
+          updated: events.length,
+          filters: {
+            eventId: filters.eventId ?? null,
+            eventTypeId: filters.eventTypeId ?? null,
+            aircraftTypeId: filters.aircraftTypeId ?? null,
+            aircraftId: filters.aircraftId ?? null,
+            from: filters.from ?? null,
+            to: filters.to ?? null
+          }
+        }
       });
     });
 

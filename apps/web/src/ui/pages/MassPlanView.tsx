@@ -445,6 +445,16 @@ export function MassPlanView() {
     cadenceHours: Number(cadenceHours) || 168
   });
 
+  const clearPlanOutput = () => {
+    setPreview(null);
+    setResult(null);
+  };
+
+  /** Расширенные настройки расписания применяются ко всем строкам списка. */
+  const applyAdvancedScheduleToRows = (patch: Partial<Pick<BatchRow, "scheduleMode" | "spacingHours" | "cadenceHours">>) => {
+    setBatchRows((rows) => rows.map((row) => ({ ...row, ...patch })));
+  };
+
   const buildBatchBody = () => ({
     items: batchRows.map((row) => ({
       tatHours: Math.max(1, Number(row.tatHours) || 1),
@@ -455,9 +465,9 @@ export function MassPlanView() {
       startFrom: dayjs(row.startFrom).startOf("day").toISOString(),
       endTo: dayjs(row.endTo).endOf("day").toISOString(),
       titleTemplate: row.titleTemplate.trim() || undefined,
-      scheduleMode: row.scheduleMode,
-      spacingHours: Math.max(0, Number(row.spacingHours || spacingHours) || 0),
-      cadenceHours: row.scheduleMode === "fixedCadence" ? Math.max(1, Number(row.cadenceHours) || 1) : undefined
+      scheduleMode,
+      spacingHours: Math.max(0, Number(spacingHours) || 0),
+      cadenceHours: scheduleMode === "fixedCadence" ? Math.max(1, Number(cadenceHours) || 1) : undefined
     })),
     hangarIds: hangarPriority.length > 0 ? hangarPriority : undefined,
     placementMode,
@@ -467,7 +477,8 @@ export function MassPlanView() {
     actualEndAt: fromInputLocalOptional(actualEndAtLocal),
     towBeforeMinutes: Math.max(0, Math.min(24 * 60, Number(towBeforeMinutes) || 0)),
     towAfterMinutes: Math.max(0, Math.min(24 * 60, Number(towAfterMinutes) || 0)),
-    towBlocksStand
+    towBlocksStand,
+    solverMode: batchSolverMode
   });
 
   const previewM = useMutation({
@@ -597,14 +608,13 @@ export function MassPlanView() {
           startFrom: parseImportDate(start, startFrom),
           endTo: parseImportDate(end, endTo),
           titleTemplate: String(pick(row, ["titleTemplate", "название", "шаблон"]) || ""),
-          scheduleMode: "compact" as const,
-          spacingHours: Number(pick(row, ["spacingHours", "пауза"])) || 0,
-          cadenceHours: Number(pick(row, ["cadenceHours", "шаг"])) || 168
+          scheduleMode,
+          spacingHours: Number(pick(row, ["spacingHours", "пауза"])) || Number(spacingHours) || 0,
+          cadenceHours: Number(pick(row, ["cadenceHours", "шаг"])) || Number(cadenceHours) || 168
         };
       });
       setBatchRows(imported);
-      setPreview(null);
-      setResult(null);
+      clearPlanOutput();
     } catch (err: any) {
       setBatchImportError(String(err?.message ?? err));
     }
@@ -648,20 +658,30 @@ export function MassPlanView() {
             <div className="massSectionHead">
               <div>
                 <h2>Основные параметры</h2>
-                <p>{inputMode === "single" ? "Определяют тип события, период планирования и количество создаваемых строк." : "Каждая строка задаёт отдельный набор событий со своим TAT и периодом."}</p>
+                <p>
+                  {inputMode === "single"
+                    ? "Задайте тип события, объём и период — система создаст серию по одному шаблону."
+                    : "Каждая строка — отдельный набор событий. Расписание и буксировки задаются ниже для всех строк."}
+                </p>
               </div>
-              <div className="row" style={{ gap: 8 }}>
-                <button type="button" className={inputMode === "single" ? "btn btnPrimary" : "btn"} onClick={() => setInputMode("single")}>
+              <div className="massModeToggle" role="group" aria-label="Режим ввода">
+                <button
+                  type="button"
+                  className={inputMode === "single" ? "isActive" : undefined}
+                  onClick={() => {
+                    setInputMode("single");
+                    clearPlanOutput();
+                  }}
+                >
                   Один шаблон
                 </button>
                 <button
                   type="button"
-                  className={inputMode === "batch" ? "btn btnPrimary" : "btn"}
+                  className={inputMode === "batch" ? "isActive" : undefined}
                   onClick={() => {
                     setInputMode("batch");
                     if (batchRows.length === 0) setBatchRows([newBatchRow()]);
-                    setPreview(null);
-                    setResult(null);
+                    clearPlanOutput();
                   }}
                 >
                   Список строк
@@ -670,98 +690,97 @@ export function MassPlanView() {
             </div>
 
             {inputMode === "single" ? (
-            <div className="massFormGrid">
-            <label className="massField">
-              <span className="muted">TAT одного события, ч</span>
-              <input
-                type="number"
-                min={1}
-                max={8760}
-                value={tatHours}
-                onChange={(e) => setTatHours(Number(e.target.value) || 72)}
-              />
-            </label>
-            <label className="massField">
-              <span className="muted">Оператор</span>
-              <select
-                value={operatorId}
-                onChange={(e) => { setOperatorId(e.target.value); setPreview(null); setResult(null); }}
-                required
-              >
-                <option value="">— выберите —</option>
-                {operators.map((o) => (
-                  <option key={o.id} value={o.id}>{o.name}</option>
-                ))}
-              </select>
-            </label>
-            <label className="massField">
-              <span className="muted">Тип ВС</span>
-              <select
-                value={aircraftTypeId}
-                onChange={(e) => setAircraftTypeId(e.target.value)}
-                required
-              >
-                <option value="">— выберите —</option>
-                {aircraftTypes.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}{t.icaoType ? ` (${t.icaoType})` : ""}</option>
-                ))}
-              </select>
-            </label>
-            <label className="massField">
-              <span className="muted">Вид события</span>
-              <select
-                value={eventTypeId}
-                onChange={(e) => setEventTypeId(e.target.value)}
-                required
-              >
-                <option value="">— выберите —</option>
-                {eventTypes.map((et) => (
-                  <option key={et.id} value={et.id}>{et.name}</option>
-                ))}
-              </select>
-            </label>
-            <label className="massField">
-              <span className="muted">Количество</span>
-              <input
-                type="number"
-                min={1}
-                max={200}
-                value={count}
-                onChange={(e) => setCount(Number(e.target.value) || 1)}
-              />
-            </label>
-            <label className="massField">
-              <span className="muted">Начало периода</span>
-              <input
-                type="date"
-                value={startFrom}
-                onChange={(e) => setStartFrom(e.target.value)}
-              />
-            </label>
-            <label className="massField">
-              <span className="muted">Конец периода (крайний старт)</span>
-              <input
-                type="date"
-                value={endTo}
-                onChange={(e) => setEndTo(e.target.value)}
-              />
-              <span className="muted massFieldHint">Событие может заканчиваться позже этой даты</span>
-            </label>
-            <label className="massField massFieldWide">
-              <span className="muted">Шаблон названия (опц., % = номер)</span>
-              <input
-                type="text"
-                placeholder="Например: A-check %"
-                value={titleTemplate}
-                onChange={(e) => setTitleTemplate(e.target.value)}
-              />
-            </label>
-          </div>
+              <>
+                <div className="massFieldGroup">
+                  <p className="massFieldGroupTitle">Что планируем</p>
+                  <div className="massFormGrid massFormGridIdentity">
+                    <label className="massField">
+                      <span className="muted">Оператор</span>
+                      <select
+                        value={operatorId}
+                        onChange={(e) => {
+                          setOperatorId(e.target.value);
+                          clearPlanOutput();
+                        }}
+                        required
+                      >
+                        <option value="">— выберите —</option>
+                        {operators.map((o) => (
+                          <option key={o.id} value={o.id}>{o.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="massField">
+                      <span className="muted">Тип ВС</span>
+                      <select value={aircraftTypeId} onChange={(e) => setAircraftTypeId(e.target.value)} required>
+                        <option value="">— выберите —</option>
+                        {aircraftTypes.map((t) => (
+                          <option key={t.id} value={t.id}>{t.name}{t.icaoType ? ` (${t.icaoType})` : ""}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="massField">
+                      <span className="muted">Вид события</span>
+                      <select value={eventTypeId} onChange={(e) => setEventTypeId(e.target.value)} required>
+                        <option value="">— выберите —</option>
+                        {eventTypes.map((et) => (
+                          <option key={et.id} value={et.id}>{et.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="massFieldGroup">
+                  <p className="massFieldGroupTitle">Объём и период</p>
+                  <div className="massFormGrid massFormGridPeriod">
+                    <label className="massField">
+                      <span className="muted">TAT, ч</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={8760}
+                        value={tatHours}
+                        onChange={(e) => setTatHours(Number(e.target.value) || 72)}
+                      />
+                    </label>
+                    <label className="massField">
+                      <span className="muted">Количество</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={count}
+                        onChange={(e) => setCount(Number(e.target.value) || 1)}
+                      />
+                    </label>
+                    <label className="massField">
+                      <span className="muted">Начало периода</span>
+                      <input type="date" value={startFrom} onChange={(e) => setStartFrom(e.target.value)} />
+                    </label>
+                    <label className="massField">
+                      <span className="muted" title="Крайняя допустимая дата старта события">Крайний старт</span>
+                      <input type="date" value={endTo} onChange={(e) => setEndTo(e.target.value)} />
+                      <span className="massFieldHint">Событие может закончиться позже этой даты</span>
+                    </label>
+                  </div>
+                  <label className="massField massFieldWide">
+                    <span className="muted">Шаблон названия (опционально, % = номер)</span>
+                    <input
+                      type="text"
+                      placeholder="Например: A-check %"
+                      value={titleTemplate}
+                      onChange={(e) => setTitleTemplate(e.target.value)}
+                    />
+                  </label>
+                </div>
+              </>
             ) : (
               <div className="massBatchBox">
                 <div className="massBatchToolbar">
                   <div className="muted small">
-                    Можно заполнить вручную или импортировать XLSX/CSV. Обязательные колонки: operator, aircraftType, eventType, tatHours, count, startFrom, endTo.
+                    Заполните строки вручную или импортируйте XLSX/CSV
+                    (operator, aircraftType, eventType, tatHours, count, startFrom, endTo).
                   </div>
                   <div className="massBatchToolbarActions">
                     <input
@@ -779,14 +798,28 @@ export function MassPlanView() {
                 </div>
                 {batchImportError ? <div className="error">{batchImportError}</div> : null}
                 <div className="massBatchRows">
+                  <div className="massBatchHead" aria-hidden="true">
+                    <div className="massBatchRowGrid">
+                      <span>#</span>
+                      <span>Оператор</span>
+                      <span>Тип ВС</span>
+                      <span>Событие</span>
+                      <span>TAT</span>
+                      <span>Кол-во</span>
+                      <span>Начало</span>
+                      <span>Крайний старт</span>
+                      <span>Название</span>
+                      <span />
+                    </div>
+                  </div>
                   {batchRows.map((row, idx) => (
                     <div className="massBatchRowCard" key={row.id}>
                       <div className="massBatchRowGrid">
-                        <div className="massBatchRowIndex">Строка {idx + 1}</div>
+                        <div className="massBatchRowIndex">{idx + 1}</div>
                         <label className="massField">
                           <span className="muted">Оператор</span>
                           <select value={row.operatorId} onChange={(e) => updateBatchRow(row.id, { operatorId: e.target.value })} required>
-                            <option value="">— выберите —</option>
+                            <option value="">—</option>
                             {operators.map((o) => (
                               <option key={o.id} value={o.id}>{o.name}</option>
                             ))}
@@ -795,7 +828,7 @@ export function MassPlanView() {
                         <label className="massField">
                           <span className="muted">Тип ВС</span>
                           <select value={row.aircraftTypeId} onChange={(e) => updateBatchRow(row.id, { aircraftTypeId: e.target.value })} required>
-                            <option value="">— выберите —</option>
+                            <option value="">—</option>
                             {aircraftTypes.map((t) => (
                               <option key={t.id} value={t.id}>{t.name}{t.icaoType ? ` (${t.icaoType})` : ""}</option>
                             ))}
@@ -804,17 +837,17 @@ export function MassPlanView() {
                         <label className="massField">
                           <span className="muted">Вид события</span>
                           <select value={row.eventTypeId} onChange={(e) => updateBatchRow(row.id, { eventTypeId: e.target.value })} required>
-                            <option value="">— выберите —</option>
+                            <option value="">—</option>
                             {eventTypes.map((et) => (
                               <option key={et.id} value={et.id}>{et.name}</option>
                             ))}
                           </select>
                         </label>
-                        <label className="massField massBatchNumberField">
+                        <label className="massField">
                           <span className="muted">TAT, ч</span>
                           <input type="number" min={1} max={8760} value={row.tatHours} onChange={(e) => updateBatchRow(row.id, { tatHours: Number(e.target.value) || 1 })} />
                         </label>
-                        <label className="massField massBatchNumberField">
+                        <label className="massField">
                           <span className="muted">Кол-во</span>
                           <input type="number" min={1} max={200} value={row.count} onChange={(e) => updateBatchRow(row.id, { count: Number(e.target.value) || 1 })} />
                         </label>
@@ -823,20 +856,12 @@ export function MassPlanView() {
                           <input type="date" value={row.startFrom} onChange={(e) => updateBatchRow(row.id, { startFrom: e.target.value })} />
                         </label>
                         <label className="massField">
-                          <span className="muted">Конец периода (крайний старт)</span>
+                          <span className="muted">Крайний старт</span>
                           <input type="date" value={row.endTo} onChange={(e) => updateBatchRow(row.id, { endTo: e.target.value })} />
                         </label>
-                        <label className="massField massBatchTitleField">
+                        <label className="massField">
                           <span className="muted">Шаблон названия</span>
                           <input value={row.titleTemplate} onChange={(e) => updateBatchRow(row.id, { titleTemplate: e.target.value })} placeholder="% = номер" />
-                        </label>
-                        <label className="massField">
-                          <span className="muted">Режим расписания</span>
-                          <select value={row.scheduleMode} onChange={(e) => updateBatchRow(row.id, { scheduleMode: e.target.value as BatchRow["scheduleMode"] })}>
-                            <option value="compact">Компактно</option>
-                            <option value="sequential">Последовательно</option>
-                            <option value="fixedCadence">Фиксированный шаг</option>
-                          </select>
                         </label>
                         <button
                           type="button"
@@ -861,186 +886,239 @@ export function MassPlanView() {
             )}
           </section>
 
-          <details className="massAdvanced massSection" open>
+          <details className="massAdvanced massSection">
             <summary>Расширенные настройки</summary>
-            <div className="massAdvancedGrid">
-              <label className="massField">
-                <span className="muted">Режим расписания</span>
-                <select
-                  value={scheduleMode}
-                  onChange={(e) => {
-                    setScheduleMode(e.target.value as "compact" | "sequential" | "fixedCadence");
-                    setPreview(null);
-                    setResult(null);
-                  }}
-                >
-                  <option value="compact">Компактно: первый свободный слот</option>
-                  <option value="sequential">Последовательно: событие за событием</option>
-                  <option value="fixedCadence">Фиксированный шаг от начала периода</option>
-                </select>
-              </label>
-
-              <label className="massField">
-                <span className="muted">Пауза между событиями, ч</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={8760}
-                  value={spacingHours}
-                  onChange={(e) => setSpacingHours(Number(e.target.value) || 0)}
-                />
-              </label>
-
-              {scheduleMode === "fixedCadence" ? (
-                <label className="massField">
-                  <span className="muted">Фиксированный шаг, ч</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={8760}
-                    value={cadenceHours}
-                    onChange={(e) => setCadenceHours(Number(e.target.value) || 1)}
-                  />
-                </label>
-              ) : null}
-
-              <label className="massField">
-                <span className="muted">Поведение при конфликте</span>
-                <select
-                  value={placementMode}
-                  onChange={(e) => {
-                    setPlacementMode(e.target.value as "auto" | "preferredHangars" | "draftOnConflict");
-                    setPreview(null);
-                    setResult(null);
-                  }}
-                >
-                  <option value="auto">Искать ближайшее свободное место</option>
-                  <option value="preferredHangars">Искать по приоритету ангаров</option>
-                  <option value="draftOnConflict">Создавать черновик, если целевой слот занят</option>
-                </select>
-              </label>
-
+            <div className="massAdvancedBody">
               {inputMode === "batch" ? (
-                <label className="massField">
-                  <span className="muted">Solver для batch</span>
-                  <select
-                    value={batchSolverMode}
-                    onChange={(e) => {
-                      setBatchSolverMode(e.target.value as BatchSolverMode);
-                      setPreview(null);
-                      setResult(null);
-                    }}
-                  >
-                    <option value="ortools">Только OR-Tools</option>
-                    <option value="hybrid">OR-Tools + эвристика</option>
-                    <option value="heuristic">Только эвристика</option>
-                  </select>
-                </label>
+                <p className="massAdvancedNote">
+                  Эти параметры применяются ко всем строкам списка. После изменения снова нажмите «Предпросмотр».
+                </p>
               ) : null}
 
-              <label className="massField">
-                <span className="muted">Бюджетное начало</span>
-                <input
-                  type="datetime-local"
-                  value={budgetStartAtLocal}
-                  onChange={(e) => setBudgetStartAtLocal(e.target.value)}
-                />
-              </label>
+              <div className="massFieldGroup">
+                <p className="massFieldGroupTitle">Расписание</p>
+                <div className="massAdvancedGrid">
+                  <label className="massField">
+                    <span className="muted">Режим</span>
+                    <select
+                      value={scheduleMode}
+                      onChange={(e) => {
+                        const next = e.target.value as "compact" | "sequential" | "fixedCadence";
+                        setScheduleMode(next);
+                        applyAdvancedScheduleToRows({ scheduleMode: next });
+                        clearPlanOutput();
+                      }}
+                    >
+                      <option value="compact">Компактно: первый свободный слот</option>
+                      <option value="sequential">Последовательно: событие за событием</option>
+                      <option value="fixedCadence">Фиксированный шаг от начала периода</option>
+                    </select>
+                  </label>
 
-              <label className="massField">
-                <span className="muted">Бюджетное окончание</span>
-                <input
-                  type="datetime-local"
-                  value={budgetEndAtLocal}
-                  onChange={(e) => setBudgetEndAtLocal(e.target.value)}
-                />
-              </label>
+                  <label className="massField">
+                    <span className="muted">Пауза между событиями, ч</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={8760}
+                      value={spacingHours}
+                      onChange={(e) => {
+                        const next = Number(e.target.value) || 0;
+                        setSpacingHours(next);
+                        applyAdvancedScheduleToRows({ spacingHours: next });
+                        clearPlanOutput();
+                      }}
+                    />
+                    {spacingHours > 0 && scheduleMode === "compact" ? (
+                      <span className="massFieldHint">В режиме «Компактно» пауза не используется — выберите «Последовательно».</span>
+                    ) : null}
+                  </label>
 
-              <label className="massField">
-                <span className="muted">Фактическое начало</span>
-                <input
-                  type="datetime-local"
-                  value={actualStartAtLocal}
-                  onChange={(e) => setActualStartAtLocal(e.target.value)}
-                />
-              </label>
+                  {scheduleMode === "fixedCadence" ? (
+                    <label className="massField">
+                      <span className="muted">Фиксированный шаг, ч</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={8760}
+                        value={cadenceHours}
+                        onChange={(e) => {
+                          const next = Number(e.target.value) || 1;
+                          setCadenceHours(next);
+                          applyAdvancedScheduleToRows({ cadenceHours: next });
+                          clearPlanOutput();
+                        }}
+                      />
+                    </label>
+                  ) : null}
 
-              <label className="massField">
-                <span className="muted">Фактическое окончание</span>
-                <input
-                  type="datetime-local"
-                  value={actualEndAtLocal}
-                  onChange={(e) => setActualEndAtLocal(e.target.value)}
-                />
-              </label>
+                  <label className="massField">
+                    <span className="muted">При конфликте</span>
+                    <select
+                      value={placementMode}
+                      onChange={(e) => {
+                        setPlacementMode(e.target.value as "auto" | "preferredHangars" | "draftOnConflict");
+                        clearPlanOutput();
+                      }}
+                    >
+                      <option value="auto">Искать ближайшее свободное место</option>
+                      <option value="preferredHangars">Искать по приоритету ангаров</option>
+                      <option value="draftOnConflict">Создавать черновик, если целевой слот занят</option>
+                    </select>
+                  </label>
 
-              <label className="massField">
-                <span className="muted">Буксировка до, мин</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={1440}
-                  value={towBeforeMinutes}
-                  onChange={(e) => setTowBeforeMinutes(Number(e.target.value) || 0)}
-                />
-              </label>
+                  {inputMode === "batch" ? (
+                    <label className="massField">
+                      <span className="muted">Solver</span>
+                      <select
+                        value={batchSolverMode}
+                        onChange={(e) => {
+                          setBatchSolverMode(e.target.value as BatchSolverMode);
+                          clearPlanOutput();
+                        }}
+                      >
+                        <option value="ortools">Только OR-Tools</option>
+                        <option value="hybrid">OR-Tools + эвристика</option>
+                        <option value="heuristic">Только эвристика</option>
+                      </select>
+                    </label>
+                  ) : null}
+                </div>
+              </div>
 
-              <label className="massField">
-                <span className="muted">Буксировка после, мин</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={1440}
-                  value={towAfterMinutes}
-                  onChange={(e) => setTowAfterMinutes(Number(e.target.value) || 0)}
-                />
-              </label>
+              <div className="massFieldGroup">
+                <p className="massFieldGroupTitle">Буксировки</p>
+                <div className="massAdvancedGrid">
+                  <label className="massField">
+                    <span className="muted">До события, мин</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1440}
+                      value={towBeforeMinutes}
+                      onChange={(e) => {
+                        setTowBeforeMinutes(Number(e.target.value) || 0);
+                        clearPlanOutput();
+                      }}
+                    />
+                  </label>
+                  <label className="massField">
+                    <span className="muted">После события, мин</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1440}
+                      value={towAfterMinutes}
+                      onChange={(e) => {
+                        setTowAfterMinutes(Number(e.target.value) || 0);
+                        clearPlanOutput();
+                      }}
+                    />
+                  </label>
+                  <label className="massCheckbox">
+                    <input
+                      type="checkbox"
+                      checked={towBlocksStand}
+                      onChange={(e) => {
+                        setTowBlocksStand(e.target.checked);
+                        clearPlanOutput();
+                      }}
+                    />
+                    <span>Учитывать как занятость места</span>
+                  </label>
+                </div>
+              </div>
 
-              <label className="massCheckbox">
-                <input
-                  type="checkbox"
-                  checked={towBlocksStand}
-                  onChange={(e) => setTowBlocksStand(e.target.checked)}
-                />
-                <span>Учитывать буксировки как занятость места</span>
-              </label>
+              <div className="massFieldGroup">
+                <p className="massFieldGroupTitle">Бюджетный и фактический периоды</p>
+                <div className="massAdvancedGrid">
+                  <label className="massField">
+                    <span className="muted">Бюджетное начало</span>
+                    <input
+                      type="datetime-local"
+                      value={budgetStartAtLocal}
+                      onChange={(e) => {
+                        setBudgetStartAtLocal(e.target.value);
+                        clearPlanOutput();
+                      }}
+                    />
+                  </label>
+                  <label className="massField">
+                    <span className="muted">Бюджетное окончание</span>
+                    <input
+                      type="datetime-local"
+                      value={budgetEndAtLocal}
+                      onChange={(e) => {
+                        setBudgetEndAtLocal(e.target.value);
+                        clearPlanOutput();
+                      }}
+                    />
+                  </label>
+                  <label className="massField">
+                    <span className="muted">Фактическое начало</span>
+                    <input
+                      type="datetime-local"
+                      value={actualStartAtLocal}
+                      onChange={(e) => {
+                        setActualStartAtLocal(e.target.value);
+                        clearPlanOutput();
+                      }}
+                    />
+                  </label>
+                  <label className="massField">
+                    <span className="muted">Фактическое окончание</span>
+                    <input
+                      type="datetime-local"
+                      value={actualEndAtLocal}
+                      onChange={(e) => {
+                        setActualEndAtLocal(e.target.value);
+                        clearPlanOutput();
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="massFieldGroup">
+                <p className="massFieldGroupTitle">Приоритет ангаров</p>
+                <p className="massAdvancedNote">Если список пуст, ангары перебираются по имени.</p>
+                <div className="massHangarPriority">
+                  {hangarPriority.map((id, index) => (
+                    <span key={id} className="massHangarChip">
+                      <span className="massHangarOrder">{index + 1}</span>
+                      <span>{hangarById.get(id)?.name ?? id}</span>
+                      <button type="button" onClick={() => moveHangar(index, -1)} disabled={index === 0} title="Выше">↑</button>
+                      <button type="button" onClick={() => moveHangar(index, 1)} disabled={index === hangarPriority.length - 1} title="Ниже">↓</button>
+                      <button type="button" onClick={() => setHangarPriority((p) => p.filter((x) => x !== id))} title="Убрать">✕</button>
+                    </span>
+                  ))}
+                  {availableHangarIds.length > 0 && (
+                    <select
+                      className="massHangarSelect"
+                      value=""
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v) setHangarPriority((p) => [...p, v]);
+                      }}
+                    >
+                      <option value="">+ ангар</option>
+                      {availableHangarIds.map((id) => (
+                        <option key={id} value={id}>{hangarById.get(id)?.name ?? id}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
             </div>
           </details>
 
-          <section className="massSection">
-            <div className="massSectionHead">
-              <div>
-                <h2>Приоритет ангаров</h2>
-                <p>Если список не задан, система перебирает активные ангары по имени.</p>
-              </div>
+          <div className="massActions massActionsSticky">
+            <div className="massActionsMeta muted small">
+              {plannedEventsCount} событий
+              {inputMode === "batch" ? ` · ${batchRows.length} строк` : null}
+              {" · "}
+              {scheduleLabel(scheduleMode)}
             </div>
-            <div className="massHangarPriority">
-              {hangarPriority.map((id, index) => (
-                <span key={id} className="massHangarChip">
-                  <span className="massHangarOrder">{index + 1}</span>
-                  <span>{hangarById.get(id)?.name ?? id}</span>
-                  <button type="button" onClick={() => moveHangar(index, -1)} disabled={index === 0} title="Выше">↑</button>
-                  <button type="button" onClick={() => moveHangar(index, 1)} disabled={index === hangarPriority.length - 1} title="Ниже">↓</button>
-                  <button type="button" onClick={() => setHangarPriority((p) => p.filter((x) => x !== id))} title="Убрать">✕</button>
-                </span>
-              ))}
-              {availableHangarIds.length > 0 && (
-                <select
-                  className="massHangarSelect"
-                  value=""
-                  onChange={(e) => { const v = e.target.value; if (v) setHangarPriority((p) => [...p, v]); }}
-                >
-                  <option value="">+ ангар</option>
-                  {availableHangarIds.map((id) => (
-                    <option key={id} value={id}>{hangarById.get(id)?.name ?? id}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-            {hangarPriority.length === 0 && <div className="massEmptyHint">Приоритет не задан. Будет использован порядок по имени ангара.</div>}
-          </section>
-
-          <div className="massActions">
             <button
               type="submit"
               className="btn btnPrimary"

@@ -35,14 +35,28 @@ const LEVEL_LABEL: Record<string, string> = {
 };
 
 type AuthedUser = Extract<MeResponse, { ok: true }>["user"];
-type ActionFilter = "" | "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE";
+type ActionFilter = "" | MyActivityItem["action"];
 
 const ACTION_LABEL: Record<string, string> = {
   CREATE: "Создание",
   UPDATE: "Изменение",
   RESERVE: "Резервирование",
-  UNRESERVE: "Снятие резерва"
+  UNRESERVE: "Снятие резерва",
+  SANDBOX_CREATE: "Песочница+",
+  SANDBOX_DELETE: "Песочница−",
+  CLEANUP: "Очистка"
 };
+
+const ACTION_FILTERS: ActionFilter[] = [
+  "",
+  "CREATE",
+  "UPDATE",
+  "RESERVE",
+  "UNRESERVE",
+  "SANDBOX_CREATE",
+  "SANDBOX_DELETE",
+  "CLEANUP"
+];
 
 const FIELD_LABEL: Record<string, string> = {
   title: "Название",
@@ -369,7 +383,16 @@ export function ProfileView(props: { me: AuthedUser }) {
   const initials = initialsFromUser(props.me);
   const total = activityQ.data?.total ?? 0;
   const items = activityQ.data?.items ?? [];
-  const byAction = activityQ.data?.byAction ?? { CREATE: 0, UPDATE: 0, RESERVE: 0, UNRESERVE: 0 };
+  const byAction = activityQ.data?.byAction ?? {
+    CREATE: 0,
+    UPDATE: 0,
+    RESERVE: 0,
+    UNRESERVE: 0,
+    SANDBOX_CREATE: 0,
+    SANDBOX_DELETE: 0,
+    CLEANUP: 0
+  };
+  const sandboxOps = (byAction.SANDBOX_CREATE ?? 0) + (byAction.SANDBOX_DELETE ?? 0) + (byAction.CLEANUP ?? 0);
 
   const hasPrev = offset > 0;
   const hasNext = offset + limit < total;
@@ -523,19 +546,20 @@ export function ProfileView(props: { me: AuthedUser }) {
         <header className="profileCardHeader profileActivityHeader">
           <div>
             <div className="profileCardTitle">Моя активность</div>
-            <div className="profileCardHint">Все изменения, сделанные вами в событиях ТО.</div>
+            <div className="profileCardHint">Все изменения в событиях и операции с песочницами — по всем контурам.</div>
           </div>
           <div className="profileActivityStats">
             <ActivityStat label="всего" value={total} />
             <ActivityStat label="создано" value={byAction.CREATE} />
             <ActivityStat label="изменено" value={byAction.UPDATE} />
             <ActivityStat label="резервы" value={byAction.RESERVE + byAction.UNRESERVE} />
+            <ActivityStat label="песочницы" value={sandboxOps} />
           </div>
         </header>
 
         <div className="profileActivityToolbar">
           <div className="profileActivityTabs" role="tablist">
-            {(["", "CREATE", "UPDATE", "RESERVE", "UNRESERVE"] as ActionFilter[]).map((a) => (
+            {ACTION_FILTERS.map((a) => (
               <button
                 key={a || "ALL"}
                 type="button"
@@ -550,7 +574,7 @@ export function ProfileView(props: { me: AuthedUser }) {
                 <span className="profileActivityTabCount">
                   {a === ""
                     ? total
-                    : (byAction[a as "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE"] ?? 0)}
+                    : (byAction[a as keyof typeof byAction] ?? 0)}
                 </span>
               </button>
             ))}
@@ -649,9 +673,20 @@ function ActivityItem({ item, maps }: { item: MyActivityItem; maps: RefMaps }) {
   const [open, setOpen] = useState(false);
   const diffs = useMemo(() => extractDiffEntries(item.changes), [item.changes]);
   const when = dayjs(item.createdAt);
+  const isSandboxOp = item.action === "SANDBOX_CREATE" || item.action === "SANDBOX_DELETE" || item.action === "CLEANUP";
   const eventLabel = item.event
     ? `${item.event.title}${item.event.tailNumber ? ` • ${item.event.tailNumber}` : ""}`
-    : "Событие удалено";
+    : isSandboxOp
+      ? item.source.sandboxName
+        ? `Песочница «${item.source.sandboxName}»`
+        : "Операция с контуром"
+      : "Событие удалено";
+  const sourceLabel =
+    item.source.kind === "sandbox"
+      ? item.source.sandboxName
+        ? `Песочница «${item.source.sandboxName}»`
+        : "Песочница"
+      : "Рабочий контур";
 
   return (
     <li className={`profileTimelineItem profileTimelineItem_${item.action}`}>
@@ -666,12 +701,20 @@ function ActivityItem({ item, maps }: { item: MyActivityItem; maps: RefMaps }) {
             {when.format("DD.MM.YYYY HH:mm")}
           </span>
         </div>
-        {item.reason ? (
-          <div className="profileTimelineReason">
-            <span className="muted">Причина: </span>
-            {item.reason}
+        <div className="profileTimelineMeta">
+          <div className="profileTimelineSource">
+            <span className="muted">Источник: </span>
+            <span className={item.source.kind === "sandbox" ? "profileSourceSandbox" : "profileSourceProd"}>
+              {sourceLabel}
+            </span>
           </div>
-        ) : null}
+          {item.reason ? (
+            <div className="profileTimelineReason">
+              <span className="muted">Причина: </span>
+              {item.reason}
+            </div>
+          ) : null}
+        </div>
         {diffs.length > 0 ? (
           <div className="profileDiffList">
             {(open ? diffs : diffs.slice(0, 3)).map((d, i) => {

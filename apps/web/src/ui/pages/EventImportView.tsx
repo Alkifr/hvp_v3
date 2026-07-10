@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 
@@ -25,6 +25,14 @@ type ImportPreviewRow = {
   warnings?: string[];
   error?: string;
 };
+
+type PreviewStatusFilter = "" | "ok" | "warn" | "error";
+
+function rowStatus(row: ImportPreviewRow): Exclude<PreviewStatusFilter, ""> {
+  if (!row.ok) return "error";
+  if ((row.warnings?.length ?? 0) > 0) return "warn";
+  return "ok";
+}
 
 function normalizeHeaderKey(key: string) {
   return String(key ?? "").replace(/^\uFEFF/, "").trim();
@@ -66,6 +74,35 @@ function formatImportPeriod(start?: string | null, end?: string | null) {
   );
 }
 
+const REQUIRED_IMPORT_COLUMNS = ["Aircraft", "Event_name", "startAt", "endAt"] as const;
+
+function validateImportRowsShape(rows: any[]): string | null {
+  if (!rows.length) return "В файле нет строк данных.";
+  const keys = new Set(Object.keys(rows[0] ?? {}));
+  const missing = REQUIRED_IMPORT_COLUMNS.filter((col) => !keys.has(col));
+  if (missing.length === 0) return null;
+
+  const looksLikeMassPlan =
+    keys.has("operator") ||
+    keys.has("Operator") ||
+    keys.has("tatHours") ||
+    keys.has("aircraftType") ||
+    (keys.has("AircraftType") && keys.has("count"));
+
+  const parts = [
+    "Файл не подходит для импорта событий.",
+    `В шапке нет колонок: ${missing.join(", ")}.`
+  ];
+  if (looksLikeMassPlan) {
+    parts.push("Похоже, это файл массового планирования — откройте раздел «Массовое планирование».");
+  } else {
+    parts.push(
+      "Нужны колонки: Aircraft, Event_name, startAt, endAt (также можно Operator, AircraftType, Event_Title, Hangar, HangarStand)."
+    );
+  }
+  return parts.join(" ");
+}
+
 export function EventImportView() {
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
@@ -74,14 +111,33 @@ export function EventImportView() {
   const [importRows, setImportRows] = useState<any[] | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<any | null>(null);
+  const [statusFilter, setStatusFilter] = useState<PreviewStatusFilter>("");
 
   const previewRows = ((importResult as any)?.rows ?? []) as ImportPreviewRow[];
   const resultErrors = (((importResult as any)?.errors ?? []) as Array<{ rowIndex: number; message: string }>);
-  const warningRowsCount = previewRows.filter((row) => row.ok && (row.warnings?.length ?? 0) > 0).length;
+
+  const statusCounts = useMemo(() => {
+    let ok = 0;
+    let warn = 0;
+    let error = 0;
+    for (const row of previewRows) {
+      const status = rowStatus(row);
+      if (status === "ok") ok += 1;
+      else if (status === "warn") warn += 1;
+      else error += 1;
+    }
+    return { all: previewRows.length, ok, warn, error };
+  }, [previewRows]);
+
+  const filteredPreviewRows = useMemo(() => {
+    if (!statusFilter) return previewRows;
+    return previewRows.filter((row) => rowStatus(row) === statusFilter);
+  }, [previewRows, statusFilter]);
 
   const previewM = useMutation({
     mutationFn: (rows: any[]) => apiPost("/api/events/import", { dryRun: true, rows }),
     onSuccess: (res) => {
+      setStatusFilter("");
       setImportResult(res);
     }
   });
@@ -89,6 +145,7 @@ export function EventImportView() {
   const importM = useMutation({
     mutationFn: (rows: any[]) => apiPost("/api/events/import", { rows }),
     onSuccess: async (res) => {
+      setStatusFilter("");
       setImportResult(res);
       // обновим все варианты запросов событий
       await qc.invalidateQueries({ queryKey: ["events"] });
@@ -155,6 +212,7 @@ export function EventImportView() {
                 setImportRows(null);
                 setImportResult(null);
                 setImportError(null);
+                setStatusFilter("");
                 if (!f) return;
                 try {
                   if (f.name.toLowerCase().endsWith(".csv")) {
@@ -162,14 +220,20 @@ export function EventImportView() {
                     const wb = XLSX.read(text, { type: "string" });
                     const ws = wb.Sheets[wb.SheetNames[0] ?? ""];
                     const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
-                    setImportRows(normalizeRows(rows));
+                    const normalized = normalizeRows(rows);
+                    const shapeError = validateImportRowsShape(normalized);
+                    setImportRows(normalized);
+                    if (shapeError) setImportError(shapeError);
                     return;
                   }
                   const buf = await f.arrayBuffer();
                   const wb = XLSX.read(buf, { type: "array", cellDates: true });
                   const ws = wb.Sheets[wb.SheetNames[0] ?? ""];
                   const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
-                  setImportRows(normalizeRows(rows));
+                  const normalized = normalizeRows(rows);
+                  const shapeError = validateImportRowsShape(normalized);
+                  setImportRows(normalized);
+                  if (shapeError) setImportError(shapeError);
                 } catch (err: any) {
                   setImportError(String(err?.message ?? err));
                 }
@@ -180,9 +244,14 @@ export function EventImportView() {
 
           <button
             className="btn btnPrimary"
-            disabled={!importRows?.length || isBusy}
+            disabled={!importRows?.length || isBusy || Boolean(importError)}
             onClick={() => {
               if (!importRows?.length) return;
+              const shapeError = validateImportRowsShape(importRows);
+              if (shapeError) {
+                setImportError(shapeError);
+                return;
+              }
               previewM.mutate(importRows);
             }}
           >
@@ -191,7 +260,7 @@ export function EventImportView() {
 
           <button
             className="btn btnPrimary"
-            disabled={!importRows?.length || isBusy || !(importResult as any)?.summary?.dryRun}
+            disabled={!importRows?.length || isBusy || Boolean(importError) || !(importResult as any)?.summary?.dryRun}
             onClick={() => {
               if (!importRows?.length) return;
               importM.mutate(importRows);
@@ -203,13 +272,17 @@ export function EventImportView() {
                 ? "Импортировать в песочницу"
                 : "Импортировать"}
           </button>
-
-          {previewM.error || importM.error ? (
-            <span className="error">
-              {String(((previewM.error ?? importM.error) as any)?.message ?? previewM.error ?? importM.error)}
-            </span>
-          ) : null}
         </div>
+
+        {(previewM.error || importM.error || importError) && (
+          <div className="eventImportErrorBanner" role="alert">
+            <strong>Не удалось проверить файл</strong>
+            <div>
+              {importError ||
+                String(((previewM.error ?? importM.error) as any)?.message ?? previewM.error ?? importM.error)}
+            </div>
+          </div>
+        )}
 
         {isBusy ? (
           <div className="massCalculationPanel eventImportProgress" role="status" aria-live="polite">
@@ -228,7 +301,6 @@ export function EventImportView() {
           </div>
         ) : null}
 
-        {importError ? <div className="error">{importError}</div> : null}
         {importFile ? (
           <div className="muted">
             Файл: <strong>{importFile.name}</strong> {importRows ? <>• строк к импорту: {importRows.length}</> : null}
@@ -243,7 +315,7 @@ export function EventImportView() {
                 <>
                   <span className="eventImportStat">режим: {(importResult as any).summary?.dryRun ? "предпросмотр" : "импорт"}</span>
                   <span className="eventImportStat eventImportStatOk">без ошибок: {(importResult as any).summary?.okRows ?? 0}</span>
-                  {warningRowsCount > 0 ? <span className="eventImportStat eventImportStatWarn">предупреждений: {warningRowsCount}</span> : null}
+                  {statusCounts.warn > 0 ? <span className="eventImportStat eventImportStatWarn">предупреждений: {statusCounts.warn}</span> : null}
                   <span className="eventImportStat eventImportStatError">с ошибками: {(importResult as any).summary?.errorRows ?? 0}</span>
                   <span className="eventImportStat">событий: {(importResult as any).summary?.wouldCreateEvents ?? 0}</span>
                   <span className="eventImportStat">резервов: {(importResult as any).summary?.wouldCreateReservations ?? 0}</span>
@@ -260,67 +332,121 @@ export function EventImportView() {
             </div>
 
             {previewRows.length ? (
-              <div className="eventImportTableWrap">
-                <table className="table eventImportTable">
-                  <thead>
-                    <tr>
-                      <th>Строка</th>
-                      <th>Статус</th>
-                      <th>Событие</th>
-                      <th>Тип события</th>
-                      <th>Борт</th>
-                      <th>Период</th>
-                      <th>Бюджетный период</th>
-                      <th>Фактический период</th>
-                      <th>Буксировка</th>
-                      <th>Ангар / место</th>
-                      <th>Вариант</th>
-                      <th>Комментарий</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewRows.map((row) => {
-                      const hasWarnings = row.ok && (row.warnings?.length ?? 0) > 0;
-                      return (
-                      <tr key={row.rowIndex} className={row.ok ? (hasWarnings ? "eventImportRowWarn" : "eventImportRowOk") : "eventImportRowError"}>
-                        <td>{row.rowIndex}</td>
-                        <td>
-                          <span className={row.ok ? (hasWarnings ? "eventImportBadge eventImportBadgeWarn" : "eventImportBadge eventImportBadgeOk") : "eventImportBadge eventImportBadgeError"}>
-                            {row.ok ? (hasWarnings ? "Предупреждение" : "Готово") : "Ошибка"}
-                          </span>
-                        </td>
-                        <td>{row.title || "—"}</td>
-                        <td>{row.eventTypeKey || "—"}</td>
-                        <td>{row.aircraftTail || "—"}</td>
-                        <td>
-                          {formatImportPeriod(row.startAt, row.endAt)}
-                        </td>
-                        <td>{formatImportPeriod(row.budgetStartAt, row.budgetEndAt)}</td>
-                        <td>{formatImportPeriod(row.actualStartAt, row.actualEndAt)}</td>
-                        <td>{formatImportPeriod(row.towStartAt, row.towEndAt)}</td>
-                        <td>
-                          {row.hangar || "—"}
-                          {row.stand ? <span className="muted"> / {row.stand}</span> : null}
-                        </td>
-                        <td>{row.layout || "—"}</td>
-                        <td className="eventImportMessageCell">
-                          {row.error ? <div className="eventImportErrorText">{row.error}</div> : null}
-                          {row.warnings?.length ? (
-                            <div className="eventImportWarnings">
-                              {row.warnings.map((w, idx) => (
-                                <div key={idx}>{w}</div>
-                              ))}
-                            </div>
-                          ) : row.ok ? (
-                            <span className="muted">Можно импортировать</span>
-                          ) : null}
-                        </td>
-                      </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <div className="eventImportStatusToolbar">
+                  <div className="profileActivityTabs" role="tablist" aria-label="Фильтр по статусу строк">
+                    {(
+                      [
+                        { id: "" as PreviewStatusFilter, label: "Все", count: statusCounts.all },
+                        { id: "ok" as PreviewStatusFilter, label: "Готово", count: statusCounts.ok },
+                        { id: "warn" as PreviewStatusFilter, label: "Предупреждение", count: statusCounts.warn },
+                        { id: "error" as PreviewStatusFilter, label: "Ошибка", count: statusCounts.error }
+                      ]
+                    ).map((tab) => (
+                      <button
+                        key={tab.id || "ALL"}
+                        type="button"
+                        role="tab"
+                        aria-selected={statusFilter === tab.id}
+                        className={`profileActivityTab${statusFilter === tab.id ? " profileActivityTabActive" : ""}`}
+                        onClick={() => setStatusFilter(tab.id)}
+                      >
+                        {tab.label}
+                        <span className="profileActivityTabCount">{tab.count}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {statusFilter ? (
+                    <button type="button" className="btn btnGhost" onClick={() => setStatusFilter("")}>
+                      Сбросить фильтр
+                    </button>
+                  ) : null}
+                </div>
+
+                {filteredPreviewRows.length ? (
+                  <div className="eventImportTableWrap">
+                    <table className="table eventImportTable">
+                      <thead>
+                        <tr>
+                          <th>Строка</th>
+                          <th>Статус</th>
+                          <th>Событие</th>
+                          <th>Тип события</th>
+                          <th>Борт</th>
+                          <th>Период</th>
+                          <th>Бюджетный период</th>
+                          <th>Фактический период</th>
+                          <th>Буксировка</th>
+                          <th>Ангар / место</th>
+                          <th>Вариант</th>
+                          <th>Комментарий</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredPreviewRows.map((row) => {
+                          const status = rowStatus(row);
+                          return (
+                            <tr
+                              key={row.rowIndex}
+                              className={
+                                status === "error"
+                                  ? "eventImportRowError"
+                                  : status === "warn"
+                                    ? "eventImportRowWarn"
+                                    : "eventImportRowOk"
+                              }
+                            >
+                              <td>{row.rowIndex}</td>
+                              <td>
+                                <span
+                                  className={
+                                    status === "error"
+                                      ? "eventImportBadge eventImportBadgeError"
+                                      : status === "warn"
+                                        ? "eventImportBadge eventImportBadgeWarn"
+                                        : "eventImportBadge eventImportBadgeOk"
+                                  }
+                                >
+                                  {status === "error" ? "Ошибка" : status === "warn" ? "Предупреждение" : "Готово"}
+                                </span>
+                              </td>
+                              <td>{row.title || "—"}</td>
+                              <td>{row.eventTypeKey || "—"}</td>
+                              <td>{row.aircraftTail || "—"}</td>
+                              <td>{formatImportPeriod(row.startAt, row.endAt)}</td>
+                              <td>{formatImportPeriod(row.budgetStartAt, row.budgetEndAt)}</td>
+                              <td>{formatImportPeriod(row.actualStartAt, row.actualEndAt)}</td>
+                              <td>{formatImportPeriod(row.towStartAt, row.towEndAt)}</td>
+                              <td>
+                                {row.hangar || "—"}
+                                {row.stand ? <span className="muted"> / {row.stand}</span> : null}
+                              </td>
+                              <td>{row.layout || "—"}</td>
+                              <td className="eventImportMessageCell">
+                                {row.error ? <div className="eventImportErrorText">{row.error}</div> : null}
+                                {row.warnings?.length ? (
+                                  <div className="eventImportWarnings">
+                                    {row.warnings.map((w, idx) => (
+                                      <div key={idx}>{w}</div>
+                                    ))}
+                                  </div>
+                                ) : row.ok ? (
+                                  <span className="muted">Можно импортировать</span>
+                                ) : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="eventImportEmptyFilter">
+                    <strong>По выбранному статусу строк нет</strong>
+                    <span className="muted">Сбросьте фильтр или выберите другой статус.</span>
+                  </div>
+                )}
+              </>
             ) : resultErrors.length ? (
               <div className="eventImportErrorsList">
                 {resultErrors.map((err) => (

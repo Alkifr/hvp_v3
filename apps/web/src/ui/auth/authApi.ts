@@ -64,11 +64,11 @@ export async function authChangePassword(oldPassword: string, newPassword: strin
 
 export type MyActivityItem = {
   id: string;
-  action: "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE";
+  action: "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE" | "SANDBOX_CREATE" | "SANDBOX_DELETE" | "CLEANUP";
   reason: string | null;
   changes: any;
   createdAt: string;
-  eventId: string;
+  eventId: string | null;
   event: {
     id: string;
     title: string;
@@ -76,6 +76,11 @@ export type MyActivityItem = {
     endAt: string;
     tailNumber: string | null;
   } | null;
+  source: {
+    kind: "prod" | "sandbox";
+    sandboxId: string | null;
+    sandboxName: string | null;
+  };
 };
 
 export type MyActivityResponse = {
@@ -83,14 +88,17 @@ export type MyActivityResponse = {
   total: number;
   limit: number;
   offset: number;
-  byAction: Record<"CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE", number>;
+  byAction: Record<
+    "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE" | "SANDBOX_CREATE" | "SANDBOX_DELETE" | "CLEANUP",
+    number
+  >;
   items: MyActivityItem[];
 };
 
 export async function authMyActivity(params: {
   limit?: number;
   offset?: number;
-  action?: "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE";
+  action?: MyActivityItem["action"];
   q?: string;
 } = {}): Promise<MyActivityResponse> {
   const u = new URLSearchParams();
@@ -105,7 +113,15 @@ export async function authMyActivity(params: {
       total: 0,
       limit: params.limit ?? 50,
       offset: params.offset ?? 0,
-      byAction: { CREATE: 0, UPDATE: 0, RESERVE: 0, UNRESERVE: 0 },
+      byAction: {
+        CREATE: 0,
+        UPDATE: 0,
+        RESERVE: 0,
+        UNRESERVE: 0,
+        SANDBOX_CREATE: 0,
+        SANDBOX_DELETE: 0,
+        CLEANUP: 0
+      },
       items: []
     };
   }

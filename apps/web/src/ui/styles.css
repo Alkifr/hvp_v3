@@ -481,6 +481,25 @@ a {
   flex-wrap: wrap;
 }
 
+.eventImportStatusToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.eventImportEmptyFilter {
+  display: grid;
+  gap: 4px;
+  padding: 14px 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 13px;
+}
+
 .eventImportStat {
   display: inline-flex;
   align-items: center;
@@ -502,6 +521,24 @@ a {
   border-color: rgba(220, 38, 38, 0.28);
   background: #fef2f2;
   color: #991b1b;
+}
+
+.eventImportErrorBanner {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(220, 38, 38, 0.28);
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.eventImportErrorBanner strong {
+  color: #7f1d1d;
 }
 
 .eventImportStatWarn {
@@ -620,6 +657,7 @@ a {
 .massSectionHead {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
 }
 
@@ -628,22 +666,96 @@ a {
   font-size: 15px;
 }
 
+.massModeToggle {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.massModeToggle button {
+  border: 0;
+  background: transparent;
+  color: #475569;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.massModeToggle button:hover {
+  color: #0f172a;
+}
+
+.massModeToggle button.isActive {
+  background: #fff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.massFieldGroup {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: #fff;
+}
+
+.massFieldGroupTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
 .massFormGrid,
 .massAdvancedGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
-  align-items: end;
+  align-items: start;
+}
+
+.massFormGridIdentity {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.massFormGridPeriod {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .massFieldWide {
-  grid-column: span 2;
+  grid-column: 1 / -1;
 }
 
 .massField {
   display: grid;
   gap: 6px;
+  align-content: start;
   font-size: 13px;
+  min-width: 0;
+}
+
+.massField > .muted:first-child {
+  line-height: 1.25;
+  min-height: 1.25em;
+}
+
+.massFieldHint {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #94a3b8;
 }
 
 .massField input,
@@ -670,13 +782,18 @@ a {
 
 .massBatchBox {
   display: grid;
-  gap: 4px;
+  gap: 10px;
   min-width: 0;
 }
 
 .massBatchRows {
   display: grid;
-  gap: 2px;
+  gap: 0;
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: #fff;
 }
 
 .massBatchToolbar {
@@ -696,24 +813,33 @@ a {
 }
 
 .massBatchToolbarActions input[type="file"] {
-  max-width: 280px;
+  max-width: 240px;
+  font-size: 12px;
 }
 
 .massBatchRowCard {
   display: grid;
-  gap: 2px;
-  padding: 3px 4px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 8px;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0;
   background: #fff;
 }
 
+.massBatchRowCard:last-child {
+  border-bottom: 0;
+}
+
+.massBatchRowCard:hover {
+  background: #f8fafc;
+}
+
 .massBatchRowIndex {
-  align-self: end;
-  min-height: 28px;
   display: flex;
   align-items: center;
-  color: #475569;
+  justify-content: center;
+  color: #64748b;
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
@@ -721,41 +847,77 @@ a {
 
 .massBatchRowGrid {
   display: grid;
-  grid-template-columns: 60px repeat(auto-fit, minmax(112px, 1fr)) 30px;
-  gap: 3px;
-  align-items: end;
+  grid-template-columns:
+    40px
+    minmax(120px, 1.2fr)
+    minmax(120px, 1.2fr)
+    minmax(120px, 1.2fr)
+    72px
+    64px
+    132px
+    132px
+    minmax(140px, 1.4fr)
+    36px;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  min-width: 980px;
+}
+
+.massBatchHead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f1f5f9;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.massBatchHead .massBatchRowGrid {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.massBatchHead span {
+  display: flex;
+  align-items: center;
+  min-height: 18px;
 }
 
 .massBatchRowGrid .massField {
-  gap: 2px;
-  font-size: 11px;
+  gap: 0;
+  font-size: 12px;
+}
+
+.massBatchRowGrid .massField > .muted {
+  display: none;
 }
 
 .massBatchRowGrid .massField input,
 .massBatchRowGrid .massField select {
-  min-height: 28px;
-  border-radius: 7px;
-  padding: 4px 6px;
-}
-
-.massBatchNumberField {
-  max-width: 78px;
-}
-
-.massBatchTitleField {
-  grid-column: span 2;
+  min-height: 32px;
+  border-radius: 8px;
+  padding: 5px 8px;
 }
 
 .massBatchDeleteButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  align-self: end;
-  width: 28px;
-  height: 28px;
+  align-self: center;
+  width: 32px;
+  height: 32px;
   padding: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   color: #991b1b;
+}
+
+.massBatchDeleteButton:hover {
+  background: #fef2f2;
 }
 
 .massBatchDeleteButton svg {
@@ -766,26 +928,6 @@ a {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-@media (max-width: 760px) {
-  .massSectionHead,
-  .massBatchToolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .massBatchRowGrid {
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  }
-
-  .massBatchTitleField {
-    grid-column: auto;
-  }
-
-  .massBatchNumberField {
-    max-width: none;
-  }
 }
 
 .massAdvanced {
@@ -802,8 +944,25 @@ a {
   list-style-position: inside;
 }
 
-.massAdvancedGrid {
+.massAdvanced > summary::-webkit-details-marker {
+  color: #64748b;
+}
+
+.massAdvancedBody {
+  display: grid;
+  gap: 12px;
   padding: 0 14px 14px;
+}
+
+.massAdvancedGrid {
+  gap: 10px;
+}
+
+.massAdvancedNote {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
 }
 
 .massCheckbox {
@@ -817,6 +976,59 @@ a {
   background: #fff;
   font-size: 13px;
   color: #334155;
+}
+
+@media (max-width: 900px) {
+  .massFormGridIdentity,
+  .massFormGridPeriod {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .massSectionHead,
+  .massBatchToolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .massModeToggle {
+    width: 100%;
+  }
+
+  .massModeToggle button {
+    flex: 1;
+    text-align: center;
+  }
+
+  .massFormGridIdentity,
+  .massFormGridPeriod {
+    grid-template-columns: 1fr;
+  }
+
+  .massBatchRowGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 0;
+  }
+
+  .massBatchHead {
+    display: none;
+  }
+
+  .massBatchRowGrid .massField > .muted {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 11px;
+  }
+
+  .massBatchRowIndex,
+  .massBatchDeleteButton {
+    grid-column: 1 / -1;
+  }
+
+  .massBatchDeleteButton {
+    justify-self: end;
+  }
 }
 
 .massHangarPriority {
@@ -886,6 +1098,22 @@ a {
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.massActionsSticky {
+  position: sticky;
+  bottom: 8px;
+  z-index: 5;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.massActionsMeta {
+  margin-right: auto;
 }
 
 .massCalculationPanel {
@@ -5022,6 +5250,46 @@ textarea {
   border-color: rgba(249, 115, 22, 0.28);
 }
 
+.profileActionBadge_SANDBOX_CREATE {
+  background: rgba(8, 145, 178, 0.12);
+  color: #0e7490;
+  border-color: rgba(8, 145, 178, 0.28);
+}
+
+.profileActionBadge_SANDBOX_DELETE {
+  background: rgba(244, 63, 94, 0.12);
+  color: #be123c;
+  border-color: rgba(244, 63, 94, 0.28);
+}
+
+.profileActionBadge_CLEANUP {
+  background: rgba(234, 88, 12, 0.12);
+  color: #c2410c;
+  border-color: rgba(234, 88, 12, 0.28);
+}
+
+.profileTimelineMeta {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.profileTimelineSource {
+  font-size: 12.5px;
+  color: #334155;
+  line-height: 1.4;
+}
+
+.profileSourceSandbox {
+  color: #0e7490;
+  font-weight: 600;
+}
+
+.profileSourceProd {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
 .profileTimelineTitle {
   font-size: 13.5px;
   font-weight: 500;
@@ -5039,9 +5307,10 @@ textarea {
 }
 
 .profileTimelineReason {
-  font-size: 13px;
-  color: #1f2937;
-  margin: 4px 0;
+  font-size: 12.5px;
+  color: #334155;
+  line-height: 1.4;
+  margin: 0;
 }
 
 .profileDiffList {

@@ -25,6 +25,53 @@ function assertCanWriteEvent(req: any) {
   assertPermission(req, "events:write");
 }
 
+const IMPORT_FIELD_LABELS: Record<string, string> = {
+  Aircraft: "Aircraft (борт)",
+  Event_name: "Event_name (тип события)",
+  startAt: "startAt (начало)",
+  endAt: "endAt (окончание)",
+  Operator: "Operator (оператор)",
+  AircraftType: "AircraftType (тип ВС)",
+  Event_Title: "Event_Title (название)",
+  Hangar: "Hangar (ангар)",
+  HangarStand: "HangarStand (место)"
+};
+
+function formatEventImportSchemaError(error: z.ZodError): string {
+  const missingFields = new Set<string>();
+  const invalidFields = new Set<string>();
+  const badRowIndexes = new Set<number>();
+
+  for (const issue of error.issues) {
+    if (issue.path[0] !== "rows" || typeof issue.path[1] !== "number") continue;
+    badRowIndexes.add(issue.path[1]);
+    const field = typeof issue.path[2] === "string" ? issue.path[2] : null;
+    if (!field) continue;
+    if (issue.code === "invalid_type" && (issue as any).received === "undefined") missingFields.add(field);
+    else invalidFields.add(field);
+  }
+
+  const label = (field: string) => IMPORT_FIELD_LABELS[field] ?? field;
+  const parts: string[] = ["Файл не подходит для импорта событий."];
+
+  if (missingFields.size > 0) {
+    parts.push(`Не найдены обязательные колонки: ${[...missingFields].map(label).join(", ")}.`);
+  } else if (invalidFields.size > 0) {
+    parts.push(`Некорректные значения в колонках: ${[...invalidFields].map(label).join(", ")}.`);
+  }
+
+  if (badRowIndexes.size > 0) {
+    parts.push(`Проблемных строк: ${badRowIndexes.size}.`);
+  }
+
+  parts.push(
+    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand)."
+  );
+  parts.push("Если это файл массового планирования — откройте раздел «Массовое планирование», а не «Импорт».");
+
+  return parts.join(" ");
+}
+
 function getActor(req: any) {
   const auth = req.auth as { email?: string } | undefined;
   if (auth?.email) return String(auth.email).slice(0, 80);
@@ -586,7 +633,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     assertCanWriteEvent(req);
 
     const zOptionalDateCell = z.union([z.string(), z.date(), z.number(), z.null()]).optional();
-    const body = z
+    const parsed = z
       .object({
         dryRun: z.boolean().optional(),
         rows: z
@@ -612,7 +659,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           .min(1)
           .max(5000)
       })
-      .parse(req.body);
+      .safeParse(req.body);
+
+    if (!parsed.success) {
+      const err: any = new Error(formatEventImportSchemaError(parsed.error));
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const body = parsed.data;
 
     const norm = (s: unknown) =>
       String(s ?? "")
@@ -683,6 +738,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     const hangarByKey = new Map<string, (typeof hangarsAll)[number]>();
     for (const h of hangarsAll) {
+      if (!h.isActive) continue;
       hangarByKey.set(key(h.name), h);
       if (h.code) hangarByKey.set(key(h.code), h);
     }
@@ -735,19 +791,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       inactiveStandsByHangarAndCode.set(standKey, arr);
     }
 
-    // Подготовим выборку резервов по всем потенциальным стендам в общем диапазоне дат файла
+    // Диапазон дат файла + резервы по ангарам (нужны и для занятости мест, и для блокировок схем)
     let minStart = new Date("2100-01-01T00:00:00.000Z");
     let maxEnd = new Date("1970-01-01T00:00:00.000Z");
-    const candidateStandIds = new Set<string>();
     for (const r of rows) {
-      const hk = lower(r.Hangar);
-      const sc = upper(r.HangarStand);
-      if (!hk || !sc) continue;
-      const h = hangarByKey.get(hk);
-      if (!h) continue;
-      const standKey = `${h.id}|${sc}`;
-      const stands = standsByHangarAndCode.get(standKey) ?? [];
-      for (const s of stands) candidateStandIds.add(s.id);
       const sAt = parseDate(r.startAt);
       const eAt = parseDate(r.endAt);
       if (Number.isFinite(sAt.valueOf()) && sAt < minStart) minStart = sAt;
@@ -755,33 +802,146 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const existingReservations =
-      candidateStandIds.size > 0 && Number.isFinite(minStart.valueOf()) && Number.isFinite(maxEnd.valueOf()) && maxEnd > minStart
+      hangarIds.length > 0 && Number.isFinite(minStart.valueOf()) && Number.isFinite(maxEnd.valueOf()) && maxEnd > minStart
         ? await app.prisma.standReservation.findMany({
             where: {
               ...sandboxFilter(req),
-              standId: { in: Array.from(candidateStandIds) },
               startAt: { lt: maxEnd },
               endAt: { gt: minStart },
+              layout: { hangarId: { in: hangarIds } },
               event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
             },
-            include: { event: { include: { aircraft: true } } }
+            include: {
+              event: { include: { aircraft: true } },
+              layout: { select: { hangarId: true, name: true, code: true, isActive: true } }
+            }
           })
         : [];
 
+    const overlaps = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) => aStart < bEnd && aEnd > bStart;
+
     const reservationsByStand = new Map<string, typeof existingReservations>();
+    const layoutLocksByHangar = new Map<string, Array<{ layoutId: string; layoutName: string; start: Date; end: Date; label: string }>>();
     for (const r of existingReservations) {
       const arr = reservationsByStand.get(r.standId) ?? [];
       arr.push(r);
       reservationsByStand.set(r.standId, arr);
+      const hangarId = r.layout.hangarId;
+      const locks = layoutLocksByHangar.get(hangarId) ?? [];
+      locks.push({
+        layoutId: r.layoutId,
+        layoutName: r.layout.name || r.layout.code || r.layoutId,
+        start: r.startAt,
+        end: r.endAt,
+        label: `${r.event.title} (${eventAircraftLabel(r.event)})`
+      });
+      layoutLocksByHangar.set(hangarId, locks);
     }
 
-    const overlaps = (aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) => aStart < bEnd && aEnd > bStart;
     const existingStandConflict = (standId: string, startAt: Date, endAt: Date) => {
       const rs = reservationsByStand.get(standId) ?? [];
       return rs.find((x: any) => overlaps(startAt, endAt, x.startAt, x.endAt));
     };
-    const chooseFirstAvailableStand = <T extends { id: string }>(stands: T[], startAt: Date, endAt: Date) =>
-      stands.find((s) => !existingStandConflict(s.id, startAt, endAt)) ?? stands[0]!;
+    const existingLayoutConflict = (hangarId: string, layoutId: string, startAt: Date, endAt: Date) => {
+      const locks = layoutLocksByHangar.get(hangarId) ?? [];
+      return locks.find((lock) => lock.layoutId !== layoutId && overlaps(startAt, endAt, lock.start, lock.end));
+    };
+
+    type PlannedStand = { standId: string; hangarId: string; layoutId: string; startAt: Date; endAt: Date; label: string };
+    const plannedReservations: PlannedStand[] = [];
+
+    const plannedStandConflict = (standId: string, startAt: Date, endAt: Date) =>
+      plannedReservations.find((x) => x.standId === standId && overlaps(startAt, endAt, x.startAt, x.endAt));
+    const plannedLayoutConflict = (hangarId: string, layoutId: string, startAt: Date, endAt: Date) =>
+      plannedReservations.find(
+        (x) => x.hangarId === hangarId && x.layoutId !== layoutId && overlaps(startAt, endAt, x.startAt, x.endAt)
+      );
+
+    const resolveImportStand = (
+      hangar: { id: string; name: string },
+      standCode: string,
+      startAt: Date,
+      endAt: Date,
+      warnings: string[]
+    ): { standId: string; layoutId: string; layoutLabel: string } => {
+      const standKey = `${hangar.id}|${standCode}`;
+      const stands = standsByHangarAndCode.get(standKey) ?? [];
+      if (stands.length === 0) {
+        const inactive = inactiveStandsByHangarAndCode.get(standKey) ?? [];
+        if (inactive.length > 0) {
+          const variants = inactive
+            .map((s) => `${s.layout.name}${s.layout.isActive === false ? " (неактивная схема)" : ""}${s.isActive === false ? " (неактивное место)" : ""}`)
+            .join(", ");
+          throw new Error(
+            `Место ${standCode} в ангаре ${hangar.name} найдено только в неактивных вариантах расстановки: ${variants}`
+          );
+        }
+        throw new Error(`Не найдено активное место ${standCode} в ангаре ${hangar.name}`);
+      }
+
+      // Конфликт схем с уже существующим планом — блокирует; внутри файла — только предупреждение.
+      const layoutCompatible = stands.filter((s) => !existingLayoutConflict(hangar.id, s.layoutId, startAt, endAt));
+
+      if (layoutCompatible.length === 0) {
+        const foreign =
+          (layoutLocksByHangar.get(hangar.id) ?? []).find((lock) => overlaps(startAt, endAt, lock.start, lock.end)) ??
+          null;
+        if (foreign) {
+          throw new Error(
+            `В этот период в ангаре «${hangar.name}» уже используется схема «${foreign.layoutName}» (${foreign.label}). Место ${standCode} из другой активной схемы недоступно.`
+          );
+        }
+        throw new Error(
+          `Не удалось подобрать активную схему для места ${standCode} в ангаре «${hangar.name}» без конфликта схем.`
+        );
+      }
+
+      // Предпочитаем схему, уже занятую в этом периоде (план или файл), затем место без нахлёста.
+      const sameLayoutPreferred = layoutCompatible.filter((s) => {
+        const locks = layoutLocksByHangar.get(hangar.id) ?? [];
+        if (locks.some((lock) => lock.layoutId === s.layoutId && overlaps(startAt, endAt, lock.start, lock.end))) {
+          return true;
+        }
+        return plannedReservations.some(
+          (x) => x.hangarId === hangar.id && x.layoutId === s.layoutId && overlaps(startAt, endAt, x.startAt, x.endAt)
+        );
+      });
+      const pool = sameLayoutPreferred.length > 0 ? sameLayoutPreferred : layoutCompatible;
+
+      const freeOfExisting = pool.filter((s) => !existingStandConflict(s.id, startAt, endAt));
+      if (freeOfExisting.length === 0) {
+        const busy = existingStandConflict(pool[0]!.id, startAt, endAt);
+        throw new Error(
+          `Конфликт резерва места ${standCode}: уже занято событием ${busy?.event.title ?? "в плане"} (${busy ? eventAircraftLabel(busy.event) : "—"})`
+        );
+      }
+
+      const free =
+        freeOfExisting.find((s) => !plannedStandConflict(s.id, startAt, endAt) && !plannedLayoutConflict(hangar.id, s.layoutId, startAt, endAt)) ??
+        freeOfExisting.find((s) => !plannedStandConflict(s.id, startAt, endAt)) ??
+        freeOfExisting[0]!;
+
+      const selfStand = plannedStandConflict(free.id, startAt, endAt);
+      if (selfStand) {
+        warnings.push(
+          `Нахлёст внутри файла по месту ${standCode}: пересекается с «${selfStand.label}». Событие будет импортировано с нахлёстом.`
+        );
+      }
+      const selfLayout = plannedLayoutConflict(hangar.id, free.layoutId, startAt, endAt);
+      if (selfLayout) {
+        warnings.push(
+          `Внутри файла пересечение схем в ангаре «${hangar.name}»: период пересекается со строкой «${selfLayout.label}» (другая схема). Событие будет импортировано.`
+        );
+      }
+
+      const layoutLabel = free.layout.name || free.layout.code || free.layoutId;
+      if (stands.length > 1) {
+        warnings.push(
+          `Место ${standCode} есть в ${stands.length} активных схемах ангара «${hangar.name}»; выбрана «${layoutLabel}».`
+        );
+      }
+      return { standId: free.id, layoutId: free.layoutId, layoutLabel };
+    };
 
     const previewRows: Array<{
       rowIndex: number;
@@ -800,12 +960,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       hangar?: string | null;
       stand?: string | null;
       layout?: string | null;
+      standId?: string | null;
+      layoutId?: string | null;
+      hangarId?: string | null;
       warnings?: string[];
       error?: string;
     }> = [];
-
-    // Для импорта без dryRun: будем учитывать конфликты "внутри файла"
-    const plannedReservations: Array<{ standId: string; startAt: Date; endAt: Date; label: string }> = [];
 
     let wouldCreateEvents = 0;
     let wouldCreateReservations = 0;
@@ -861,47 +1021,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         }
 
         const hangar = hangarStr ? hangarByKey.get(key(hangarStr)) ?? null : null;
-        if (hangarStr && !hangar) throw new Error(`Не найден ангар: ${hangarStr}`);
+        if (hangarStr && !hangar) {
+          const inactiveHangar = hangarsAll.find((h) => key(h.name) === key(hangarStr) || key(h.code ?? "") === key(hangarStr));
+          if (inactiveHangar && !inactiveHangar.isActive) {
+            throw new Error(`Ангар «${hangarStr}» неактивен`);
+          }
+          throw new Error(`Не найден ангар: ${hangarStr}`);
+        }
 
         let resolvedStand: { standId: string; layoutId: string; layoutLabel: string } | null = null;
         if (standCode) {
           if (!hangar) throw new Error("Указано HangarStand, но не указан/не найден Hangar (нужен для поиска места)");
-          const key = `${hangar.id}|${standCode}`;
-          const stands = standsByHangarAndCode.get(key) ?? [];
-          if (stands.length === 0) {
-            const inactive = inactiveStandsByHangarAndCode.get(key) ?? [];
-            if (inactive.length > 0) {
-              const variants = inactive
-                .map((s) => `${s.layout.name}${s.layout.isActive === false ? " (неактивная схема)" : ""}${s.isActive === false ? " (неактивное место)" : ""}`)
-                .join(", ");
-              throw new Error(
-                `Место ${standCode} в ангаре ${hangar.name} найдено только в неактивных вариантах расстановки: ${variants}`
-              );
-            }
-            throw new Error(`Не найдено активное место ${standCode} в ангаре ${hangar.name}`);
-          }
-          const selectedStand = chooseFirstAvailableStand(stands, startAt, endAt);
-          const layoutLabel = selectedStand.layout.name || selectedStand.layout.code || selectedStand.layoutId;
-          if (stands.length > 1) {
-            warnings.push(
-              `Место ${standCode} найдено в ${stands.length} активных вариантах расстановки ангара ${hangar.name}; выбран «${layoutLabel}».`
-            );
-          }
-          resolvedStand = { standId: selectedStand.id, layoutId: selectedStand.layoutId, layoutLabel };
-
-          // конфликты с существующими резервами
-          const conflict = existingStandConflict(resolvedStand.standId, startAt, endAt);
-          if (conflict) {
-            throw new Error(
-              `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`
-            );
-          }
-
-          // конфликты внутри самого файла (если импортируем реально)
-          const selfConflict = plannedReservations.find((x) => x.standId === resolvedStand!.standId && overlaps(startAt, endAt, x.startAt, x.endAt));
-          if (selfConflict) {
-            warnings.push(`Нахлёст внутри файла по месту ${standCode}: пересекается с "${selfConflict.label}". Событие будет импортировано с нахлёстом.`);
-          }
+          resolvedStand = resolveImportStand(hangar, standCode, startAt, endAt, warnings);
         }
 
         previewRows.push({
@@ -919,16 +1050,26 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           aircraftTail,
           eventTypeKey: norm(r.Event_name),
           hangar: hangar?.name ?? null,
+          hangarId: hangar?.id ?? null,
           stand: standCode || null,
           layout: resolvedStand?.layoutLabel ?? null,
+          standId: resolvedStand?.standId ?? null,
+          layoutId: resolvedStand?.layoutId ?? null,
           warnings
         });
 
         wouldCreateEvents += 1;
         if (towStartAt && towEndAt) wouldCreateTows += 1;
-        if (resolvedStand) {
+        if (resolvedStand && hangar) {
           wouldCreateReservations += 1;
-          plannedReservations.push({ standId: resolvedStand.standId, startAt, endAt, label: `${aircraftTail} • ${title}` });
+          plannedReservations.push({
+            standId: resolvedStand.standId,
+            hangarId: hangar.id,
+            layoutId: resolvedStand.layoutId,
+            startAt,
+            endAt,
+            label: `${aircraftTail} • ${title}`
+          });
         }
       } catch (err: any) {
         previewRows.push({
@@ -1061,28 +1202,19 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           }
 
           if (standCode) {
-            if (!hangar) throw new Error("Указано HangarStand, но не указан/не найден Hangar");
-            const key = `${hangar.id}|${standCode}`;
-            const stands = standsByHangarAndCode.get(key) ?? [];
-            if (stands.length === 0) {
-              const inactive = inactiveStandsByHangarAndCode.get(key) ?? [];
-              if (inactive.length > 0) {
-                const variants = inactive
-                  .map((s) => `${s.layout.name}${s.layout.isActive === false ? " (неактивная схема)" : ""}${s.isActive === false ? " (неактивное место)" : ""}`)
-                  .join(", ");
-                throw new Error(
-                  `Место ${standCode} в ангаре ${hangar.name} найдено только в неактивных вариантах расстановки: ${variants}`
-                );
-              }
-              throw new Error(`Не найдено активное место ${standCode} в ангаре ${hangar.name}`);
+            const preview = previewRows[i]!;
+            const standId = preview.standId;
+            const layoutId = preview.layoutId;
+            const hangarId = preview.hangarId ?? hangar?.id ?? null;
+            if (!standId || !layoutId || !hangarId) {
+              throw new Error("Не удалось определить активное место/схему из предпросмотра");
             }
-            const stand = chooseFirstAvailableStand(stands, startAt, endAt);
 
-            // Повторно проверим конфликт на случай параллельных изменений (дешево: standId + диапазон)
+            // Повторно проверим конфликт на случай параллельных изменений
             const conflicts = await tx.standReservation.findMany({
               where: {
                 sandboxId: sbId,
-                standId: stand.id,
+                standId,
                 startAt: { lt: endAt },
                 endAt: { gt: startAt },
                 event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
@@ -1096,6 +1228,24 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               );
             }
 
+            const layoutConflict = await tx.standReservation.findFirst({
+              where: {
+                sandboxId: sbId,
+                eventId: { notIn: Array.from(importedEventIds) },
+                layoutId: { not: layoutId },
+                startAt: { lt: endAt },
+                endAt: { gt: startAt },
+                layout: { hangarId },
+                event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+              },
+              include: { layout: { select: { name: true } }, event: { include: { aircraft: true } } }
+            });
+            if (layoutConflict) {
+              throw new Error(
+                `В этот период в ангаре уже используется другая схема расстановки: ${layoutConflict.layout?.name ?? "другая схема"} (${layoutConflict.event.title}, ${eventAircraftLabel(layoutConflict.event)})`
+              );
+            }
+
             const placement = await tx.eventPlacement.create({
               data: {
                 eventId: created.id,
@@ -1106,9 +1256,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                 budgetEndAt,
                 actualStartAt,
                 actualEndAt,
-                hangarId: hangar.id,
-                layoutId: stand.layoutId,
-                standId: stand.id,
+                hangarId,
+                layoutId,
+                standId,
                 sortOrder: 0
               }
             });
@@ -1117,8 +1267,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               data: {
                 eventId: created.id,
                 placementId: placement.id,
-                layoutId: stand.layoutId,
-                standId: stand.id,
+                layoutId,
+                standId,
                 startAt,
                 endAt,
                 sandboxId: sbId
@@ -1127,7 +1277,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
             await tx.maintenanceEvent.update({
               where: { id: created.id },
-              data: { layoutId: stand.layoutId, hangarId: hangar.id }
+              data: { layoutId, hangarId }
             });
 
             result.createdReservations += 1;

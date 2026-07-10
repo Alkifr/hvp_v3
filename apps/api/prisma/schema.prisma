@@ -34,6 +34,12 @@ enum EventAuditAction {
   UNRESERVE
 }
 
+enum UserActivityAction {
+  SANDBOX_CREATE
+  SANDBOX_DELETE
+  CLEANUP
+}
+
 enum TechnicalPlanStatus {
   DRAFT
   IN_REVIEW
@@ -380,6 +386,7 @@ model User {
 
   ownedSandboxes     Sandbox[]       @relation("SandboxOwner")
   sandboxMemberships SandboxMember[]
+  activityLogs       UserActivityLog[]
 
   @@index([isActive])
 }
@@ -948,6 +955,30 @@ model MaintenanceEventAudit {
 
   @@index([eventId, createdAt])
   @@index([sandboxId])
+  @@index([actor, createdAt])
+}
+
+/// Журнал действий пользователя вне конкретного события (песочницы, массовая очистка).
+/// Не привязан FK к Sandbox, чтобы записи переживали удаление песочницы.
+model UserActivityLog {
+  id          String             @id @default(uuid())
+  userId      String?
+  actor       String
+  action      UserActivityAction
+  reason      String?
+  title       String?
+  /// Снимок: "prod" | "sandbox"
+  sourceKind  String             @default("prod")
+  sandboxId   String?
+  sandboxName String?
+  changes     Json?
+  createdAt   DateTime           @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([actor, createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
 }
 
 model StandReservation {

@@ -1,10 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { EventAuditAction, EventStatus, Prisma, SandboxMemberRole } from "@prisma/client";
+import { EventAuditAction, EventStatus, Prisma, SandboxMemberRole, UserActivityAction } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { zDateTime, zUuid } from "../lib/zod.js";
 import { copyPlanToSandbox, eventFingerprint, resolveOriginEventId } from "../lib/sandboxCopy.js";
+import { logUserActivity } from "../lib/userActivity.js";
 
 function getActor(req: any) {
   const auth = req.auth as { email?: string } | undefined;
@@ -145,6 +146,21 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
             actor
           });
         }
+        await logUserActivity(tx, {
+          userId: me.id,
+          actor,
+          action: UserActivityAction.SANDBOX_CREATE,
+          title: `Песочница «${sandbox.name}»`,
+          reason: copyFrom === "empty" ? "Создание пустой песочницы" : "Создание песочницы с копированием плана",
+          sourceKind: "sandbox",
+          sandboxId: sandbox.id,
+          sandboxName: sandbox.name,
+          changes: {
+            sandbox: { id: sandbox.id, name: sandbox.name },
+            copyFrom,
+            copied: copiedCounts
+          }
+        });
         return { sandbox, copiedCounts };
       },
       { timeout: 120_000, maxWait: 15_000 }
@@ -404,6 +420,22 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
           { events: 0, reservations: 0, tows: 0, skippedDuplicates: 0 }
         );
 
+        await logUserActivity(tx, {
+          userId: me.id,
+          actor,
+          action: UserActivityAction.SANDBOX_CREATE,
+          title: `Песочница «${sandbox.name}»`,
+          reason: "Создание песочницы слиянием",
+          sourceKind: "sandbox",
+          sandboxId: sandbox.id,
+          sandboxName: sandbox.name,
+          changes: {
+            sandbox: { id: sandbox.id, name: sandbox.name },
+            mergeFrom: uniqueIds,
+            totals
+          }
+        });
+
         return { sandbox, perSource, totals };
       },
       { timeout: 180_000, maxWait: 20_000 }
@@ -437,6 +469,29 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
     const me = assertAuthed(req);
     const sandboxId = zUuid.parse((req.params as any).id);
     await assertOwner(app, sandboxId, me.id);
+    const sandbox = await app.prisma.sandbox.findUnique({
+      where: { id: sandboxId },
+      select: { id: true, name: true, _count: { select: { events: true } } }
+    });
+    if (!sandbox) {
+      const err: any = new Error("SANDBOX_NOT_FOUND");
+      err.statusCode = 404;
+      throw err;
+    }
+    await logUserActivity(app.prisma, {
+      userId: me.id,
+      actor: getActor(req),
+      action: UserActivityAction.SANDBOX_DELETE,
+      title: `Песочница «${sandbox.name}»`,
+      reason: "Удаление песочницы",
+      sourceKind: "sandbox",
+      sandboxId: sandbox.id,
+      sandboxName: sandbox.name,
+      changes: {
+        sandbox: { id: sandbox.id, name: sandbox.name },
+        eventCount: sandbox._count.events
+      }
+    });
     await app.prisma.sandbox.delete({ where: { id: sandboxId } });
     return { ok: true };
   });
