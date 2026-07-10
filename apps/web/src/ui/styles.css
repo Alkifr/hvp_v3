@@ -1613,10 +1613,12 @@ a {
 
 .ganttTableWrap {
   overflow: auto;
-  max-height: min(78vh, 920px);
+  height: min(70vh, 720px); /* fallback; JS подгоняет под низ viewport */
   border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 12px;
   background: #fff;
+  /* scrollbar всегда у нижнего края контейнера (= низ экрана после syncHeight) */
+  scrollbar-gutter: stable;
 }
 
 .ganttEventsTable {
@@ -1632,11 +1634,14 @@ a {
 .ganttEventsTable td {
   border-bottom: 1px solid rgba(148, 163, 184, 0.22);
   border-right: 1px solid rgba(148, 163, 184, 0.14);
-  padding: 6px 8px;
+  padding: 4px 6px;
   vertical-align: middle;
   white-space: nowrap;
   text-align: left;
   background: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0; /* force ellipsis with table-layout: fixed + explicit widths */
 }
 
 .ganttEventsTable th {
@@ -1649,7 +1654,6 @@ a {
   font-size: 11px;
   letter-spacing: 0.02em;
   overflow: hidden;
-  /* relative for resize handle; sticky already establishes containing block */
 }
 
 .ganttEventsTable tbody tr {
@@ -1674,36 +1678,45 @@ a {
 .ganttTableStickyCol {
   position: sticky;
   left: 0;
-  z-index: 1;
-  box-shadow: 1px 0 0 rgba(148, 163, 184, 0.22);
+  z-index: 2;
+  background-clip: padding-box;
 }
 
 .ganttEventsTable th.ganttTableStickyCol {
-  z-index: 3;
+  z-index: 5;
   background: #f8fafc;
 }
 
-.ganttTableRowEditing .ganttTableStickyCol,
-.ganttTableRowDirty .ganttTableStickyCol {
-  background: inherit;
+.ganttEventsTable tbody td.ganttTableStickyCol {
+  background: #fff;
+}
+
+.ganttEventsTable tbody tr:hover td.ganttTableStickyCol {
+  background: #f8fafc;
+}
+
+.ganttTableRowEditing td.ganttTableStickyCol,
+.ganttTableRowEditing:hover td.ganttTableStickyCol {
+  background: #fffbeb;
+}
+
+.ganttTableRowDirty td.ganttTableStickyCol,
+.ganttTableRowDirty:hover td.ganttTableStickyCol {
+  background: #fef3c7;
+}
+
+.ganttTableStickyColEdge {
+  box-shadow: 2px 0 6px rgba(15, 23, 42, 0.08);
 }
 
 .ganttTableActionsCol {
-  position: sticky;
-  right: 0;
-  z-index: 1;
-  background: #fff;
-  box-shadow: -1px 0 0 rgba(148, 163, 184, 0.22);
+  overflow: visible;
+  z-index: 3;
 }
 
 .ganttEventsTable th.ganttTableActionsCol {
-  z-index: 3;
+  z-index: 6;
   background: #f8fafc;
-}
-
-.ganttTableRowEditing .ganttTableActionsCol,
-.ganttTableRowDirty .ganttTableActionsCol {
-  background: inherit;
 }
 
 .ganttTableThLabel {
@@ -1769,6 +1782,12 @@ a {
   gap: 2px;
 }
 
+.ganttTableColMenuHint {
+  font-size: 11px;
+  padding: 0 6px 8px;
+  line-height: 1.35;
+}
+
 .ganttTableColMenuItem {
   display: flex;
   align-items: center;
@@ -1784,8 +1803,25 @@ a {
   background: #f1f5f9;
 }
 
+.ganttTableColMenuItemDragging {
+  background: #e2e8f0;
+  opacity: 0.85;
+}
+
 .ganttTableColMenuItemLocked {
   opacity: 0.65;
+  cursor: default;
+}
+
+.ganttTableColMenuGrip {
+  display: inline-flex;
+  color: #94a3b8;
+  cursor: grab;
+  flex: 0 0 auto;
+}
+
+.ganttTableColMenuGripLocked {
+  opacity: 0.35;
   cursor: default;
 }
 
@@ -1797,9 +1833,93 @@ a {
 
 .ganttTableRowActions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-wrap: nowrap;
+  gap: 4px;
   align-items: center;
+  justify-content: flex-start;
+}
+
+.ganttTableSelect {
+  min-width: 0;
+  width: 100%;
+}
+
+.ganttTableSelect .msdBtn {
+  width: 100%;
+  min-height: 26px;
+  height: 26px;
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 6px;
+}
+
+.ssdPanelPortal {
+  position: fixed !important;
+  top: auto;
+  left: auto;
+  min-width: 180px;
+  z-index: 1200;
+}
+
+.ssdOption {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.msdCompact .ssdOption,
+.ssdPanelPortal.msdCompact .ssdOption {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.ssdOption:hover,
+.ssdOptionActive {
+  background: #f1f5f9;
+}
+
+.ganttTableIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.ganttTableIconBtn:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: rgba(100, 116, 139, 0.7);
+}
+
+.ganttTableIconBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ganttTableIconBtnPrimary {
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #fff;
+}
+
+.ganttTableIconBtnPrimary:hover:not(:disabled) {
+  background: #1e293b;
+  border-color: #1e293b;
+  color: #fff;
 }
 
 .ganttTableRowHint {
@@ -1807,25 +1927,42 @@ a {
   font-size: 11px;
 }
 
+.ganttTableCellText {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .ganttTableInput {
-  min-width: 118px;
+  min-width: 0 !important;
   width: 100%;
-  padding: 4px 6px !important;
-  font-size: 12px !important;
-  height: 30px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 2px 4px !important;
+  font-size: 11px !important;
+  height: 26px;
+  line-height: 1.2;
 }
 
 .ganttTableInput[type="datetime-local"] {
-  min-width: 168px;
+  min-width: 0 !important;
+  font-size: 10px !important;
+  padding: 2px 2px !important;
 }
 
 .ganttTableReadonly {
   color: #64748b;
   font-variant-numeric: tabular-nums;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ganttTableNotes {
-  max-width: 220px;
+  display: block;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1836,6 +1973,8 @@ a {
   color: #64748b;
   padding: 24px 12px !important;
   white-space: normal !important;
+  max-width: none !important;
+  overflow: visible !important;
 }
 
 .ganttToolbar {
@@ -2208,51 +2347,10 @@ a {
   min-inline-size: 0;
 }
 
-.ganttLegendDetails {
-  border-top: 1px dashed rgba(148, 163, 184, 0.35);
-  padding-top: 10px;
-}
-
-.ganttLegendDetails > summary {
-  cursor: pointer;
-  user-select: none;
-  font-size: 12px;
-  color: #475569;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  padding: 2px 4px;
-  border-radius: 6px;
-  width: fit-content;
-  list-style: none;
-}
-
-.ganttLegendDetails > summary::-webkit-details-marker {
-  display: none;
-}
-
-.ganttLegendDetails > summary::before {
-  content: "▸";
-  display: inline-block;
-  margin-right: 6px;
-  transition: transform 120ms ease;
-  color: #94a3b8;
-}
-
-.ganttLegendDetails[open] > summary::before {
-  transform: rotate(90deg);
-}
-
-.ganttLegend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  padding: 8px 4px 0;
-}
-
 .ganttLegendBody {
   display: grid;
-  gap: 12px;
-  padding: 10px 4px 2px;
+  gap: 14px;
+  padding: 2px 0 8px;
 }
 
 .ganttLegendItem {

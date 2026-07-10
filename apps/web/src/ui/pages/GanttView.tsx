@@ -1332,7 +1332,7 @@ export function GanttView() {
         key,
         color,
         operator: opNameById.get(opId) || "—",
-        type: t ? (t.icaoType ? `${t.icaoType} • ${t.name}` : t.name) : "—"
+        type: t?.name || "—"
       });
     }
     out.sort((a, b) => `${a.operator} ${a.type}`.localeCompare(`${b.operator} ${b.type}`, "ru"));
@@ -1898,6 +1898,7 @@ export function GanttView() {
 
   // подтверждение изменения
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
   const [pendingSave, setPendingSave] = useState<"event" | "reserve" | "towAdd" | "towDel" | "dndMove" | null>(null);
   const [changeReason, setChangeReason] = useState("");
 
@@ -3489,6 +3490,20 @@ export function GanttView() {
             <button
               type="button"
               className="btn ganttIconBtn"
+              onClick={() => setLegendOpen(true)}
+              title="Легенда диаграммы"
+              aria-label="Открыть легенду диаграммы"
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <rect x="3" y="3.5" width="4" height="4" rx="1" fill="#38bdf8" />
+                <rect x="3" y="8.5" width="4" height="4" rx="1" fill="#a78bfa" />
+                <rect x="3" y="13.5" width="4" height="3" rx="1" fill="#f59e0b" />
+                <path d="M9 5.5h8M9 10.5h8M9 15h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="btn ganttIconBtn"
               onClick={exportTableXlsx}
               disabled={reportRows.length === 0}
               title="Скачать плоскую таблицу событий по текущим фильтрам в XLSX"
@@ -3913,121 +3928,6 @@ export function GanttView() {
           </div>
         ) : null}
 
-        {panelView === "DIAGRAM" ? (
-        <details className="ganttLegendDetails">
-          <summary>Легенда</summary>
-          <div className="ganttLegendBody">
-            <div className="legendSection">
-              <div className="legendSectionTitle">Статусы событий</div>
-              <div className="legendSectionGrid">
-                <LegendStatus status="PLANNED" baseColor="#94a3b8" label="Черновик / Запланировано" />
-                <LegendStatus status="CONFIRMED" baseColor="#94a3b8" label="Подтверждено / В работе" />
-                <LegendStatus status="DONE" baseColor="#94a3b8" label="Завершено" />
-                <LegendStatus status="CANCELLED" baseColor="#94a3b8" label="Отменено" />
-              </div>
-              <div className="legendHint muted">
-                Заливка выше — нейтральный серый для наглядности. Реальный цвет бара определяется правилом «оператор × тип ВС» (см. ниже).
-              </div>
-            </div>
-
-            <div className="legendSection">
-              <div className="legendSectionTitle">Индикаторы</div>
-              <div className="legendSectionGrid">
-                <span className="ganttLegendItem">
-                  <span className="legendOverlayBox" aria-hidden="true">
-                    <span style={{ background: "#94a3b8", border: "1px solid rgba(15, 23, 42, 0.22)" }} />
-                    <span
-                      style={{
-                        backgroundColor: "rgba(220, 38, 38, 0.30)",
-                        backgroundImage:
-                          "repeating-linear-gradient(135deg, rgba(220,38,38,0.55) 0px, rgba(220,38,38,0.55) 6px, rgba(220,38,38,0) 6px, rgba(220,38,38,0) 12px)"
-                      }}
-                    />
-                  </span>
-                  Нахлёст по месту / ангару
-                </span>
-                <span className="ganttLegendItem">
-                  <span
-                    className="legendBar"
-                    style={{
-                      background: "rgba(239, 68, 68, 0.95)",
-                      borderLeft: "2px solid rgba(255,255,255,0.9)",
-                      borderRight: "2px solid rgba(255,255,255,0.9)",
-                      borderTop: "none",
-                      borderBottom: "none"
-                    }}
-                  />
-                  Буксировка (разрыв внутри события)
-                </span>
-                <span className="ganttLegendItem">
-                  <span
-                    className="legendBar"
-                    style={{ background: "rgba(220, 38, 38, 0.35)", width: 4, borderRadius: 2 }}
-                  />
-                  Линия «сегодня»
-                </span>
-                <span className="ganttLegendItem">
-                  <span className="legendBar legendPlanFactSample" aria-hidden="true">
-                    <span className="legendPlanFactPlan" />
-                    <span className="legendPlanFactActual legendPlanFactActualGood" />
-                  </span>
-                  План-факт: верхний — оперативный план, нижний — факт
-                </span>
-                <span className="ganttLegendItem">
-                  <span className="legendBar legendFactGood" aria-hidden="true" />
-                  Факт в срок, TAT не больше плана
-                </span>
-                <span className="ganttLegendItem">
-                  <span className="legendBar legendFactWarn" aria-hidden="true" />
-                  Факт требует внимания
-                </span>
-                <span className="ganttLegendItem">
-                  <span className="legendBar legendFactBad" aria-hidden="true" />
-                  Факт позже плана, TAT больше
-                </span>
-              </div>
-            </div>
-
-            <div className="legendSection">
-              <div className="legendSectionTitle">
-                Цвет бара — оператор × тип ВС
-                <span className="muted legendSectionMeta">
-                  {legendPaletteEntries.length > 0
-                    ? `${legendPaletteEntries.length} записей в палитре`
-                    : "палитра не настроена — используется запасная"}
-                </span>
-              </div>
-              {legendPaletteEntries.length > 0 ? (
-                <div className="legendPalette">
-                  {legendPaletteEntries.slice(0, 24).map((p) => (
-                    <span className="legendPaletteItem" key={p.key} title={`${p.operator} × ${p.type}`}>
-                      <span className="legendPaletteSwatch" style={{ background: p.color }} />
-                      <span className="legendPaletteLabel">
-                        <span className="legendPaletteOperator">{p.operator}</span>
-                        <span className="legendPaletteType">{p.type}</span>
-                      </span>
-                    </span>
-                  ))}
-                  {legendPaletteEntries.length > 24 ? (
-                    <span className="legendPaletteMore muted">и ещё {legendPaletteEntries.length - 24}…</span>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="legendPalette">
-                  {AIRCRAFT_MARK_PALETTE.map((c, i) => (
-                    <span className="legendPaletteItem" key={i} title={c}>
-                      <span className="legendPaletteSwatch" style={{ background: c }} />
-                    </span>
-                  ))}
-                  <span className="legendHint muted">
-                    Настроить соответствие оператора и типа ВС можно в Справочниках → Палитра ВС.
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        </details>
-        ) : null}
       </div>
 
       {panelView === "TABLE" ? (
@@ -4041,7 +3941,7 @@ export function GanttView() {
             eventTypes={eventTypesQ.data ?? []}
             hangars={hangarsQ.data ?? []}
             aircraftTypes={aircraftTypesQ.data ?? []}
-            operators={(operatorsQ.data ?? []).map((o) => ({ id: o.id, name: o.name }))}
+            operators={(operatorsQ.data ?? []).map((o) => ({ id: o.id, code: o.code, name: o.name }))}
             onOpenEvent={(eventId) => {
               const ev = events.find((e) => e.id === eventId);
               if (ev) openEditorForExisting(ev);
@@ -5276,6 +5176,125 @@ export function GanttView() {
             </footer>
           </div>
         )}
+      </Drawer>
+
+      <Drawer
+        open={legendOpen}
+        title="Легенда диаграммы"
+        subtitle="Статусы, индикаторы и цвета баров по правилу «оператор × тип ВС»."
+        onClose={() => setLegendOpen(false)}
+      >
+        <div className="ganttLegendBody">
+          <div className="legendSection">
+            <div className="legendSectionTitle">Статусы событий</div>
+            <div className="legendSectionGrid">
+              <LegendStatus status="PLANNED" baseColor="#94a3b8" label="Черновик / Запланировано" />
+              <LegendStatus status="CONFIRMED" baseColor="#94a3b8" label="Подтверждено / В работе" />
+              <LegendStatus status="DONE" baseColor="#94a3b8" label="Завершено" />
+              <LegendStatus status="CANCELLED" baseColor="#94a3b8" label="Отменено" />
+            </div>
+            <div className="legendHint muted">
+              Заливка выше — нейтральный серый для наглядности. Реальный цвет бара определяется правилом «оператор × тип ВС»
+              (см. ниже).
+            </div>
+          </div>
+
+          <div className="legendSection">
+            <div className="legendSectionTitle">Индикаторы</div>
+            <div className="legendSectionGrid">
+              <span className="ganttLegendItem">
+                <span className="legendOverlayBox" aria-hidden="true">
+                  <span style={{ background: "#94a3b8", border: "1px solid rgba(15, 23, 42, 0.22)" }} />
+                  <span
+                    style={{
+                      backgroundColor: "rgba(220, 38, 38, 0.30)",
+                      backgroundImage:
+                        "repeating-linear-gradient(135deg, rgba(220,38,38,0.55) 0px, rgba(220,38,38,0.55) 6px, rgba(220,38,38,0) 6px, rgba(220,38,38,0) 12px)"
+                    }}
+                  />
+                </span>
+                Нахлёст по месту / ангару
+              </span>
+              <span className="ganttLegendItem">
+                <span
+                  className="legendBar"
+                  style={{
+                    background: "rgba(239, 68, 68, 0.95)",
+                    borderLeft: "2px solid rgba(255,255,255,0.9)",
+                    borderRight: "2px solid rgba(255,255,255,0.9)",
+                    borderTop: "none",
+                    borderBottom: "none"
+                  }}
+                />
+                Буксировка (разрыв внутри события)
+              </span>
+              <span className="ganttLegendItem">
+                <span
+                  className="legendBar"
+                  style={{ background: "rgba(220, 38, 38, 0.35)", width: 4, borderRadius: 2 }}
+                />
+                Линия «сегодня»
+              </span>
+              <span className="ganttLegendItem">
+                <span className="legendBar legendPlanFactSample" aria-hidden="true">
+                  <span className="legendPlanFactPlan" />
+                  <span className="legendPlanFactActual legendPlanFactActualGood" />
+                </span>
+                План-факт: верхний — оперативный план, нижний — факт
+              </span>
+              <span className="ganttLegendItem">
+                <span className="legendBar legendFactGood" aria-hidden="true" />
+                Факт в срок, TAT не больше плана
+              </span>
+              <span className="ganttLegendItem">
+                <span className="legendBar legendFactWarn" aria-hidden="true" />
+                Факт требует внимания
+              </span>
+              <span className="ganttLegendItem">
+                <span className="legendBar legendFactBad" aria-hidden="true" />
+                Факт позже плана, TAT больше
+              </span>
+            </div>
+          </div>
+
+          <div className="legendSection">
+            <div className="legendSectionTitle">
+              Цвет бара — оператор × тип ВС
+              <span className="muted legendSectionMeta">
+                {legendPaletteEntries.length > 0
+                  ? `${legendPaletteEntries.length} записей в палитре`
+                  : "палитра не настроена — используется запасная"}
+              </span>
+            </div>
+            {legendPaletteEntries.length > 0 ? (
+              <div className="legendPalette">
+                {legendPaletteEntries.slice(0, 48).map((p) => (
+                  <span className="legendPaletteItem" key={p.key} title={`${p.operator} × ${p.type}`}>
+                    <span className="legendPaletteSwatch" style={{ background: p.color }} />
+                    <span className="legendPaletteLabel">
+                      <span className="legendPaletteOperator">{p.operator}</span>
+                      <span className="legendPaletteType">{p.type}</span>
+                    </span>
+                  </span>
+                ))}
+                {legendPaletteEntries.length > 48 ? (
+                  <span className="legendPaletteMore muted">и ещё {legendPaletteEntries.length - 48}…</span>
+                ) : null}
+              </div>
+            ) : (
+              <div className="legendPalette">
+                {AIRCRAFT_MARK_PALETTE.map((c, i) => (
+                  <span className="legendPaletteItem" key={i} title={c}>
+                    <span className="legendPaletteSwatch" style={{ background: c }} />
+                  </span>
+                ))}
+                <span className="legendHint muted">
+                  Настроить соответствие оператора и типа ВС можно в Справочниках → Палитра ВС.
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
       </Drawer>
 
       <Drawer

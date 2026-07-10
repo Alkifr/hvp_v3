@@ -3,8 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
 import { apiDelete, apiGet, apiPatch, apiPut } from "../../lib/api";
+import { SingleSelectDropdown } from "./SingleSelectDropdown";
 
-const TABLE_COLS_LS_KEY = "hangarPlanning:ganttTableColumns:v1";
+const TABLE_COLS_LS_KEY = "hangarPlanning:ganttTableColumns:v3";
 
 type TableColId =
   | "title"
@@ -36,46 +37,77 @@ type TableColDef = {
   label: string;
   defaultWidth: number;
   minWidth: number;
-  sticky?: "left" | "right";
+  sticky?: "left";
   hideable?: boolean;
 };
 
 const TABLE_COLUMNS: TableColDef[] = [
-  { id: "title", label: "Название", defaultWidth: 180, minWidth: 120, sticky: "left", hideable: false },
-  { id: "level", label: "Уровень", defaultWidth: 120, minWidth: 90 },
-  { id: "status", label: "Статус", defaultWidth: 120, minWidth: 90 },
-  { id: "planningKind", label: "Тип план.", defaultWidth: 110, minWidth: 90 },
-  { id: "aircraftId", label: "Борт", defaultWidth: 110, minWidth: 80 },
-  { id: "operator", label: "Оператор", defaultWidth: 140, minWidth: 90 },
-  { id: "aircraftType", label: "Тип ВС", defaultWidth: 140, minWidth: 90 },
-  { id: "eventTypeId", label: "Тип события", defaultWidth: 140, minWidth: 100 },
-  { id: "startAtLocal", label: "Опер. начало", defaultWidth: 150, minWidth: 120 },
-  { id: "endAtLocal", label: "Опер. окончание", defaultWidth: 150, minWidth: 120 },
-  { id: "tatOper", label: "TAT опер.", defaultWidth: 110, minWidth: 80 },
-  { id: "budgetStartAtLocal", label: "Бюдж. начало", defaultWidth: 150, minWidth: 120 },
-  { id: "budgetEndAtLocal", label: "Бюдж. окончание", defaultWidth: 150, minWidth: 120 },
-  { id: "tatBudget", label: "TAT бюдж.", defaultWidth: 110, minWidth: 80 },
-  { id: "actualStartAtLocal", label: "Факт начало", defaultWidth: 150, minWidth: 120 },
-  { id: "actualEndAtLocal", label: "Факт окончание", defaultWidth: 150, minWidth: 120 },
-  { id: "tatActual", label: "TAT факт", defaultWidth: 110, minWidth: 80 },
-  { id: "hangarId", label: "Ангар", defaultWidth: 120, minWidth: 90 },
-  { id: "layoutId", label: "Вариант", defaultWidth: 140, minWidth: 90 },
-  { id: "standId", label: "Место", defaultWidth: 100, minWidth: 70 },
-  { id: "allowOverlap", label: "Нахлёст", defaultWidth: 80, minWidth: 60 },
-  { id: "notes", label: "Примечание", defaultWidth: 180, minWidth: 100 },
-  { id: "actions", label: "Действия", defaultWidth: 220, minWidth: 180, sticky: "right", hideable: false }
+  // Действия слева: не пересекаются с горизонтальным скроллом (best practice для wide tables).
+  { id: "actions", label: "", defaultWidth: 108, minWidth: 96, sticky: "left", hideable: false },
+  { id: "title", label: "Название", defaultWidth: 180, minWidth: 100, sticky: "left", hideable: false },
+  { id: "level", label: "Уровень", defaultWidth: 120, minWidth: 80 },
+  { id: "status", label: "Статус", defaultWidth: 120, minWidth: 80 },
+  { id: "planningKind", label: "Тип план.", defaultWidth: 110, minWidth: 80 },
+  { id: "aircraftId", label: "Борт", defaultWidth: 110, minWidth: 72 },
+  { id: "operator", label: "Оператор", defaultWidth: 140, minWidth: 80 },
+  { id: "aircraftType", label: "Тип ВС", defaultWidth: 140, minWidth: 80 },
+  { id: "eventTypeId", label: "Тип события", defaultWidth: 140, minWidth: 90 },
+  { id: "startAtLocal", label: "Опер. начало", defaultWidth: 150, minWidth: 110 },
+  { id: "endAtLocal", label: "Опер. окончание", defaultWidth: 150, minWidth: 110 },
+  { id: "tatOper", label: "TAT опер.", defaultWidth: 110, minWidth: 72 },
+  { id: "budgetStartAtLocal", label: "Бюдж. начало", defaultWidth: 150, minWidth: 110 },
+  { id: "budgetEndAtLocal", label: "Бюдж. окончание", defaultWidth: 150, minWidth: 110 },
+  { id: "tatBudget", label: "TAT бюдж.", defaultWidth: 110, minWidth: 72 },
+  { id: "actualStartAtLocal", label: "Факт начало", defaultWidth: 150, minWidth: 110 },
+  { id: "actualEndAtLocal", label: "Факт окончание", defaultWidth: 150, minWidth: 110 },
+  { id: "tatActual", label: "TAT факт", defaultWidth: 110, minWidth: 72 },
+  { id: "hangarId", label: "Ангар", defaultWidth: 120, minWidth: 80 },
+  { id: "layoutId", label: "Вариант", defaultWidth: 140, minWidth: 80 },
+  { id: "standId", label: "Место", defaultWidth: 100, minWidth: 64 },
+  { id: "allowOverlap", label: "Нахлёст", defaultWidth: 80, minWidth: 56 },
+  { id: "notes", label: "Примечание", defaultWidth: 180, minWidth: 90 }
 ];
 
 const DEFAULT_COL_WIDTHS = Object.fromEntries(TABLE_COLUMNS.map((c) => [c.id, c.defaultWidth])) as Record<
   TableColId,
   number
 >;
+const DEFAULT_COL_ORDER = TABLE_COLUMNS.map((c) => c.id);
 const DEFAULT_HIDDEN_COLS: TableColId[] = [];
+const COL_BY_ID = Object.fromEntries(TABLE_COLUMNS.map((c) => [c.id, c])) as Record<TableColId, TableColDef>;
+const PINNED_LEFT_IDS: TableColId[] = ["actions", "title"];
 
-function safeReadTableCols(): { widths?: Partial<Record<TableColId, number>>; hidden?: TableColId[] } | null {
+function normalizeColOrder(order: unknown): TableColId[] {
+  const known = new Set(DEFAULT_COL_ORDER);
+  const seen = new Set<TableColId>();
+  const middle: TableColId[] = [];
+  if (Array.isArray(order)) {
+    for (const id of order) {
+      if (typeof id !== "string" || !known.has(id as TableColId)) continue;
+      const colId = id as TableColId;
+      if (PINNED_LEFT_IDS.includes(colId) || seen.has(colId)) continue;
+      seen.add(colId);
+      middle.push(colId);
+    }
+  }
+  for (const id of DEFAULT_COL_ORDER) {
+    if (PINNED_LEFT_IDS.includes(id) || seen.has(id)) continue;
+    middle.push(id);
+  }
+  return [...PINNED_LEFT_IDS, ...middle];
+}
+
+function safeReadTableCols(): {
+  widths?: Partial<Record<TableColId, number>>;
+  hidden?: TableColId[];
+  order?: TableColId[];
+} | null {
   try {
     if (typeof window === "undefined") return null;
-    const raw = window.localStorage.getItem(TABLE_COLS_LS_KEY);
+    const raw =
+      window.localStorage.getItem(TABLE_COLS_LS_KEY) ??
+      window.localStorage.getItem("hangarPlanning:ganttTableColumns:v2") ??
+      window.localStorage.getItem("hangarPlanning:ganttTableColumns:v1");
     if (!raw) return null;
     return JSON.parse(raw);
   } catch {
@@ -83,13 +115,72 @@ function safeReadTableCols(): { widths?: Partial<Record<TableColId, number>>; hi
   }
 }
 
-function safeWriteTableCols(v: { widths: Record<TableColId, number>; hidden: TableColId[] }) {
+function safeWriteTableCols(v: { widths: Record<TableColId, number>; hidden: TableColId[]; order: TableColId[] }) {
   try {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(TABLE_COLS_LS_KEY, JSON.stringify(v));
   } catch {
     // ignore
   }
+}
+
+function formatAircraftTypeLabel(type: { icaoType?: string | null; name: string } | null | undefined): string {
+  if (!type) return "—";
+  return type.name || "—";
+}
+
+function formatOperatorCode(
+  operator: { code?: string | null; name?: string | null } | null | undefined,
+  fallbackCode?: string | null
+): string {
+  const code = (operator?.code ?? fallbackCode ?? "").trim();
+  if (code) return code;
+  const name = (operator?.name ?? "").trim();
+  return name || "—";
+}
+
+function IconSave() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M5 3h11l3 3v15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path d="M8 3v6h8V3" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M8 17h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconCancel() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconCard() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M8 9h8M8 13h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconGrip() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="9" cy="7" r="1.5" />
+      <circle cx="15" cy="7" r="1.5" />
+      <circle cx="9" cy="12" r="1.5" />
+      <circle cx="15" cy="12" r="1.5" />
+      <circle cx="9" cy="17" r="1.5" />
+      <circle cx="15" cy="17" r="1.5" />
+    </svg>
+  );
 }
 
 type Aircraft = {
@@ -403,7 +494,7 @@ export function GanttEventsTable(props: {
   eventTypes: EventType[];
   hangars: Hangar[];
   aircraftTypes: AircraftTypeRef[];
-  operators: Array<{ id: string; name: string }>;
+  operators: Array<{ id: string; code?: string | null; name: string }>;
   onOpenEvent: (eventId: string) => void;
 }) {
   const qc = useQueryClient();
@@ -431,17 +522,65 @@ export function GanttEventsTable(props: {
     const hideable = new Set(TABLE_COLUMNS.filter((c) => c.hideable !== false).map((c) => c.id));
     return new Set(arr.filter((id): id is TableColId => hideable.has(id as TableColId)));
   });
+  const [colOrder, setColOrder] = useState<TableColId[]>(() => normalizeColOrder(savedCols?.order));
   const [colMenu, setColMenu] = useState<null | { x: number; y: number }>(null);
+  const [dragColId, setDragColId] = useState<TableColId | null>(null);
   const colMenuRef = useRef<HTMLDivElement | null>(null);
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
 
-  const visibleColumns = useMemo(
-    () => TABLE_COLUMNS.filter((c) => !hiddenCols.has(c.id)),
-    [hiddenCols]
+  const orderedColumns = useMemo(
+    () => colOrder.map((id) => COL_BY_ID[id]).filter(Boolean),
+    [colOrder]
   );
 
+  const visibleColumns = useMemo(
+    () => orderedColumns.filter((c) => !hiddenCols.has(c.id)),
+    [orderedColumns, hiddenCols]
+  );
+
+  const stickyLeftById = useMemo(() => {
+    const map = new Map<TableColId, number>();
+    let left = 0;
+    for (const col of visibleColumns) {
+      if (col.sticky !== "left") continue;
+      map.set(col.id, left);
+      left += colWidths[col.id] ?? col.defaultWidth;
+    }
+    return map;
+  }, [visibleColumns, colWidths]);
+
+  const lastStickyLeftId = useMemo(() => {
+    let last: TableColId | null = null;
+    for (const col of visibleColumns) {
+      if (col.sticky === "left") last = col.id;
+    }
+    return last;
+  }, [visibleColumns]);
+
   useEffect(() => {
-    safeWriteTableCols({ widths: colWidths, hidden: Array.from(hiddenCols) });
-  }, [colWidths, hiddenCols]);
+    safeWriteTableCols({ widths: colWidths, hidden: Array.from(hiddenCols), order: colOrder });
+  }, [colWidths, hiddenCols, colOrder]);
+
+  // Горизонтальный скролл всегда у нижнего края экрана: высота wrap = оставшееся место до низа viewport.
+  useEffect(() => {
+    const el = tableWrapRef.current;
+    if (!el) return;
+    const syncHeight = () => {
+      const top = el.getBoundingClientRect().top;
+      const bottomGap = 12;
+      el.style.height = `${Math.max(240, Math.floor(window.innerHeight - top - bottomGap))}px`;
+    };
+    syncHeight();
+    const raf = window.requestAnimationFrame(syncHeight);
+    window.addEventListener("resize", syncHeight);
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncHeight) : null;
+    if (el.parentElement) ro?.observe(el.parentElement);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener("resize", syncHeight);
+      ro?.disconnect();
+    };
+  }, [localError, confirmOpen]);
 
   useEffect(() => {
     if (!colMenu) return;
@@ -494,15 +633,35 @@ export function GanttEventsTable(props: {
   const resetColumns = useCallback(() => {
     setColWidths({ ...DEFAULT_COL_WIDTHS });
     setHiddenCols(new Set(DEFAULT_HIDDEN_COLS));
+    setColOrder([...DEFAULT_COL_ORDER]);
     setColMenu(null);
+  }, []);
+
+  const moveColumn = useCallback((fromId: TableColId, toId: TableColId) => {
+    if (fromId === toId || PINNED_LEFT_IDS.includes(fromId) || PINNED_LEFT_IDS.includes(toId)) return;
+    setColOrder((prev) => {
+      const next = [...prev];
+      const from = next.indexOf(fromId);
+      const to = next.indexOf(toId);
+      if (from < 0 || to < 0) return prev;
+      next.splice(from, 1);
+      next.splice(to, 0, fromId);
+      return normalizeColOrder(next);
+    });
   }, []);
 
   const colStyle = useCallback(
     (id: TableColId): CSSProperties => {
       const w = colWidths[id] ?? DEFAULT_COL_WIDTHS[id];
-      return { width: w, minWidth: w, maxWidth: w };
+      const left = stickyLeftById.get(id);
+      return {
+        width: w,
+        minWidth: w,
+        maxWidth: w,
+        ...(left != null ? { left } : {})
+      };
     },
-    [colWidths]
+    [colWidths, stickyLeftById]
   );
 
   const layoutsQ = useQuery({
@@ -535,11 +694,22 @@ export function GanttEventsTable(props: {
     return m;
   }, [standsQ.data]);
 
-  const operatorNameById = useMemo(() => {
+  const aircraftOptions = useMemo(
+    () => props.aircraft.map((a) => ({ id: a.id, label: a.tailNumber })),
+    [props.aircraft]
+  );
+
+  const operatorCodeById = useMemo(() => {
     const m = new Map<string, string>();
-    for (const o of props.operators) m.set(o.id, o.name);
+    for (const o of props.operators) {
+      const code = formatOperatorCode(o);
+      if (code !== "—") m.set(o.id, code);
+    }
     for (const a of props.aircraft) {
-      if (a.operator?.id && !m.has(a.operator.id)) m.set(a.operator.id, a.operator.name);
+      if (a.operator?.id && !m.has(a.operator.id)) {
+        const code = formatOperatorCode(a.operator);
+        if (code !== "—") m.set(a.operator.id, code);
+      }
     }
     return m;
   }, [props.operators, props.aircraft]);
@@ -712,30 +882,67 @@ export function GanttEventsTable(props: {
     }
   });
 
-  const renderReadonlyMeta = (ev: GanttTableEvent) => {
-    const opId = ev.aircraft?.operatorId ?? ev.aircraft?.operator?.id ?? ev.virtualAircraft?.operatorId ?? "";
-    const typeId = String(ev.aircraft?.typeId ?? ev.aircraft?.type?.id ?? ev.virtualAircraft?.aircraftTypeId ?? "");
+  const resolveAircraftMeta = (ev: GanttTableEvent, d?: RowDraft | null) => {
+    // Как в карточке: при выбранном борте в черновике — предпросмотр оператора/типа до сохранения.
+    if (d) {
+      if (d.aircraftId) {
+        const selected = props.aircraft.find((a) => a.id === d.aircraftId) ?? null;
+        const operator =
+          formatOperatorCode(selected?.operator) !== "—"
+            ? formatOperatorCode(selected?.operator)
+            : selected?.operatorId
+              ? operatorCodeById.get(selected.operatorId) ?? "—"
+              : "—";
+        const typeRef =
+          selected?.type ?? (selected?.typeId ? aircraftTypeById.get(selected.typeId) ?? null : null);
+        return { operator, aircraftType: formatAircraftTypeLabel(typeRef) };
+      }
+      if (d.hasVirtualAircraft) {
+        const opId = ev.virtualAircraft?.operatorId ?? "";
+        const typeId = String(ev.virtualAircraft?.aircraftTypeId ?? "");
+        return {
+          operator: (opId ? operatorCodeById.get(opId) : undefined) ?? "—",
+          aircraftType: formatAircraftTypeLabel(typeId ? aircraftTypeById.get(typeId) : null)
+        };
+      }
+      return { operator: "—", aircraftType: "—" };
+    }
+    if (ev.virtualAircraft && !ev.aircraft?.id) {
+      const opId = ev.virtualAircraft.operatorId ?? "";
+      const typeId = String(ev.virtualAircraft.aircraftTypeId ?? "");
+      return {
+        operator: (opId ? operatorCodeById.get(opId) : undefined) ?? "—",
+        aircraftType: formatAircraftTypeLabel(typeId ? aircraftTypeById.get(typeId) : null)
+      };
+    }
+    const opId = ev.aircraft?.operatorId ?? ev.aircraft?.operator?.id ?? "";
+    const typeId = String(ev.aircraft?.typeId ?? ev.aircraft?.type?.id ?? "");
     const operator =
-      ev.aircraft?.operator?.name ?? (opId ? operatorNameById.get(opId) : undefined) ?? "—";
-    const typeRef = typeId ? aircraftTypeById.get(typeId) : null;
-    const aircraftType = ev.aircraft?.type
-      ? `${ev.aircraft.type.icaoType ? `${ev.aircraft.type.icaoType} • ` : ""}${ev.aircraft.type.name}`
-      : typeRef
-        ? `${typeRef.icaoType ? `${typeRef.icaoType} • ` : ""}${typeRef.name}`
-        : "—";
-    return { operator, aircraftType };
+      formatOperatorCode(ev.aircraft?.operator) !== "—"
+        ? formatOperatorCode(ev.aircraft?.operator)
+        : opId
+          ? operatorCodeById.get(opId) ?? "—"
+          : "—";
+    const typeRef = ev.aircraft?.type ?? (typeId ? aircraftTypeById.get(typeId) ?? null : null);
+    return { operator, aircraftType: formatAircraftTypeLabel(typeRef) };
   };
 
   const cellClass = (col: TableColDef) => {
-    if (col.sticky === "left") return "ganttTableStickyCol";
-    if (col.sticky === "right") return "ganttTableActionsCol";
-    return undefined;
+    const parts: string[] = [];
+    if (col.sticky === "left") parts.push("ganttTableStickyCol");
+    if (col.id === "actions") parts.push("ganttTableActionsCol");
+    if (col.id === lastStickyLeftId) parts.push("ganttTableStickyColEdge");
+    return parts.length ? parts.join(" ") : undefined;
   };
 
   const renderReadonlyCell = (col: TableColDef, ev: GanttTableEvent, meta: { operator: string; aircraftType: string }) => {
     switch (col.id) {
       case "title":
-        return <strong>{ev.title}</strong>;
+        return (
+          <span className="ganttTableCellText" title={ev.title}>
+            <strong>{ev.title}</strong>
+          </span>
+        );
       case "level":
         return ev.level === "STRATEGIC" ? "Стратегический" : "Оперативный";
       case "status":
@@ -745,11 +952,23 @@ export function GanttEventsTable(props: {
       case "aircraftId":
         return ev.aircraft?.tailNumber ?? ev.virtualAircraft?.label ?? "—";
       case "operator":
-        return meta.operator;
+        return (
+          <span className="ganttTableCellText" title={meta.operator}>
+            {meta.operator}
+          </span>
+        );
       case "aircraftType":
-        return meta.aircraftType;
+        return (
+          <span className="ganttTableCellText" title={meta.aircraftType}>
+            {meta.aircraftType}
+          </span>
+        );
       case "eventTypeId":
-        return ev.eventType?.name ?? "—";
+        return (
+          <span className="ganttTableCellText" title={ev.eventType?.name ?? undefined}>
+            {ev.eventType?.name ?? "—"}
+          </span>
+        );
       case "startAtLocal":
         return formatCellDate(ev.startAt);
       case "endAtLocal":
@@ -777,20 +996,40 @@ export function GanttEventsTable(props: {
           </span>
         );
       case "hangarId":
-        return ev.hangar?.name ?? "—";
+        return (
+          <span className="ganttTableCellText" title={ev.hangar?.name ?? undefined}>
+            {ev.hangar?.name ?? "—"}
+          </span>
+        );
       case "layoutId":
-        return ev.layout?.name ?? "—";
+        return (
+          <span className="ganttTableCellText" title={ev.layout?.name ?? undefined}>
+            {ev.layout?.name ?? "—"}
+          </span>
+        );
       case "standId":
         return ev.reservation?.stand?.code ?? "—";
       case "allowOverlap":
         return "—";
       case "notes":
-        return <span className="ganttTableNotes">{ev.notes?.trim() ? ev.notes : "—"}</span>;
+        return (
+          <span className="ganttTableNotes" title={ev.notes?.trim() || undefined}>
+            {ev.notes?.trim() ? ev.notes : "—"}
+          </span>
+        );
       case "actions":
         return (
-          <button className="btn" type="button" onClick={() => props.onOpenEvent(ev.id)}>
-            Карточка
-          </button>
+          <div className="ganttTableRowActions">
+            <button
+              className="ganttTableIconBtn"
+              type="button"
+              title="Открыть карточку"
+              aria-label="Открыть карточку"
+              onClick={() => props.onOpenEvent(ev.id)}
+            >
+              <IconCard />
+            </button>
+          </div>
         );
       default:
         return null;
@@ -862,23 +1101,32 @@ export function GanttEventsTable(props: {
         return ctx.aircraftLocked ? (
           <input className="evInput ganttTableInput evInputReadonly" value={ev.virtualAircraft?.label ?? "—"} readOnly />
         ) : (
-          <select
-            className="evInput ganttTableInput"
+          <SingleSelectDropdown
+            className="ganttTableSelect"
+            compact
+            searchable
+            searchPlaceholder="Найти борт"
+            placeholder="— выберите —"
+            emptyLabel="— выберите —"
+            options={aircraftOptions}
             value={d.aircraftId}
-            onChange={(e) => patchDraft({ aircraftId: e.target.value })}
-          >
-            <option value="">— выберите —</option>
-            {props.aircraft.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.tailNumber}
-              </option>
-            ))}
-          </select>
+            onChange={(aircraftId) => patchDraft({ aircraftId })}
+            maxHeight={260}
+            width="100%"
+          />
         );
       case "operator":
-        return <span className="ganttTableReadonly">{meta.operator}</span>;
+        return (
+          <span className="ganttTableReadonly ganttTableCellText" title={meta.operator}>
+            {meta.operator}
+          </span>
+        );
       case "aircraftType":
-        return <span className="ganttTableReadonly">{meta.aircraftType}</span>;
+        return (
+          <span className="ganttTableReadonly ganttTableCellText" title={meta.aircraftType}>
+            {meta.aircraftType}
+          </span>
+        );
       case "eventTypeId":
         return (
           <select
@@ -1010,7 +1258,7 @@ export function GanttEventsTable(props: {
             <option value="">— не выбрано —</option>
             {ctx.standOptions.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.code} • {s.name}
+                {s.code}
               </option>
             ))}
           </select>
@@ -1030,20 +1278,37 @@ export function GanttEventsTable(props: {
         );
       case "actions":
         return (
-          <>
-            <div className="ganttTableRowActions">
-              <button className="btn btnPrimary" type="button" onClick={requestSave} disabled={!isDirty || saveM.isPending}>
-                Сохранить
-              </button>
-              <button className="btn" type="button" onClick={cancelEdit} disabled={saveM.isPending}>
-                Отмена
-              </button>
-              <button className="btn" type="button" onClick={() => props.onOpenEvent(ev.id)}>
-                Карточка
-              </button>
-            </div>
-            {ctx.locationLocked ? <div className="muted ganttTableRowHint">Несколько ангаров — место в карточке</div> : null}
-          </>
+          <div className="ganttTableRowActions" title={ctx.locationLocked ? "Несколько ангаров — место в карточке" : undefined}>
+            <button
+              className="ganttTableIconBtn ganttTableIconBtnPrimary"
+              type="button"
+              title="Сохранить"
+              aria-label="Сохранить"
+              onClick={requestSave}
+              disabled={!isDirty || saveM.isPending}
+            >
+              <IconSave />
+            </button>
+            <button
+              className="ganttTableIconBtn"
+              type="button"
+              title="Отмена"
+              aria-label="Отмена"
+              onClick={cancelEdit}
+              disabled={saveM.isPending}
+            >
+              <IconCancel />
+            </button>
+            <button
+              className="ganttTableIconBtn"
+              type="button"
+              title="Открыть карточку"
+              aria-label="Открыть карточку"
+              onClick={() => props.onOpenEvent(ev.id)}
+            >
+              <IconCard />
+            </button>
+          </div>
         );
       default:
         return null;
@@ -1053,13 +1318,13 @@ export function GanttEventsTable(props: {
   return (
     <div className="ganttTablePanel">
       <div className="ganttTableHint muted">
-        Редактирование: клик по строке → правки в черновике → «Сохранить». ПКМ по заголовку — показать/скрыть столбцы.
-        Тяните край заголовка, чтобы изменить ширину. Настройки сохраняются локально.
+        Редактирование: клик по строке → правки в черновике → сохранить. Действия закреплены слева. ПКМ по заголовку —
+        видимость и порядок столбцов. Тяните край заголовка для ширины. Горизонтальный скролл — у нижнего края экрана.
       </div>
 
       {localError && !confirmOpen ? <div className="error ganttTableError">{localError}</div> : null}
 
-      <div className="ganttTableWrap">
+      <div className="ganttTableWrap" ref={tableWrapRef}>
         <table className="ganttEventsTable">
           <colgroup>
             {visibleColumns.map((col) => (
@@ -1074,12 +1339,17 @@ export function GanttEventsTable(props: {
               }}
             >
               {visibleColumns.map((col) => (
-                <th key={col.id} className={cellClass(col)} style={colStyle(col.id)} title={`${col.label} · ПКМ — столбцы`}>
-                  <span className="ganttTableThLabel">{col.label}</span>
+                <th
+                  key={col.id}
+                  className={cellClass(col)}
+                  style={colStyle(col.id)}
+                  title={col.id === "actions" ? "Действия · ПКМ — столбцы" : `${col.label} · ПКМ — столбцы`}
+                >
+                  <span className="ganttTableThLabel">{col.id === "actions" ? "…" : col.label}</span>
                   <button
                     type="button"
                     className="ganttTableColResize"
-                    aria-label={`Изменить ширину столбца «${col.label}»`}
+                    aria-label={`Изменить ширину столбца «${col.label || "Действия"}»`}
                     onPointerDown={(e) => startColResize(col, e)}
                   />
                 </th>
@@ -1096,7 +1366,7 @@ export function GanttEventsTable(props: {
             ) : (
               sortedEvents.map((ev) => {
                 const isEditing = editingId === ev.id && draft;
-                const meta = renderReadonlyMeta(ev);
+                const meta = resolveAircraftMeta(ev, isEditing ? draft : null);
                 const rowClass = [
                   isEditing ? "ganttTableRowEditing" : "",
                   isEditing && isDirty ? "ganttTableRowDirty" : ""
@@ -1160,25 +1430,57 @@ export function GanttEventsTable(props: {
           role="menu"
         >
           <div className="ganttTableColMenuTitle">Столбцы</div>
+          <div className="ganttTableColMenuHint muted">Перетащите, чтобы изменить порядок</div>
           <div className="ganttTableColMenuList">
-            {TABLE_COLUMNS.map((col) => {
+            {orderedColumns.map((col) => {
               const locked = col.hideable === false;
               const checked = !hiddenCols.has(col.id);
+              const reorderLocked = PINNED_LEFT_IDS.includes(col.id);
               return (
-                <label key={col.id} className={`ganttTableColMenuItem${locked ? " ganttTableColMenuItemLocked" : ""}`}>
+                <label
+                  key={col.id}
+                  className={`ganttTableColMenuItem${locked ? " ganttTableColMenuItemLocked" : ""}${
+                    dragColId === col.id ? " ganttTableColMenuItemDragging" : ""
+                  }`}
+                  draggable={!reorderLocked}
+                  onDragStart={(e) => {
+                    if (reorderLocked) {
+                      e.preventDefault();
+                      return;
+                    }
+                    setDragColId(col.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", col.id);
+                  }}
+                  onDragOver={(e) => {
+                    if (reorderLocked || !dragColId || dragColId === col.id) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const from = (e.dataTransfer.getData("text/plain") as TableColId) || dragColId;
+                    if (from) moveColumn(from, col.id);
+                    setDragColId(null);
+                  }}
+                  onDragEnd={() => setDragColId(null)}
+                >
+                  <span className={`ganttTableColMenuGrip${reorderLocked ? " ganttTableColMenuGripLocked" : ""}`} title={reorderLocked ? "Фиксированный столбец" : "Перетащить"}>
+                    <IconGrip />
+                  </span>
                   <input
                     type="checkbox"
                     checked={checked}
                     disabled={locked}
                     onChange={() => toggleColHidden(col.id)}
                   />
-                  <span>{col.label}</span>
+                  <span>{col.label || "Действия"}</span>
                 </label>
               );
             })}
           </div>
           <button type="button" className="btn ganttTableColMenuReset" onClick={resetColumns}>
-            Сбросить ширины и видимость
+            Сбросить ширины, видимость и порядок
           </button>
         </div>
       ) : null}
