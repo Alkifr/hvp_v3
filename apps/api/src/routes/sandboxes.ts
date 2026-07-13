@@ -87,6 +87,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       id: s.id,
       name: s.name,
       description: s.description,
+      status: s.status === "ARCHIVED" ? "ARCHIVED" : "ACTIVE",
       ownerId: s.ownerId,
       owner: s.owner,
       createdAt: s.createdAt,
@@ -452,14 +453,16 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
     const body = z
       .object({
         name: z.string().trim().min(1).max(120).optional(),
-        description: z.string().trim().max(1000).nullable().optional()
+        description: z.string().trim().max(1000).nullable().optional(),
+        status: z.enum(["ACTIVE", "ARCHIVED"]).optional()
       })
       .parse(req.body);
     return await app.prisma.sandbox.update({
       where: { id: sandboxId },
       data: {
         ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.description !== undefined ? { description: body.description } : {})
+        ...(body.description !== undefined ? { description: body.description } : {}),
+        ...(body.status !== undefined ? { status: body.status } : {})
       }
     });
   });

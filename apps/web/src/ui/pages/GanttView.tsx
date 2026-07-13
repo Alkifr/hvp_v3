@@ -5126,20 +5126,6 @@ export function GanttView() {
                 >
                   Отмена
                 </button>
-                {draft.id ? (
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      localStorage.setItem("hangarPlanning:itpSelectedEventId", draft.id!);
-                      setEditorOpen(false);
-                      setCopyFromTitle(null);
-                      location.hash = "itp";
-                    }}
-                    type="button"
-                  >
-                    Открыть в РМ ИТП
-                  </button>
-                ) : null}
                 {draft.id && activeSandbox ? (
                   <button
                     className="btn btnDanger"

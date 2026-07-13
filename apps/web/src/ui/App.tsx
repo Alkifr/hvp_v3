@@ -6,17 +6,28 @@ import { HangarView } from "./pages/HangarView";
 import { GanttView } from "./pages/GanttView";
 import { EventImportView } from "./pages/EventImportView";
 import { MassPlanView } from "./pages/MassPlanView";
-import { RmItpView } from "./pages/RmItpView";
 import { ReferenceView } from "./pages/ReferenceView";
 import { LoginView } from "./pages/LoginView";
 import { ProfileView } from "./pages/ProfileView";
 import { AdminView } from "./pages/AdminView";
 import { SandboxesView } from "./pages/SandboxesView";
+import { AnalyticsView } from "./pages/AnalyticsView";
 import { HelpView } from "./pages/HelpView";
-import { SandboxSwitcher, useActiveSandbox } from "./components/SandboxSwitcher";
+import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { authMe } from "./auth/authApi";
 
-type Page = "gantt" | "hangar" | "import" | "mass" | "itp" | "ref" | "profile" | "admin" | "sandboxes" | "help";
+type Page =
+  | "gantt"
+  | "hangar"
+  | "import"
+  | "mass"
+  | "itp"
+  | "ref"
+  | "profile"
+  | "admin"
+  | "sandboxes"
+  | "analytics"
+  | "help";
 
 function isPage(value: string): value is Page {
   return (
@@ -29,6 +40,7 @@ function isPage(value: string): value is Page {
     value === "profile" ||
     value === "admin" ||
     value === "sandboxes" ||
+    value === "analytics" ||
     value === "help"
   );
 }
@@ -82,14 +94,6 @@ const ICONS = {
       <path d="M3 17l9 5 9-5" />
     </svg>
   ),
-  itp: (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6 4h9l3 3v13H6z" />
-      <path d="M15 4v4h4" />
-      <path d="M9 12h6" />
-      <path d="M9 16h4" />
-    </svg>
-  ),
   ref: (
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2V5z" />
@@ -117,6 +121,16 @@ const ICONS = {
       <path d="M3 12l9 4 9-4" />
     </svg>
   ),
+  analytics: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 19V5" />
+      <path d="M4 19h16" />
+      <path d="M8 16v-5" />
+      <path d="M12 16V8" />
+      <path d="M16 16v-3" />
+      <path d="M8 7h.01M12 5h.01M16 9h.01" />
+    </svg>
+  ),
   help: (
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="9" />
@@ -142,15 +156,23 @@ export function App() {
     return "gantt";
   }, []);
 
-  const [page, setPage] = useState<Page>(initial);
+  const [page, setPage] = useState<Page>(() => (initial === "itp" ? "gantt" : initial));
 
   useEffect(() => {
-    location.hash = page;
+    if (page === "itp") setPage("gantt");
+  }, [page]);
+
+  useEffect(() => {
+    location.hash = page === "itp" ? "gantt" : page;
   }, [page]);
 
   useEffect(() => {
     const onHashChange = () => {
       const hash = (location.hash || "").replace("#", "");
+      if (hash === "itp") {
+        setPage("gantt");
+        return;
+      }
       if (isPage(hash)) setPage(hash);
     };
     window.addEventListener("hashchange", onHashChange);
@@ -194,10 +216,17 @@ function AppShell(props: {
     canWrite || activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
 
   return (
-    <div className={inSandbox ? "appShell appShellSandbox" : "appShell"}>
-      <aside className="nav">
-        <div className="navBrand" title="Hangar Planning" aria-label="Hangar Planning">
-          HP
+    <div className={inSandbox ? "appShell appShellSandbox" : "appShell appShellProd"}>
+      <aside className="nav" aria-label="Навигация HVP">
+        <div className="navBrand" title="HVP — Hangar Visual Planning" aria-label="HVP">
+          <span className="navBrandIcon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 11c3-4 6-6 9-6s6 2 9 6" />
+              <path d="M3 11v9h18v-9" />
+              <path d="M8 20v-5h8v5" />
+            </svg>
+          </span>
+          <span className="navBrandText">HVP</span>
         </div>
 
         <div className="navGroup">
@@ -205,7 +234,7 @@ function AppShell(props: {
             <>
               <NavIcon active={page === "gantt"} onClick={() => setPage("gantt")} label="План (Гантт)" icon={ICONS.gantt} />
               <NavIcon active={page === "hangar"} onClick={() => setPage("hangar")} label="Ангар (схема)" icon={ICONS.hangar} />
-              <NavIcon active={page === "itp"} onClick={() => setPage("itp")} label="РМ ИТП" icon={ICONS.itp} />
+              <NavIcon active={page === "analytics"} onClick={() => setPage("analytics")} label="Аналитика" icon={ICONS.analytics} />
             </>
           ) : null}
 
@@ -220,7 +249,7 @@ function AppShell(props: {
             <NavIcon active={page === "ref"} onClick={() => setPage("ref")} label="Справочники" icon={ICONS.ref} />
           ) : null}
 
-          <NavIcon active={page === "sandboxes"} onClick={() => setPage("sandboxes")} label="Песочницы" icon={ICONS.sandboxes} />
+          <NavSandboxMenu active={page === "sandboxes"} icon={ICONS.sandboxes} onManage={() => setPage("sandboxes")} />
         </div>
 
         <div className="navGroup navGroupBottom">
@@ -233,33 +262,15 @@ function AppShell(props: {
       </aside>
 
       <main className="content">
-        <div className="topbar">
-          {inSandbox ? (
-            <div className="topbarSandboxBanner" title={activeSandbox?.description ?? ""}>
-              <span className="topbarSandboxDot" aria-hidden="true" />
-              <span>Вы работаете в песочнице</span>
-              <b>{activeSandbox?.name}</b>
-              <span className="muted">· изменения изолированы от рабочего контура</span>
-            </div>
-          ) : (
-            <div className="topbarProdBanner">
-              <span className="topbarProdDot" aria-hidden="true" />
-              <span>Рабочий контур</span>
-            </div>
-          )}
-          <div className="topbarSpacer" />
-          <SandboxSwitcher onManage={() => setPage("sandboxes")} />
-        </div>
-
         {page === "gantt" && <GanttView />}
         {page === "hangar" && <HangarView />}
         {page === "import" && <EventImportView />}
         {page === "mass" && <MassPlanView />}
-        {page === "itp" && <RmItpView />}
         {page === "ref" && <ReferenceView />}
         {page === "profile" && <ProfileView me={me} />}
         {page === "admin" && <AdminView permissions={permissions} />}
         {page === "sandboxes" && <SandboxesView />}
+        {page === "analytics" && <AnalyticsView />}
         {page === "help" && <HelpView permissions={permissions} onNavigate={(p) => setPage(p as Page)} />}
       </main>
     </div>

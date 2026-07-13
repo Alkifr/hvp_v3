@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiGet, getActiveSandboxId, setActiveSandboxId } from "../../lib/api";
+
+export type SandboxStatus = "ACTIVE" | "ARCHIVED";
 
 export type SandboxSummary = {
   id: string;
   name: string;
   description: string | null;
+  status?: SandboxStatus;
   ownerId: string;
   owner: { id: string; email: string; displayName: string | null };
   isOwner: boolean;
@@ -17,7 +20,16 @@ export type SandboxSummary = {
   members: Array<{ userId: string; role: "OWNER" | "EDITOR" | "VIEWER"; email: string; displayName: string | null }>;
 };
 
-export function useActiveSandbox(): { activeId: string | null; active: SandboxSummary | null; list: SandboxSummary[]; loading: boolean } {
+export function sandboxIsArchived(s: Pick<SandboxSummary, "status">): boolean {
+  return s.status === "ARCHIVED";
+}
+
+export function useActiveSandbox(): {
+  activeId: string | null;
+  active: SandboxSummary | null;
+  list: SandboxSummary[];
+  loading: boolean;
+} {
   const [activeId, setActiveIdState] = useState<string | null>(() => getActiveSandboxId());
 
   useEffect(() => {
@@ -39,99 +51,156 @@ export function useActiveSandbox(): { activeId: string | null; active: SandboxSu
   const list = listQ.data ?? [];
   const active = useMemo(() => (activeId ? list.find((s) => s.id === activeId) ?? null : null), [activeId, list]);
 
+  // Если активная песочница ушла в архив или пропала — возвращаемся в рабочий контур.
+  useEffect(() => {
+    if (!activeId || listQ.isLoading || !listQ.data) return;
+    const found = list.find((s) => s.id === activeId);
+    if (!found || sandboxIsArchived(found)) {
+      setActiveSandboxId(null);
+    }
+  }, [activeId, list, listQ.isLoading, listQ.data]);
+
   return { activeId, active, list, loading: listQ.isLoading };
 }
 
-export function SandboxSwitcher({ onManage }: { onManage: () => void }) {
+/** Дерево быстрого переключения контекста у иконки песочниц в навбаре. */
+export function NavSandboxMenu(props: {
+  active: boolean;
+  icon: ReactNode;
+  onManage: () => void;
+}) {
   const qc = useQueryClient();
-  const { activeId, active, list, loading } = useActiveSandbox();
+  const { activeId, list, loading } = useActiveSandbox();
   const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
+
+  const activeList = useMemo(() => list.filter((s) => !sandboxIsArchived(s)), [list]);
+  const archivedList = useMemo(() => list.filter((s) => sandboxIsArchived(s)), [list]);
 
   const pick = (id: string | null) => {
     setActiveSandboxId(id);
     setOpen(false);
-    // обнуляем кеш, чтобы запросы перезагрузились с учётом нового контекста
     void qc.invalidateQueries();
   };
 
-  const label = active ? active.name : "Рабочий контур";
-
   return (
-    <div className="sandboxSwitcher" ref={menuRef}>
+    <div className="navSandboxRoot" ref={rootRef}>
       <button
         type="button"
-        className={activeId ? "sandboxSwitcherBtn sandboxSwitcherBtnActive" : "sandboxSwitcherBtn"}
+        className={`navIcon${props.active || open ? " active" : ""}${activeId ? " navIconSandboxActive" : ""}`}
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-label="Контекст плана"
+        title="Контекст плана"
       >
-        <span className="sandboxSwitcherIcon" aria-hidden="true">
-          {activeId ? (
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 7l9-4 9 4-9 4-9-4z" />
-              <path d="M3 7v10l9 4 9-4V7" />
-              <path d="M3 12l9 4 9-4" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 7h16M4 12h16M4 17h16" />
-            </svg>
-          )}
+        <span className="navIconGlyph" aria-hidden="true">
+          {props.icon}
         </span>
-        <span className="sandboxSwitcherLabel">{label}</span>
-        {activeId ? <span className="sandboxSwitcherBadge">Песочница</span> : null}
-        <span className="sandboxSwitcherCaret" aria-hidden="true">▾</span>
+        <span className="navTooltip">Контекст плана</span>
       </button>
 
       {open ? (
-        <div className="sandboxSwitcherMenu" role="menu">
+        <div className="navSandboxMenu" role="menu">
+          <div className="navSandboxMenuTitle">Контекст плана</div>
+
           <button
             type="button"
-            className={"sandboxSwitcherItem " + (activeId ? "" : "active")}
+            className={`navSandboxItem${activeId ? "" : " active"}`}
             onClick={() => pick(null)}
+            role="menuitem"
           >
-            <span className="sandboxSwitcherItemTitle">Рабочий контур</span>
-            <span className="sandboxSwitcherItemMeta">продакшен</span>
+            <span className="navSandboxItemMark" aria-hidden="true">
+              {activeId ? "○" : "●"}
+            </span>
+            <span className="navSandboxItemBody">
+              <span className="navSandboxItemTitle">Рабочий контур</span>
+              <span className="navSandboxItemMeta">продакшен</span>
+            </span>
           </button>
-          <div className="sandboxSwitcherDivider" />
-          <div className="sandboxSwitcherGroupTitle">Мои песочницы</div>
-          {loading ? <div className="sandboxSwitcherEmpty">Загрузка…</div> : null}
-          {!loading && list.length === 0 ? (
-            <div className="sandboxSwitcherEmpty">Нет песочниц</div>
+
+          <div className="navSandboxGroup">
+            <div className="navSandboxGroupTitle">Песочницы</div>
+            {loading ? <div className="navSandboxEmpty">Загрузка…</div> : null}
+            {!loading && activeList.length === 0 ? <div className="navSandboxEmpty">Нет активных песочниц</div> : null}
+            {activeList.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={`navSandboxItem navSandboxItemChild${activeId === s.id ? " active" : ""}`}
+                onClick={() => pick(s.id)}
+                role="menuitem"
+              >
+                <span className="navSandboxItemMark" aria-hidden="true">
+                  {activeId === s.id ? "●" : "○"}
+                </span>
+                <span className="navSandboxItemBody">
+                  <span className="navSandboxItemTitle">{s.name}</span>
+                  <span className="navSandboxItemMeta">
+                    {s.eventCount} соб. · {s.isOwner ? "Владелец" : s.myRole ?? "—"}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {archivedList.length > 0 ? (
+            <div className="navSandboxGroup">
+              <button
+                type="button"
+                className="navSandboxGroupToggle"
+                onClick={() => setArchiveOpen((v) => !v)}
+                aria-expanded={archiveOpen}
+              >
+                <span aria-hidden="true">{archiveOpen ? "▾" : "▸"}</span>
+                Архив <span className="navSandboxCount">{archivedList.length}</span>
+              </button>
+              {archiveOpen
+                ? archivedList.map((s) => (
+                    <div key={s.id} className="navSandboxItem navSandboxItemChild navSandboxItemArchived" role="presentation">
+                      <span className="navSandboxItemMark" aria-hidden="true">
+                        ◌
+                      </span>
+                      <span className="navSandboxItemBody">
+                        <span className="navSandboxItemTitle">{s.name}</span>
+                        <span className="navSandboxItemMeta">в архиве — откройте в управлении</span>
+                      </span>
+                    </div>
+                  ))
+                : null}
+            </div>
           ) : null}
-          {list.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              className={"sandboxSwitcherItem " + (activeId === s.id ? "active" : "")}
-              onClick={() => pick(s.id)}
-            >
-              <span className="sandboxSwitcherItemTitle">{s.name}</span>
-              <span className="sandboxSwitcherItemMeta">
-                {s.eventCount} событий · {s.isOwner ? "Владелец" : s.myRole ?? "—"}
-              </span>
-            </button>
-          ))}
-          <div className="sandboxSwitcherDivider" />
+
+          <div className="navSandboxDivider" />
           <button
             type="button"
-            className="sandboxSwitcherItem sandboxSwitcherItemAction"
+            className="navSandboxItem navSandboxItemAction"
             onClick={() => {
               setOpen(false);
-              onManage();
+              props.onManage();
             }}
+            role="menuitem"
           >
-            Управление песочницами
+            <span className="navSandboxItemBody">
+              <span className="navSandboxItemTitle">Управление песочницами</span>
+            </span>
           </button>
         </div>
       ) : null}

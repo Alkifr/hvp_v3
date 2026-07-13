@@ -3,7 +3,7 @@
     sans-serif;
   color: #0f172a;
   background: #f8fafc;
-  --topbar-sticky-height: 54px;
+  --topbar-sticky-height: 0px;
 }
 
 * {
@@ -164,20 +164,53 @@ a {
   z-index: 20;
 }
 
+.appShellProd .nav {
+  background:
+    linear-gradient(180deg, rgba(16, 185, 129, 0.22) 0%, rgba(6, 95, 70, 0.08) 42%, rgba(11, 18, 32, 0.96) 100%),
+    #0b1220;
+  box-shadow: inset -3px 0 0 rgba(52, 211, 153, 0.55);
+}
+
+.appShellSandbox .nav {
+  background:
+    linear-gradient(180deg, rgba(180, 120, 60, 0.28) 0%, rgba(120, 72, 28, 0.14) 45%, rgba(11, 18, 32, 0.96) 100%),
+    #0b1220;
+  box-shadow: inset -3px 0 0 rgba(217, 149, 80, 0.7);
+}
+
 .navBrand {
   width: 44px;
-  height: 44px;
+  min-height: 44px;
   margin: 2px auto 8px;
   border-radius: 10px;
-  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  background: linear-gradient(145deg, #0f766e, #1d4ed8);
   color: #fff;
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 0.5px;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.04em;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 1px;
   user-select: none;
+  line-height: 1;
+  padding: 4px 0;
+}
+
+.appShellSandbox .navBrand {
+  background: linear-gradient(145deg, #92400e, #b45309);
+}
+
+.navBrandIcon {
+  display: inline-flex;
+  opacity: 0.95;
+}
+
+.navBrandText {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
 }
 
 .navGroup {
@@ -203,6 +236,10 @@ a {
   justify-content: center;
   color: #cbd5e1;
   text-decoration: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
   transition: background-color 120ms ease, color 120ms ease;
 }
 
@@ -257,25 +294,158 @@ a {
 
 .appShell.appShellSandbox .content {
   background:
-    linear-gradient(180deg, rgba(249, 115, 22, 0.06) 0%, rgba(249, 115, 22, 0) 260px);
+    linear-gradient(180deg, rgba(180, 120, 60, 0.07) 0%, rgba(180, 120, 60, 0) 220px);
 }
 
-.appShell.appShellSandbox .nav {
-  box-shadow: inset -3px 0 0 rgba(249, 115, 22, 0.55);
+.navSandboxRoot {
+  position: relative;
+}
+
+.navIcon.navIconSandboxActive {
+  box-shadow: inset 2px 0 0 #f59e0b;
+}
+
+.navSandboxMenu {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 0;
+  z-index: 80;
+  width: min(280px, calc(100vw - 80px));
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #0f172a;
+  color: #e2e8f0;
+  box-shadow: 0 16px 40px rgba(2, 6, 23, 0.45);
+}
+
+.navSandboxMenuTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  padding: 4px 8px 8px;
+}
+
+.navSandboxGroup {
+  margin-top: 4px;
+}
+
+.navSandboxGroupTitle,
+.navSandboxGroupToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 8px 8px 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.navSandboxCount {
+  margin-left: auto;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.navSandboxItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.navSandboxItem:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.navSandboxItem.active {
+  background: rgba(52, 211, 153, 0.16);
+}
+
+.appShellSandbox .navSandboxItem.active {
+  background: rgba(245, 158, 11, 0.18);
+}
+
+.navSandboxItemChild {
+  padding-left: 18px;
+}
+
+.navSandboxItemArchived {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.navSandboxItemMark {
+  flex: 0 0 auto;
+  width: 12px;
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+.navSandboxItem.active .navSandboxItemMark {
+  color: #34d399;
+}
+
+.appShellSandbox .navSandboxItem.active .navSandboxItemMark {
+  color: #fbbf24;
+}
+
+.navSandboxItemBody {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.navSandboxItemTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navSandboxItemMeta {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.navSandboxItemAction .navSandboxItemTitle {
+  color: #93c5fd;
+}
+
+.navSandboxDivider {
+  height: 1px;
+  margin: 8px 4px;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.navSandboxEmpty {
+  padding: 6px 8px 10px 18px;
+  font-size: 12px;
+  color: #64748b;
 }
 
 .topbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: var(--topbar-sticky-height);
-  padding: 10px 12px;
-  margin: -18px -18px 14px -18px;
-  background: #fff;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
-  position: sticky;
-  top: 0;
-  z-index: 30;
+  display: none;
 }
 
 .topbarSpacer {
@@ -5652,6 +5822,15 @@ textarea {
   border-radius: 999px;
 }
 
+.sandboxCardArchivedBadge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  background: rgba(148, 163, 184, 0.18);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
 .sandboxCardDesc {
   font-size: 13px;
   color: #475569;
@@ -7176,6 +7355,223 @@ textarea.refInput {
 
   .helpNavItem {
     width: auto;
+  }
+}
+
+
+.analyticsPage {
+  display: grid;
+  gap: 14px;
+}
+
+.analyticsToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: end;
+  padding: 12px 14px;
+}
+
+.analyticsField {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.analyticsFieldGrow {
+  flex: 1 1 200px;
+  min-width: 180px;
+}
+
+.analyticsPresets {
+  display: flex;
+  gap: 6px;
+}
+
+.analyticsStack {
+  display: grid;
+  gap: 14px;
+}
+
+.analyticsStats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.analyticsStat {
+  padding: 12px 14px;
+}
+
+.analyticsStatLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.analyticsStatValue {
+  margin-top: 4px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.analyticsStatHint {
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.analyticsSplit {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.analyticsCard {
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.analyticsCard h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.analyticsBarList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.analyticsBarList li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  align-items: center;
+  font-size: 13px;
+  position: relative;
+  padding-bottom: 6px;
+}
+
+.analyticsBarList li span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analyticsBarFill {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.55);
+}
+
+.analyticsBarFillAlt {
+  background: rgba(245, 158, 11, 0.55);
+}
+
+.analyticsTableWrap {
+  overflow: auto;
+  max-height: min(62vh, 640px);
+}
+
+.analyticsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.analyticsTable th,
+.analyticsTable td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  vertical-align: top;
+}
+
+.analyticsTable th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  z-index: 1;
+  font-size: 11px;
+  color: #475569;
+}
+
+.analyticsEventTitle {
+  font-weight: 600;
+}
+
+.analyticsTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.analyticsTag {
+  display: inline-flex;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 11px;
+}
+
+.analyticsBad {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.analyticsGood {
+  color: #047857;
+  font-weight: 600;
+}
+
+.analyticsUtilCell {
+  display: grid;
+  gap: 4px;
+  min-width: 110px;
+}
+
+.analyticsUtilTrack {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.analyticsUtilFill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #34d399, #059669);
+}
+
+.analyticsCompareHeads {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.analyticsMiniStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 13px;
+  color: #475569;
+}
+
+@media (max-width: 900px) {
+  .analyticsSplit,
+  .analyticsCompareHeads {
+    grid-template-columns: 1fr;
   }
 }
 

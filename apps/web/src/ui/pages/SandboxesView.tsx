@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiDelete, apiGet, apiPatch, apiPost, getActiveSandboxId, setActiveSandboxId } from "../../lib/api";
-import type { SandboxSummary } from "../components/SandboxSwitcher";
+import { sandboxIsArchived, type SandboxSummary } from "../components/SandboxSwitcher";
 
 type CopyMode = "empty" | "prod" | "prodRange";
+type SandboxTab = "mine" | "shared" | "archived";
 
 function formatDate(v: string | Date | null | undefined) {
   if (!v) return "—";
@@ -24,7 +25,7 @@ function fromInputLocal(v: string): Date {
 
 export function SandboxesView() {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<"mine" | "shared">("mine");
+  const [tab, setTab] = useState<SandboxTab>("mine");
   const [createOpen, setCreateOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [shareFor, setShareFor] = useState<SandboxSummary | null>(null);
@@ -40,10 +41,13 @@ export function SandboxesView() {
   const list = listQ.data ?? [];
   const activeId = getActiveSandboxId();
 
-  const mine = list.filter((s) => s.isOwner);
-  const shared = list.filter((s) => !s.isOwner);
-  const visible = tab === "mine" ? mine : shared;
-  const editableSandboxes = list.filter((s) => s.myRole === "OWNER" || s.myRole === "EDITOR");
+  const mine = list.filter((s) => s.isOwner && !sandboxIsArchived(s));
+  const shared = list.filter((s) => !s.isOwner && !sandboxIsArchived(s));
+  const archived = list.filter((s) => sandboxIsArchived(s));
+  const visible = tab === "mine" ? mine : tab === "shared" ? shared : archived;
+  const editableSandboxes = list.filter(
+    (s) => !sandboxIsArchived(s) && (s.myRole === "OWNER" || s.myRole === "EDITOR")
+  );
   const currentShareFor = shareFor ? (list.find((s) => s.id === shareFor.id) ?? shareFor) : null;
   const currentRenameFor = renameFor ? (list.find((s) => s.id === renameFor.id) ?? renameFor) : null;
   const currentPromoteFor = promoteFor ? (list.find((s) => s.id === promoteFor.id) ?? promoteFor) : null;
@@ -52,6 +56,15 @@ export function SandboxesView() {
     mutationFn: (id: string) => apiDelete(`/api/sandboxes/${id}`),
     onSuccess: (_d, id) => {
       if (getActiveSandboxId() === id) setActiveSandboxId(null);
+      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
+    }
+  });
+
+  const archiveM = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: "ACTIVE" | "ARCHIVED" }) =>
+      apiPatch(`/api/sandboxes/${id}`, { status }),
+    onSuccess: (_d, vars) => {
+      if (vars.status === "ARCHIVED" && getActiveSandboxId() === vars.id) setActiveSandboxId(null);
       void qc.invalidateQueries({ queryKey: ["sandboxes"] });
     }
   });
@@ -69,12 +82,14 @@ export function SandboxesView() {
           <h1>Песочницы плана</h1>
           <p>
             Создавайте изолированные копии плана, проверяйте альтернативные сценарии, объединяйте ветки без дублей
-            и переносите готовые изменения обратно в рабочий контур.
+            и переносите готовые изменения обратно в рабочий контур. Архивные песочницы не мешают быстрому
+            переключению в меню слева.
           </p>
         </div>
         <div className="massHeroStats" aria-label="Песочницы">
           <span><b>{mine.length}</b> мои</span>
           <span><b>{shared.length}</b> доступны</span>
+          <span><b>{archived.length}</b> в архиве</span>
           <button type="button" className="btn" onClick={() => setMergeOpen(true)} disabled={editableSandboxes.length < 2}>
             Слить песочницы
           </button>
@@ -99,6 +114,13 @@ export function SandboxesView() {
         >
           Расшарены со мной <span className="sandboxesTabCount">{shared.length}</span>
         </button>
+        <button
+          type="button"
+          className={tab === "archived" ? "sandboxesTab active" : "sandboxesTab"}
+          onClick={() => setTab("archived")}
+        >
+          Архив <span className="sandboxesTabCount">{archived.length}</span>
+        </button>
       </div>
 
       {listQ.isLoading ? (
@@ -107,7 +129,9 @@ export function SandboxesView() {
         <div className="sandboxesEmpty">
           {tab === "mine"
             ? "У вас пока нет песочниц. Создайте первую — скопируйте текущий план и спокойно поэкспериментируйте."
-            : "Пока никто не поделился с вами песочницей."}
+            : tab === "shared"
+              ? "Пока никто не поделился с вами песочницей."
+              : "Архив пуст."}
         </div>
       ) : (
         <div className="sandboxesGrid">
@@ -123,6 +147,11 @@ export function SandboxesView() {
                 if (!confirm(`Удалить песочницу «${s.name}»? Все её события и связанные данные будут удалены.`)) return;
                 deleteM.mutate(s.id);
               }}
+              onArchive={() => {
+                if (!confirm(`Отправить песочницу «${s.name}» в архив?`)) return;
+                archiveM.mutate({ id: s.id, status: "ARCHIVED" });
+              }}
+              onRestore={() => archiveM.mutate({ id: s.id, status: "ACTIVE" })}
               onPromote={() => setPromoteFor(s)}
             />
           ))}
@@ -147,15 +176,19 @@ function SandboxCard(props: {
   onRename: () => void;
   onShare: () => void;
   onDelete: () => void;
+  onArchive: () => void;
+  onRestore: () => void;
   onPromote: () => void;
 }) {
-  const { sandbox: s, active, onOpen, onRename, onShare, onDelete, onPromote } = props;
+  const { sandbox: s, active, onOpen, onRename, onShare, onDelete, onArchive, onRestore, onPromote } = props;
   const canWrite = s.myRole === "OWNER" || s.myRole === "EDITOR";
+  const archived = sandboxIsArchived(s);
   return (
     <div className={active ? "sandboxCard sandboxCardActive" : "sandboxCard"}>
       <div className="sandboxCardHead">
         <div className="sandboxCardTitle">{s.name}</div>
         {active ? <span className="sandboxCardActiveBadge">Активна</span> : null}
+        {archived ? <span className="sandboxCardArchivedBadge">Архив</span> : null}
       </div>
       {s.description ? <div className="sandboxCardDesc">{s.description}</div> : null}
       <div className="sandboxCardMeta">
@@ -166,18 +199,25 @@ function SandboxCard(props: {
         <span>Участников: {s.members.length + 1}</span>
       </div>
       <div className="sandboxCardActions">
-        <button type="button" className="btn btnPrimary" onClick={onOpen} disabled={active}>
-          {active ? "Открыта" : "Открыть"}
-        </button>
-        {canWrite ? (
+        {!archived ? (
+          <button type="button" className="btn btnPrimary" onClick={onOpen} disabled={active}>
+            {active ? "Открыта" : "Открыть"}
+          </button>
+        ) : null}
+        {!archived && canWrite ? (
           <button type="button" className="btn" onClick={onPromote}>
             Перенести в прод
           </button>
         ) : null}
         {s.isOwner ? (
           <>
-            <button type="button" className="btn" onClick={onShare}>Поделиться</button>
+            {!archived ? <button type="button" className="btn" onClick={onShare}>Поделиться</button> : null}
             <button type="button" className="btn" onClick={onRename}>Переименовать</button>
+            {archived ? (
+              <button type="button" className="btn" onClick={onRestore}>Вернуть из архива</button>
+            ) : (
+              <button type="button" className="btn" onClick={onArchive}>В архив</button>
+            )}
             <button type="button" className="btn btnDanger" onClick={onDelete}>Удалить</button>
           </>
         ) : null}

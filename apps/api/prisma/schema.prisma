@@ -121,6 +121,11 @@ enum SandboxMemberRole {
   VIEWER
 }
 
+enum SandboxStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 model Shift {
   id        String   @id @default(uuid())
   code      String   @unique
@@ -393,12 +398,13 @@ model User {
 
 // Песочница плана: именованное изолированное пространство для «игры» с планом
 model Sandbox {
-  id          String   @id @default(uuid())
+  id          String        @id @default(uuid())
   name        String
   description String?
+  status      SandboxStatus @default(ACTIVE)
   ownerId     String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
   owner   User            @relation("SandboxOwner", fields: [ownerId], references: [id])
   members SandboxMember[]
@@ -419,6 +425,7 @@ model Sandbox {
   technicalSteps    EventTechnicalStep[]
 
   @@index([ownerId])
+  @@index([status])
 }
 
 model SandboxMember {
