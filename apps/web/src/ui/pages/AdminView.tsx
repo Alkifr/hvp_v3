@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { apiGet, apiPatch, apiPost } from "../../lib/api";
+import { isValidDateInput } from "../../lib/dateInput";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import type { SandboxSummary } from "../components/SandboxSwitcher";
 
@@ -97,8 +98,8 @@ export function AdminView(props: { permissions: string[] }) {
     ...(cleanupEventTypeId ? { eventTypeId: cleanupEventTypeId } : {}),
     ...(cleanupAircraftTypeId ? { aircraftTypeId: cleanupAircraftTypeId } : {}),
     ...(cleanupAircraftId ? { aircraftId: cleanupAircraftId } : {}),
-    ...(cleanupFrom ? { from: new Date(`${cleanupFrom}T00:00:00`).toISOString() } : {}),
-    ...(cleanupTo ? { to: new Date(`${cleanupTo}T23:59:59`).toISOString() } : {}),
+    ...(isValidDateInput(cleanupFrom) ? { from: new Date(`${cleanupFrom}T00:00:00`).toISOString() } : {}),
+    ...(isValidDateInput(cleanupTo) ? { to: new Date(`${cleanupTo}T23:59:59`).toISOString() } : {}),
     ...(cleanupConfirmBulk ? { confirmBulk: true } : {})
   });
   const cleanupHasFilters = Boolean(cleanupEventId.trim() || cleanupEventTypeId || cleanupAircraftTypeId || cleanupAircraftId || cleanupFrom || cleanupTo || cleanupConfirmBulk);

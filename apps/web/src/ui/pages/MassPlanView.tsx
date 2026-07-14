@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import * as XLSX from "xlsx";
 
 import { apiGet, apiPost } from "../../lib/api";
+import { isValidDateInput } from "../../lib/dateInput";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 type Hangar = { id: string; name: string; code: string };
@@ -412,8 +413,8 @@ export function MassPlanView() {
     aircraftTypeId,
     eventTypeId,
     count: Math.max(1, Math.min(200, Number(count) || 1)),
-    startFrom: dayjs(startFrom).startOf("day").toISOString(),
-    endTo: dayjs(endTo).endOf("day").toISOString(),
+    startFrom: isValidDateInput(startFrom) ? dayjs(startFrom).startOf("day").toISOString() : dayjs().startOf("day").toISOString(),
+    endTo: isValidDateInput(endTo) ? dayjs(endTo).endOf("day").toISOString() : dayjs().add(30, "day").endOf("day").toISOString(),
     hangarIds: hangarPriority.length > 0 ? hangarPriority : undefined,
     titleTemplate: titleTemplate.trim() || undefined,
     scheduleMode,
@@ -462,8 +463,12 @@ export function MassPlanView() {
       aircraftTypeId: row.aircraftTypeId,
       eventTypeId: row.eventTypeId,
       count: Math.max(1, Math.min(200, Number(row.count) || 1)),
-      startFrom: dayjs(row.startFrom).startOf("day").toISOString(),
-      endTo: dayjs(row.endTo).endOf("day").toISOString(),
+      startFrom: isValidDateInput(row.startFrom)
+        ? dayjs(row.startFrom).startOf("day").toISOString()
+        : dayjs().startOf("day").toISOString(),
+      endTo: isValidDateInput(row.endTo)
+        ? dayjs(row.endTo).endOf("day").toISOString()
+        : dayjs().add(30, "day").endOf("day").toISOString(),
       titleTemplate: row.titleTemplate.trim() || undefined,
       scheduleMode,
       spacingHours: Math.max(0, Number(spacingHours) || 0),

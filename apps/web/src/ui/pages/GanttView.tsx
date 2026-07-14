@@ -6,6 +6,7 @@ import utc from "dayjs/plugin/utc";
 import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
+import { isValidDateInput } from "../../lib/dateInput";
 import { authMe } from "../auth/authApi";
 import { EventResourcesPanel } from "../components/EventResourcesPanel";
 import { GanttEventsTable } from "../components/GanttEventsTable";
@@ -374,7 +375,7 @@ type Aircraft = {
 type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
 type EventType = { id: string; code: string; name: string; color?: string | null };
 type OperatorRef = { id: string; code?: string | null; name: string; isActive?: boolean };
-type Hangar = { id: string; name: string };
+type Hangar = { id: string; name: string; isPhysical?: boolean };
 type Layout = { id: string; name: string; hangarId: string; code?: string; capacitySummary?: string; isCompatible?: boolean };
 type Stand = { id: string; layoutId: string; code: string; name: string; isActive?: boolean; isCompatible?: boolean };
 type AircraftTypePaletteRow = { id: string; operatorId: string; aircraftTypeId: string; color: string; isActive: boolean };
@@ -816,14 +817,6 @@ function eventSegmentsForHangarRows(ev: EventRow): EventRow[] {
     layout: p.layout ?? (p.layoutId ? ({ id: p.layoutId, name: ev.layout?.name ?? "Вариант", hangarId: p.hangarId ?? undefined } as any) : null),
     reservation: p.stand ? { stand: p.stand } : null
   }));
-}
-
-function isValidDateInput(v: string) {
-  // Для <input type="date"> значение либо "" (в процессе ввода), либо "YYYY-MM-DD"
-  if (!v) return false;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
-  const d = dayjs.utc(v);
-  return d.isValid();
 }
 
 function barVisualStyle(status: string, baseColor: string) {
@@ -1371,6 +1364,10 @@ export function GanttView() {
   });
   const [dndZoneOnly, setDndZoneOnly] = useState<boolean>(() => Boolean(savedUi?.dndZoneOnly ?? false));
   const [selectedDndEventIds, setSelectedDndEventIds] = useState<string[]>([]);
+  /** Показывать на Гантте внешние MRO (isPhysical=false). По умолчанию — да. */
+  const [showExternalMroOnGantt, setShowExternalMroOnGantt] = useState<boolean>(
+    () => savedUi?.showExternalMroOnGantt !== false
+  );
 
   const resetFilters = () => {
     const rf = dayjs().add(-20, "day").format("YYYY-MM-DD");
@@ -1512,6 +1509,7 @@ export function GanttView() {
       dndHangarIds,
       dndLayoutIds,
       dndZoneOnly,
+      showExternalMroOnGantt,
       zoom: minorScale
     });
   }, [
@@ -1537,9 +1535,23 @@ export function GanttView() {
     dndHangarIds,
     dndLayoutIds,
     dndZoneOnly,
+    showExternalMroOnGantt,
   ]);
 
   const events = q.data ?? [];
+
+  const externalMroHangarIds = useMemo(() => {
+    return new Set((hangarsQ.data ?? []).filter((h) => h.isPhysical === false).map((h) => h.id));
+  }, [hangarsQ.data]);
+
+  const eventsForGantt = useMemo(() => {
+    if (showExternalMroOnGantt || externalMroHangarIds.size === 0) return events;
+    return events.filter((e) => {
+      const ids = eventHangarIds(e);
+      if (ids.length === 0) return true;
+      return ids.some((id) => !externalMroHangarIds.has(id));
+    });
+  }, [events, showExternalMroOnGantt, externalMroHangarIds]);
 
   const ganttFilters = useMemo<GanttFilters>(
     () => ({
@@ -1561,7 +1573,7 @@ export function GanttView() {
     const eventTypeIdSet = new Set<string>();
     const planningKindSet = new Set<"PLANNED" | "UNPLANNED">();
 
-    for (const e of events) {
+    for (const e of eventsForGantt) {
       if (eventMatchesGanttFilters(e, ganttFilters, "hangarIds")) {
         for (const id of eventHangarIds(e)) if (id) hangarIdSet.add(id);
       }
@@ -1582,40 +1594,45 @@ export function GanttView() {
         if (etid) eventTypeIdSet.add(etid);
       }
       if (eventMatchesGanttFilters(e, ganttFilters, "planningKind")) {
-        planningKindSet.add(eventPlanningKind(e));
+        const pk = String(e.planningKind ?? "").toUpperCase();
+        if (pk === "PLANNED" || pk === "UNPLANNED") planningKindSet.add(pk);
       }
     }
 
     const hangars = (hangarsQ.data ?? [])
-      .filter((h) => events.length === 0 || hangarIdSet.has(h.id))
-      .map((h) => ({ id: h.id, label: h.name }))
+      .filter((h) => eventsForGantt.length === 0 || hangarIdSet.has(h.id))
+      .filter((h) => showExternalMroOnGantt || h.isPhysical !== false)
+      .map((h) => ({
+        id: h.id,
+        label: h.isPhysical === false ? `${h.name} (MRO)` : h.name
+      }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const operators = (operatorsQ.data ?? [])
-      .filter((o) => events.length === 0 || operatorIdSet.has(o.id))
+      .filter((o) => eventsForGantt.length === 0 || operatorIdSet.has(o.id))
       .map((o) => ({ id: o.id, label: o.code ? `${o.code} • ${o.name}` : o.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const aircraftTypes = (aircraftTypesQ.data ?? [])
-      .filter((t) => events.length === 0 || aircraftTypeIdSet.has(t.id))
+      .filter((t) => eventsForGantt.length === 0 || aircraftTypeIdSet.has(t.id))
       .map((t) => ({ id: t.id, label: t.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const aircraft = (aircraftQ.data ?? [])
-      .filter((a) => events.length === 0 || aircraftIdSet.has(String(a.id)))
+      .filter((a) => eventsForGantt.length === 0 || aircraftIdSet.has(String(a.id)))
       .map((a) => ({ id: a.id, label: a.tailNumber }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const eventTypes = (eventTypesQ.data ?? [])
-      .filter((t) => events.length === 0 || eventTypeIdSet.has(t.id))
+      .filter((t) => eventsForGantt.length === 0 || eventTypeIdSet.has(t.id))
       .map((t) => ({ id: t.id, label: t.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     return { hangars, operators, aircraftTypes, aircraft, eventTypes, planningKinds: planningKindSet };
-  }, [events, ganttFilters, hangarsQ.data, operatorsQ.data, aircraftTypesQ.data, aircraftQ.data, eventTypesQ.data]);
+  }, [eventsForGantt, ganttFilters, hangarsQ.data, operatorsQ.data, aircraftTypesQ.data, aircraftQ.data, eventTypesQ.data, showExternalMroOnGantt]);
 
   useEffect(() => {
-    if (events.length === 0) return;
+    if (eventsForGantt.length === 0) return;
 
     const prune = (selected: string[], available: Set<string>) => selected.filter((id) => available.has(id));
     const hangarAvail = new Set(smartFilterOptions.hangars.map((o) => o.id));
@@ -2736,7 +2753,7 @@ export function GanttView() {
     const getStandId = (e: EventRow) => (e.reservation?.stand as any)?.id ?? "";
     const getStandCode = (e: EventRow) => (e.reservation?.stand as any)?.code ?? "";
 
-    const visible = events
+    const visible = eventsForGantt
       .filter((e) => eventMatchesGanttFilters(e, ganttFilters))
       .flatMap(eventSegmentsForHangarRows);
     const activeVisible = visible.filter((e) => e.status !== "CANCELLED");
@@ -2891,7 +2908,7 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, ganttFilters, events, dndActive, dndStandsQ.data, dndStandById, dndHangarScopeIds, dndLayoutIds, dndZoneOnly, hangarsQ.data]);
+  }, [groupMode, ganttFilters, eventsForGantt, dndActive, dndStandsQ.data, dndStandById, dndHangarScopeIds, dndLayoutIds, dndZoneOnly, hangarsQ.data]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -2949,8 +2966,8 @@ export function GanttView() {
   }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap, ganttRowHeight, timelineTimeMode]);
 
   const exportEvents = useMemo(() => {
-    return events.filter((e) => eventMatchesGanttFilters(e, ganttFilters));
-  }, [events, ganttFilters]);
+    return eventsForGantt.filter((e) => eventMatchesGanttFilters(e, ganttFilters));
+  }, [eventsForGantt, ganttFilters]);
 
   const visibleEvents = useMemo(() => exportEvents.filter((e) => e.status !== "CANCELLED"), [exportEvents]);
 
@@ -3641,6 +3658,19 @@ export function GanttView() {
                   <select value={ganttDisplayMode} onChange={(e) => setGanttDisplayMode(e.target.value as GanttDisplayMode)}>
                     <option value="CURRENT">Текущий график</option>
                     <option value="PLAN_FACT">План-факт</option>
+                  </select>
+                </label>
+                <label
+                  className="tgField"
+                  title="Внешние MRO (ангары с isPhysical=false) — сторонние контуры для оценки потребности"
+                >
+                  <span className="tgFieldLabel">Внешние MRO</span>
+                  <select
+                    value={showExternalMroOnGantt ? "SHOW" : "HIDE"}
+                    onChange={(e) => setShowExternalMroOnGantt(e.target.value === "SHOW")}
+                  >
+                    <option value="SHOW">Показывать</option>
+                    <option value="HIDE">Скрыть</option>
                   </select>
                 </label>
                 <button

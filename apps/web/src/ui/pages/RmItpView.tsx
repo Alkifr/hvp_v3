@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
+import { isValidDateInput } from "../../lib/dateInput";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 const ITP_SELECTED_EVENT_KEY = "hangarPlanning:itpSelectedEventId";
@@ -159,8 +160,14 @@ function stepGroup(step: TechnicalStep) {
 export function RmItpView() {
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
-  const [rangeFrom, setRangeFrom] = useState(() => dayjs().add(-14, "day").format("YYYY-MM-DD"));
-  const [rangeTo, setRangeTo] = useState(() => dayjs().add(45, "day").format("YYYY-MM-DD"));
+  const [rangeFromInput, setRangeFromInput] = useState(() => dayjs().add(-14, "day").format("YYYY-MM-DD"));
+  const [rangeToInput, setRangeToInput] = useState(() => dayjs().add(45, "day").format("YYYY-MM-DD"));
+  const rangeFromRef = useRef(rangeFromInput);
+  const rangeToRef = useRef(rangeToInput);
+  if (isValidDateInput(rangeFromInput)) rangeFromRef.current = rangeFromInput;
+  if (isValidDateInput(rangeToInput)) rangeToRef.current = rangeToInput;
+  const rangeFrom = isValidDateInput(rangeFromInput) ? rangeFromInput : rangeFromRef.current;
+  const rangeTo = isValidDateInput(rangeToInput) ? rangeToInput : rangeToRef.current;
   const [search, setSearch] = useState("");
   const [selectedEventId, setSelectedEventId] = useState<string>(() => localStorage.getItem(ITP_SELECTED_EVENT_KEY) ?? "");
   const [planDraft, setPlanDraft] = useState({ status: "DRAFT", leadEngineer: "", readinessPct: 0, notes: "" });
@@ -190,6 +197,7 @@ export function RmItpView() {
 
   const eventsQ = useQuery({
     queryKey: ["itp-events", rangeFrom, rangeTo, search],
+    enabled: isValidDateInput(rangeFrom) && isValidDateInput(rangeTo),
     queryFn: () => {
       const params = new URLSearchParams();
       params.set("from", dayjs(rangeFrom).startOf("day").toISOString());
@@ -416,11 +424,11 @@ export function RmItpView() {
         <div className="itpPickerGrid">
           <label>
             <span className="muted">С</span>
-            <input type="date" value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)} />
+            <input type="date" value={rangeFromInput} onChange={(e) => setRangeFromInput(e.target.value)} />
           </label>
           <label>
             <span className="muted">По</span>
-            <input type="date" value={rangeTo} onChange={(e) => setRangeTo(e.target.value)} />
+            <input type="date" value={rangeToInput} onChange={(e) => setRangeToInput(e.target.value)} />
           </label>
           <label>
             <span className="muted">Поиск</span>

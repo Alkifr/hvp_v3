@@ -13,11 +13,15 @@ type SummaryEvent = {
   title: string;
   status: string;
   aircraftLabel: string;
+  aircraftId: string | null;
   aircraftTypeId: string | null;
+  operatorId: string | null;
   bodyType: BodyType;
+  eventTypeId: string | null;
   eventTypeName: string | null;
   startAt: Date;
   endAt: Date;
+  hangarId: string | null;
   reservation: { layoutId: string; standId: string } | null;
 };
 
@@ -59,6 +63,24 @@ function eventAircraftTypeId(event: any): string | null {
   return virtualTypeId;
 }
 
+function eventAircraftId(event: any): string | null {
+  if (event.aircraftId) return String(event.aircraftId);
+  if (event.aircraft?.id) return String(event.aircraft.id);
+  return null;
+}
+
+function eventOperatorId(event: any): string | null {
+  if (event.aircraft?.operatorId) return String(event.aircraft.operatorId);
+  if (event.virtualAircraft?.operatorId) return String(event.virtualAircraft.operatorId);
+  return null;
+}
+
+function eventEventTypeId(event: any): string | null {
+  if (event.eventTypeId) return String(event.eventTypeId);
+  if (event.eventType?.id) return String(event.eventType.id);
+  return null;
+}
+
 function allowedAircraftTypeIds(stand: any): string[] {
   return (stand.allowedAircraftTypes ?? []).map((link: any) => String(link.aircraftTypeId));
 }
@@ -73,12 +95,31 @@ function buildSummaryEvent(event: any, bodyTypeByAircraftTypeId: Map<string, Bod
     title: event.title,
     status: event.status,
     aircraftLabel: aircraftLabel(event),
+    aircraftId: eventAircraftId(event),
     aircraftTypeId: eventAircraftTypeId(event),
+    operatorId: eventOperatorId(event),
     bodyType: eventBodyType(event, bodyTypeByAircraftTypeId),
+    eventTypeId: eventEventTypeId(event),
     eventTypeName: event.eventType?.name ?? null,
     startAt: event.startAt,
     endAt: event.endAt,
+    hangarId: event.hangarId ? String(event.hangarId) : null,
     reservation: null
+  };
+}
+
+function summaryEventFields(e: any, bodyTypeByAircraftTypeId: Map<string, BodyType>) {
+  return {
+    id: e.id,
+    title: e.title,
+    status: e.status,
+    aircraftLabel: aircraftLabel(e),
+    aircraftId: eventAircraftId(e),
+    aircraftTypeId: eventAircraftTypeId(e),
+    operatorId: eventOperatorId(e),
+    bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
+    eventTypeId: eventEventTypeId(e),
+    eventTypeName: e.eventType?.name ?? null
   };
 }
 
@@ -117,18 +158,28 @@ function buildHangarEfficiency(params: {
     let capacityHours = 0;
     let conflictMs = 0;
 
+    let referenceStandCount = 0;
+    for (const l of hangarLayouts) {
+      referenceStandCount = Math.max(referenceStandCount, (l.stands ?? []).length);
+    }
+
     for (let i = 0; i < sorted.length - 1; i++) {
       const s = sorted[i]!;
       const en = sorted[i + 1]!;
       if (en <= s) continue;
       const active = hangarEvents.filter((e) => e.startAt.getTime() < en && e.endAt.getTime() > s);
-      if (active.length === 0) continue;
+      const durationHours = (en - s) / (60 * 60 * 1000);
+
+      if (active.length === 0) {
+        // Empty hangar: nominal (max) layout capacity — blocked alternatives contribute 0
+        if (referenceStandCount > 0) capacityHours += referenceStandCount * durationHours;
+        continue;
+      }
 
       const activeLayoutIds = Array.from(new Set(active.map((e) => e.reservation?.layoutId).filter(Boolean) as string[]));
       const conflict = activeLayoutIds.length > 1;
       const primaryLayout = activeLayoutIds.length === 1 ? layoutById.get(activeLayoutIds[0]!) : null;
       const capacity = primaryLayout ? (primaryLayout.stands ?? []).length : 0;
-      const durationHours = (en - s) / (60 * 60 * 1000);
       const occupiedCount = active.length;
       const utilizationPct = capacity > 0 ? (occupiedCount / capacity) * 100 : 100;
 
@@ -221,37 +272,49 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     const bodyTypeByAircraftTypeId = new Map<string, BodyType>(
       aircraftTypes.map((t: any) => [t.id, (t.bodyType ?? null) as BodyType])
     );
-    const selectedLayouts = selectedLayoutIds.size
+    const layoutById = new Map(layouts.map((l: any) => [l.id, l]));
+    const selectedLayoutsRaw = selectedLayoutIds.size
       ? layouts.filter((l: any) => selectedLayoutIds.has(l.id))
       : Array.from(new Map(layouts.map((l: any) => [l.hangarId, l])).values());
+    // Гарантируем карточку для каждого ангара с активной схемой (даже если клиент
+    // не передал layoutId из‑за гонки загрузки или выбрал неактивную схему).
+    const selectedLayouts = [...selectedLayoutsRaw];
+    const coveredHangarIds = new Set(selectedLayouts.map((l: any) => String(l.hangarId)));
+    for (const layout of layouts) {
+      const hid = String(layout.hangarId);
+      if (coveredHangarIds.has(hid)) continue;
+      selectedLayouts.push(layout);
+      coveredHangarIds.add(hid);
+    }
     const periodMs = Math.max(1, query.to.getTime() - query.from.getTime());
+    const resolveHangarId = (e: any, placement: any | null, reservation: any | null): string | null => {
+      if (placement?.hangarId) return String(placement.hangarId);
+      if (e.hangarId) return String(e.hangarId);
+      const layoutId = placement?.layoutId ?? reservation?.layoutId;
+      if (layoutId) {
+        const hid = layoutById.get(String(layoutId))?.hangarId;
+        return hid ? String(hid) : null;
+      }
+      return null;
+    };
     const summaryEvents: SummaryEvent[] = events.flatMap((e: any) => {
+      const base = summaryEventFields(e, bodyTypeByAircraftTypeId);
       const placements = e.placements?.length ? e.placements : [];
       if (placements.length === 0) {
         const reservation = e.reservations?.[0] ?? null;
         return [{
-          id: e.id,
-          title: e.title,
-          status: e.status,
-          aircraftLabel: aircraftLabel(e),
-          aircraftTypeId: eventAircraftTypeId(e),
-          bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
-          eventTypeName: e.eventType?.name ?? null,
+          ...base,
           startAt: reservation?.startAt ?? e.startAt,
           endAt: reservation?.endAt ?? e.endAt,
+          hangarId: resolveHangarId(e, null, reservation),
           reservation: reservation ? { layoutId: reservation.layoutId, standId: reservation.standId } : null
         }];
       }
       return placements.map((p: any) => ({
-        id: e.id,
-        title: e.title,
-        status: e.status,
-        aircraftLabel: aircraftLabel(e),
-        aircraftTypeId: eventAircraftTypeId(e),
-        bodyType: eventBodyType(e, bodyTypeByAircraftTypeId),
-        eventTypeName: e.eventType?.name ?? null,
+        ...base,
         startAt: p.startAt,
         endAt: p.endAt,
+        hangarId: resolveHangarId(e, p, null),
         reservation: p.layoutId && p.standId ? { layoutId: p.layoutId, standId: p.standId } : null
       }));
     });
@@ -330,6 +393,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     });
 
     const selectedLayoutIdSet = new Set(selectedLayouts.map((l: any) => l.id));
+    const hangarsWithActiveLayouts = new Set(layouts.map((l: any) => String(l.hangarId)));
     const unplaced = summaryEvents.filter((e) => !e.reservation || !selectedLayoutIdSet.has(e.reservation.layoutId));
     const incompatible = unplaced.map((e) => ({
       event: e,
@@ -338,18 +402,63 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       }, 0)
     }));
 
+    // Только ангары без активных схем в БД (внешние MRO и т.п.)
+    const allHangars = await app.prisma.hangar.findMany({
+      where: { isActive: true },
+      orderBy: { name: "asc" }
+    });
+    const layoutlessHangars = allHangars
+      .filter((h) => !hangarsWithActiveLayouts.has(h.id))
+      .map((hangar) => {
+        const hangarEvents = summaryEvents.filter((e) => e.hangarId === hangar.id);
+        return {
+          hangar,
+          layout: {
+            id: "",
+            code: "",
+            name: "Без схемы",
+            description: null,
+            widthMeters: null,
+            heightMeters: null,
+            obstacles: null,
+            capacityByBodyType: { narrow: 0, wide: 0, any: 0 },
+            capacityByAircraftTypeRule: { specific: 0, any: 0 }
+          },
+          utilizationPct: 0,
+          timeUtilizationPct: 0,
+          aircraftHours: 0,
+          capacityHours: 0,
+          conflictPct: 0,
+          conflictSegments: 0,
+          efficiencyTimeline: [],
+          occupiedAtCount: 0,
+          freeAtCount: query.at ? 0 : null,
+          eventCount: hangarEvents.length,
+          standCount: 0,
+          stands: [],
+          assignedEvents: hangarEvents,
+          isPhysical: hangar.isPhysical !== false
+        };
+      })
+      .filter((h) => h.eventCount > 0);
+
+    const hangarsOut = [
+      ...byLayout.map((h: any) => ({ ...h, isPhysical: h.hangar?.isPhysical !== false, assignedEvents: [] as SummaryEvent[] })),
+      ...layoutlessHangars
+    ];
+
     return {
       ok: true,
       range: { from: query.from, to: query.to, at: query.at ?? null },
       selectedLayouts: selectedLayouts.map((l: any) => ({ hangarId: l.hangarId, layoutId: l.id })),
       summary: {
-        hangars: byLayout.length,
+        hangars: hangarsOut.length,
         layouts: selectedLayouts.length,
         events: summaryEvents.length,
         unplaced: unplaced.length,
         incompatible: incompatible.filter((x) => x.suitableStandCount === 0).length
       },
-      hangars: byLayout,
+      hangars: hangarsOut,
       unplaced,
       incompatible
     };

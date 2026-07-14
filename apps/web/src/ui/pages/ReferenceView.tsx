@@ -117,7 +117,7 @@ function bodyTypeLabel(v: unknown): string | null {
 type Operator = { id: string; code: string; name: string; isActive: boolean };
 type AircraftType = { id: string; icaoType?: string | null; name: string; manufacturer?: string | null; isActive: boolean };
 type EventType = { id: string; code: string; name: string; isActive: boolean };
-type Hangar = { id: string; code: string; name: string; isActive: boolean };
+type Hangar = { id: string; code: string; name: string; isActive: boolean; isPhysical?: boolean };
 type Layout = {
   id: string;
   hangarId: string;
@@ -588,6 +588,7 @@ export function ReferenceView() {
   const [fCode, setFCode] = useState("");
   const [fName, setFName] = useState("");
   const [fIsActive, setFIsActive] = useState(true);
+  const [fIsPhysical, setFIsPhysical] = useState(true);
   const [fIcaoType, setFIcaoType] = useState("");
   const [fManufacturer, setFManufacturer] = useState("");
   const [fTailNumber, setFTailNumber] = useState("");
@@ -695,6 +696,7 @@ export function ReferenceView() {
     } else if (k === "hangars") {
       setFCode("HNEW");
       setFName("Ангар");
+      setFIsPhysical(true);
     } else if (k === "layouts") {
       setFCode("BASE");
       setFName("Вариант");
@@ -749,6 +751,7 @@ export function ReferenceView() {
     setMode("edit");
     setEditId(row.id);
     setFIsActive(Boolean(row.isActive ?? true));
+    setFIsPhysical(row.isPhysical !== false);
     setFCode(String(row.code ?? ""));
     setFName(String(row.name ?? ""));
     setFIcaoType(String(row.icaoType ?? ""));
@@ -875,7 +878,7 @@ export function ReferenceView() {
       };
     if (kind === "event-types")
       return { code: fCode.trim(), name: fName.trim(), color: fColor.trim() ? fColor.trim() : undefined, isActive: fIsActive };
-    if (kind === "hangars") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
+    if (kind === "hangars") return { code: fCode.trim(), name: fName.trim(), isPhysical: fIsPhysical, isActive: fIsActive };
     if (kind === "layouts")
       return {
         hangarId: fHangarId,
@@ -1819,6 +1822,16 @@ export function ReferenceView() {
               </>
             ) : null}
 
+            {kind === "hangars" ? (
+              <label className="row" style={{ gap: 8, alignItems: "center" }}>
+                <input type="checkbox" checked={fIsPhysical} onChange={(e) => setFIsPhysical(e.target.checked)} />
+                <span>
+                  Физический ангар площадки
+                  <div className="muted small">Снимите флажок для внешнего MRO / стороннего контура (удобно для потребности на Гантте).</div>
+                </span>
+              </label>
+            ) : null}
+
             <BoolToggle value={fIsActive} onChange={setFIsActive} />
 
             <button
@@ -2037,6 +2050,9 @@ export function ReferenceView() {
                       ) : (
                         <span className="refStatus refStatusActive">Активен</span>
                       )}
+                      {kind === "hangars" && row.isPhysical === false ? (
+                        <span className="gpChip gpChipInfo" style={{ marginLeft: 6 }}>внешний MRO</span>
+                      ) : null}
                     </td>
                     {isAdmin ? (
                       <td className="refTechColumn">

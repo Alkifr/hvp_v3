@@ -126,6 +126,11 @@ enum SandboxStatus {
   ARCHIVED
 }
 
+enum ReportShareRole {
+  VIEWER
+  EDITOR
+}
+
 model Shift {
   id        String   @id @default(uuid())
   code      String   @unique
@@ -392,6 +397,8 @@ model User {
   ownedSandboxes     Sandbox[]       @relation("SandboxOwner")
   sandboxMemberships SandboxMember[]
   activityLogs       UserActivityLog[]
+  ownedReports       SavedReport[]   @relation("ReportOwner")
+  reportShares       SavedReportShare[]
 
   @@index([isActive])
 }
@@ -566,12 +573,14 @@ model EventType {
 }
 
 model Hangar {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  name      String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(uuid())
+  code       String   @unique
+  name       String
+  /// false = внешний MRO / «сторонний» контур (не физический ангар площадки)
+  isPhysical Boolean  @default(true)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   layouts HangarLayout[]
   events  MaintenanceEvent[]
@@ -1015,5 +1024,36 @@ model StandReservation {
   @@index([layoutId])
   @@index([standId, startAt, endAt])
   @@index([sandboxId])
+}
+
+/// Пользовательский отчёт конструктора аналитики (СКД-подобный конфиг в JSON).
+model SavedReport {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  ownerId     String
+  /// { dataset, fields[], filters, sort[], grain?, compareA?, compareB?, periodMode? }
+  config      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner  User               @relation("ReportOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  shares SavedReportShare[]
+
+  @@index([ownerId])
+  @@index([updatedAt])
+}
+
+model SavedReportShare {
+  reportId String
+  userId   String
+  role     ReportShareRole @default(VIEWER)
+  addedAt  DateTime        @default(now())
+
+  report SavedReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([reportId, userId])
+  @@index([userId])
 }
 

@@ -1,15 +1,40 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import * as XLSX from "xlsx";
 
 import { apiGet, apiPost, apiPut } from "../../lib/api";
+import { isValidDateInput } from "../../lib/dateInput";
+import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
+import { ToolbarPopover } from "../components/ToolbarPopover";
+
+const HANGAR_UI_LS_KEY = "hangarPlanning:hangarViewUi:v1";
+
+function safeReadHangarUi(): any | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = window.localStorage.getItem(HANGAR_UI_LS_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function safeWriteHangarUi(v: any) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(HANGAR_UI_LS_KEY, JSON.stringify(v));
+  } catch {
+    // ignore
+  }
+}
 
 type BodyType = "NARROW_BODY" | "WIDE_BODY" | null;
 type ViewMode = "range" | "moment";
 
-type Hangar = { id: string; name: string; code: string };
+type Hangar = { id: string; name: string; code: string; isPhysical?: boolean };
 type Layout = {
   id: string;
   name: string;
@@ -22,11 +47,15 @@ type SummaryEvent = {
   title: string;
   status: string;
   aircraftLabel: string;
+  aircraftId?: string | null;
   aircraftTypeId: string | null;
+  operatorId?: string | null;
   bodyType: BodyType;
+  eventTypeId?: string | null;
   eventTypeName: string | null;
   startAt: string;
   endAt: string;
+  hangarId?: string | null;
   reservation?: { layoutId: string; standId: string } | null;
 };
 type SummaryStand = {
@@ -79,6 +108,8 @@ type SummaryHangar = {
   eventCount: number;
   standCount: number;
   stands: SummaryStand[];
+  assignedEvents?: SummaryEvent[];
+  isPhysical?: boolean;
 };
 type SummaryResponse = {
   ok: boolean;
@@ -182,90 +213,157 @@ function sheetName(raw: string, used: Set<string>) {
   return name;
 }
 
-function ImportLayoutsPanel(props: { onDone: () => void }) {
-  const [raw, setRaw] = useState("");
-  const importM = useMutation({
-    mutationFn: () => apiPost<{ ok: boolean; hangars: number; layouts: number; stands: number }>("/api/ref/layouts/import", JSON.parse(raw)),
-    onSuccess: () => {
-      setRaw("");
-      props.onDone();
-    }
-  });
+type HangarEventFilters = {
+  hangarIds: string[];
+  operatorIds: string[];
+  aircraftTypeIds: string[];
+  aircraftIds: string[];
+  eventTypeIds: string[];
+};
 
-  const sample = `{
-  "hangars": [
-    {
-      "code": "SVO-1",
-      "name": "Шереметьево Ангар 1",
-      "layouts": [
-        {
-          "code": "BASE",
-          "name": "Базовая схема",
-          "widthMeters": 80,
-          "heightMeters": 50,
-          "obstacles": [{ "type": "rect", "x": 38, "y": 0, "w": 4, "h": 50 }],
-          "stands": [
-            { "code": "S1", "name": "Место 1", "bodyType": "NARROW_BODY", "x": 5, "y": 8, "w": 20, "h": 12 },
-            { "code": "S2", "name": "Место 2", "bodyType": "WIDE_BODY", "x": 48, "y": 8, "w": 26, "h": 16 }
-          ]
-        }
-      ]
-    }
-  ]
-}`;
+type RefOption = { id: string; label: string };
 
-  return (
-    <details className="hangarImport">
-      <summary>Импорт реальных схем JSON</summary>
-      <div className="hangarImportBody">
-        <p className="muted">
-          Демо-данные можно заменить пачкой: ангары обновляются по `code`, схемы по `hangar + code`, места по `layout + code`.
-        </p>
-        <textarea
-          className="refInput"
-          rows={8}
-          value={raw}
-          onChange={(e) => setRaw(e.target.value)}
-          placeholder={sample}
-        />
-        <div className="row">
-          <button className="btn btnPrimary" type="button" disabled={!raw.trim() || importM.isPending} onClick={() => importM.mutate()}>
-            {importM.isPending ? "Импорт…" : "Импортировать схемы"}
-          </button>
-          <button className="btn" type="button" onClick={() => setRaw(sample)}>
-            Вставить пример
-          </button>
-          {importM.isSuccess ? <span className="muted">Импорт завершён.</span> : null}
-        </div>
-        {importM.error ? <div className="errorMsg">{String((importM.error as any)?.message ?? importM.error)}</div> : null}
-      </div>
-    </details>
-  );
+function eventMatchesHangarFilters(e: SummaryEvent, filters: HangarEventFilters, skip?: keyof HangarEventFilters): boolean {
+  if (skip !== "hangarIds" && filters.hangarIds.length > 0) {
+    const id = e.hangarId ? String(e.hangarId) : "";
+    // Как на Гантте: события без ангара остаются видимыми при фильтре по ангару
+    if (id && !filters.hangarIds.includes(id)) return false;
+  }
+  if (skip !== "operatorIds" && filters.operatorIds.length > 0) {
+    const id = e.operatorId ? String(e.operatorId) : "";
+    if (!id || !filters.operatorIds.includes(id)) return false;
+  }
+  if (skip !== "aircraftTypeIds" && filters.aircraftTypeIds.length > 0) {
+    const id = e.aircraftTypeId ? String(e.aircraftTypeId) : "";
+    if (!id || !filters.aircraftTypeIds.includes(id)) return false;
+  }
+  if (skip !== "aircraftIds" && filters.aircraftIds.length > 0) {
+    const id = e.aircraftId ? String(e.aircraftId) : "";
+    if (!id || !filters.aircraftIds.includes(id)) return false;
+  }
+  if (skip !== "eventTypeIds" && filters.eventTypeIds.length > 0) {
+    const id = e.eventTypeId ? String(e.eventTypeId) : "";
+    if (!id || !filters.eventTypeIds.includes(id)) return false;
+  }
+  return true;
+}
+
+function readStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.map(String).filter(Boolean) : [];
 }
 
 export function HangarView() {
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
-  const [viewMode, setViewMode] = useState<ViewMode>("range");
-  const [fromDate, setFromDate] = useState(() => dayjs().format("YYYY-MM-DD"));
-  const [toDate, setToDate] = useState(() => dayjs().add(14, "day").format("YYYY-MM-DD"));
-  const [minuteOffset, setMinuteOffset] = useState(12 * 60);
+  const savedUi = useMemo(() => safeReadHangarUi(), []);
+  const initialFrom = useMemo(
+    () => (isValidDateInput(String(savedUi?.fromDate ?? "")) ? String(savedUi.fromDate) : dayjs().format("YYYY-MM-DD")),
+    [savedUi]
+  );
+  const initialTo = useMemo(
+    () => (isValidDateInput(String(savedUi?.toDate ?? "")) ? String(savedUi.toDate) : dayjs().add(14, "day").format("YYYY-MM-DD")),
+    [savedUi]
+  );
+  const [viewMode, setViewMode] = useState<ViewMode>(() => (savedUi?.viewMode === "moment" ? "moment" : "range"));
+  const [fromDateInput, setFromDateInput] = useState(initialFrom);
+  const [toDateInput, setToDateInput] = useState(initialTo);
+  const fromAppliedRef = useRef(initialFrom);
+  const toAppliedRef = useRef(initialTo);
+  if (isValidDateInput(fromDateInput)) fromAppliedRef.current = fromDateInput;
+  if (isValidDateInput(toDateInput)) toAppliedRef.current = toDateInput;
+  const fromDateApplied = isValidDateInput(fromDateInput) ? fromDateInput : fromAppliedRef.current;
+  const toDateApplied = isValidDateInput(toDateInput) ? toDateInput : toAppliedRef.current;
+  const [minuteOffset, setMinuteOffset] = useState(() => {
+    const raw = Number(savedUi?.minuteOffset);
+    return Number.isFinite(raw) ? raw : 12 * 60;
+  });
   const [expandedHangarId, setExpandedHangarId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [layoutIdByHangarId, setLayoutIdByHangarId] = useState<Record<string, string>>({});
+  const [layoutIdByHangarId, setLayoutIdByHangarId] = useState<Record<string, string>>(() => {
+    const raw = savedUi?.layoutIdByHangarId;
+    return raw && typeof raw === "object" ? Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v)])) : {};
+  });
+  const [filterHangarIds, setFilterHangarIds] = useState<string[]>(() => readStringArray(savedUi?.filterHangarIds));
+  const [filterOperatorIds, setFilterOperatorIds] = useState<string[]>(() => readStringArray(savedUi?.filterOperatorIds));
+  const [filterAircraftTypeIds, setFilterAircraftTypeIds] = useState<string[]>(() => readStringArray(savedUi?.filterAircraftTypeIds));
+  const [filterAircraftIds, setFilterAircraftIds] = useState<string[]>(() => readStringArray(savedUi?.filterAircraftIds));
+  const [filterEventTypeIds, setFilterEventTypeIds] = useState<string[]>(() => readStringArray(savedUi?.filterEventTypeIds));
   const [draft, setDraft] = useState<Map<string, { layoutId: string; standId: string }>>(new Map());
   const [fitResult, setFitResult] = useState<AutoFitResponse | null>(null);
   const [suggestResult, setSuggestResult] = useState<SuggestPlacementResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const from = useMemo(() => dayjs(fromDate).startOf("day"), [fromDate]);
-  const to = useMemo(() => dayjs(toDate).endOf("day"), [toDate]);
+  const from = useMemo(() => dayjs(fromDateApplied).startOf("day"), [fromDateApplied]);
+  const to = useMemo(() => dayjs(toDateApplied).endOf("day"), [toDateApplied]);
+  const periodOk = from.isValid() && to.isValid() && to.valueOf() > from.valueOf();
   const totalMinutes = Math.max(0, to.diff(from, "minute"));
   const effectiveMinuteOffset = Math.min(minuteOffset, totalMinutes);
   const at = useMemo(() => from.add(effectiveMinuteOffset, "minute"), [from, effectiveMinuteOffset]);
 
+  useEffect(() => {
+    safeWriteHangarUi({
+      fromDate: fromDateApplied,
+      toDate: toDateApplied,
+      viewMode,
+      minuteOffset: effectiveMinuteOffset,
+      layoutIdByHangarId,
+      filterHangarIds,
+      filterOperatorIds,
+      filterAircraftTypeIds,
+      filterAircraftIds,
+      filterEventTypeIds
+    });
+  }, [
+    fromDateApplied,
+    toDateApplied,
+    viewMode,
+    effectiveMinuteOffset,
+    layoutIdByHangarId,
+    filterHangarIds,
+    filterOperatorIds,
+    filterAircraftTypeIds,
+    filterAircraftIds,
+    filterEventTypeIds
+  ]);
+
   const hangarsQ = useQuery({ queryKey: ["ref", "hangars"], queryFn: () => apiGet<Hangar[]>("/api/ref/hangars") });
-  const layoutsAllQ = useQuery({ queryKey: ["ref", "layouts", "all"], queryFn: () => apiGet<Layout[]>("/api/ref/layouts") });
+  const layoutsAllQ = useQuery({
+    queryKey: ["ref", "layouts", "all", "active"],
+    queryFn: () => apiGet<Layout[]>("/api/ref/layouts?activeOnly=1")
+  });
+  const operatorsQ = useQuery({
+    queryKey: ["ref", "operators"],
+    queryFn: () => apiGet<Array<{ id: string; code?: string | null; name: string }>>("/api/ref/operators")
+  });
+  const aircraftTypesQ = useQuery({
+    queryKey: ["ref", "aircraft-types"],
+    queryFn: () => apiGet<Array<{ id: string; name: string; icaoType?: string | null }>>("/api/ref/aircraft-types")
+  });
+  const aircraftQ = useQuery({
+    queryKey: ["ref", "aircraft"],
+    queryFn: () => apiGet<Array<{ id: string; tailNumber: string }>>("/api/ref/aircraft")
+  });
+  const eventTypesQ = useQuery({
+    queryKey: ["ref", "event-types"],
+    queryFn: () => apiGet<Array<{ id: string; name: string }>>("/api/ref/event-types")
+  });
+
+  const eventFilters = useMemo<HangarEventFilters>(
+    () => ({
+      hangarIds: filterHangarIds,
+      operatorIds: filterOperatorIds,
+      aircraftTypeIds: filterAircraftTypeIds,
+      aircraftIds: filterAircraftIds,
+      eventTypeIds: filterEventTypeIds
+    }),
+    [filterHangarIds, filterOperatorIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds]
+  );
+  const filtersActive =
+    filterHangarIds.length > 0 ||
+    filterOperatorIds.length > 0 ||
+    filterAircraftTypeIds.length > 0 ||
+    filterAircraftIds.length > 0 ||
+    filterEventTypeIds.length > 0;
 
   const hangars = hangarsQ.data ?? [];
   const layoutsByHangar = useMemo(() => {
@@ -291,13 +389,13 @@ export function HangarView() {
   const selectedLayoutIds = useMemo(() => Object.values(layoutIdPerHangar).filter(Boolean), [layoutIdPerHangar]);
   const summaryQ = useQuery({
     queryKey: ["hangar-planning", "summary", from.toISOString(), to.toISOString(), selectedLayoutIds.join(",")],
-    enabled: selectedLayoutIds.length > 0,
+    enabled: periodOk && hangarsQ.isSuccess && layoutsAllQ.isSuccess,
     queryFn: () => {
       const params = new URLSearchParams({
         from: from.toISOString(),
-        to: to.toISOString(),
-        layoutIds: selectedLayoutIds.join(",")
+        to: to.toISOString()
       });
+      if (selectedLayoutIds.length > 0) params.set("layoutIds", selectedLayoutIds.join(","));
       return apiGet<SummaryResponse>(`/api/hangar-planning/summary?${params.toString()}`);
     },
     placeholderData: (prev) => prev
@@ -306,28 +404,175 @@ export function HangarView() {
   const summary = useMemo<SummaryResponse | undefined>(() => {
     const data = summaryQ.data;
     if (!data) return data;
-    if (viewMode !== "moment") return data;
 
-    const atMs = at.valueOf();
+    const periodMs = Math.max(1, to.valueOf() - from.valueOf());
+    const match = (e: SummaryEvent) => eventMatchesHangarFilters(e, eventFilters);
+
+    const hangars = data.hangars
+      .filter((h) => eventFilters.hangarIds.length === 0 || eventFilters.hangarIds.includes(h.hangar.id))
+      .map((h) => {
+      let occupiedAtCount = 0;
+      const stands = h.stands.map((s) => {
+        const reservations = s.reservations.filter(match);
+        const occupiedMs = reservations.reduce((sum, e) => {
+          const start = Math.max(dayjs(e.startAt).valueOf(), from.valueOf());
+          const end = Math.min(dayjs(e.endAt).valueOf(), to.valueOf());
+          return sum + Math.max(0, end - start);
+        }, 0);
+        const occupiedAt =
+          viewMode === "moment"
+            ? reservations.find((r) => dayjs(r.startAt).valueOf() <= at.valueOf() && dayjs(r.endAt).valueOf() > at.valueOf()) ?? null
+            : s.occupiedAt && match(s.occupiedAt)
+              ? s.occupiedAt
+              : null;
+        if (occupiedAt) occupiedAtCount += 1;
+        return {
+          ...s,
+          reservations,
+          occupiedAt,
+          utilizationPct: Math.min(100, (occupiedMs / periodMs) * 100)
+        };
+      });
+      const assignedEvents = (h.assignedEvents ?? []).filter(match);
+      const reservedEvents = stands.flatMap((s) => s.reservations);
+      const eventIds = new Set<string>();
+      for (const e of reservedEvents) eventIds.add(e.id);
+      for (const e of assignedEvents) eventIds.add(e.id);
+      return {
+        ...h,
+        stands,
+        assignedEvents,
+        eventCount: eventIds.size,
+        occupiedAtCount,
+        freeAtCount: viewMode === "moment" ? Math.max(0, h.standCount - occupiedAtCount) : h.freeAtCount
+      };
+    });
+
+    const unplaced = data.unplaced.filter(match);
+    const incompatible = (data.incompatible ?? []).filter((x) => match(x.event));
+    const eventIds = new Set<string>();
+    for (const h of hangars) {
+      for (const s of h.stands) for (const e of s.reservations) eventIds.add(e.id);
+      for (const e of h.assignedEvents ?? []) eventIds.add(e.id);
+    }
+    for (const e of unplaced) eventIds.add(e.id);
+
     return {
       ...data,
-      hangars: data.hangars.map((h) => {
-        let occupiedAtCount = 0;
-        const stands = h.stands.map((s) => {
-          const occupiedAt =
-            s.reservations.find((r) => dayjs(r.startAt).valueOf() <= atMs && dayjs(r.endAt).valueOf() > atMs) ?? null;
-          if (occupiedAt) occupiedAtCount += 1;
-          return { ...s, occupiedAt };
-        });
-        return {
-          ...h,
-          occupiedAtCount,
-          freeAtCount: Math.max(0, h.standCount - occupiedAtCount),
-          stands
-        };
-      })
+      hangars,
+      unplaced,
+      incompatible,
+      summary: {
+        events: eventIds.size,
+        unplaced: unplaced.length,
+        incompatible: incompatible.filter((x) => x.suitableStandCount === 0).length
+      }
     };
-  }, [summaryQ.data, viewMode, at]);
+  }, [summaryQ.data, viewMode, at, from, to, eventFilters]);
+
+  const allSummaryEvents = useMemo(() => {
+    const data = summaryQ.data;
+    if (!data) return [] as SummaryEvent[];
+    const out: SummaryEvent[] = [...data.unplaced];
+    for (const h of data.hangars) {
+      for (const s of h.stands) out.push(...s.reservations);
+      out.push(...(h.assignedEvents ?? []));
+    }
+    return out;
+  }, [summaryQ.data]);
+
+  const filterOptions = useMemo(() => {
+    const hangarIdSet = new Set<string>();
+    const operatorIdSet = new Set<string>();
+    const aircraftTypeIdSet = new Set<string>();
+    const aircraftIdSet = new Set<string>();
+    const eventTypeIdSet = new Set<string>();
+
+    for (const e of allSummaryEvents) {
+      if (eventMatchesHangarFilters(e, eventFilters, "hangarIds") && e.hangarId) {
+        hangarIdSet.add(String(e.hangarId));
+      }
+      if (eventMatchesHangarFilters(e, eventFilters, "operatorIds") && e.operatorId) {
+        operatorIdSet.add(String(e.operatorId));
+      }
+      if (eventMatchesHangarFilters(e, eventFilters, "aircraftTypeIds") && e.aircraftTypeId) {
+        aircraftTypeIdSet.add(String(e.aircraftTypeId));
+      }
+      if (eventMatchesHangarFilters(e, eventFilters, "aircraftIds") && e.aircraftId) {
+        aircraftIdSet.add(String(e.aircraftId));
+      }
+      if (eventMatchesHangarFilters(e, eventFilters, "eventTypeIds") && e.eventTypeId) {
+        eventTypeIdSet.add(String(e.eventTypeId));
+      }
+    }
+
+    // Ангары со схемами тоже показываем в фильтре, даже без событий в периоде
+    for (const h of summaryQ.data?.hangars ?? []) hangarIdSet.add(h.hangar.id);
+
+    const hangars: RefOption[] = (hangarsQ.data ?? [])
+      .filter((h) => allSummaryEvents.length === 0 || hangarIdSet.has(h.id) || filterHangarIds.includes(h.id))
+      .map((h) => ({
+        id: h.id,
+        label: h.isPhysical === false ? `${h.name} (MRO)` : h.name
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    const operators: RefOption[] = (operatorsQ.data ?? [])
+      .filter((o) => allSummaryEvents.length === 0 || operatorIdSet.has(o.id))
+      .map((o) => ({ id: o.id, label: o.code ? `${o.code} • ${o.name}` : o.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    const aircraftTypes: RefOption[] = (aircraftTypesQ.data ?? [])
+      .filter((t) => allSummaryEvents.length === 0 || aircraftTypeIdSet.has(t.id))
+      .map((t) => ({ id: t.id, label: t.icaoType ? `${t.icaoType} • ${t.name}` : t.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    const aircraft: RefOption[] = (aircraftQ.data ?? [])
+      .filter((a) => allSummaryEvents.length === 0 || aircraftIdSet.has(a.id))
+      .map((a) => ({ id: a.id, label: a.tailNumber }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    const eventTypes: RefOption[] = (eventTypesQ.data ?? [])
+      .filter((t) => allSummaryEvents.length === 0 || eventTypeIdSet.has(t.id))
+      .map((t) => ({ id: t.id, label: t.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    return { hangars, operators, aircraftTypes, aircraft, eventTypes };
+  }, [
+    allSummaryEvents,
+    eventFilters,
+    filterHangarIds,
+    hangarsQ.data,
+    summaryQ.data?.hangars,
+    operatorsQ.data,
+    aircraftTypesQ.data,
+    aircraftQ.data,
+    eventTypesQ.data
+  ]);
+
+  useEffect(() => {
+    if (allSummaryEvents.length === 0 && (summaryQ.data?.hangars.length ?? 0) === 0) return;
+    const prune = (selected: string[], available: Set<string>) => selected.filter((id) => available.has(id));
+    const nextHangars = prune(filterHangarIds, new Set(filterOptions.hangars.map((o) => o.id)));
+    if (nextHangars.length !== filterHangarIds.length) setFilterHangarIds(nextHangars);
+    const nextOps = prune(filterOperatorIds, new Set(filterOptions.operators.map((o) => o.id)));
+    if (nextOps.length !== filterOperatorIds.length) setFilterOperatorIds(nextOps);
+    const nextTypes = prune(filterAircraftTypeIds, new Set(filterOptions.aircraftTypes.map((o) => o.id)));
+    if (nextTypes.length !== filterAircraftTypeIds.length) setFilterAircraftTypeIds(nextTypes);
+    const nextAircraft = prune(filterAircraftIds, new Set(filterOptions.aircraft.map((o) => o.id)));
+    if (nextAircraft.length !== filterAircraftIds.length) setFilterAircraftIds(nextAircraft);
+    const nextEventTypes = prune(filterEventTypeIds, new Set(filterOptions.eventTypes.map((o) => o.id)));
+    if (nextEventTypes.length !== filterEventTypeIds.length) setFilterEventTypeIds(nextEventTypes);
+  }, [
+    filterOptions,
+    allSummaryEvents.length,
+    summaryQ.data?.hangars.length,
+    filterHangarIds,
+    filterOperatorIds,
+    filterAircraftTypeIds,
+    filterAircraftIds,
+    filterEventTypeIds
+  ]);
   const selectedEvent = useMemo(() => {
     if (!selectedEventId) return null;
     const all = [...(summary?.unplaced ?? []), ...(summary?.hangars ?? []).flatMap((h) => h.stands.flatMap((s) => s.reservations))];
@@ -495,7 +740,7 @@ export function HangarView() {
       if (rows.length > 0) appendSheet(hangar.hangar.name, rows, used);
     }
     if (efficiencyReport.eventRows.length > 0) appendSheet("Детализация событий", efficiencyReport.eventRows, used);
-    XLSX.writeFile(wb, `hangar-efficiency-${fromDate}-${toDate}.xlsx`);
+    XLSX.writeFile(wb, `hangar-efficiency-${fromDateApplied}-${toDateApplied}.xlsx`);
   };
 
   const reserveM = useMutation({
@@ -609,6 +854,31 @@ export function HangarView() {
   };
 
   const renderScheme = (hangar: SummaryHangar, compact: boolean) => {
+    if (!hangar.layout.id || hangar.standCount === 0) {
+      const assigned = hangar.assignedEvents ?? [];
+      return (
+        <div className="hangarNoLayoutBox">
+          <div className="muted small">
+            {hangar.isPhysical === false
+              ? "Внешний MRO / сторонний контур — схемы расстановки нет. События видны для оценки потребности."
+              : "Нет схемы расстановки. События с привязкой к ангару без мест:"}
+          </div>
+          {assigned.length === 0 ? (
+            <div className="muted small">Нет событий в выбранном периоде.</div>
+          ) : (
+            <div className="hangarEventList" style={{ marginTop: 8 }}>
+              {assigned.map((event) => (
+                <div key={`${event.id}-${event.startAt}`} className="hangarEventItem" style={{ cursor: "default" }}>
+                  <b>{event.aircraftLabel}</b>
+                  <span>{event.title}</span>
+                  <small>{formatEventPeriod(event)} · {bodyTypeLabel(event.bodyType)}</small>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
     const width = hangar.layout.widthMeters ?? 80;
     const height = hangar.layout.heightMeters ?? 50;
     return (
@@ -662,7 +932,14 @@ export function HangarView() {
   };
 
   const renderHangarCard = (hangar: SummaryHangar, expanded: boolean) => {
-    const layouts = layoutsByHangar[hangar.hangar.id] ?? [];
+    const layoutsFromRef = layoutsByHangar[hangar.hangar.id] ?? [];
+    const layouts =
+      layoutsFromRef.length > 0
+        ? layoutsFromRef
+        : hangar.layout.id
+          ? [{ id: hangar.layout.id, name: hangar.layout.name, code: hangar.layout.code, hangarId: hangar.hangar.id }]
+          : [];
+    const hasLayout = Boolean(hangar.layout.id) || layouts.length > 0;
     const cap = hangar.layout.capacityByAircraftTypeRule;
     const efficiencyTooltip =
       `Эффективность активной схемы за выбранный период.\n` +
@@ -675,9 +952,10 @@ export function HangarView() {
         key={hangar.hangar.id}
         className={expanded ? "hangarPlanCard hangarPlanCardExpanded" : "hangarPlanCard"}
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("text/plain")) e.preventDefault();
+          if (hasLayout && e.dataTransfer.types.includes("text/plain")) e.preventDefault();
         }}
         onDrop={(e) => {
+          if (!hasLayout) return;
           const eventId = e.dataTransfer.getData("text/plain");
           if (!eventId) return;
           e.preventDefault();
@@ -686,74 +964,96 @@ export function HangarView() {
       >
         <header className="hangarPlanCardHead">
           <div>
-            <div className="hangarPlanTitle">{hangar.hangar.name}</div>
+            <div className="hangarPlanTitle">
+              {hangar.hangar.name}
+              {hangar.isPhysical === false || hangar.hangar.isPhysical === false ? (
+                <span className="gpChip gpChipInfo" style={{ marginLeft: 8, fontSize: 11 }}>внешний MRO</span>
+              ) : null}
+            </div>
             <div className="muted small">
-              {hangar.hangar.code} · {hangar.layout.name} · мест: {hangar.standCount}
+              {hangar.hangar.code}
+              {hasLayout ? ` · ${hangar.layout.name} · мест: ${hangar.standCount}` : " · без схемы расстановки"}
             </div>
           </div>
-          <div className="hangarLoadBadge" title={efficiencyTooltip} aria-label={efficiencyTooltip}>
-            {hangar.utilizationPct.toFixed(0)}%
+          <div className="hangarLoadBadge" title={hasLayout ? efficiencyTooltip : "Без схемы эффективность не считается"} aria-label={efficiencyTooltip}>
+            {hasLayout ? `${hangar.utilizationPct.toFixed(0)}%` : "—"}
           </div>
         </header>
-        <div className="row" style={{ gap: 8, alignItems: "end" }}>
-          <label className="refLabel" style={{ flex: "1 1 auto", margin: 0 }}>
-            <span>Схема для просмотра</span>
-            <select
-              className="refInput"
-              value={hangar.layout.id}
-              onChange={(e) => {
-                setLayoutIdByHangarId((prev) => ({ ...prev, [hangar.hangar.id]: e.target.value }));
-                setDraft(new Map());
-                setFitResult(null);
-                setSuggestResult(null);
-              }}
+        {hasLayout ? (
+          <div className="row" style={{ gap: 8, alignItems: "end" }}>
+            <label className="refLabel" style={{ flex: "1 1 auto", margin: 0 }}>
+              <span>Схема для просмотра</span>
+              <select
+                className="refInput"
+                value={hangar.layout.id}
+                onChange={(e) => {
+                  setLayoutIdByHangarId((prev) => ({ ...prev, [hangar.hangar.id]: e.target.value }));
+                  setDraft(new Map());
+                  setFitResult(null);
+                  setSuggestResult(null);
+                }}
+              >
+                {layouts.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}{l.capacitySummary ? ` · ${l.capacitySummary}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="btn btnPrimary"
+              type="button"
+              disabled={!selectedEventId || suggestM.isPending}
+              onClick={() => placeInHangar(hangar)}
+              title="Подобрать подходящую схему и место внутри ангара"
             >
-              {layouts.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}{l.capacitySummary ? ` · ${l.capacitySummary}` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            className="btn btnPrimary"
-            type="button"
-            disabled={!selectedEventId || suggestM.isPending}
-            onClick={() => placeInHangar(hangar)}
-            title="Подобрать подходящую схему и место внутри ангара"
-          >
-            {suggestM.isPending ? "Подбор…" : "Разместить в ангар"}
-          </button>
-        </div>
+              {suggestM.isPending ? "Подбор…" : "Разместить в ангар"}
+            </button>
+          </div>
+        ) : null}
         <div className="hangarMetrics">
           <span>Событий: <b>{hangar.eventCount}</b></span>
-          <span>{viewMode === "moment" ? <>Свободно сейчас: <b>{hangar.freeAtCount ?? "—"}</b></> : <>Занят по времени: <b>{hangar.timeUtilizationPct.toFixed(0)}%</b></>}</span>
-          <span>Типиз./люб.: <b>{cap?.specific ?? 0}/{cap?.any ?? hangar.standCount}</b></span>
-          <span>ВС-часы: <b>{hangar.aircraftHours.toFixed(0)}</b></span>
-        </div>
-        <div className="hangarEfficiencyTimeline" aria-label={`Эффективность использования ${hangar.hangar.name}`}>
-          {(hangar.efficiencyTimeline ?? []).length === 0 ? (
-            <div className="hangarTimelineEmpty">Нет занятости в выбранном периоде</div>
+          {hasLayout ? (
+            <>
+              <span>{viewMode === "moment" ? <>Свободно сейчас: <b>{hangar.freeAtCount ?? "—"}</b></> : <>Занят по времени: <b>{hangar.timeUtilizationPct.toFixed(0)}%</b></>}</span>
+              <span>Типиз./люб.: <b>{cap?.specific ?? 0}/{cap?.any ?? hangar.standCount}</b></span>
+              <span>ВС-часы: <b>{hangar.aircraftHours.toFixed(0)}</b></span>
+            </>
           ) : (
-            hangar.efficiencyTimeline.map((segment, idx) => {
-              const left = timelineLeft(from, to, segment.startAt);
-              const right = timelineLeft(from, to, segment.endAt);
-              const width = Math.max(0.6, right - left);
-              return (
-                <div
-                  key={`${segment.startAt}-${idx}`}
-                  className={segment.conflict ? "hangarTimelineSegment hangarTimelineSegmentConflict" : "hangarTimelineSegment"}
-                  style={{ left: `${left}%`, width: `${width}%`, opacity: Math.min(1, Math.max(0.35, segment.utilizationPct / 100)) }}
-                  title={`${dayjs(segment.startAt).format("DD.MM HH:mm")} – ${dayjs(segment.endAt).format("DD.MM HH:mm")} · ${segment.layoutName ?? "без схемы"} · ${segment.occupiedCount}/${segment.capacity || "?"}`}
-                />
-              );
-            })
+            <span className="muted">Потребность на стороне (без мест стоянки)</span>
           )}
         </div>
-        <div className="hangarTimelineLegend">
-          <span>Эффективность: <b>{hangar.utilizationPct.toFixed(0)}%</b></span>
-          {hangar.conflictSegments > 0 ? <span className="hangarTimelineConflictText">конфликты схем: {hangar.conflictSegments}</span> : null}
-        </div>
+        {hasLayout ? (
+          <div className="hangarEfficiencyTimeline" aria-label={`Эффективность использования ${hangar.hangar.name}`}>
+            {(hangar.efficiencyTimeline ?? []).length === 0 ? (
+              <div className="hangarTimelineEmpty">Нет занятости в выбранном периоде</div>
+            ) : (
+              hangar.efficiencyTimeline.map((segment, idx) => {
+                const left = timelineLeft(from, to, segment.startAt);
+                const right = timelineLeft(from, to, segment.endAt);
+                const width = Math.max(0.6, right - left);
+                return (
+                  <div
+                    key={`${segment.startAt}-${idx}`}
+                    className={segment.conflict ? "hangarTimelineSegment hangarTimelineSegmentConflict" : "hangarTimelineSegment"}
+                    style={{ left: `${left}%`, width: `${width}%`, opacity: Math.min(1, Math.max(0.35, segment.utilizationPct / 100)) }}
+                    title={`${dayjs(segment.startAt).format("DD.MM HH:mm")} – ${dayjs(segment.endAt).format("DD.MM HH:mm")} · ${segment.layoutName ?? "без схемы"} · ${segment.occupiedCount}/${segment.capacity || "?"}`}
+                  />
+                );
+              })
+            )}
+          </div>
+        ) : null}
+        {hasLayout && hangar.conflictSegments > 0 ? (
+          <div className="hangarTimelineLegend">
+            <span>Эффективность: <b>{hangar.utilizationPct.toFixed(0)}%</b></span>
+            <span className="hangarTimelineConflictText">конфликты схем: {hangar.conflictSegments}</span>
+          </div>
+        ) : hasLayout ? (
+          <div className="hangarTimelineLegend">
+            <span>Эффективность: <b>{hangar.utilizationPct.toFixed(0)}%</b></span>
+          </div>
+        ) : null}
         <div className="hangarSchemeWrap">{renderScheme(hangar, !expanded)}</div>
       </section>
     );
@@ -761,6 +1061,24 @@ export function HangarView() {
 
   const expanded = expandedHangarId ? summary?.hangars.find((h) => h.hangar.id === expandedHangarId) ?? null : null;
   const draftCount = draft.size;
+  const periodChipLabel = `${dayjs(fromDateApplied).format("DD.MM.YYYY")} – ${dayjs(toDateApplied).format("DD.MM.YYYY")}`;
+
+  const applyPeriodPreset = (days: number) => {
+    const start = dayjs();
+    const nextFrom = start.format("YYYY-MM-DD");
+    const nextTo = start.add(Number(days) - 1, "day").format("YYYY-MM-DD");
+    setFromDateInput(nextFrom);
+    setToDateInput(nextTo);
+    fromAppliedRef.current = nextFrom;
+    toAppliedRef.current = nextTo;
+    setMinuteOffset(12 * 60);
+  };
+
+  const clearDraft = () => {
+    setDraft(new Map());
+    setFitResult(null);
+    setSuggestResult(null);
+  };
 
   return (
     <div className="hangarPlanPage">
@@ -780,64 +1098,249 @@ export function HangarView() {
         </div>
       </section>
 
-      <section className="hangarControls">
-        <label className="refLabel">
-          <span>Режим</span>
-          <select className="refInput" value={viewMode} onChange={(e) => setViewMode(e.target.value as ViewMode)}>
-            <option value="range">Диапазон</option>
-            <option value="moment">Момент времени</option>
-          </select>
-        </label>
-        <label className="refLabel">
-          <span>С</span>
-          <input className="refInput" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-        </label>
-        <label className="refLabel">
-          <span>По</span>
-          <input className="refInput" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-        </label>
-        <div className="hangarPresetRow">
-          {[
-            ["сутки", 1],
-            ["неделя", 7],
-            ["месяц", 30],
-            ["квартал", 90],
-            ["год", 365]
-          ].map(([label, days]) => (
+      <div className="card hangarFilterPanel">
+        <div className="ganttPanelHeader">
+          <div className="ganttPanelTitle">
+            <strong>Фильтры</strong>
+            <span className="muted ganttPanelPeriod">
+              {periodChipLabel}
+              <span className="ganttPanelDot" aria-hidden="true">·</span>
+              {viewMode === "range" ? "Диапазон" : "Момент времени"}
+              {filtersActive ? (
+                <>
+                  <span className="ganttPanelDot" aria-hidden="true">·</span>
+                  фильтры
+                </>
+              ) : null}
+              {draftCount > 0 ? (
+                <>
+                  <span className="ganttPanelDot" aria-hidden="true">·</span>
+                  draft: {draftCount}
+                </>
+              ) : null}
+            </span>
+          </div>
+          <div className="ganttPanelActions">
             <button
-              key={String(label)}
-              className="btn btnSmall"
               type="button"
-              onClick={() => {
-                const start = dayjs();
-                setFromDate(start.format("YYYY-MM-DD"));
-                setToDate(start.add(Number(days) - 1, "day").format("YYYY-MM-DD"));
-                setMinuteOffset(12 * 60);
-              }}
+              className="btn ganttIconBtn"
+              onClick={exportEfficiencyXlsx}
+              disabled={efficiencyReport.pivotRows.length === 0}
+              title="Выгрузить расчёт эффективности использования ангаров в Excel"
+              aria-label="Скачать отчёт эффективности XLSX"
             >
-              {label}
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M5 2h7l4 4v12H5z" />
+                <path d="M12 2v4h4" />
+                <path d="M7 14l2-4" />
+                <path d="M11 14l-2-4" />
+                <path d="M12.5 14h2.5" />
+                <path d="M12.5 10h2.5" />
+              </svg>
             </button>
-          ))}
+          </div>
         </div>
-        <button className="btn" type="button" onClick={() => autoFitM.mutate()} disabled={!summary || autoFitM.isPending}>
-          {autoFitM.isPending ? "Подбор…" : "Подобрать схемы"}
-        </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={exportEfficiencyXlsx}
-          disabled={efficiencyReport.pivotRows.length === 0}
-          title="Выгрузить детальный расчёт эффективности использования ангаров в Excel"
-        >
-          Эффективность XLSX
-        </button>
-        <button className="btn btnPrimary" type="button" onClick={applyDraft} disabled={draftCount === 0 || reserveM.isPending}>
-          Применить draft ({draftCount})
-        </button>
-        <button className="btn" type="button" onClick={() => { setDraft(new Map()); setFitResult(null); setSuggestResult(null); }} disabled={draftCount === 0}>
-          Очистить draft
-        </button>
-      </section>
+
+        <div className="ganttToolbar">
+          <div className="ganttToolbarGroup">
+            <span className="tgLabel">Вид</span>
+            <label className="tgField" title="Режим просмотра загрузки">
+              <span className="tgFieldLabel">Режим</span>
+              <select value={viewMode} onChange={(e) => setViewMode(e.target.value as ViewMode)}>
+                <option value="range">Диапазон</option>
+                <option value="moment">Момент времени</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="ganttToolbarGroup">
+            <span className="tgLabel">Период</span>
+            <ToolbarPopover label={periodChipLabel} title="Период просмотра ангаров" panelClassName="tbPopoverPeriod">
+              <div className="tbPopoverPeriodBody">
+                <div className="tgPresets" role="group" aria-label="Быстрый выбор периода">
+                  {[
+                    ["сутки", 1],
+                    ["неделя", 7],
+                    ["месяц", 30],
+                    ["квартал", 90],
+                    ["год", 365]
+                  ].map(([label, days]) => (
+                    <button
+                      key={String(label)}
+                      className="btn btnGhost"
+                      type="button"
+                      onClick={() => applyPeriodPreset(Number(days))}
+                      title={`${label} от сегодня`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="tbPopoverPeriodDates">
+                  <label className="tgField">
+                    <span className="tgFieldLabel">с</span>
+                    <input
+                      type="date"
+                      value={fromDateInput}
+                      onChange={(e) => setFromDateInput(e.target.value)}
+                      style={{ width: 150 }}
+                    />
+                  </label>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">по</span>
+                    <input
+                      type="date"
+                      value={toDateInput}
+                      onChange={(e) => setToDateInput(e.target.value)}
+                      style={{ width: 150 }}
+                    />
+                  </label>
+                </div>
+              </div>
+            </ToolbarPopover>
+          </div>
+
+          <div className="ganttToolbarGroup">
+            <span className="tgLabel">Фильтры</span>
+            <label className="tgField">
+              <span className="tgFieldLabel">Ангар</span>
+              <MultiSelectDropdown
+                options={filterOptions.hangars}
+                value={filterHangarIds}
+                onChange={setFilterHangarIds}
+                placeholder="все"
+                width={150}
+                maxHeight={320}
+                searchable
+                searchPlaceholder="Найти ангар"
+                compact
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Оператор</span>
+              <MultiSelectDropdown
+                options={filterOptions.operators}
+                value={filterOperatorIds}
+                onChange={setFilterOperatorIds}
+                placeholder="все"
+                width={160}
+                maxHeight={320}
+                searchable
+                searchPlaceholder="Найти оператора"
+                compact
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Тип ВС</span>
+              <MultiSelectDropdown
+                options={filterOptions.aircraftTypes}
+                value={filterAircraftTypeIds}
+                onChange={setFilterAircraftTypeIds}
+                placeholder="все"
+                width={150}
+                maxHeight={320}
+                searchable
+                searchPlaceholder="Найти тип ВС"
+                compact
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Борт</span>
+              <MultiSelectDropdown
+                options={filterOptions.aircraft}
+                value={filterAircraftIds}
+                onChange={setFilterAircraftIds}
+                placeholder="все"
+                width={140}
+                maxHeight={320}
+                searchable
+                searchPlaceholder="Найти борт"
+                compact
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Тип события</span>
+              <MultiSelectDropdown
+                options={filterOptions.eventTypes}
+                value={filterEventTypeIds}
+                onChange={setFilterEventTypeIds}
+                placeholder="все"
+                width={160}
+                maxHeight={320}
+                searchable
+                searchPlaceholder="Найти тип события"
+                compact
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="hangarToolbarActions">
+          <button
+            type="button"
+            className="btn ganttIconBtn"
+            onClick={() => {
+              setFilterHangarIds([]);
+              setFilterOperatorIds([]);
+              setFilterAircraftTypeIds([]);
+              setFilterAircraftIds([]);
+              setFilterEventTypeIds([]);
+            }}
+            disabled={!filtersActive}
+            title="Сбросить фильтры событий"
+            aria-label="Сбросить фильтры"
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 10a6 6 0 0 1 10.2-4.3" />
+              <path d="M14 2v4h-4" />
+              <path d="M16 10a6 6 0 0 1-10.2 4.3" />
+              <path d="M6 18v-4h4" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="btn ganttIconBtn"
+            onClick={() => autoFitM.mutate()}
+            disabled={!summary || autoFitM.isPending}
+            title={autoFitM.isPending ? "Подбор схем…" : "Подобрать схемы для неразмещённых событий"}
+            aria-label="Подобрать схемы"
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 4h5v5H4z" />
+              <path d="M11 4h5v5h-5z" />
+              <path d="M4 11h5v5H4z" />
+              <path d="M12.5 11.5l2 2 3.5-4" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="btn ganttIconBtn"
+            onClick={clearDraft}
+            disabled={draftCount === 0}
+            title="Очистить draft размещений"
+            aria-label="Очистить draft"
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 6h12" />
+              <path d="M8 6V4h4v2" />
+              <path d="M6.5 6l.5 10h6l.5-10" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className={`btn ganttIconBtn${draftCount > 0 ? " btnPrimary" : ""}`}
+            onClick={applyDraft}
+            disabled={draftCount === 0 || reserveM.isPending}
+            title={reserveM.isPending ? "Применение…" : `Применить draft (${draftCount})`}
+            aria-label={`Применить draft${draftCount ? `, ${draftCount}` : ""}`}
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 10.5l4 4 8-9" />
+            </svg>
+            {draftCount > 0 ? <span className="hangarIconBadge">{draftCount}</span> : null}
+          </button>
+        </div>
+      </div>
 
       {viewMode === "moment" ? (
         <section className="hangarSliderCard">
@@ -855,8 +1358,6 @@ export function HangarView() {
           />
         </section>
       ) : null}
-
-      <ImportLayoutsPanel onDone={() => { void qc.invalidateQueries({ queryKey: ["ref"] }); void qc.invalidateQueries({ queryKey: ["hangar-planning"] }); }} />
 
       {notice ? <div className="contextNotice">{notice}</div> : null}
       {summaryQ.error ? <div className="errorMsg">{String((summaryQ.error as any)?.message ?? summaryQ.error)}</div> : null}
@@ -1000,7 +1501,9 @@ export function HangarView() {
           )}
 
           {!summaryQ.isLoading && (summary?.hangars ?? []).length === 0 ? (
-            <div className="sandboxesEmpty">Нет активных схем. Добавьте или импортируйте реальные варианты расстановок.</div>
+            <div className="sandboxesEmpty">
+              Нет ангаров со схемами и нет событий на сторонних MRO в выбранном периоде.
+            </div>
           ) : null}
           {summaryQ.isLoading ? <div className="muted">Загрузка аналитики ангаров…</div> : null}
         </main>

@@ -13,6 +13,7 @@ import { planningRoutes } from "./routes/planning/index.js";
 import { adminRoutes } from "./routes/admin/index.js";
 import { resourcesRoutes } from "./routes/resources/index.js";
 import { analyticsRoutes } from "./routes/analytics.js";
+import { reportRoutes } from "./routes/reports.js";
 
 export async function buildServer() {
   const app = Fastify({
@@ -35,6 +36,7 @@ export async function buildServer() {
   await app.register(planningRoutes, { prefix: "/api" });
   await app.register(resourcesRoutes, { prefix: "/api/resources" });
   await app.register(analyticsRoutes, { prefix: "/api/analytics" });
+  await app.register(reportRoutes, { prefix: "/api/reports" });
   await app.register(adminRoutes, { prefix: "/api/admin" });
   await app.register(sandboxRoutes, { prefix: "/api/sandboxes" });
 

@@ -6064,6 +6064,54 @@ textarea {
   background: #fff;
 }
 
+.hangarFilterPanel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.hangarFilterPanel .ganttPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 0 2px;
+}
+
+.hangarFilterPanel .ganttToolbar {
+  margin: 0;
+}
+
+.hangarToolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  padding-top: 10px;
+}
+
+.hangarToolbarActions .ganttIconBtn {
+  position: relative;
+}
+
+.hangarIconBadge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
 .hangarPresetRow {
   display: flex;
   gap: 6px;
@@ -7568,7 +7616,339 @@ textarea.refInput {
   color: #475569;
 }
 
+.analyticsEffHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.analyticsEffHeader h3 {
+  margin: 0 0 4px;
+}
+
+.reportBuilder {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.reportBuilderSidebar {
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+  position: sticky;
+  top: 12px;
+}
+
+.reportBuilderSidebarHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.reportBuilderListGroup {
+  display: grid;
+  gap: 4px;
+}
+
+.reportBuilderListItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font: inherit;
+  color: #0f172a;
+}
+
+.reportBuilderListItem:hover {
+  background: #f8fafc;
+}
+
+.reportBuilderListItem.active {
+  background: #ecfeff;
+  border-color: rgba(13, 148, 136, 0.35);
+}
+
+.reportBuilderMain {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.reportBuilderFormHead {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.reportBuilderNameField {
+  width: 100%;
+  max-width: 420px;
+}
+
+.reportBuilderIconActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.reportBuilderIconActive {
+  background: #0f172a !important;
+  border-color: #0f172a !important;
+  color: #fff !important;
+}
+
+.reportConditionRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(110px, 0.8fr) minmax(120px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 760px) {
+  .reportConditionRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.reportBuilderTabs {
+  margin: 8px 0 12px;
+}
+
+.reportBuilderSection {
+  display: grid;
+  gap: 10px;
+}
+
+.reportBuilderPeriodRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+
+.reportDatasetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.reportDatasetCard {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  color: #0f172a;
+}
+
+.reportDatasetCard.active {
+  border-color: #0d9488;
+  background: #f0fdfa;
+}
+
+.reportBuilderCompareRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.reportFieldsLayout {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 16px;
+}
+
+.reportFieldsAvailable,
+.reportFieldsOrder {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.reportFieldCheck {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.reportFieldOrderRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.reportFieldOrderBtns {
+  display: flex;
+  gap: 4px;
+}
+
+.reportBuilderFilters {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  display: grid;
+}
+
+.reportSortRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.reportShareForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.reportShareList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.reportShareList li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+@media (max-width: 980px) {
+  .reportBuilder {
+    grid-template-columns: 1fr;
+  }
+
+  .reportFieldsLayout,
+  .reportBuilderCompareRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analyticsModuleHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.analyticsTatChartWrap,
+.analyticsCompareChartWrap {
+  position: relative;
+  width: 100%;
+  height: 280px;
+}
+
+.analyticsStackRefreshing {
+  opacity: 0.72;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.analyticsRefreshHint {
+  font-size: 13px;
+  margin: -4px 0 2px;
+}
+
+.analyticsTimeline {
+  display: grid;
+  gap: 10px;
+}
+
+.analyticsTimelineChartWrap {
+  position: relative;
+  width: 100%;
+  height: 280px;
+}
+
+.analyticsTimelineTooltip {
+  min-height: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: #f8fafc;
+  font-size: 13px;
+  color: #334155;
+}
+
+.analyticsExpandRow {
+  cursor: pointer;
+}
+
+.analyticsExpandRow:hover {
+  background: rgba(241, 245, 249, 0.85);
+}
+
+.analyticsExpandBtn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.analyticsExpandDetail td {
+  background: #f8fafc;
+  padding: 12px 14px;
+}
+
+.analyticsCompareEvents {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.analyticsEventMiniList {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.analyticsEventMiniList li {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: #fff;
+  font-size: 13px;
+}
+
 @media (max-width: 900px) {
+  .analyticsCompareEvents,
   .analyticsSplit,
   .analyticsCompareHeads {
     grid-template-columns: 1fr;
