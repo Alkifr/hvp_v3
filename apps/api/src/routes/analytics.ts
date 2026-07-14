@@ -24,12 +24,6 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-const zIdsParam = z
-  .string()
-  .trim()
-  .optional()
-  .transform((v) => (v ? v.split(",").map((x) => x.trim()).filter(Boolean) : []));
-
 type EfficiencyGrain = "day" | "week" | "month" | "period";
 
 function pickTimelineGrain(from: Date, to: Date): Exclude<EfficiencyGrain, "period"> {
@@ -249,7 +243,7 @@ function computeHangarEfficiency(params: {
   hangarLayoutIds: string[];
   events: EffEvent[];
 }) {
-  const { from, to, standCountByLayoutId, hangarLayoutIds, events } = params;
+  const { from, to, hangarLayoutIds, events } = params;
   const periodMs = Math.max(1, to.getTime() - from.getTime());
   const hangarLayoutSet = new Set(hangarLayoutIds);
   const hangarEvents = events.filter((e) => e.layoutId && hangarLayoutSet.has(e.layoutId));
