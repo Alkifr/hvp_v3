@@ -1548,20 +1548,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     if (scheduleLocked) {
       // UI always resends the full form; keep schedule immutable while DONE.
       placements = undefined;
-      const {
-        planningKind: _planningKind,
-        eventTypeId: _eventTypeId,
-        startAt: _startAt,
-        endAt: _endAt,
-        budgetStartAt: _budgetStartAt,
-        budgetEndAt: _budgetEndAt,
-        actualStartAt: _actualStartAt,
-        actualEndAt: _actualEndAt,
-        hangarId: _hangarId,
-        layoutId: _layoutId,
-        ...safePatch
-      } = patch;
-      patch = safePatch;
+      delete patch.planningKind;
+      delete patch.eventTypeId;
+      delete patch.startAt;
+      delete patch.endAt;
+      delete patch.budgetStartAt;
+      delete patch.budgetEndAt;
+      delete patch.actualStartAt;
+      delete patch.actualEndAt;
+      delete patch.hangarId;
+      delete patch.layoutId;
     }
 
     const nextStatus = body.status ?? existing.status;
