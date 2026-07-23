@@ -6,8 +6,33 @@ import { EventAuditAction, EventStatus, UserActivityAction } from "@prisma/clien
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { logUserActivity } from "../../lib/userActivity.js";
+import { queryActivityFeed } from "../../lib/activityFeed.js";
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
+  // Журнал активности по всем пользователям (или фильтр по email)
+  app.get("/activity", async (req) => {
+    assertPermission(req as any, "admin:users");
+    const query = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+        action: z
+          .enum(["CREATE", "UPDATE", "RESERVE", "UNRESERVE", "SANDBOX_CREATE", "SANDBOX_DELETE", "CLEANUP"])
+          .optional(),
+        q: z.string().trim().max(200).optional(),
+        actor: z.string().trim().max(80).optional()
+      })
+      .parse(req.query);
+
+    return await queryActivityFeed(app.prisma, {
+      actor: query.actor ?? null,
+      limit: query.limit,
+      offset: query.offset,
+      action: query.action,
+      q: query.q
+    });
+  });
+
   const zCleanupFilters = z
     .object({
       eventId: zUuid.optional(),

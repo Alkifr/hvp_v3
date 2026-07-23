@@ -43,6 +43,7 @@ async function assertMember(app: any, sandboxId: string, userId: string): Promis
     where: { id: sandboxId },
     select: {
       ownerId: true,
+      sharedWithAllRole: true,
       members: { where: { userId }, select: { role: true } }
     }
   });
@@ -53,12 +54,13 @@ async function assertMember(app: any, sandboxId: string, userId: string): Promis
   }
   if (sb.ownerId === userId) return "OWNER";
   const m = sb.members[0];
-  if (!m) {
+  if (m) return m.role as "OWNER" | "EDITOR" | "VIEWER";
+  if (!sb.sharedWithAllRole) {
     const err: any = new Error("FORBIDDEN");
     err.statusCode = 403;
     throw err;
   }
-  return m.role as "OWNER" | "EDITOR" | "VIEWER";
+  return sb.sharedWithAllRole as "EDITOR" | "VIEWER";
 }
 
 function canWriteRole(role: "OWNER" | "EDITOR" | "VIEWER"): boolean {
@@ -71,7 +73,11 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
     const me = assertAuthed(req);
     const sandboxes = await app.prisma.sandbox.findMany({
       where: {
-        OR: [{ ownerId: me.id }, { members: { some: { userId: me.id } } }]
+        OR: [
+          { ownerId: me.id },
+          { members: { some: { userId: me.id } } },
+          { sharedWithAllRole: { not: null } }
+        ]
       },
       include: {
         owner: { select: { id: true, email: true, displayName: true } },
@@ -93,7 +99,11 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
       isOwner: s.ownerId === me.id,
-      myRole: s.ownerId === me.id ? "OWNER" : s.members.find((m: any) => m.userId === me.id)?.role ?? null,
+      myRole:
+        s.ownerId === me.id
+          ? "OWNER"
+          : s.members.find((m: any) => m.userId === me.id)?.role ?? s.sharedWithAllRole ?? null,
+      sharedWithAllRole: s.sharedWithAllRole,
       eventCount: s._count.events,
       members: s.members.map((m: any) => ({
         userId: m.userId,
@@ -454,7 +464,8 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       .object({
         name: z.string().trim().min(1).max(120).optional(),
         description: z.string().trim().max(1000).nullable().optional(),
-        status: z.enum(["ACTIVE", "ARCHIVED"]).optional()
+        status: z.enum(["ACTIVE", "ARCHIVED"]).optional(),
+        sharedWithAllRole: z.enum(["EDITOR", "VIEWER"]).nullable().optional()
       })
       .parse(req.body);
     return await app.prisma.sandbox.update({
@@ -462,7 +473,8 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       data: {
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.description !== undefined ? { description: body.description } : {}),
-        ...(body.status !== undefined ? { status: body.status } : {})
+        ...(body.status !== undefined ? { status: body.status } : {}),
+        ...(body.sharedWithAllRole !== undefined ? { sharedWithAllRole: body.sharedWithAllRole } : {})
       }
     });
   });

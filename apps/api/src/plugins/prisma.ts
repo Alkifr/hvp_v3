@@ -1,5 +1,5 @@
 import fp from "fastify-plugin";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -7,19 +7,71 @@ declare module "fastify" {
     db: {
       connected: boolean;
       lastError?: string;
+      /** Пометить БД недоступной (включает ретрай $connect). */
+      markDisconnected: (err?: unknown) => void;
     };
   }
 }
 
+const CONNECTION_ERROR_CODES = new Set([
+  "P1001", // Can't reach database server
+  "P1002", // Database server reached but timed out
+  "P1008", // Operations timed out
+  "P1017", // Server has closed the connection
+  "P2024" // Timed out fetching a new connection from the pool
+]);
+
+export function isDbConnectionError(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientInitializationError) return true;
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    return CONNECTION_ERROR_CODES.has(err.code);
+  }
+  const msg = String((err as any)?.message ?? err);
+  return /Can't reach database server|Server has closed the connection|Connection reset|ECONNREFUSED|ETIMEDOUT|ENOTFOUND/i.test(
+    msg
+  );
+}
+
 export const prismaPlugin = fp(async (app) => {
-  const prisma = new PrismaClient();
+  let markDisconnected: (err?: unknown) => void = () => undefined;
+
+  const base = new PrismaClient();
+  // Ловим обрыв на любом запросе — иначе connected=true «залипает» после P1001
+  const prisma = base.$extends({
+    query: {
+      $allOperations: async ({ args, query }) => {
+        try {
+          return await query(args);
+        } catch (e) {
+          if (isDbConnectionError(e)) markDisconnected(e);
+          throw e;
+        }
+      }
+    }
+  }) as unknown as PrismaClient;
+
+  markDisconnected = (err?: unknown) => {
+    if (err != null && !isDbConnectionError(err)) return;
+    const detail = err != null ? String((err as any)?.message ?? err) : app.db.lastError;
+    if (app.db.connected === false && app.db.lastError === detail) return;
+    app.db.connected = false;
+    app.db.lastError = detail;
+    app.log.warn({ err: detail }, "PostgreSQL marked disconnected (will retry)");
+  };
 
   app.decorate("prisma", prisma);
-  app.decorate("db", { connected: false });
+  app.decorate("db", {
+    connected: false as boolean,
+    lastError: undefined as string | undefined,
+    markDisconnected
+  });
 
   const tryConnect = async () => {
     try {
+      // Сброс пула после обрыва, иначе мёртвые сокеты могут висеть
+      await prisma.$disconnect().catch(() => undefined);
       await prisma.$connect();
+      await prisma.$queryRaw`SELECT 1`;
       app.db.connected = true;
       app.db.lastError = undefined;
       app.log.info("PostgreSQL connected");
@@ -35,7 +87,7 @@ export const prismaPlugin = fp(async (app) => {
   // Первичная попытка без падения процесса (чтобы UI мог подняться и подсказать проблему)
   void tryConnect();
 
-  // Быстрый ретрай в dev/стенде: подключимся как только БД станет доступна
+  // Быстрый ретрай: подключимся как только БД станет доступна
   const interval = setInterval(() => {
     if (app.db.connected) return;
     void tryConnect();
@@ -57,4 +109,3 @@ export const prismaPlugin = fp(async (app) => {
     await instance.prisma.$disconnect();
   });
 });
-

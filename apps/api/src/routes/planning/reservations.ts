@@ -4,6 +4,7 @@ import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { DONE_SCHEDULE_LOCK_MESSAGE, isDoneScheduleLocked } from "../../lib/eventStatus.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 
 function assertCanWrite(req: any) {
@@ -166,6 +167,9 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       where: { id: eventId, ...sandboxFilter(req) }
     });
     if (!event) throw app.httpErrors.notFound("Event not found");
+    if (isDoneScheduleLocked(event.status)) {
+      throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
 
     const existingReservation = await app.prisma.standReservation.findFirst({
       where: { eventId, ...sandboxFilter(req) },
@@ -319,6 +323,9 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
       });
       if (!event) throw app.httpErrors.notFound("Event not found");
+      if (isDoneScheduleLocked(event.status)) {
+        throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+      }
 
       const layout = await tx.hangarLayout.findUniqueOrThrow({
         where: { id: body.layoutId },
@@ -511,6 +518,9 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
       });
       if (!event) throw app.httpErrors.notFound("Event not found");
+      if (isDoneScheduleLocked(event.status)) {
+        throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+      }
 
       const layout = await tx.hangarLayout.findUniqueOrThrow({
         where: { id: body.layoutId },
@@ -696,6 +706,9 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
       });
       if (!event) throw app.httpErrors.notFound("Event not found");
+      if (isDoneScheduleLocked(event.status)) {
+        throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+      }
 
       const [layouts, overlapping] = await Promise.all([
         tx.hangarLayout.findMany({
@@ -901,6 +914,11 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           const eventLabel =
             `${event.title ?? "событие"} (${(event as any).aircraft?.tailNumber ?? (event as any).virtualAircraft?.label ?? event.id})`;
 
+          if (isDoneScheduleLocked(event.status)) {
+            errors.push({ eventId: event.id, message: DONE_SCHEDULE_LOCK_MESSAGE });
+            continue;
+          }
+
           try {
             const [layouts, overlapping] = await Promise.all([
               tx.hangarLayout.findMany({
@@ -1075,9 +1093,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     const eventId = zUuid.parse((req.params as any).eventId);
     const event = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req) },
-      select: { id: true }
+      select: { id: true, status: true }
     });
     if (!event) throw app.httpErrors.notFound("Event not found");
+    if (isDoneScheduleLocked(event.status)) {
+      throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
     const existing = await app.prisma.standReservation.findFirst({ where: { eventId, ...sandboxFilter(req) }, orderBy: [{ startAt: "asc" }] });
     if (!existing) {
       // идемпотентность: если резерва нет — считаем, что "уже снято"

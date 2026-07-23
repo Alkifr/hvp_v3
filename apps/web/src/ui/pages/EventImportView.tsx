@@ -3,6 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 
 import { apiPost } from "../../lib/api";
+import { downloadEventImportTemplate } from "../../lib/importTemplates";
+import { normalizeImportRowsDates } from "../../lib/localDate";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 type ImportPreviewRow = {
@@ -135,7 +137,7 @@ export function EventImportView() {
   }, [previewRows, statusFilter]);
 
   const previewM = useMutation({
-    mutationFn: (rows: any[]) => apiPost("/api/events/import", { dryRun: true, rows }),
+    mutationFn: (rows: any[]) => apiPost("/api/events/import", { dryRun: true, rows: normalizeImportRowsDates(rows) }),
     onSuccess: (res) => {
       setStatusFilter("");
       setImportResult(res);
@@ -143,7 +145,7 @@ export function EventImportView() {
   });
 
   const importM = useMutation({
-    mutationFn: (rows: any[]) => apiPost("/api/events/import", { rows }),
+    mutationFn: (rows: any[]) => apiPost("/api/events/import", { rows: normalizeImportRowsDates(rows) }),
     onSuccess: async (res) => {
       setStatusFilter("");
       setImportResult(res);
@@ -185,6 +187,7 @@ export function EventImportView() {
           Excel/CSV. Шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt, budgetStartAt, budgetEndAt,
           actualStartAt, actualEndAt, towStartAt, towEndAt, Hangar, HangarStand. Периоды можно оставлять пустыми.
           Места назначаются только в активных вариантах расстановки.
+          Даты без часового пояса и ячейки Excel трактуются как местное время (MSK).
         </div>
         <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>
           {activeSandbox ? (
@@ -227,9 +230,9 @@ export function EventImportView() {
                     return;
                   }
                   const buf = await f.arrayBuffer();
-                  const wb = XLSX.read(buf, { type: "array", cellDates: true });
+                  const wb = XLSX.read(buf, { type: "array", cellDates: false });
                   const ws = wb.Sheets[wb.SheetNames[0] ?? ""];
-                  const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
+                  const rows = XLSX.utils.sheet_to_json(ws, { defval: "", raw: true }) as any[];
                   const normalized = normalizeRows(rows);
                   const shapeError = validateImportRowsShape(normalized);
                   setImportRows(normalized);
@@ -241,6 +244,16 @@ export function EventImportView() {
               style={{ width: 620 }}
             />
           </label>
+
+          <button
+            type="button"
+            className="btn btnGhost"
+            disabled={isBusy}
+            title="Скачать Excel-шаблон с колонками, примером и инструкцией"
+            onClick={() => downloadEventImportTemplate()}
+          >
+            Скачать шаблон
+          </button>
 
           <button
             className="btn btnPrimary"

@@ -35,6 +35,7 @@ type SourceEvent = {
   actualEndAt?: Date | null;
   hangarId: string | null;
   layoutId: string | null;
+  workshopId?: string | null;
   notes: string | null;
   originEventId?: string | null;
   sourceEventId?: string | null;
@@ -208,6 +209,7 @@ export async function copyPlanToSandbox(
       actualEndAt: (src as any).actualEndAt,
       hangarId: src.hangarId,
       layoutId: src.layoutId,
+      workshopId: (src as any).workshopId ?? null,
       notes: src.notes,
       originEventId,
       sourceEventId: src.id,

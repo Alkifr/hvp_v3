@@ -5,7 +5,7 @@ import dayjs from "dayjs";
 import { apiDelete, apiGet, apiPatch, apiPut } from "../../lib/api";
 import { SingleSelectDropdown } from "./SingleSelectDropdown";
 
-const TABLE_COLS_LS_KEY = "hangarPlanning:ganttTableColumns:v3";
+const TABLE_COLS_LS_KEY = "hangarPlanning:ganttTableColumns:v4";
 
 type TableColId =
   | "title"
@@ -16,6 +16,7 @@ type TableColId =
   | "operator"
   | "aircraftType"
   | "eventTypeId"
+  | "workshopId"
   | "startAtLocal"
   | "endAtLocal"
   | "tatOper"
@@ -52,6 +53,7 @@ const TABLE_COLUMNS: TableColDef[] = [
   { id: "operator", label: "Оператор", defaultWidth: 140, minWidth: 80 },
   { id: "aircraftType", label: "Тип ВС", defaultWidth: 140, minWidth: 80 },
   { id: "eventTypeId", label: "Тип события", defaultWidth: 140, minWidth: 90 },
+  { id: "workshopId", label: "Цех", defaultWidth: 140, minWidth: 90 },
   { id: "startAtLocal", label: "Опер. начало", defaultWidth: 150, minWidth: 110 },
   { id: "endAtLocal", label: "Опер. окончание", defaultWidth: 150, minWidth: 110 },
   { id: "tatOper", label: "TAT опер.", defaultWidth: 110, minWidth: 72 },
@@ -194,6 +196,7 @@ type Aircraft = {
 
 type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
 type EventType = { id: string; code: string; name: string; color?: string | null };
+type Workshop = { id: string; code?: string; name: string; isActive?: boolean };
 type Hangar = { id: string; name: string };
 type Layout = {
   id: string;
@@ -246,6 +249,7 @@ export type GanttTableEvent = {
   virtualAircraft?: { operatorId?: string; aircraftTypeId?: string; label?: string } | null;
   eventType: { id?: string; name: string; color?: string | null };
   hangar?: { id?: string; name: string } | null;
+  workshop?: { id?: string; code?: string | null; name: string } | null;
   layout?: { id?: string; name: string; hangarId?: string } | null;
   reservation?: { stand?: { id?: string; code: string } | null } | null;
   placements?: EventPlacementRow[];
@@ -267,6 +271,7 @@ type RowDraft = {
   actualEndAtLocal: string;
   notes: string;
   hangarId: string;
+  workshopId: string;
   layoutId: string;
   standId: string;
   allowOverlap: boolean;
@@ -289,6 +294,7 @@ const FIELD_LABEL: Record<string, string> = {
   actualEndAtLocal: "Фактическое окончание",
   notes: "Примечание",
   hangarId: "Ангар",
+  workshopId: "Цех",
   layoutId: "Вариант размещения",
   standId: "Место",
   allowOverlap: "Разрешить нахлёст"
@@ -356,6 +362,7 @@ function draftFromEvent(ev: GanttTableEvent): RowDraft {
     actualEndAtLocal: toInputLocal(ev.actualEndAt),
     notes: ev.notes ?? "",
     hangarId: ev.hangar?.id ?? "",
+    workshopId: ev.workshop?.id ?? "",
     layoutId: ev.layout?.id ?? "",
     standId: ev.reservation?.stand?.id ?? "",
     allowOverlap: false,
@@ -372,6 +379,7 @@ function computeDiff(a: RowDraft, b: RowDraft) {
     "planningKind",
     "aircraftId",
     "eventTypeId",
+    "workshopId",
     "startAtLocal",
     "endAtLocal",
     "budgetStartAtLocal",
@@ -492,6 +500,7 @@ export function GanttEventsTable(props: {
   eventsQueryToISO: string;
   aircraft: Aircraft[];
   eventTypes: EventType[];
+  workshops: Workshop[];
   hangars: Hangar[];
   aircraftTypes: AircraftTypeRef[];
   operators: Array<{ id: string; code?: string | null; name: string }>;
@@ -846,6 +855,7 @@ export function GanttEventsTable(props: {
         payload.layoutId = draft.layoutId || null;
         payload.placements = placementsPayload;
       }
+      payload.workshopId = draft.workshopId || null;
 
       await apiPatch(`/api/events/${draft.id}`, payload);
 
@@ -967,6 +977,15 @@ export function GanttEventsTable(props: {
         return (
           <span className="ganttTableCellText" title={ev.eventType?.name ?? undefined}>
             {ev.eventType?.name ?? "—"}
+          </span>
+        );
+      case "workshopId":
+        return (
+          <span
+            className="ganttTableCellText"
+            title={ev.workshop ? (ev.workshop.code ? `${ev.workshop.code} • ${ev.workshop.name}` : ev.workshop.name) : undefined}
+          >
+            {ev.workshop?.name ?? "—"}
           </span>
         );
       case "startAtLocal":
@@ -1140,6 +1159,23 @@ export function GanttEventsTable(props: {
                 {t.name}
               </option>
             ))}
+          </select>
+        );
+      case "workshopId":
+        return (
+          <select
+            className="evInput ganttTableInput"
+            value={d.workshopId}
+            onChange={(e) => patchDraft({ workshopId: e.target.value })}
+          >
+            <option value="">— не задан —</option>
+            {props.workshops
+              .filter((w) => w.isActive !== false || w.id === d.workshopId)
+              .map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.code ? `${w.code} • ${w.name}` : w.name}
+                </option>
+              ))}
           </select>
         );
       case "startAtLocal":

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
@@ -7,12 +7,16 @@ import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
+import { buildEventShareUrl, copyTextToClipboard } from "../../lib/eventDeepLink";
+import { MSK_OFFSET_MINUTES, startOfMskDayIso } from "../../lib/localDate";
 import { authMe } from "../auth/authApi";
 import { EventResourcesPanel } from "../components/EventResourcesPanel";
 import { GanttEventsTable } from "../components/GanttEventsTable";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
+import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 import { ToolbarPopover } from "../components/ToolbarPopover";
+import { SwitchToggle } from "../components/SwitchToggle";
 
 dayjs.extend(utc);
 
@@ -33,6 +37,7 @@ const FIELD_LABEL: Record<string, string> = {
   actualEndAtLocal: "Фактическое окончание",
   notes: "Примечание",
   hangarId: "Ангар",
+  workshopId: "Цех",
   layoutId: "Вариант размещения",
   standId: "Место"
 };
@@ -102,6 +107,7 @@ type EventRow = {
   virtualAircraft?: { operatorId?: string; aircraftTypeId?: string; label?: string } | null;
   eventType: { id?: string; name: string; color?: string | null };
   hangar?: { id?: string; name: string } | null;
+  workshop?: { id?: string; code?: string | null; name: string } | null;
   layout?: { id?: string; name: string; hangarId?: string } | null;
   reservation?: { stand?: { id?: string; code: string } | null } | null;
   placements?: EventPlacementRow[];
@@ -149,6 +155,10 @@ function eventAircraftId(ev: EventRow): string {
 
 function eventEventTypeId(ev: EventRow): string {
   return String((ev.eventType as any)?.id ?? (ev as any).eventTypeId ?? "");
+}
+
+function eventWorkshopId(ev: EventRow): string {
+  return String((ev.workshop as any)?.id ?? (ev as any).workshopId ?? "");
 }
 
 function eventPrimaryHangarId(ev: EventRow): string {
@@ -393,6 +403,7 @@ type GanttFilters = {
   aircraftTypeIds: string[];
   aircraftIds: string[];
   eventTypeIds: string[];
+  workshopIds: string[];
   planningKind: PlanningKindFilter;
 };
 
@@ -425,6 +436,7 @@ type EditorDraft = {
   actualEndAtLocal: string;
   notes: string;
   hangarId: string; // optional, "" means null
+  workshopId: string; // optional, "" means null
   layoutId: string; // optional, "" means null
   standId: string; // optional, "" means no reservation
   allowOverlap: boolean;
@@ -460,7 +472,14 @@ function clamp(n: number, min: number, max: number) {
 }
 
 function timelineDate(value: string | Date | number, mode: TimelineTimeMode): dayjs.Dayjs {
-  return mode === "UTC" ? dayjs.utc(value) : dayjs(value);
+  if (mode === "UTC") return dayjs.utc(value);
+  // Date-only (календарный день с type=date) → полночь MSK
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const iso = startOfMskDayIso(value);
+    return dayjs(iso ?? value).utcOffset(MSK_OFFSET_MINUTES);
+  }
+  // Абсолютный инстант → показать wall clock MSK
+  return dayjs(value).utcOffset(MSK_OFFSET_MINUTES);
 }
 
 function formatTimelineDate(value: string | Date | null | undefined, mode: TimelineTimeMode): string {
@@ -477,7 +496,7 @@ function calcBarXW(params: {
   canvasWidth: number;
   timeMode?: TimelineTimeMode;
 }): { x: number; w: number; leftRaw: number; rightRaw: number } | null {
-  const mode = params.timeMode ?? "UTC";
+  const mode = params.timeMode ?? "LOCAL";
   const s = timelineDate(params.startAt, mode);
   const e = timelineDate(params.endAt, mode);
   if (!s.isValid() || !e.isValid()) return null;
@@ -631,6 +650,9 @@ function eventMatchesGanttFilters(ev: EventRow, filters: GanttFilters, skip?: Ga
   if (skip !== "eventTypeIds") {
     if (filters.eventTypeIds.length > 0 && !filters.eventTypeIds.includes(eventEventTypeId(ev))) return false;
   }
+  if (skip !== "workshopIds") {
+    if (filters.workshopIds.length > 0 && !filters.workshopIds.includes(eventWorkshopId(ev))) return false;
+  }
   if (skip !== "planningKind") {
     if (filters.planningKind !== "ALL" && eventPlanningKind(ev) !== filters.planningKind) return false;
   }
@@ -642,6 +664,25 @@ function displayPeriodForMode(ev: EventRow, mode: GanttDisplayMode): { startAt: 
     return { startAt: ev.actualStartAt, endAt: ev.actualEndAt, source: "Факт" };
   }
   return { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." };
+}
+
+/** Интервал для раскладки строк: должен совпадать с тем, что реально рисуется на Гантте. */
+function eventPackRangeMs(ev: EventRow, mode: GanttDisplayMode): { startMs: number; endMs: number } {
+  if (mode === "PLAN_FACT") {
+    const starts = [ev.startAt, ev.actualStartAt]
+      .filter(Boolean)
+      .map((d) => Date.parse(String(d)))
+      .filter((n) => Number.isFinite(n));
+    const ends = [ev.endAt, ev.actualEndAt]
+      .filter(Boolean)
+      .map((d) => Date.parse(String(d)))
+      .filter((n) => Number.isFinite(n));
+    if (starts.length && ends.length) {
+      return { startMs: Math.min(...starts), endMs: Math.max(...ends) };
+    }
+  }
+  const period = displayPeriodForMode(ev, mode);
+  return { startMs: Date.parse(period.startAt), endMs: Date.parse(period.endAt) };
 }
 
 function displayTatForMode(ev: EventRow, mode: GanttDisplayMode): { label: string; source: "Опер." | "Факт" } {
@@ -672,11 +713,13 @@ function factToneLabel(tone: "good" | "warn" | "bad") {
 
 const EXIT_TIME_LABEL_WIDTH = 42;
 const EXIT_TIME_LABEL_GAP = 4;
+const ENTRY_TIME_LABEL_WIDTH = 42;
+const ENTRY_TIME_LABEL_GAP = 4;
 const MIN_GANTT_LABEL_WIDTH = 160;
 const MAX_GANTT_LABEL_WIDTH = 720;
 const MIN_FIT_DAY_WIDTH = 0.25;
 
-function canShowExitTimeLabel(zoom: ZoomLevel) {
+function canShowBarEdgeTimeLabel(zoom: ZoomLevel) {
   return zoom === "hour" || zoom === "day";
 }
 
@@ -686,8 +729,18 @@ function exitTimeLabel(ev: EventRow, mode: TimelineTimeMode) {
 
 function exitTimeTitle(ev: EventRow, mode: TimelineTimeMode) {
   return ev.actualEndAt
-    ? `Фактическое время выхода: ${formatTimelineDate(ev.actualEndAt, mode)}`
-    : `Плановое время выхода: ${formatTimelineDate(ev.endAt, mode)}`;
+    ? `Фактическое время окончания: ${formatTimelineDate(ev.actualEndAt, mode)}`
+    : `Плановое время окончания: ${formatTimelineDate(ev.endAt, mode)}`;
+}
+
+function entryTimeLabel(ev: EventRow, mode: TimelineTimeMode) {
+  return timelineDate(ev.actualStartAt ?? ev.startAt, mode).format("HH:mm");
+}
+
+function entryTimeTitle(ev: EventRow, mode: TimelineTimeMode) {
+  return ev.actualStartAt
+    ? `Фактическое время начала: ${formatTimelineDate(ev.actualStartAt, mode)}`
+    : `Плановое время начала: ${formatTimelineDate(ev.startAt, mode)}`;
 }
 
 // Образец бара статуса для легенды — использует тот же barVisualStyle,
@@ -790,7 +843,7 @@ function BarLabel(props: { tat: { label: string; source: string }; parts: string
   );
 }
 
-function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "UTC") {
+function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "LOCAL") {
   const base = `${eventAircraftLabel(ev)} • ${ev.title}`;
   const period = `Опер.: ${formatTimelineDate(ev.startAt, mode)} – ${formatTimelineDate(ev.endAt, mode)}`;
   const place = placementLabel(ev);
@@ -824,7 +877,6 @@ function barVisualStyle(status: string, baseColor: string) {
   // - основной цвет = тип ВС (в связке с оператором)
   // - статусы показываем преимущественно РАМКАМИ/прозрачностью
   // - CANCELLED всегда серый
-  // - нахлёсты подсвечиваются отдельно (оверлеем), не здесь
   if (status === "CANCELLED") {
     return {
       background: "rgba(148, 163, 184, 0.85)",
@@ -838,7 +890,8 @@ function barVisualStyle(status: string, baseColor: string) {
   if (status === "DONE") {
     return {
       background: baseColor,
-      border: "2px solid rgba(34, 197, 94, 0.95)",
+      border: "none",
+      boxShadow: "inset 0 -3px 0 rgba(22, 163, 74, 0.92)",
       color: textColor
     } as const;
   }
@@ -905,37 +958,44 @@ function aircraftTypeMarkColor(ev: EventRow, palette?: Map<string, string>) {
   return AIRCRAFT_MARK_PALETTE[hashToIndex(key, AIRCRAFT_MARK_PALETTE.length)]!;
 }
 
-type PlacedEvent = { ev: EventRow; overlapToMs: number | null };
+type PlacedEvent = { ev: EventRow };
 
-function packOverlapsIntoLanes(events: EventRow[]): PlacedEvent[][] {
+function packOverlapsIntoLanes(
+  events: EventRow[],
+  getRange: (ev: EventRow) => { startMs: number; endMs: number } = (ev) => ({
+    startMs: Date.parse(ev.startAt),
+    endMs: Date.parse(ev.endAt)
+  })
+): PlacedEvent[][] {
   const sorted = [...events].sort((a, b) => {
-    const as = Date.parse(a.startAt);
-    const bs = Date.parse(b.startAt);
-    if (as !== bs) return as - bs;
-    return Date.parse(a.endAt) - Date.parse(b.endAt);
+    const ar = getRange(a);
+    const br = getRange(b);
+    if (ar.startMs !== br.startMs) return ar.startMs - br.startMs;
+    return ar.endMs - br.endMs;
   });
 
   const lanes: Array<{ items: PlacedEvent[]; lastEndMs: number }> = [];
 
   for (const ev of sorted) {
-    const startMs = Date.parse(ev.startAt);
-    const endMs = Date.parse(ev.endAt);
+    const { startMs, endMs } = getRange(ev);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      lanes.push({ items: [{ ev }], lastEndMs: Number.isFinite(endMs) ? endMs : startMs });
+      continue;
+    }
 
     if (lanes.length === 0) {
-      lanes.push({ items: [{ ev, overlapToMs: null }], lastEndMs: endMs });
+      lanes.push({ items: [{ ev }], lastEndMs: endMs });
       continue;
     }
 
     const laneIdx = lanes.findIndex((l) => l.lastEndMs <= startMs);
     if (laneIdx >= 0) {
-      lanes[laneIdx]!.items.push({ ev, overlapToMs: null });
-      lanes[laneIdx]!.lastEndMs = endMs;
+      lanes[laneIdx]!.items.push({ ev });
+      lanes[laneIdx]!.lastEndMs = Math.max(lanes[laneIdx]!.lastEndMs, endMs);
       continue;
     }
 
-    const maxOverlapEndMs = Math.max(...lanes.map((l) => l.lastEndMs));
-    const overlapToMs = Math.min(endMs, maxOverlapEndMs);
-    lanes.push({ items: [{ ev, overlapToMs }], lastEndMs: endMs });
+    lanes.push({ items: [{ ev }], lastEndMs: endMs });
   }
 
   return lanes.map((l) => l.items);
@@ -1113,6 +1173,7 @@ function Drawer(props: {
   title: string;
   subtitle?: React.ReactNode;
   onClose: () => void;
+  headerActions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   if (!props.open) return null;
@@ -1124,21 +1185,186 @@ function Drawer(props: {
             <div className="drawerTitle">{props.title}</div>
             {props.subtitle ? <div className="drawerSubtitle">{props.subtitle}</div> : null}
           </div>
-          <button
-            className="drawerCloseBtn"
-            onClick={props.onClose}
-            aria-label="Закрыть"
-            title="Закрыть"
-            type="button"
-          >
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-              <path d="M5 5l10 10M15 5L5 15" />
-            </svg>
-            <span className="drawerCloseBtnLabel">Закрыть</span>
-          </button>
+          <div className="drawerHeaderActions">
+            {props.headerActions}
+            <button
+              className="drawerCloseBtn"
+              onClick={props.onClose}
+              aria-label="Закрыть"
+              title="Закрыть"
+              type="button"
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                <path d="M5 5l10 10M15 5L5 15" />
+              </svg>
+              <span className="drawerCloseBtnLabel">Закрыть</span>
+            </button>
+          </div>
         </header>
         <div className="drawerBody">{props.children}</div>
       </div>
+    </div>
+  );
+}
+
+/** Подсказка блока карточки: «?» рядом с заголовком; панель через portal, чтобы не обрезалась overflow. */
+function EvCardHelp(props: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLSpanElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelPos, setPanelPos] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    maxWidth: number;
+  } | null>(null);
+
+  const syncPanelPos = useCallback(() => {
+    const btn = btnRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const maxWidth = Math.min(340, window.innerWidth - 24);
+    let left = rect.left;
+    if (left + maxWidth > window.innerWidth - 12) {
+      left = Math.max(12, window.innerWidth - maxWidth - 12);
+    }
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const openUp = spaceBelow < 160 && rect.top > spaceBelow;
+    if (openUp) {
+      setPanelPos({ bottom: window.innerHeight - rect.top + 6, left, maxWidth });
+    } else {
+      setPanelPos({ top: rect.bottom + 6, left, maxWidth });
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPanelPos(null);
+      return;
+    }
+    syncPanelPos();
+  }, [open, syncPanelPos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onWin = () => syncPanelPos();
+    window.addEventListener("resize", onWin);
+    window.addEventListener("scroll", onWin, true);
+    return () => {
+      window.removeEventListener("resize", onWin);
+      window.removeEventListener("scroll", onWin, true);
+    };
+  }, [open, syncPanelPos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target;
+      if (!(t instanceof Node)) return;
+      if (rootRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const panel =
+    open && panelPos
+      ? createPortal(
+          <div
+            ref={panelRef}
+            className="evCardHelpPanel evCardHelpPanelPortal"
+            role="dialog"
+            aria-label={`Справка: ${props.label}`}
+            style={{
+              position: "fixed",
+              top: panelPos.top,
+              bottom: panelPos.bottom,
+              left: panelPos.left,
+              maxWidth: panelPos.maxWidth,
+              zIndex: 1400
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="evCardHelpPanelTitle">{props.label}</div>
+            <div className="evCardHelpPanelBody">{props.children}</div>
+          </div>,
+          document.body
+        )
+      : null;
+
+  return (
+    <div
+      ref={rootRef}
+      className={`evCardHelp${open ? " evCardHelpOpen" : ""}`}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <span
+        ref={btnRef}
+        role="button"
+        tabIndex={0}
+        className="evCardHelpBtn"
+        aria-label={`Справка: ${props.label}`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title="Справка по блоку"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }
+        }}
+      >
+        ?
+      </span>
+      {panel}
+    </div>
+  );
+}
+
+function EvToggle(props: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <SwitchToggle
+      checked={props.checked}
+      onChange={props.onChange}
+      label={props.label}
+      hint={props.hint}
+      disabled={props.disabled}
+    />
+  );
+}
+
+function EvCardTitle(props: { children: React.ReactNode; helpLabel: string; help: React.ReactNode; badge?: React.ReactNode }) {
+  return (
+    <div className="evCardTitleRow">
+      <div className="evCardTitle">
+        {props.children}
+        {props.badge}
+      </div>
+      <EvCardHelp label={props.helpLabel}>{props.help}</EvCardHelp>
     </div>
   );
 }
@@ -1193,9 +1419,13 @@ export function GanttView() {
     return Number.isFinite(raw) ? clamp(raw, MIN_GANTT_LABEL_WIDTH, MAX_GANTT_LABEL_WIDTH) : 220;
   });
   const [currentMinute, setCurrentMinute] = useState(() => dayjs().second(0).millisecond(0));
-  const [timelineTimeMode, setTimelineTimeMode] = useState<TimelineTimeMode>(() =>
-    savedUi?.timelineTimeMode === "LOCAL" ? "LOCAL" : "UTC"
-  );
+  const [timelineTimeMode, setTimelineTimeMode] = useState<TimelineTimeMode>(() => {
+    // Ранее дефолт был UTC; с v2 дефолт — LOCAL (MSK). Явный выбор UTC сохраняем только после миграции.
+    if (savedUi?.timeModeMigratedToLocalDefault) {
+      return savedUi.timelineTimeMode === "UTC" ? "UTC" : "LOCAL";
+    }
+    return "LOCAL";
+  });
 
   const from = useMemo(() => timelineDate(rangeFromApplied, timelineTimeMode).startOf("day"), [rangeFromApplied, timelineTimeMode]);
   // полузакрытый интервал [from, to)
@@ -1258,6 +1488,11 @@ export function GanttView() {
   });
   const [filterEventTypeIds, setFilterEventTypeIds] = useState<string[]>(() => {
     const arr = savedUi?.filterEventTypeIds;
+    if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
+    return [];
+  });
+  const [filterWorkshopIds, setFilterWorkshopIds] = useState<string[]>(() => {
+    const arr = savedUi?.filterWorkshopIds;
     if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
     return [];
   });
@@ -1337,6 +1572,11 @@ export function GanttView() {
     queryFn: () => apiGet<EventType[]>("/api/ref/event-types")
   });
 
+  const workshopsQ = useQuery({
+    queryKey: ["ref", "workshops"],
+    queryFn: () => apiGet<Array<{ id: string; code: string; name: string; isActive?: boolean }>>("/api/ref/workshops")
+  });
+
   const hangarsQ = useQuery({
     queryKey: ["ref", "hangars"],
     queryFn: () => apiGet<Hangar[]>("/api/ref/hangars")
@@ -1377,6 +1617,7 @@ export function GanttView() {
     setFilterOperatorIds([]);
     setFilterAircraftIds([]);
     setFilterEventTypeIds([]);
+    setFilterWorkshopIds([]);
     setFilterPlanningKind("ALL");
     setSelectedHangarIds([]);
     setDndHangarIds([]);
@@ -1497,11 +1738,13 @@ export function GanttView() {
       majorScale,
       minorScale,
       timelineTimeMode,
+      timeModeMigratedToLocalDefault: true,
       selectedHangarIds,
       filterAircraftTypeIds,
       filterOperatorIds,
       filterAircraftIds,
       filterEventTypeIds,
+      filterWorkshopIds,
       filterPlanningKind,
       ganttLabelWidth,
       fitWidth,
@@ -1528,6 +1771,7 @@ export function GanttView() {
     filterOperatorIds,
     filterAircraftIds,
     filterEventTypeIds,
+    filterWorkshopIds,
     filterPlanningKind,
     ganttLabelWidth,
     fitWidth,
@@ -1560,9 +1804,10 @@ export function GanttView() {
       aircraftTypeIds: filterAircraftTypeIds,
       aircraftIds: filterAircraftIds,
       eventTypeIds: filterEventTypeIds,
+      workshopIds: filterWorkshopIds,
       planningKind: filterPlanningKind
     }),
-    [selectedHangarIds, filterOperatorIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds, filterPlanningKind]
+    [selectedHangarIds, filterOperatorIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds, filterWorkshopIds, filterPlanningKind]
   );
 
   const smartFilterOptions = useMemo(() => {
@@ -1571,6 +1816,7 @@ export function GanttView() {
     const aircraftTypeIdSet = new Set<string>();
     const aircraftIdSet = new Set<string>();
     const eventTypeIdSet = new Set<string>();
+    const workshopIdSet = new Set<string>();
     const planningKindSet = new Set<"PLANNED" | "UNPLANNED">();
 
     for (const e of eventsForGantt) {
@@ -1592,6 +1838,10 @@ export function GanttView() {
       if (eventMatchesGanttFilters(e, ganttFilters, "eventTypeIds")) {
         const etid = eventEventTypeId(e);
         if (etid) eventTypeIdSet.add(etid);
+      }
+      if (eventMatchesGanttFilters(e, ganttFilters, "workshopIds")) {
+        const wid = eventWorkshopId(e);
+        if (wid) workshopIdSet.add(wid);
       }
       if (eventMatchesGanttFilters(e, ganttFilters, "planningKind")) {
         const pk = String(e.planningKind ?? "").toUpperCase();
@@ -1628,8 +1878,14 @@ export function GanttView() {
       .map((t) => ({ id: t.id, label: t.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
-    return { hangars, operators, aircraftTypes, aircraft, eventTypes, planningKinds: planningKindSet };
-  }, [eventsForGantt, ganttFilters, hangarsQ.data, operatorsQ.data, aircraftTypesQ.data, aircraftQ.data, eventTypesQ.data, showExternalMroOnGantt]);
+    const workshops = (workshopsQ.data ?? [])
+      .filter((w) => w.isActive !== false)
+      .filter((w) => eventsForGantt.length === 0 || workshopIdSet.has(w.id))
+      .map((w) => ({ id: w.id, label: w.code ? `${w.code} • ${w.name}` : w.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+
+    return { hangars, operators, aircraftTypes, aircraft, eventTypes, workshops, planningKinds: planningKindSet };
+  }, [eventsForGantt, ganttFilters, hangarsQ.data, operatorsQ.data, aircraftTypesQ.data, aircraftQ.data, eventTypesQ.data, workshopsQ.data, showExternalMroOnGantt]);
 
   useEffect(() => {
     if (eventsForGantt.length === 0) return;
@@ -1640,6 +1896,7 @@ export function GanttView() {
     const typeAvail = new Set(smartFilterOptions.aircraftTypes.map((o) => o.id));
     const aircraftAvail = new Set(smartFilterOptions.aircraft.map((o) => o.id));
     const eventTypeAvail = new Set(smartFilterOptions.eventTypes.map((o) => o.id));
+    const workshopAvail = new Set(smartFilterOptions.workshops.map((o) => o.id));
 
     const nextHangars = prune(selectedHangarIds, hangarAvail);
     if (nextHangars.length !== selectedHangarIds.length) setSelectedHangarIds(nextHangars);
@@ -1656,6 +1913,9 @@ export function GanttView() {
     const nextEventTypes = prune(filterEventTypeIds, eventTypeAvail);
     if (nextEventTypes.length !== filterEventTypeIds.length) setFilterEventTypeIds(nextEventTypes);
 
+    const nextWorkshops = prune(filterWorkshopIds, workshopAvail);
+    if (nextWorkshops.length !== filterWorkshopIds.length) setFilterWorkshopIds(nextWorkshops);
+
     if (filterPlanningKind !== "ALL" && !smartFilterOptions.planningKinds.has(filterPlanningKind)) {
       setFilterPlanningKind("ALL");
     }
@@ -1666,6 +1926,7 @@ export function GanttView() {
     filterAircraftTypeIds,
     filterAircraftIds,
     filterEventTypeIds,
+    filterWorkshopIds,
     filterPlanningKind
   ]);
 
@@ -1768,7 +2029,7 @@ export function GanttView() {
   }, [ganttLabelWidth]);
 
   useEffect(() => {
-    const update = () => setCurrentMinute((timelineTimeMode === "UTC" ? dayjs.utc() : dayjs()).second(0).millisecond(0));
+    const update = () => setCurrentMinute(dayjs().utcOffset(timelineTimeMode === "UTC" ? 0 : MSK_OFFSET_MINUTES).second(0).millisecond(0));
     update();
     const timer = window.setInterval(update, 60_000);
     return () => window.clearInterval(timer);
@@ -1884,6 +2145,18 @@ export function GanttView() {
   // копией, а сохранение создаёт НОВОЕ событие (draft.id остаётся пустым)
   const [copySelectMode, setCopySelectMode] = useState(false);
   const [copyFromTitle, setCopyFromTitle] = useState<string | null>(null);
+  const [shareHint, setShareHint] = useState<string | null>(null);
+
+  const shareCurrentEvent = async () => {
+    if (!draft?.id) return;
+    const url = buildEventShareUrl({
+      eventId: draft.id,
+      sandboxId: activeSandboxId
+    });
+    const ok = await copyTextToClipboard(url);
+    setShareHint(ok ? "Ссылка скопирована" : "Не удалось скопировать ссылку");
+    window.setTimeout(() => setShareHint(null), 2200);
+  };
 
   // ESC — отмена режима выбора копирования
   useEffect(() => {
@@ -1900,6 +2173,17 @@ export function GanttView() {
     if (!id) return null;
     return (aircraftQ.data ?? []).find((a) => a.id === id) ?? null;
   }, [draft?.aircraftId, aircraftQ.data]);
+  const aircraftSelectOptions = useMemo(() => {
+    const selectedId = draft?.aircraftId ?? "";
+    const opts = (aircraftQ.data ?? []).map((a) => ({ id: a.id, label: a.tailNumber }));
+    if (!selectedId) return opts;
+    const selected = opts.filter((o) => o.id === selectedId);
+    const rest = opts.filter((o) => o.id !== selectedId);
+    return [...selected, ...rest];
+  }, [aircraftQ.data, draft?.aircraftId]);
+  const aircraftFieldEditable = draft?.status === "DRAFT" || draft?.status === "PLANNED";
+  /** В статусе «Завершено» нельзя менять даты, тип планирования/события, ангар и буксировки. */
+  const scheduleLockedByDone = draft?.status === "DONE";
   const selectedDraftEvent = useMemo(() => {
     if (!draft?.id) return null;
     return events.find((ev) => ev.id === draft.id) ?? null;
@@ -1912,6 +2196,9 @@ export function GanttView() {
     ? ((aircraftTypesQ.data ?? []).find((type) => type.id === selectedVirtualAircraft.aircraftTypeId) ?? null)
     : null;
   const selectedAircraftTypeId = selectedAircraft?.typeId ?? selectedVirtualAircraft?.aircraftTypeId ?? "";
+  const aircraftFieldLabel =
+    selectedAircraft?.tailNumber ??
+    (selectedVirtualAircraft && !draft?.aircraftId ? selectedVirtualAircraft.label ?? "—" : "—");
 
   // подтверждение изменения
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1939,6 +2226,7 @@ export function GanttView() {
       actualEndAtLocal: "",
       notes: "",
       hangarId: "",
+      workshopId: "",
       layoutId: "",
       standId: "",
       allowOverlap: false,
@@ -1984,6 +2272,7 @@ export function GanttView() {
       actualEndAtLocal: toInputLocal(ev.actualEndAt),
       notes: ev.notes ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
+      workshopId: (ev.workshop as any)?.id ?? (ev as any).workshopId ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
       allowOverlap: false,
@@ -2019,6 +2308,7 @@ export function GanttView() {
       actualEndAtLocal: "",
       notes: ev.notes ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
+      workshopId: (ev.workshop as any)?.id ?? (ev as any).workshopId ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
       allowOverlap: false,
@@ -2040,6 +2330,71 @@ export function GanttView() {
     if (copySelectMode) openEditorForCopy(fullEvent);
     else openEditorForExisting(fullEvent);
   };
+
+  // Открытие карточки из уведомления / shared-ссылки — без смены периода на Гантте
+  const [pendingOpenEventId, setPendingOpenEventId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const consumeStorage = () => {
+      try {
+        const eventId = sessionStorage.getItem("hangarPlanning:openEventId");
+        if (eventId) {
+          sessionStorage.removeItem("hangarPlanning:openEventId");
+          sessionStorage.removeItem("hangarPlanning:openEventStartAt");
+          sessionStorage.removeItem("hangarPlanning:openEventEndAt");
+          sessionStorage.removeItem("hangarPlanning:openEventSandboxId");
+          setPendingOpenEventId(eventId);
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+      return false;
+    };
+
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent<{ eventId?: string }>).detail;
+      if (!detail?.eventId) return;
+      setPendingOpenEventId(detail.eventId);
+    };
+
+    consumeStorage();
+    window.addEventListener("hangarPlanning:openEventFromNotification", onOpen);
+    return () => window.removeEventListener("hangarPlanning:openEventFromNotification", onOpen);
+  }, []);
+
+  // После смены контура/песочницы снова пробуем открыть событие из sessionStorage
+  useEffect(() => {
+    try {
+      const eventId = sessionStorage.getItem("hangarPlanning:openEventId");
+      if (!eventId) return;
+      sessionStorage.removeItem("hangarPlanning:openEventId");
+      sessionStorage.removeItem("hangarPlanning:openEventStartAt");
+      sessionStorage.removeItem("hangarPlanning:openEventEndAt");
+      sessionStorage.removeItem("hangarPlanning:openEventSandboxId");
+      setPendingOpenEventId(eventId);
+    } catch {
+      // ignore
+    }
+  }, [activeSandboxId]);
+
+  useEffect(() => {
+    if (!pendingOpenEventId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const ev = await apiGet<EventRow>(`/api/events/${encodeURIComponent(pendingOpenEventId)}`);
+        if (cancelled || !ev?.id) return;
+        setPendingOpenEventId(null);
+        openEditorForExisting(ev);
+      } catch {
+        if (!cancelled) setPendingOpenEventId(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingOpenEventId, activeSandboxId]);
 
   const layoutsForEditorQ = useQuery({
     queryKey: ["ref", "layouts", "editor", draft?.hangarId ?? "", selectedAircraftTypeId],
@@ -2114,6 +2469,7 @@ export function GanttView() {
       "actualEndAtLocal",
       "notes",
       "hangarId",
+      "workshopId",
       "layoutId",
       "standId",
       "multiPlacement"
@@ -2220,6 +2576,7 @@ export function GanttView() {
         actualStartAt,
         actualEndAt,
         hangarId: draft.hangarId || null,
+        workshopId: draft.workshopId || null,
         layoutId: draft.layoutId || null,
         placements: placementsPayload,
         notes: draft.notes?.trim() ? draft.notes : null,
@@ -2863,6 +3220,13 @@ export function GanttView() {
       });
     }
 
+    // Раскладка нахлёстов по тому же интервалу, что рисуется на шкале
+    // (в CURRENT с фактом иначе бары «наезжают» при непересекающемся оперативе).
+    const packRange = (ev: EventRow) =>
+      dndActive
+        ? { startMs: Date.parse(ev.startAt), endMs: Date.parse(ev.endAt) }
+        : eventPackRangeMs(ev, ganttDisplayMode);
+
     // В режиме зоны DnD не показываем unassigned / no-stand / cancelled — только рабочие drop-строки
     if (dndActive && dndZoneOnly) {
       const onlyStands = rows.filter((r) => r.kind === "stand");
@@ -2871,10 +3235,19 @@ export function GanttView() {
         if (r.events.length === 0) {
           laneRows.push({ key: `${r.key}:lane:0`, label: r.label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: [] });
         } else {
-          const lanes = packOverlapsIntoLanes(r.events);
+          const lanes = packOverlapsIntoLanes(r.events, packRange);
           for (let i = 0; i < lanes.length; i++) {
             const label = i === 0 ? r.label : `${r.label} (нахлёст)`;
-            laneRows.push({ key: `${r.key}:lane:${i}`, label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: lanes[i]! });
+            laneRows.push({
+              key: `${r.key}:lane:${i}`,
+              label,
+              subLabel: r.subLabel,
+              kind: r.kind,
+              hangarId: r.hangarId,
+              layoutId: r.layoutId,
+              standId: r.standId,
+              events: lanes[i]!
+            });
           }
         }
       }
@@ -2887,16 +3260,25 @@ export function GanttView() {
         // пустая строка — drop-зона
         laneRows.push({ key: `${r.key}:lane:0`, label: r.label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: [] });
       } else {
-        const lanes = packOverlapsIntoLanes(r.events);
+        const lanes = packOverlapsIntoLanes(r.events, packRange);
         for (let i = 0; i < lanes.length; i++) {
           const label = i === 0 ? r.label : `${r.label} (нахлёст)`;
-          laneRows.push({ key: `${r.key}:lane:${i}`, label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: lanes[i]! });
+          laneRows.push({
+            key: `${r.key}:lane:${i}`,
+            label,
+            subLabel: r.subLabel,
+            kind: r.kind,
+            hangarId: r.hangarId,
+            layoutId: r.layoutId,
+            standId: r.standId,
+            events: lanes[i]!
+          });
         }
       }
     }
 
     if (cancelledVisible.length > 0) {
-      const cancelledLanes = packOverlapsIntoLanes(cancelledVisible);
+      const cancelledLanes = packOverlapsIntoLanes(cancelledVisible, packRange);
       for (let i = 0; i < cancelledLanes.length; i++) {
         laneRows.push({
           key: `cancelled:lane:${i}`,
@@ -2908,7 +3290,7 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, ganttFilters, eventsForGantt, dndActive, dndStandsQ.data, dndStandById, dndHangarScopeIds, dndLayoutIds, dndZoneOnly, hangarsQ.data]);
+  }, [groupMode, ganttFilters, eventsForGantt, dndActive, dndStandsQ.data, dndStandById, dndHangarScopeIds, dndLayoutIds, dndZoneOnly, hangarsQ.data, ganttDisplayMode]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -3025,7 +3407,7 @@ export function GanttView() {
     [slotHistogram]
   );
 
-  const hasExitLabelCollision = useCallback(
+  const hasEdgeTimeLabelCollision = useCallback(
     (rowEvents: PlacedEvent[], current: EventRow, targetStartAt: string, targetEndAt: string, labelLeft: number, labelRight: number) => {
       for (const item of rowEvents) {
         const ev = item.ev;
@@ -3053,11 +3435,11 @@ export function GanttView() {
 
   const renderExitTimeLabel = useCallback(
     (rowEvents: PlacedEvent[], ev: EventRow, seg: { x: number; w: number }, targetStartAt: string, targetEndAt: string, targetIsFact: boolean) => {
-      if (!canShowExitTimeLabel(minorScale)) return null;
+      if (!canShowBarEdgeTimeLabel(minorScale)) return null;
       const labelLeft = seg.x + seg.w + EXIT_TIME_LABEL_GAP;
       const labelRight = labelLeft + EXIT_TIME_LABEL_WIDTH;
       if (labelRight > canvasWidth - 2) return null;
-      if (hasExitLabelCollision(rowEvents, ev, targetStartAt, targetEndAt, labelLeft, labelRight)) return null;
+      if (hasEdgeTimeLabelCollision(rowEvents, ev, targetStartAt, targetEndAt, labelLeft, labelRight)) return null;
       const top = ganttDisplayMode === "PLAN_FACT" ? (targetIsFact ? 34 : 8) : 14;
       return (
         <span
@@ -3069,19 +3451,40 @@ export function GanttView() {
         </span>
       );
     },
-    [canvasWidth, ganttDisplayMode, hasExitLabelCollision, minorScale, timelineTimeMode]
+    [canvasWidth, ganttDisplayMode, hasEdgeTimeLabelCollision, minorScale, timelineTimeMode]
+  );
+
+  const renderEntryTimeLabel = useCallback(
+    (rowEvents: PlacedEvent[], ev: EventRow, seg: { x: number; w: number }, targetStartAt: string, targetEndAt: string, targetIsFact: boolean) => {
+      if (!canShowBarEdgeTimeLabel(minorScale)) return null;
+      const labelRight = seg.x - ENTRY_TIME_LABEL_GAP;
+      const labelLeft = labelRight - ENTRY_TIME_LABEL_WIDTH;
+      if (labelLeft < 2) return null;
+      if (hasEdgeTimeLabelCollision(rowEvents, ev, targetStartAt, targetEndAt, labelLeft, labelRight)) return null;
+      const top = ganttDisplayMode === "PLAN_FACT" ? (targetIsFact ? 34 : 8) : 14;
+      return (
+        <span
+          className={`entryTimeLabel${targetIsFact ? " entryTimeLabelFact" : ""}`}
+          style={{ left: labelLeft, top, width: ENTRY_TIME_LABEL_WIDTH }}
+          title={entryTimeTitle(ev, timelineTimeMode)}
+        >
+          {entryTimeLabel(ev, timelineTimeMode)}
+        </span>
+      );
+    },
+    [ganttDisplayMode, hasEdgeTimeLabelCollision, minorScale, timelineTimeMode]
   );
 
   const cancelledAircraftRows = useMemo(() => {
     if (groupMode !== "AIRCRAFT") return [];
     const cancelled = exportEvents.filter((e) => e.status === "CANCELLED");
-    return packOverlapsIntoLanes(cancelled).map((events, i) => ({
+    return packOverlapsIntoLanes(cancelled, (ev) => eventPackRangeMs(ev, ganttDisplayMode)).map((events, i) => ({
       key: `cancelled-aircraft:lane:${i}`,
       label: i === 0 ? "Отменено" : "Отменено (нахлёст)",
       subLabel: "Не участвует в рабочем размещении",
       events
     }));
-  }, [groupMode, exportEvents]);
+  }, [groupMode, exportEvents, ganttDisplayMode]);
 
   const aircraftRows = useMemo(
     () => [
@@ -3091,7 +3494,7 @@ export function GanttView() {
           key: ev.id,
           label: eventAircraftLabel(ev),
           subLabel: aircraftAxisSubLabel(ev) || formatRowLabel(ev) || ev.title,
-          events: segments.map((segment) => ({ ev: segment, overlapToMs: null } as PlacedEvent))
+          events: segments.map((segment) => ({ ev: segment } as PlacedEvent))
         };
       }),
       ...cancelledAircraftRows
@@ -3788,6 +4191,20 @@ export function GanttView() {
               />
             </label>
             <label className="tgField">
+              <span className="tgFieldLabel">Цех</span>
+              <MultiSelectDropdown
+                options={smartFilterOptions.workshops}
+                value={filterWorkshopIds}
+                onChange={setFilterWorkshopIds}
+                placeholder="все"
+                width={160}
+                maxHeight={320}
+                searchable
+                searchPlaceholder="Найти цех"
+                compact
+              />
+            </label>
+            <label className="tgField">
               <span className="tgFieldLabel">Планирование</span>
               <select value={filterPlanningKind} onChange={(e) => setFilterPlanningKind(e.target.value as PlanningKindFilter)}>
                 <option value="ALL">все</option>
@@ -3969,6 +4386,7 @@ export function GanttView() {
             eventsQueryToISO={to.toISOString()}
             aircraft={aircraftQ.data ?? []}
             eventTypes={eventTypesQ.data ?? []}
+            workshops={workshopsQ.data ?? []}
             hangars={hangarsQ.data ?? []}
             aircraftTypes={aircraftTypesQ.data ?? []}
             operators={(operatorsQ.data ?? []).map((o) => ({ id: o.id, code: o.code, name: o.name }))}
@@ -4107,8 +4525,8 @@ export function GanttView() {
                   <label className="tgField" title="Часовой режим отображения таймлайна">
                     <span className="tgFieldLabel">Время</span>
                     <select value={timelineTimeMode} onChange={(e) => setTimelineTimeMode(e.target.value as TimelineTimeMode)}>
+                      <option value="LOCAL">Local (MSK)</option>
                       <option value="UTC">UTC</option>
-                      <option value="LOCAL">Local</option>
                     </select>
                   </label>
                   <div className="tbPopoverActions">
@@ -4233,6 +4651,7 @@ export function GanttView() {
                                   title={`${factToneLabel(actualTone)}: ${formatTimelineDate(ev.actualStartAt, timelineTimeMode)} – ${formatTimelineDate(ev.actualEndAt, timelineTimeMode)}`}
                                 />
                               ) : null}
+                              {renderEntryTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                               {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                             </Fragment>
                           );
@@ -4304,7 +4723,7 @@ export function GanttView() {
                           const exitTargetEndAt = exitTargetIsFact && ev.actualEndAt ? ev.actualEndAt : displayPeriod.endAt;
 
                           return (
-                            <Fragment key={ev.id}>
+                            <Fragment key={ev.segmentKey ?? ev.id}>
                               <div
                               className={`bar${ganttDisplayMode === "PLAN_FACT" ? " barPlanFactPlan" : ""}${displayPeriod.source === "Факт" ? " barCurrentFact" : ""}`}
                               style={{
@@ -4410,6 +4829,7 @@ export function GanttView() {
                                 title={`${factToneLabel(actualTone)}: ${formatTimelineDate(ev.actualStartAt, timelineTimeMode)} – ${formatTimelineDate(ev.actualEndAt, timelineTimeMode)}`}
                               />
                             ) : null}
+                            {renderEntryTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                             {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                             </Fragment>
                           );
@@ -4486,7 +4906,39 @@ export function GanttView() {
         onClose={() => {
           setEditorOpen(false);
           setCopyFromTitle(null);
+          setShareHint(null);
         }}
+        headerActions={
+          draft?.id ? (
+            <>
+              {shareHint ? <span className="drawerShareHint" role="status">{shareHint}</span> : null}
+              <button
+                className="drawerShareBtn"
+                onClick={() => void shareCurrentEvent()}
+                aria-label="Поделиться"
+                title="Поделиться ссылкой на событие"
+                type="button"
+              >
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path
+                    d="M10 2.5v9.5M10 2.5L6.5 6M10 2.5L13.5 6"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M4 11.5v3.2c0 .7.56 1.3 1.25 1.3h9.5c.69 0 1.25-.6 1.25-1.3v-3.2"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </>
+          ) : null
+        }
       >
         {!draft ? (
           <div className="muted">Нет данных формы.</div>
@@ -4512,161 +4964,204 @@ export function GanttView() {
             <fieldset className="evReadonlyFieldset" disabled={!canEditEvents}>
             <section className="evCard">
               <header className="evCardHeader">
-                <div className="evCardTitle">Основная информация</div>
-                <div className="evCardHint">Название, уровень планирования, статус и связь с бортом.</div>
+                <EvCardTitle
+                  helpLabel="Основная информация"
+                  help={
+                    <>
+                      <p>Идентификация события: название, статус, тип планирования, тип события, борт и ответственный цех.</p>
+                      <ul>
+                        <li>Борт можно менять только в статусах «Черновик» и «Запланировано».</li>
+                        <li>Оператор и тип ВС подставляются из справочника по выбранному борту.</li>
+                        <li>Новые события создаются как оперативные; уровень на форме не выбирается.</li>
+                      </ul>
+                    </>
+                  }
+                >
+                  Основная информация
+                </EvCardTitle>
               </header>
               <div className="evCardBody">
-                <div className="evForm">
-                  <label className="evField">
-                    <span className="evFieldLabel">Название</span>
+                <div className="evMainInfo">
+                  <label className="evField evEventTitleField">
                     <input
-                      className="evInput"
+                      className="evInput evEventTitleInput"
                       value={draft.title}
                       onChange={(e) => setDraft({ ...draft, title: e.target.value })}
                       placeholder="Например: Техобслуживание А320"
+                      aria-label="Название события"
                     />
                   </label>
-                  <label className="evField">
-                    <span className="evFieldLabel">Уровень</span>
-                    <select
-                      className="evInput"
-                      value={draft.level}
-                      onChange={(e) => setDraft({ ...draft, level: e.target.value as any })}
-                    >
-                      <option value="OPERATIONAL">Оперативный</option>
-                      <option value="STRATEGIC">Стратегический</option>
-                    </select>
-                  </label>
-                  <label className="evField">
-                    <span className="evFieldLabel">Статус</span>
-                    <select
-                      className="evInput"
-                      value={draft.status}
-                      onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
-                    >
-                      <option value="DRAFT">Черновик</option>
-                      <option value="PLANNED">Запланировано</option>
-                      <option value="CONFIRMED">Подтверждено</option>
-                      <option value="IN_PROGRESS">В работе</option>
-                      <option value="DONE">Завершено</option>
-                      <option value="CANCELLED">Отменено</option>
-                    </select>
-                  </label>
-                  <label className="evField">
-                    <span className="evFieldLabel">Тип планирования</span>
-                    <select
-                      className="evInput"
-                      value={draft.planningKind}
-                      onChange={(e) => {
-                        const planningKind = e.target.value as EditorDraft["planningKind"];
-                        setDraft({
-                          ...draft,
-                          planningKind,
-                          budgetStartAtLocal: planningKind === "PLANNED" ? draft.budgetStartAtLocal || draft.startAtLocal : "",
-                          budgetEndAtLocal: planningKind === "PLANNED" ? draft.budgetEndAtLocal || draft.endAtLocal : "",
-                          placements: draft.placements.map((p) =>
-                            planningKind === "PLANNED"
-                              ? {
-                                  ...p,
-                                  budgetStartAtLocal: p.budgetStartAtLocal || p.startAtLocal,
-                                  budgetEndAtLocal: p.budgetEndAtLocal || p.endAtLocal
-                                }
-                              : { ...p, budgetStartAtLocal: "", budgetEndAtLocal: "" }
-                          )
-                        });
-                      }}
-                    >
-                      <option value="PLANNED">Плановое</option>
-                      <option value="UNPLANNED">Внеплановое</option>
-                    </select>
-                  </label>
-                  <label className="evField">
-                    <span className="evFieldLabel">Борт</span>
-                    {selectedVirtualAircraft && !draft.aircraftId ? (
-                      <input className="evInput evInputReadonly" value={selectedVirtualAircraft.label ?? "—"} readOnly />
-                    ) : (
+
+                  <div className="evMainInfoGroup" aria-label="Параметры события">
+                    <label className="evField">
+                      <span className="evFieldLabel">Статус</span>
                       <select
                         className="evInput"
-                        value={draft.aircraftId}
-                        onChange={(e) => setDraft({ ...draft, aircraftId: e.target.value })}
+                        value={draft.status}
+                        onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
+                      >
+                        <option value="DRAFT">Черновик</option>
+                        <option value="PLANNED">Запланировано</option>
+                        <option value="CONFIRMED">Подтверждено</option>
+                        <option value="IN_PROGRESS">В работе</option>
+                        <option value="DONE">Завершено</option>
+                        <option value="CANCELLED">Отменено</option>
+                      </select>
+                    </label>
+                    <label className="evField">
+                      <span className="evFieldLabel">Тип планирования</span>
+                      <select
+                        className={`evInput${scheduleLockedByDone ? " evInputReadonly" : ""}`}
+                        value={draft.planningKind}
+                        disabled={scheduleLockedByDone}
+                        title={scheduleLockedByDone ? "Нельзя менять у завершённого события" : undefined}
+                        onChange={(e) => {
+                          const planningKind = e.target.value as EditorDraft["planningKind"];
+                          setDraft({
+                            ...draft,
+                            planningKind,
+                            budgetStartAtLocal: planningKind === "PLANNED" ? draft.budgetStartAtLocal || draft.startAtLocal : "",
+                            budgetEndAtLocal: planningKind === "PLANNED" ? draft.budgetEndAtLocal || draft.endAtLocal : "",
+                            placements: draft.placements.map((p) =>
+                              planningKind === "PLANNED"
+                                ? {
+                                    ...p,
+                                    budgetStartAtLocal: p.budgetStartAtLocal || p.startAtLocal,
+                                    budgetEndAtLocal: p.budgetEndAtLocal || p.endAtLocal
+                                  }
+                                : { ...p, budgetStartAtLocal: "", budgetEndAtLocal: "" }
+                            )
+                          });
+                        }}
+                      >
+                        <option value="PLANNED">Плановое</option>
+                        <option value="UNPLANNED">Внеплановое</option>
+                      </select>
+                    </label>
+                    <label className="evField">
+                      <span className="evFieldLabel">Тип события</span>
+                      <select
+                        className={`evInput${scheduleLockedByDone ? " evInputReadonly" : ""}`}
+                        value={draft.eventTypeId}
+                        disabled={scheduleLockedByDone}
+                        title={scheduleLockedByDone ? "Нельзя менять у завершённого события" : undefined}
+                        onChange={(e) => setDraft({ ...draft, eventTypeId: e.target.value })}
                       >
                         <option value="">— выберите —</option>
-                        {(aircraftQ.data ?? []).map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.tailNumber}
+                        {(eventTypesQ.data ?? []).map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
                           </option>
                         ))}
                       </select>
-                    )}
-                  </label>
-                  <label className="evField">
-                    <span className="evFieldLabel">Тип события</span>
-                    <select
-                      className="evInput"
-                      value={draft.eventTypeId}
-                      onChange={(e) => setDraft({ ...draft, eventTypeId: e.target.value })}
-                    >
-                      <option value="">— выберите —</option>
-                      {(eventTypesQ.data ?? []).map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {draft.aircraftId ? (
-                    <>
-                      <label className="evField">
-                        <span className="evFieldLabel">Оператор</span>
+                    </label>
+                  </div>
+
+                  <div className="evMainInfoGroup" aria-label="Воздушное судно">
+                    <div className="evField">
+                      <span className="evFieldLabel">Борт</span>
+                      {!aircraftFieldEditable || (selectedVirtualAircraft && !draft.aircraftId) ? (
                         <input
                           className="evInput evInputReadonly"
-                          value={selectedAircraft?.operator?.name ?? "—"}
+                          value={aircraftFieldLabel}
                           readOnly
+                          title={
+                            !aircraftFieldEditable
+                              ? "Борт можно менять только в статусах «Черновик» и «Запланировано»"
+                              : undefined
+                          }
                         />
-                      </label>
-                      <label className="evField">
-                        <span className="evFieldLabel">Тип ВС</span>
-                        <input
-                          className="evInput evInputReadonly"
-                          value={
-                            selectedAircraft?.type
+                      ) : (
+                        <SingleSelectDropdown
+                          className="evSelect"
+                          searchable
+                          searchPlaceholder="Найти борт"
+                          placeholder="— выберите —"
+                          emptyLabel="— выберите —"
+                          options={aircraftSelectOptions}
+                          value={draft.aircraftId}
+                          onChange={(aircraftId) => setDraft({ ...draft, aircraftId })}
+                          width="100%"
+                          maxHeight={280}
+                        />
+                      )}
+                    </div>
+                    <label className="evField">
+                      <span className="evFieldLabel">Оператор</span>
+                      <input
+                        className="evInput evInputReadonly"
+                        value={
+                          draft.aircraftId
+                            ? selectedAircraft?.operator?.name ?? "—"
+                            : selectedVirtualAircraft
+                              ? selectedVirtualOperatorName
+                              : "—"
+                        }
+                        readOnly
+                      />
+                    </label>
+                    <label className="evField">
+                      <span className="evFieldLabel">Тип ВС</span>
+                      <input
+                        className="evInput evInputReadonly"
+                        value={
+                          draft.aircraftId
+                            ? selectedAircraft?.type
                               ? `${selectedAircraft.type.icaoType ? `${selectedAircraft.type.icaoType} • ` : ""}${selectedAircraft.type.name}`
                               : "—"
-                          }
-                          readOnly
-                        />
-                      </label>
-                    </>
-                  ) : selectedVirtualAircraft ? (
-                    <>
-                      <label className="evField">
-                        <span className="evFieldLabel">Оператор</span>
-                        <input className="evInput evInputReadonly" value={selectedVirtualOperatorName} readOnly />
-                      </label>
-                      <label className="evField">
-                        <span className="evFieldLabel">Тип ВС</span>
-                        <input
-                          className="evInput evInputReadonly"
-                          value={
-                            selectedVirtualAircraftType
+                            : selectedVirtualAircraftType
                               ? `${selectedVirtualAircraftType.icaoType ? `${selectedVirtualAircraftType.icaoType} • ` : ""}${selectedVirtualAircraftType.name}`
                               : "—"
-                          }
-                          readOnly
-                        />
-                      </label>
-                    </>
-                  ) : null}
+                        }
+                        readOnly
+                      />
+                    </label>
+                  </div>
+
+                  <label className="evField evWorkshopField">
+                    <span className="evFieldLabel">Ответственный цех</span>
+                    <select
+                      className="evInput"
+                      value={draft.workshopId}
+                      onChange={(e) => setDraft({ ...draft, workshopId: e.target.value })}
+                    >
+                      <option value="">— не задан —</option>
+                      {(workshopsQ.data ?? [])
+                        .filter((w) => w.isActive !== false || w.id === draft.workshopId)
+                        .map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.code ? `${w.code} • ${w.name}` : w.name}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
                 </div>
               </div>
             </section>
 
             <section className="evCard">
               <header className="evCardHeader">
-                <div className="evCardTitle">Периоды и TAT</div>
-                <div className="evCardHint">Оперативный период управляет Ганттом и размещением. Бюджетный и фактический нужны для сравнения TAT.</div>
+                <EvCardTitle
+                  helpLabel="Периоды и TAT"
+                  help={
+                    <>
+                      <p>Три периода события для планирования и сравнения.</p>
+                      <ul>
+                        <li>Оперативный период управляет полоской на Гантте и размещением в ангаре.</li>
+                        <li>Бюджетный период нужен для планового TAT; у внеплановых событий он скрыт.</li>
+                        <li>Фактический период заполняется по ходу работы и влияет на статус «Завершено».</li>
+                      </ul>
+                    </>
+                  }
+                >
+                  Периоды и TAT
+                </EvCardTitle>
               </header>
               <div className="evCardBody">
+                <fieldset
+                  className={`evReadonlyFieldset${scheduleLockedByDone ? " evLockedReadonly" : ""}`}
+                  disabled={scheduleLockedByDone}
+                >
                 <div className="evPeriodGrid">
                   <div className="evPeriodName">Оперативный</div>
                   <label className="evField">
@@ -4742,17 +5237,33 @@ export function GanttView() {
                     <input className="evInput evInputReadonly" value={formatTatDetailed(draft.actualStartAtLocal, draft.actualEndAtLocal)} readOnly />
                   </label>
                 </div>
+                </fieldset>
               </div>
             </section>
 
             <section className="evCard">
               <header className="evCardHeader">
-                <div className="evCardTitle">Ангар и место</div>
-                <div className="evCardHint">
-                  Резервирование места выполняется отдельной операцией — кнопкой «Назначить место».
-                </div>
+                <EvCardTitle
+                  helpLabel="Ангар и место"
+                  help={
+                    <>
+                      <p>Где событие выполняется: ангар, вариант размещения и место.</p>
+                      <ul>
+                        <li>Выбор ангара и места в форме ещё не резервирует слот — для этого нужна кнопка «Назначить место».</li>
+                        <li>Варианты размещения фильтруются по совместимости с типом ВС.</li>
+                        <li>При нескольких размещениях управляйте этапами в списке ниже; одно место назначается отдельно.</li>
+                      </ul>
+                    </>
+                  }
+                >
+                  Ангар и место
+                </EvCardTitle>
               </header>
               <div className="evCardBody">
+                <fieldset
+                  className={`evReadonlyFieldset${scheduleLockedByDone ? " evLockedReadonly" : ""}`}
+                  disabled={scheduleLockedByDone}
+                >
                 <div className="evLocationGrid">
                   <label className="evField">
                     <span className="evFieldLabel">Ангар</span>
@@ -4805,27 +5316,24 @@ export function GanttView() {
                     </select>
                   </label>
                 </div>
-                <label className="evCheckRow">
-                  <input
-                    type="checkbox"
+                <div className="evToggleStack">
+                  <EvToggle
                     checked={draft.multiPlacement}
-                    onChange={(e) => setMultiPlacementMode(e.target.checked)}
+                    onChange={setMultiPlacementMode}
+                    label="Событие в нескольких ангарах"
+                    hint="Добавляет этапы размещения с буксировками между ангарами"
                   />
-                  <span>Событие в нескольких ангарах</span>
-                </label>
-                <label className="evCheckRow">
-                  <input
-                    type="checkbox"
+                  <EvToggle
                     checked={draft.allowOverlap}
-                    onChange={(e) => setDraft({ ...draft, allowOverlap: e.target.checked })}
+                    onChange={(allowOverlap) => setDraft({ ...draft, allowOverlap })}
+                    label="Разрешить нахлёст при сохранении"
+                    hint={
+                      draft.allowOverlap
+                        ? "Сохранение не блокируется занятостью места или другой схемой ангара"
+                        : "При конфликте места сохранение будет отклонено"
+                    }
                   />
-                  <span>Разрешить нахлёст при сохранении</span>
-                </label>
-                {draft.allowOverlap ? (
-                  <div className="muted">
-                    Сохранение не будет блокироваться занятостью места или другой активной схемой ангара.
-                  </div>
-                ) : null}
+                </div>
                 {draft.multiPlacement ? (
                   <div className="evPlacementList">
                     {draft.placements.map((p, idx) => {
@@ -4965,18 +5473,35 @@ export function GanttView() {
                     Назначить место
                   </button>
                 </div>
+                </fieldset>
               </div>
             </section>
 
             <section className="evCard">
               <header className="evCardHeader">
-                <div className="evCardTitle">Буксировки</div>
-                <div className="evCardHint">Закатка и выкатка — можно указать несколько интервалов внутри события.</div>
+                <EvCardTitle
+                  helpLabel="Буксировки"
+                  help={
+                    <>
+                      <p>Интервалы закатки и выкатки внутри события.</p>
+                      <ul>
+                        <li>Сначала сохраните событие — затем можно добавлять буксировки.</li>
+                        <li>Можно указать несколько интервалов; они должны лежать внутри оперативного периода.</li>
+                      </ul>
+                    </>
+                  }
+                >
+                  Буксировки
+                </EvCardTitle>
               </header>
               <div className="evCardBody">
                 {!draft.id ? (
                   <div className="muted">Сначала сохраните событие, затем можно добавлять буксировки.</div>
                 ) : (
+                  <fieldset
+                    className={`evReadonlyFieldset${scheduleLockedByDone ? " evLockedReadonly" : ""}`}
+                    disabled={scheduleLockedByDone}
+                  >
                   <div style={{ display: "grid", gap: 10 }}>
                     <div className="evForm">
                       <label className="evField">
@@ -5037,14 +5562,27 @@ export function GanttView() {
                       ) : null}
                     </div>
                   </div>
+                  </fieldset>
                 )}
               </div>
             </section>
 
             <section className="evCard">
               <header className="evCardHeader">
-                <div className="evCardTitle">Примечание</div>
-                <div className="evCardHint">Комментарий к событию для команды.</div>
+                <EvCardTitle
+                  helpLabel="Примечание"
+                  help={
+                    <>
+                      <p>Свободный комментарий к событию для команды планирования и производства.</p>
+                      <ul>
+                        <li>Сюда удобно писать контекст, особенности работ и внешние согласования.</li>
+                        <li>Текст виден всем, у кого есть доступ к карточке события.</li>
+                      </ul>
+                    </>
+                  }
+                >
+                  Примечание
+                </EvCardTitle>
               </header>
               <div className="evCardBody">
                 <textarea
@@ -5061,12 +5599,20 @@ export function GanttView() {
             {draft.id ? (
               <details className="evCard evCardDetails">
                 <summary className="evCardHeader evCardSummary">
-                  <div>
-                    <div className="evCardTitle">Ресурсы и факт</div>
-                    <div className="evCardHint">
-                      Планирование ресурсов, исполнителей и фактические показатели.
-                    </div>
-                  </div>
+                  <EvCardTitle
+                    helpLabel="Ресурсы и факт"
+                    help={
+                      <>
+                        <p>Планирование ресурсов, исполнителей и фактические показатели по событию.</p>
+                        <ul>
+                          <li>Блок доступен после сохранения события.</li>
+                          <li>Здесь ведётся план ресурсов и фиксация факта выполнения.</li>
+                        </ul>
+                      </>
+                    }
+                  >
+                    Ресурсы и факт
+                  </EvCardTitle>
                   <span className="evCardChevron" aria-hidden="true" />
                 </summary>
                 <div className="evCardBody">
@@ -5077,21 +5623,25 @@ export function GanttView() {
 
             <details className="evCard evCardDetails">
               <summary className="evCardHeader evCardSummary">
-                <div>
-                  <div className="evCardTitle">
-                    История изменений{" "}
-                    {draft.id && (historyQ.data ?? []).length > 0 ? (
+                <EvCardTitle
+                  helpLabel="История изменений"
+                  help={
+                    <>
+                      <p>Журнал правок события: кто, когда и что изменил.</p>
+                      <ul>
+                        <li>История появляется после первого сохранения.</li>
+                        <li>При существенных изменениях указывается причина правки.</li>
+                      </ul>
+                    </>
+                  }
+                  badge={
+                    draft.id && (historyQ.data ?? []).length > 0 ? (
                       <span className="evCardBadge">{(historyQ.data ?? []).length}</span>
-                    ) : null}
-                  </div>
-                  <div className="evCardHint">
-                    {!draft.id
-                      ? "Будет доступна после сохранения события."
-                      : historyQ.isFetching
-                        ? "обновление…"
-                        : "Все правки события с автором и причиной."}
-                  </div>
-                </div>
+                    ) : null
+                  }
+                >
+                  История изменений
+                </EvCardTitle>
                 <span className="evCardChevron" aria-hidden="true" />
               </summary>
               <div className="evCardBody">
@@ -5218,19 +5768,6 @@ export function GanttView() {
           <div className="legendSection">
             <div className="legendSectionTitle">Индикаторы</div>
             <div className="legendSectionGrid">
-              <span className="ganttLegendItem">
-                <span className="legendOverlayBox" aria-hidden="true">
-                  <span style={{ background: "#94a3b8", border: "1px solid rgba(15, 23, 42, 0.22)" }} />
-                  <span
-                    style={{
-                      backgroundColor: "rgba(220, 38, 38, 0.30)",
-                      backgroundImage:
-                        "repeating-linear-gradient(135deg, rgba(220,38,38,0.55) 0px, rgba(220,38,38,0.55) 6px, rgba(220,38,38,0) 6px, rgba(220,38,38,0) 12px)"
-                    }}
-                  />
-                </span>
-                Нахлёст по месту / ангару
-              </span>
               <span className="ganttLegendItem">
                 <span
                   className="legendBar"

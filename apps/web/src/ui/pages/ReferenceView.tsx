@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { authMe } from "../auth/authApi";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
+import { SwitchToggle } from "../components/SwitchToggle";
 
 type RefKind =
   | "operators"
@@ -12,6 +13,7 @@ type RefKind =
   | "aircraft"
   | "aircraft-type-palette"
   | "event-types"
+  | "workshops"
   | "hangars"
   | "layouts"
   | "stands"
@@ -59,6 +61,7 @@ const REF_GROUPS: RefGroup[] = [
   {
     label: "Персонал",
     items: [
+      { kind: "workshops", title: "Цеха" },
       { kind: "skills", title: "Квалификации" },
       { kind: "persons", title: "Сотрудники" },
       { kind: "shifts", title: "Смены" }
@@ -83,6 +86,7 @@ const REF_SINGULAR: Record<RefKind, string> = {
   aircraft: "Борт",
   "aircraft-type-palette": "Правило палитры",
   "event-types": "Тип события",
+  workshops: "Цех",
   hangars: "Ангар",
   layouts: "Вариант расстановки",
   stands: "Место (стоянка)",
@@ -168,13 +172,8 @@ function NumberInput(props: { value: number; onChange: (v: number) => void; step
   );
 }
 
-function BoolToggle(props: { value: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label className="row" style={{ gap: 6 }}>
-      <input type="checkbox" checked={props.value} onChange={(e) => props.onChange(e.target.checked)} />
-      <span className="muted">активен</span>
-    </label>
-  );
+function BoolToggle(props: { value: boolean; onChange: (v: boolean) => void; label?: string }) {
+  return <SwitchToggle compact checked={props.value} onChange={props.onChange} label={props.label ?? "активен"} />;
 }
 
 function refNum(v: unknown, fallback = 0): number {
@@ -693,6 +692,9 @@ export function ReferenceView() {
       setFCode("NEW_EVENT");
       setFName("Событие");
       setFColor("#3b82f6");
+    } else if (k === "workshops") {
+      setFCode("SHOP1");
+      setFName("Цех");
     } else if (k === "hangars") {
       setFCode("HNEW");
       setFName("Ангар");
@@ -878,6 +880,7 @@ export function ReferenceView() {
       };
     if (kind === "event-types")
       return { code: fCode.trim(), name: fName.trim(), color: fColor.trim() ? fColor.trim() : undefined, isActive: fIsActive };
+    if (kind === "workshops") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
     if (kind === "hangars") return { code: fCode.trim(), name: fName.trim(), isPhysical: fIsPhysical, isActive: fIsActive };
     if (kind === "layouts")
       return {
@@ -1436,6 +1439,7 @@ export function ReferenceView() {
           <div className={`refForm refForm_${kind}`}>
             {kind === "operators" ||
             kind === "event-types" ||
+            kind === "workshops" ||
             kind === "hangars" ||
             kind === "layouts" ||
             kind === "stands" ||
@@ -1765,10 +1769,12 @@ export function ReferenceView() {
                   <span className="muted">Описание</span>
                   <TextInput value={fDescription} onChange={setFDescription} style={{ width: 360 }} />
                 </label>
-                <label className="row" style={{ gap: 6 }}>
-                  <input type="checkbox" checked={fIsDefault} onChange={(e) => setFIsDefault(e.target.checked)} />
-                  <span className="muted">профиль по умолчанию</span>
-                </label>
+                <SwitchToggle
+                  compact
+                  checked={fIsDefault}
+                  onChange={setFIsDefault}
+                  label="профиль по умолчанию"
+                />
               </>
             ) : null}
 
@@ -1823,13 +1829,12 @@ export function ReferenceView() {
             ) : null}
 
             {kind === "hangars" ? (
-              <label className="row" style={{ gap: 8, alignItems: "center" }}>
-                <input type="checkbox" checked={fIsPhysical} onChange={(e) => setFIsPhysical(e.target.checked)} />
-                <span>
-                  Физический ангар площадки
-                  <div className="muted small">Снимите флажок для внешнего MRO / стороннего контура (удобно для потребности на Гантте).</div>
-                </span>
-              </label>
+              <SwitchToggle
+                checked={fIsPhysical}
+                onChange={setFIsPhysical}
+                label="Физический ангар площадки"
+                hint="Выключите для внешнего MRO / стороннего контура (удобно для потребности на Гантте)."
+              />
             ) : null}
 
             <BoolToggle value={fIsActive} onChange={setFIsActive} />

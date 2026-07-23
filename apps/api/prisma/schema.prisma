@@ -399,19 +399,21 @@ model User {
   activityLogs       UserActivityLog[]
   ownedReports       SavedReport[]   @relation("ReportOwner")
   reportShares       SavedReportShare[]
+  notificationReads  AppNotificationRead[]
 
   @@index([isActive])
 }
 
 // Песочница плана: именованное изолированное пространство для «игры» с планом
 model Sandbox {
-  id          String        @id @default(uuid())
-  name        String
-  description String?
-  status      SandboxStatus @default(ACTIVE)
-  ownerId     String
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id                String             @id @default(uuid())
+  name              String
+  description       String?
+  status            SandboxStatus      @default(ACTIVE)
+  ownerId           String
+  sharedWithAllRole SandboxMemberRole?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
   owner   User            @relation("SandboxOwner", fields: [ownerId], references: [id])
   members SandboxMember[]
@@ -570,6 +572,19 @@ model EventType {
 
   events MaintenanceEvent[]
   placementPriorityRules PlacementPriorityRuleEventType[]
+}
+
+model Workshop {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events MaintenanceEvent[]
+
+  @@index([isActive])
 }
 
 model Hangar {
@@ -773,6 +788,9 @@ model MaintenanceEvent {
   hangarId      String?
   layoutId      String?
 
+  // Цех (справочник) — одинарный выбор
+  workshopId    String?
+
   notes         String?
 
   // Lineage: связь копии с источником (для merge/dedup между песочницами)
@@ -789,9 +807,10 @@ model MaintenanceEvent {
   aircraft  Aircraft? @relation(fields: [aircraftId], references: [id])
   eventType EventType @relation(fields: [eventTypeId], references: [id])
 
-  hangar  Hangar?       @relation(fields: [hangarId], references: [id])
-  layout  HangarLayout? @relation(fields: [layoutId], references: [id])
-  sandbox Sandbox?      @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  hangar   Hangar?       @relation(fields: [hangarId], references: [id])
+  layout   HangarLayout? @relation(fields: [layoutId], references: [id])
+  workshop Workshop?     @relation(fields: [workshopId], references: [id])
+  sandbox  Sandbox?      @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   reservations StandReservation[]
   placements   EventPlacement[]
@@ -805,6 +824,7 @@ model MaintenanceEvent {
   materialIssues       MaterialIssue[]
   stockMovements       StockMovement[]
   technicalPlan        EventTechnicalPlan?
+  notifications        AppNotification[]
 
   @@index([aircraftId])
   @@index([eventTypeId])
@@ -812,6 +832,7 @@ model MaintenanceEvent {
   @@index([planningKind])
   @@index([hangarId])
   @@index([layoutId])
+  @@index([workshopId])
   @@index([sandboxId])
   @@index([originEventId, sandboxId])
   @@index([sourceEventId])
@@ -953,6 +974,39 @@ model EventTow {
 
   @@index([eventId, startAt])
   @@index([sandboxId])
+}
+
+/// Уведомления (колокольчик): просрочка без факта и др.
+model AppNotification {
+  id        String   @id @default(uuid())
+  /// EVENT_OVERDUE_NO_FACT | EVENT_STATUS_IN_PROGRESS | EVENT_STATUS_DONE
+  kind      String
+  title     String
+  body      String?
+  eventId   String?
+  sandboxId String?
+  /// Уникальный ключ дедупликации, напр. overdue:<eventId>
+  dedupeKey String   @unique
+  createdAt DateTime @default(now())
+
+  event MaintenanceEvent?     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  reads AppNotificationRead[]
+
+  @@index([createdAt])
+  @@index([eventId])
+  @@index([kind, createdAt])
+}
+
+model AppNotificationRead {
+  notificationId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  notification AppNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, userId])
+  @@index([userId, readAt])
 }
 
 model MaintenanceEventAudit {

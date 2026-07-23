@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
+import { SwitchToggle } from "../components/SwitchToggle";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 const ITP_SELECTED_EVENT_KEY = "hangarPlanning:itpSelectedEventId";
@@ -546,10 +547,18 @@ export function RmItpView() {
                       <input value={needDraft.quantity} onChange={(e) => setNeedDraft({ ...needDraft, quantity: e.target.value })} placeholder="Кол-во" />
                       <input type="datetime-local" value={needDraft.requiredAtLocal} onChange={(e) => setNeedDraft({ ...needDraft, requiredAtLocal: e.target.value })} />
                       <input value={needDraft.responsible} onChange={(e) => setNeedDraft({ ...needDraft, responsible: e.target.value })} placeholder="Ответственный" />
-                      <label className="itpCheck">
-                        <input type="checkbox" checked={needDraft.isBlocker} onChange={(e) => setNeedDraft({ ...needDraft, isBlocker: e.target.checked, status: e.target.checked ? "BLOCKED" : needDraft.status })} />
-                        Блокер
-                      </label>
+                      <SwitchToggle
+                        compact
+                        checked={needDraft.isBlocker}
+                        onChange={(v) =>
+                          setNeedDraft({
+                            ...needDraft,
+                            isBlocker: v,
+                            status: v ? "BLOCKED" : needDraft.status
+                          })
+                        }
+                        label="Блокер"
+                      />
                       <button className="btn btnPrimary" type="button" disabled={!needDraft.description.trim() || addNeedM.isPending} onClick={() => addNeedM.mutate()}>
                         Добавить
                       </button>

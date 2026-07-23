@@ -14,7 +14,14 @@ import { SandboxesView } from "./pages/SandboxesView";
 import { AnalyticsView } from "./pages/AnalyticsView";
 import { HelpView } from "./pages/HelpView";
 import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
+import { NotificationBell } from "./components/NotificationBell";
 import { authMe } from "./auth/authApi";
+import { getActiveSandboxId, setActiveSandboxId } from "../lib/api";
+import {
+  applyEventDeepLink,
+  eventDeepLinkFromHashQuery,
+  parseHashPage
+} from "../lib/eventDeepLink";
 
 type Page =
   | "gantt"
@@ -43,6 +50,35 @@ function isPage(value: string): value is Page {
     value === "analytics" ||
     value === "help"
   );
+}
+
+function resolvePageFromHash(hashRaw: string): Page {
+  const { page } = parseHashPage(hashRaw);
+  if (page === "itp") return "gantt";
+  if (isPage(page)) return page;
+  return "gantt";
+}
+
+function consumeEventDeepLinkFromHash() {
+  const { page, query } = parseHashPage(location.hash);
+  const link = eventDeepLinkFromHashQuery(query);
+  if (!link) return null;
+
+  const targetSandbox = link.sandboxId ?? null;
+  const current = getActiveSandboxId();
+  if ((targetSandbox || null) !== (current || null)) {
+    setActiveSandboxId(targetSandbox);
+  }
+  applyEventDeepLink(link);
+
+  const cleanPage = page === "itp" ? "gantt" : isPage(page) ? page : "gantt";
+  const next = `${location.pathname}${location.search}#${cleanPage}`;
+  try {
+    history.replaceState(null, "", next);
+  } catch {
+    location.hash = cleanPage;
+  }
+  return cleanPage as Page;
 }
 
 function NavIcon(props: { active: boolean; onClick: () => void; label: string; icon: ReactNode }) {
@@ -150,30 +186,34 @@ export function App() {
   const me = meQ.data && meQ.data.ok ? meQ.data.user : null;
   const permissions = me?.permissions ?? [];
 
-  const initial = useMemo<Page>(() => {
-    const hash = (location.hash || "").replace("#", "");
-    if (isPage(hash)) return hash;
-    return "gantt";
-  }, []);
+  const initial = useMemo<Page>(() => resolvePageFromHash(location.hash), []);
 
-  const [page, setPage] = useState<Page>(() => (initial === "itp" ? "gantt" : initial));
+  const [page, setPage] = useState<Page>(() => initial);
 
   useEffect(() => {
     if (page === "itp") setPage("gantt");
   }, [page]);
 
   useEffect(() => {
-    location.hash = page === "itp" ? "gantt" : page;
+    const desired = page === "itp" ? "gantt" : page;
+    const { page: hashPage, query } = parseHashPage(location.hash);
+    // Не затираем deep-link (`#gantt?event=...`), пока его не обработали.
+    if (hashPage === desired && query.get("event")) return;
+    if (hashPage === desired && !query.toString()) return;
+    location.hash = desired;
   }, [page]);
 
   useEffect(() => {
+    const opened = consumeEventDeepLinkFromHash();
+    if (opened) setPage(opened);
+
     const onHashChange = () => {
-      const hash = (location.hash || "").replace("#", "");
-      if (hash === "itp") {
-        setPage("gantt");
+      const openedFromHash = consumeEventDeepLinkFromHash();
+      if (openedFromHash) {
+        setPage(openedFromHash);
         return;
       }
-      if (isPage(hash)) setPage(hash);
+      setPage(resolvePageFromHash(location.hash));
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -253,6 +293,19 @@ function AppShell(props: {
         </div>
 
         <div className="navGroup navGroupBottom">
+          {canEvents ? (
+            <NotificationBell
+              enabled
+              onOpenEvent={(detail) => {
+                const targetSandbox = detail.sandboxId ?? null;
+                const current = getActiveSandboxId();
+                if ((targetSandbox || null) !== (current || null)) {
+                  setActiveSandboxId(targetSandbox);
+                }
+                setPage("gantt");
+              }}
+            />
+          ) : null}
           <NavIcon active={page === "help"} onClick={() => setPage("help")} label="Инструкция" icon={ICONS.help} />
           <NavIcon active={page === "profile"} onClick={() => setPage("profile")} label="Профиль" icon={ICONS.profile} />
           {canAdmin ? (
@@ -268,7 +321,7 @@ function AppShell(props: {
         {page === "mass" && <MassPlanView />}
         {page === "ref" && <ReferenceView />}
         {page === "profile" && <ProfileView me={me} />}
-        {page === "admin" && <AdminView permissions={permissions} />}
+        {page === "admin" && <AdminView permissions={permissions} me={me} />}
         {page === "sandboxes" && <SandboxesView />}
         {page === "analytics" && <AnalyticsView />}
         {page === "help" && <HelpView permissions={permissions} onNavigate={(p) => setPage(p as Page)} />}

@@ -64,6 +64,7 @@ export async function authChangePassword(oldPassword: string, newPassword: strin
 
 export type MyActivityItem = {
   id: string;
+  actor?: string;
   action: "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE" | "SANDBOX_CREATE" | "SANDBOX_DELETE" | "CLEANUP";
   reason: string | null;
   changes: any;
@@ -95,36 +96,62 @@ export type MyActivityResponse = {
   items: MyActivityItem[];
 };
 
-export async function authMyActivity(params: {
-  limit?: number;
-  offset?: number;
-  action?: MyActivityItem["action"];
-  q?: string;
-} = {}): Promise<MyActivityResponse> {
+const EMPTY_BY_ACTION: MyActivityResponse["byAction"] = {
+  CREATE: 0,
+  UPDATE: 0,
+  RESERVE: 0,
+  UNRESERVE: 0,
+  SANDBOX_CREATE: 0,
+  SANDBOX_DELETE: 0,
+  CLEANUP: 0
+};
+
+async function fetchActivity(
+  url: string,
+  params: {
+    limit?: number;
+    offset?: number;
+    action?: MyActivityItem["action"];
+    q?: string;
+    actor?: string;
+  }
+): Promise<MyActivityResponse> {
   const u = new URLSearchParams();
   if (params.limit != null) u.set("limit", String(params.limit));
   if (params.offset != null) u.set("offset", String(params.offset));
   if (params.action) u.set("action", params.action);
   if (params.q) u.set("q", params.q);
-  const res = await fetch(`/api/auth/me/activity?${u.toString()}`, { credentials: "include" });
+  if (params.actor) u.set("actor", params.actor);
+  const res = await fetch(`${url}?${u.toString()}`, { credentials: "include" });
   if (!res.ok) {
     return {
       ok: true,
       total: 0,
       limit: params.limit ?? 50,
       offset: params.offset ?? 0,
-      byAction: {
-        CREATE: 0,
-        UPDATE: 0,
-        RESERVE: 0,
-        UNRESERVE: 0,
-        SANDBOX_CREATE: 0,
-        SANDBOX_DELETE: 0,
-        CLEANUP: 0
-      },
+      byAction: { ...EMPTY_BY_ACTION },
       items: []
     };
   }
   return (await res.json()) as MyActivityResponse;
+}
+
+export async function authMyActivity(params: {
+  limit?: number;
+  offset?: number;
+  action?: MyActivityItem["action"];
+  q?: string;
+} = {}): Promise<MyActivityResponse> {
+  return fetchActivity("/api/auth/me/activity", params);
+}
+
+export async function adminActivity(params: {
+  limit?: number;
+  offset?: number;
+  action?: MyActivityItem["action"];
+  q?: string;
+  actor?: string;
+} = {}): Promise<MyActivityResponse> {
+  return fetchActivity("/api/admin/activity", params);
 }
 

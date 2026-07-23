@@ -34,6 +34,7 @@ async function resolveSandboxFor(
       id: true,
       name: true,
       ownerId: true,
+      sharedWithAllRole: true,
       members: { where: { userId }, select: { role: true } }
     }
   });
@@ -44,6 +45,8 @@ async function resolveSandboxFor(
     role = "OWNER";
   } else if (sandbox.members[0]) {
     role = sandbox.members[0].role as SandboxContext["role"];
+  } else if (sandbox.sharedWithAllRole) {
+    role = sandbox.sharedWithAllRole as SandboxContext["role"];
   }
   if (!role) return "denied";
 

@@ -409,14 +409,19 @@ async function assertSandboxAccess(app: any, sandboxId: string | null, userId: s
   if (!sandboxId) return true;
   const sb = await app.prisma.sandbox.findUnique({
     where: { id: sandboxId },
-    select: { id: true, ownerId: true, members: { where: { userId }, select: { userId: true } } }
+    select: {
+      id: true,
+      ownerId: true,
+      sharedWithAllRole: true,
+      members: { where: { userId }, select: { userId: true } }
+    }
   });
   if (!sb) {
     const err: any = new Error("SANDBOX_NOT_FOUND");
     err.statusCode = 404;
     throw err;
   }
-  if (sb.ownerId !== userId && sb.members.length === 0) {
+  if (sb.ownerId !== userId && sb.members.length === 0 && !sb.sharedWithAllRole) {
     const err: any = new Error("SANDBOX_ACCESS_DENIED");
     err.statusCode = 403;
     throw err;

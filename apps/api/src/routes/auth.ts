@@ -2,6 +2,8 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import argon2 from "argon2";
 
+import { queryActivityFeed } from "../lib/activityFeed.js";
+
 async function requireAuthUser(app: any, req: FastifyRequest, reply: FastifyReply) {
   try {
     const decoded = await req.jwtVerify<{ sub: string }>();
@@ -141,156 +143,13 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.query);
 
-    const eventActions = new Set(["CREATE", "UPDATE", "RESERVE", "UNRESERVE"]);
-    const userActions = new Set(["SANDBOX_CREATE", "SANDBOX_DELETE", "CLEANUP"]);
-    const wantEvents = !query.action || eventActions.has(query.action);
-    const wantUserLogs = !query.action || userActions.has(query.action);
-
-    const eventWhere: any = { actor: user.email };
-    if (query.action && eventActions.has(query.action)) eventWhere.action = query.action;
-    if (query.q) {
-      eventWhere.OR = [
-        { reason: { contains: query.q, mode: "insensitive" } },
-        { event: { title: { contains: query.q, mode: "insensitive" } } },
-        { sandbox: { name: { contains: query.q, mode: "insensitive" } } }
-      ];
-    }
-
-    const userLogWhere: any = { actor: user.email };
-    if (query.action && userActions.has(query.action)) userLogWhere.action = query.action;
-    if (query.q) {
-      userLogWhere.OR = [
-        { reason: { contains: query.q, mode: "insensitive" } },
-        { title: { contains: query.q, mode: "insensitive" } },
-        { sandboxName: { contains: query.q, mode: "insensitive" } }
-      ];
-    }
-
-    const takeWindow = query.limit + query.offset;
-
-    const [eventTotal, userLogTotal, eventItems, userLogItems, eventTotals, userLogTotals] = await Promise.all([
-      wantEvents ? app.prisma.maintenanceEventAudit.count({ where: eventWhere }) : Promise.resolve(0),
-      wantUserLogs ? app.prisma.userActivityLog.count({ where: userLogWhere }) : Promise.resolve(0),
-      wantEvents
-        ? app.prisma.maintenanceEventAudit.findMany({
-            where: eventWhere,
-            orderBy: { createdAt: "desc" },
-            take: takeWindow,
-            include: {
-              event: {
-                select: {
-                  id: true,
-                  title: true,
-                  startAt: true,
-                  endAt: true,
-                  aircraft: { select: { tailNumber: true } }
-                }
-              },
-              sandbox: { select: { id: true, name: true } }
-            }
-          })
-        : Promise.resolve([]),
-      wantUserLogs
-        ? app.prisma.userActivityLog.findMany({
-            where: userLogWhere,
-            orderBy: { createdAt: "desc" },
-            take: takeWindow
-          })
-        : Promise.resolve([]),
-      wantEvents
-        ? app.prisma.maintenanceEventAudit.groupBy({
-            by: ["action"],
-            where: { actor: user.email },
-            _count: { _all: true }
-          })
-        : Promise.resolve([]),
-      wantUserLogs
-        ? app.prisma.userActivityLog.groupBy({
-            by: ["action"],
-            where: { actor: user.email },
-            _count: { _all: true }
-          })
-        : Promise.resolve([])
-    ]);
-
-    const mappedEvents = (eventItems as any[]).map((a) => ({
-      id: a.id,
-      action: a.action as string,
-      reason: a.reason as string | null,
-      changes: a.changes,
-      createdAt: a.createdAt as Date,
-      eventId: a.eventId as string | null,
-      event: a.event
-        ? {
-            id: a.event.id,
-            title: a.event.title,
-            startAt: a.event.startAt,
-            endAt: a.event.endAt,
-            tailNumber: a.event.aircraft?.tailNumber ?? null
-          }
-        : null,
-      source: {
-        kind: a.sandboxId ? ("sandbox" as const) : ("prod" as const),
-        sandboxId: a.sandboxId ?? a.sandbox?.id ?? null,
-        sandboxName: a.sandbox?.name ?? null
-      }
-    }));
-
-    const mappedUserLogs = (userLogItems as any[]).map((a) => ({
-      id: a.id,
-      action: a.action as string,
-      reason: a.reason as string | null,
-      changes: a.changes,
-      createdAt: a.createdAt as Date,
-      eventId: null as string | null,
-      event: a.title
-        ? {
-            id: a.id,
-            title: a.title as string,
-            startAt: a.createdAt as Date,
-            endAt: a.createdAt as Date,
-            tailNumber: null as string | null
-          }
-        : null,
-      source: {
-        kind: (a.sourceKind === "sandbox" || a.sandboxId ? "sandbox" : "prod") as "sandbox" | "prod",
-        sandboxId: (a.sandboxId as string | null) ?? null,
-        sandboxName: (a.sandboxName as string | null) ?? null
-      }
-    }));
-
-    const merged = [...mappedEvents, ...mappedUserLogs].sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || a.id.localeCompare(b.id)
-    );
-    const page = merged.slice(query.offset, query.offset + query.limit);
-
-    const byAction: Record<string, number> = {
-      CREATE: 0,
-      UPDATE: 0,
-      RESERVE: 0,
-      UNRESERVE: 0,
-      SANDBOX_CREATE: 0,
-      SANDBOX_DELETE: 0,
-      CLEANUP: 0
-    };
-    for (const g of eventTotals as Array<{ action: string; _count?: { _all?: number } }>) {
-      byAction[g.action] = g._count?._all ?? 0;
-    }
-    for (const g of userLogTotals as Array<{ action: string; _count?: { _all?: number } }>) {
-      byAction[g.action] = g._count?._all ?? 0;
-    }
-
-    return {
-      ok: true,
-      total: eventTotal + userLogTotal,
+    return await queryActivityFeed(app.prisma, {
+      actor: user.email,
       limit: query.limit,
       offset: query.offset,
-      byAction,
-      items: page.map((a) => ({
-        ...a,
-        createdAt: a.createdAt
-      }))
-    };
+      action: query.action,
+      q: query.q
+    });
   });
 };
 

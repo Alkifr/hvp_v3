@@ -2,6 +2,13 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { EventAuditAction, EventStatus, PlanningLevel, Prisma } from "@prisma/client";
 
+import { parseImportDateTime } from "../../lib/localDate.js";
+import {
+  DONE_SCHEDULE_LOCK_MESSAGE,
+  isDoneScheduleLocked,
+  patchTouchesDoneScheduleLock,
+  reconcileEventStatus
+} from "../../lib/eventStatus.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
@@ -187,6 +194,7 @@ const eventInclude: Prisma.MaintenanceEventInclude = {
   eventType: true,
   hangar: true,
   layout: true,
+  workshop: true,
   reservations: { include: { stand: true }, orderBy: [{ startAt: "asc" }] },
   placements: { include: placementInclude, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
   towSegments: { orderBy: [{ startAt: "asc" }] }
@@ -462,6 +470,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     return rows.map(serializeEvent);
   });
 
+  // Карточка по id (без диапазона дат) — для deep-link / уведомлений
+  app.get("/:id", async (req) => {
+    assertPermission(req, "events:read");
+    const id = zUuid.parse((req.params as any).id);
+    const row = await app.prisma.maintenanceEvent.findFirst({
+      where: { id, ...sandboxFilter(req), status: { not: EventStatus.DELETED } },
+      include: eventInclude
+    });
+    if (!row) throw app.httpErrors.notFound("Event not found");
+    return serializeEvent(row);
+  });
+
   // --- Буксировки (интервалы) ---
   app.get("/:id/tows", async (req) => {
     assertPermission(req, "events:read");
@@ -488,6 +508,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       where: { id: eventId, ...sandboxFilter(req) }
     });
     if (!ev) throw app.httpErrors.notFound("Event not found");
+    if (isDoneScheduleLocked(ev.status)) {
+      throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
     if (body.startAt < ev.startAt || body.endAt > ev.endAt) {
       throw app.httpErrors.badRequest("Tow interval must be within event startAt/endAt");
     }
@@ -522,6 +545,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .parse((req.query ?? {}) as any);
+
+    const event = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) },
+      select: { id: true, status: true }
+    });
+    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (isDoneScheduleLocked(event.status)) {
+      throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
 
     const existing = await app.prisma.eventTow.findFirst({
       where: { id: towId, eventId, ...sandboxFilter(req) }
@@ -573,6 +605,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       include: { placements: true }
     });
     if (!event) throw app.httpErrors.notFound("Event not found");
+    if (isDoneScheduleLocked(event.status)) {
+      throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
 
     const sbId = sandboxIdFor(req);
     const before = event.placements.map((p) => ({
@@ -682,15 +717,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const upper = (s: unknown) => norm(s).toLocaleUpperCase("ru-RU");
     const lower = key;
 
-    const parseDate = (v: string | number | Date) => {
-      if (v instanceof Date) return v;
-      if (typeof v === "number") {
-        // Excel serial date (дни с 1899-12-30)
-        const ms = Math.round((v - 25569) * 86400 * 1000);
-        return new Date(ms);
-      }
-      return new Date(v);
-    };
+    // Naive даты/Excel serial → wall clock MSK; ISO с Z/offset — абсолютные.
+    const parseDate = (v: string | number | Date) => parseImportDateTime(v);
     const parseOptionalDate = (v: string | number | Date | null | undefined, label: string) => {
       if (v == null) return null;
       if (typeof v === "string" && norm(v) === "") return null;
@@ -1325,6 +1353,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         actualEndAt: zDateTime.nullable().optional(),
         hangarId: zUuid.optional(),
         layoutId: zUuid.optional(),
+        workshopId: zUuid.nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional().default(false),
@@ -1351,10 +1380,21 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       budgetStartAt: data.budgetStartAt,
       budgetEndAt: data.budgetEndAt
     });
+    const statusReconciled = reconcileEventStatus({
+      status: data.status ?? EventStatus.PLANNED,
+      startAt: data.startAt,
+      endAt: data.endAt,
+      actualStartAt: data.actualStartAt ?? null,
+      actualEndAt: data.actualEndAt ?? null,
+      forceDone: data.status === EventStatus.DONE
+    });
     const created = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const event = await tx.maintenanceEvent.create({
         data: {
           ...data,
+          status: statusReconciled.status,
+          actualStartAt: statusReconciled.actualStartAt,
+          actualEndAt: statusReconciled.actualEndAt,
           planningKind: planning.planningKind,
           budgetStartAt: planning.budgetStartAt,
           budgetEndAt: planning.budgetEndAt,
@@ -1377,8 +1417,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                 endAt: event.endAt,
                 budgetStartAt: planning.budgetStartAt,
                 budgetEndAt: planning.budgetEndAt,
-                actualStartAt: data.actualStartAt ?? null,
-                actualEndAt: data.actualEndAt ?? null,
+                actualStartAt: statusReconciled.actualStartAt,
+                actualEndAt: statusReconciled.actualEndAt,
                 hangarId: data.hangarId ?? null,
                 layoutId: data.layoutId ?? null,
                 standId: null,
@@ -1411,6 +1451,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               actualEndAt: (event as any).actualEndAt?.toISOString() ?? null,
               hangarId: event.hangarId ?? null,
               layoutId: event.layoutId ?? null,
+              workshopId: (event as any).workshopId ?? null,
               placements: (placements ?? []).map((p) => ({
                 startAt: p.startAt.toISOString(),
                 endAt: p.endAt.toISOString(),
@@ -1452,6 +1493,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         actualEndAt: zDateTime.nullable().optional(),
         hangarId: zUuid.nullable().optional(),
         layoutId: zUuid.nullable().optional(),
+        workshopId: zUuid.nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional().default(false),
@@ -1469,21 +1511,79 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!existing) throw app.httpErrors.notFound("Event not found");
 
-    const { changeReason, placements, allowOverlap, ...patch } = body;
+    let { changeReason, placements, allowOverlap, ...patch } = body;
+    const scheduleLocked = isDoneScheduleLocked(existing.status, body.status);
+    if (
+      patchTouchesDoneScheduleLock(
+        {
+          status: existing.status,
+          planningKind: existing.planningKind,
+          eventTypeId: existing.eventTypeId,
+          startAt: existing.startAt,
+          endAt: existing.endAt,
+          budgetStartAt: existing.budgetStartAt ?? null,
+          budgetEndAt: existing.budgetEndAt ?? null,
+          actualStartAt: (existing as any).actualStartAt ?? null,
+          actualEndAt: (existing as any).actualEndAt ?? null,
+          hangarId: existing.hangarId ?? null,
+          layoutId: existing.layoutId ?? null
+        },
+        {
+          planningKind: body.planningKind,
+          eventTypeId: body.eventTypeId,
+          startAt: body.startAt,
+          endAt: body.endAt,
+          budgetStartAt: body.budgetStartAt,
+          budgetEndAt: body.budgetEndAt,
+          actualStartAt: body.actualStartAt,
+          actualEndAt: body.actualEndAt,
+          hangarId: body.hangarId,
+          layoutId: body.layoutId
+        },
+        body.status
+      )
+    ) {
+      throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
+    if (scheduleLocked) {
+      // UI always resends the full form; keep schedule immutable while DONE.
+      placements = undefined;
+      const {
+        planningKind: _planningKind,
+        eventTypeId: _eventTypeId,
+        startAt: _startAt,
+        endAt: _endAt,
+        budgetStartAt: _budgetStartAt,
+        budgetEndAt: _budgetEndAt,
+        actualStartAt: _actualStartAt,
+        actualEndAt: _actualEndAt,
+        hangarId: _hangarId,
+        layoutId: _layoutId,
+        ...safePatch
+      } = patch;
+      patch = safePatch;
+    }
+
     const nextStatus = body.status ?? existing.status;
-    const nextStart = body.startAt ?? existing.startAt;
-    const nextEnd = body.endAt ?? existing.endAt;
+    const nextStart = scheduleLocked ? existing.startAt : (body.startAt ?? existing.startAt);
+    const nextEnd = scheduleLocked ? existing.endAt : (body.endAt ?? existing.endAt);
     if (nextEnd <= nextStart) {
       throw app.httpErrors.badRequest("endAt must be after startAt");
     }
-    const planning = normalizePatchPlanningPeriod({
-      existing,
-      planningKind: body.planningKind,
-      startAt: nextStart,
-      endAt: nextEnd,
-      budgetStartAt: body.budgetStartAt,
-      budgetEndAt: body.budgetEndAt
-    });
+    const planning = scheduleLocked
+      ? {
+          planningKind: existing.planningKind,
+          budgetStartAt: existing.budgetStartAt ?? null,
+          budgetEndAt: existing.budgetEndAt ?? null
+        }
+      : normalizePatchPlanningPeriod({
+          existing,
+          planningKind: body.planningKind,
+          startAt: nextStart,
+          endAt: nextEnd,
+          budgetStartAt: body.budgetStartAt,
+          budgetEndAt: body.budgetEndAt
+        });
     const nextBudgetStart = planning.budgetStartAt;
     const nextBudgetEnd = planning.budgetEndAt;
     if ((nextBudgetStart && !nextBudgetEnd) || (!nextBudgetStart && nextBudgetEnd)) {
@@ -1494,16 +1594,46 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }
     let patchData = {
       ...patch,
-      planningKind: planning.planningKind,
-      budgetStartAt: planning.budgetStartAt,
-      budgetEndAt: planning.budgetEndAt
+      ...(scheduleLocked
+        ? {}
+        : {
+            planningKind: planning.planningKind,
+            budgetStartAt: planning.budgetStartAt,
+            budgetEndAt: planning.budgetEndAt
+          })
     } as Record<string, unknown>;
+
+    const nextActualStart = scheduleLocked
+      ? ((existing as any).actualStartAt ?? null)
+      : body.actualStartAt === undefined
+        ? (existing as any).actualStartAt
+        : body.actualStartAt;
+    const nextActualEnd = scheduleLocked
+      ? ((existing as any).actualEndAt ?? null)
+      : body.actualEndAt === undefined
+        ? (existing as any).actualEndAt
+        : body.actualEndAt;
+    if ((nextActualStart && !nextActualEnd) || (!nextActualStart && nextActualEnd)) {
+      throw app.httpErrors.badRequest("actual period must have both dates");
+    }
+    if (nextActualStart && nextActualEnd && nextActualEnd <= nextActualStart) {
+      throw app.httpErrors.badRequest("actualEndAt must be after actualStartAt");
+    }
+
+    const statusReconciled = reconcileEventStatus({
+      status: nextStatus,
+      startAt: nextStart,
+      endAt: nextEnd,
+      actualStartAt: nextActualStart,
+      actualEndAt: nextActualEnd,
+      forceDone: body.status === EventStatus.DONE
+    });
 
     // При закрытии события (DONE/CONFIRMED) с виртуальным бортом — создаём Aircraft и привязываем
     const virtualAircraft = existing.virtualAircraft as { operatorId: string; aircraftTypeId: string; label: string } | null;
     if (
       virtualAircraft &&
-      (nextStatus === EventStatus.DONE || nextStatus === EventStatus.CONFIRMED) &&
+      (statusReconciled.status === EventStatus.DONE || statusReconciled.status === EventStatus.CONFIRMED) &&
       !existing.aircraftId
     ) {
       const aircraft = await app.prisma.aircraft.create({
@@ -1516,14 +1646,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       patchData = { ...patchData, aircraftId: aircraft.id, virtualAircraft: Prisma.JsonNull };
     }
 
-    const nextActualStart = body.actualStartAt === undefined ? (existing as any).actualStartAt : body.actualStartAt;
-    const nextActualEnd = body.actualEndAt === undefined ? (existing as any).actualEndAt : body.actualEndAt;
-    if ((nextActualStart && !nextActualEnd) || (!nextActualStart && nextActualEnd)) {
-      throw app.httpErrors.badRequest("actual period must have both dates");
-    }
-    if (nextActualStart && nextActualEnd && nextActualEnd <= nextActualStart) {
-      throw app.httpErrors.badRequest("actualEndAt must be after actualStartAt");
-    }
+    patchData = {
+      ...patchData,
+      status: statusReconciled.status,
+      actualStartAt: statusReconciled.actualStartAt,
+      actualEndAt: statusReconciled.actualEndAt
+    };
 
     const placementChanged = placements !== undefined;
     const singlePlacementSyncNeeded =
@@ -1562,8 +1690,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               endAt: nextEnd,
               budgetStartAt: nextBudgetStart ?? null,
               budgetEndAt: nextBudgetEnd ?? null,
-              actualStartAt: nextActualStart ?? null,
-              actualEndAt: nextActualEnd ?? null,
+              actualStartAt: statusReconciled.actualStartAt,
+              actualEndAt: statusReconciled.actualEndAt,
               hangarId: body.hangarId === undefined ? defaultPlacementFromEvent(existing).hangarId : body.hangarId,
               layoutId: body.layoutId === undefined ? defaultPlacementFromEvent(existing).layoutId : body.layoutId,
               standId: body.layoutId === null ? null : defaultPlacementFromEvent(existing).standId,

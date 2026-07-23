@@ -213,6 +213,18 @@ async function main() {
     create: { code: "C_CHECK", name: "C‑check", color: "#f97316" }
   });
 
+  await prisma.workshop.upsert({
+    where: { code: "SHOP1" },
+    update: {},
+    create: { code: "SHOP1", name: "Цех 1" }
+  });
+
+  await prisma.workshop.upsert({
+    where: { code: "SHOP2" },
+    update: {},
+    create: { code: "SHOP2", name: "Цех 2" }
+  });
+
   // 5 ангаров (как в текущем описании)
   const hangars = await Promise.all(
     [1, 2, 3, 4, 5].map(async (n) =>

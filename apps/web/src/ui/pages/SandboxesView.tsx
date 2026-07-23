@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiDelete, apiGet, apiPatch, apiPost, getActiveSandboxId, setActiveSandboxId } from "../../lib/api";
 import { sandboxIsArchived, type SandboxSummary } from "../components/SandboxSwitcher";
+import { SwitchToggle } from "../components/SwitchToggle";
 
 type CopyMode = "empty" | "prod" | "prodRange";
 type SandboxTab = "mine" | "shared" | "archived";
@@ -188,6 +189,7 @@ function SandboxCard(props: {
       <div className="sandboxCardHead">
         <div className="sandboxCardTitle">{s.name}</div>
         {active ? <span className="sandboxCardActiveBadge">Активна</span> : null}
+        {s.sharedWithAllRole ? <span className="sandboxCardSharedBadge">Для всех</span> : null}
         {archived ? <span className="sandboxCardArchivedBadge">Архив</span> : null}
       </div>
       {s.description ? <div className="sandboxCardDesc">{s.description}</div> : null}
@@ -200,29 +202,67 @@ function SandboxCard(props: {
       </div>
       <div className="sandboxCardActions">
         {!archived ? (
-          <button type="button" className="btn btnPrimary" onClick={onOpen} disabled={active}>
-            {active ? "Открыта" : "Открыть"}
-          </button>
+          <SandboxActionButton
+            icon={active ? "check" : "open"}
+            label={active ? "Песочница открыта" : "Открыть песочницу"}
+            onClick={onOpen}
+            disabled={active}
+            primary
+          />
         ) : null}
         {!archived && canWrite ? (
-          <button type="button" className="btn" onClick={onPromote}>
-            Перенести в прод
-          </button>
+          <SandboxActionButton icon="promote" label="Перенести в рабочий контур" onClick={onPromote} />
         ) : null}
         {s.isOwner ? (
           <>
-            {!archived ? <button type="button" className="btn" onClick={onShare}>Поделиться</button> : null}
-            <button type="button" className="btn" onClick={onRename}>Переименовать</button>
+            {!archived ? <SandboxActionButton icon="share" label="Настроить доступ" onClick={onShare} /> : null}
+            <SandboxActionButton icon="rename" label="Переименовать" onClick={onRename} />
             {archived ? (
-              <button type="button" className="btn" onClick={onRestore}>Вернуть из архива</button>
+              <SandboxActionButton icon="restore" label="Вернуть из архива" onClick={onRestore} />
             ) : (
-              <button type="button" className="btn" onClick={onArchive}>В архив</button>
+              <SandboxActionButton icon="archive" label="Перенести в архив" onClick={onArchive} />
             )}
-            <button type="button" className="btn btnDanger" onClick={onDelete}>Удалить</button>
+            <SandboxActionButton icon="delete" label="Удалить" onClick={onDelete} danger />
           </>
         ) : null}
       </div>
     </div>
+  );
+}
+
+type SandboxActionIcon = "open" | "check" | "promote" | "share" | "rename" | "restore" | "archive" | "delete";
+
+function SandboxActionButton(props: {
+  icon: SandboxActionIcon;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+  danger?: boolean;
+}) {
+  const paths: Record<SandboxActionIcon, React.ReactNode> = {
+    open: <><path d="M8 5H5v14h14v-3" /><path d="M11 13 20 4M14 4h6v6" /></>,
+    check: <path d="m5 12 4 4L19 6" />,
+    promote: <><path d="M12 16V4m0 0L7 9m5-5 5 5" /><path d="M5 15v4h14v-4" /></>,
+    share: <><circle cx="8" cy="8" r="3" /><circle cx="17" cy="7" r="2.5" /><path d="M3 19c.5-4 2.2-6 5-6s4.5 2 5 6M14 13c3.8-.6 6 1.4 6.5 5" /></>,
+    rename: <><path d="m4 20 4.2-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" /><path d="m13.8 7.4 3 3" /></>,
+    restore: <><path d="M4 9V4h5" /><path d="M5.5 5.5A8 8 0 1 1 4 14" /></>,
+    archive: <><path d="M4 7h16v13H4zM3 4h18v3H3z" /><path d="M9 11h6" /></>,
+    delete: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" /><path d="M10 11v5m4-5v5" /></>
+  };
+  return (
+    <button
+      type="button"
+      className={`btn sandboxActionIcon${props.primary ? " btnPrimary" : ""}${props.danger ? " btnDanger" : ""}`}
+      onClick={props.onClick}
+      disabled={props.disabled}
+      aria-label={props.label}
+      title={props.label}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        {paths[props.icon]}
+      </svg>
+    </button>
   );
 }
 
@@ -332,20 +372,15 @@ function MergeSandboxesModal({
           </div>
         </div>
 
-        <label className="sandboxModeOption">
-          <input
-            type="checkbox"
-            checked={useRange}
-            onChange={(e) => {
-              setUseRange(e.target.checked);
-              setPreview(null);
-            }}
-          />
-          <div>
-            <b>Ограничить диапазоном дат</b>
-            <div className="muted small">Копируются только события, пересекающие период</div>
-          </div>
-        </label>
+        <SwitchToggle
+          checked={useRange}
+          onChange={(v) => {
+            setUseRange(v);
+            setPreview(null);
+          }}
+          label="Ограничить диапазоном дат"
+          hint="Копируются только события, пересекающие период"
+        />
         {useRange ? (
           <div className="sandboxRangeRow">
             <label className="refLabel">
@@ -582,6 +617,15 @@ function ShareSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; onCl
   const qc = useQueryClient();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"EDITOR" | "VIEWER">("EDITOR");
+  const [sharedRole, setSharedRole] = useState<"EDITOR" | "VIEWER">(sandbox.sharedWithAllRole ?? "VIEWER");
+
+  const shareAllM = useMutation({
+    mutationFn: (nextRole: "EDITOR" | "VIEWER" | null) =>
+      apiPatch(`/api/sandboxes/${sandbox.id}`, { sharedWithAllRole: nextRole }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
+    }
+  });
 
   const addM = useMutation({
     mutationFn: () => apiPost(`/api/sandboxes/${sandbox.id}/members`, { email: email.trim().toLowerCase(), role }),
@@ -601,6 +645,34 @@ function ShareSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; onCl
   return (
     <ModalShell title={`Поделиться «${sandbox.name}»`} onClose={onClose}>
       <div className="modalBody sandboxModalBody">
+        <div className="sandboxShareAll">
+          <SwitchToggle
+            checked={sandbox.sharedWithAllRole !== null}
+            onChange={(enabled) => shareAllM.mutate(enabled ? sharedRole : null)}
+            label="Поделиться со всеми"
+            hint="Доступ автоматически получат все текущие и новые пользователи"
+            disabled={shareAllM.isPending}
+          />
+          <label className="refLabel sandboxShareAllRole">
+            <span>Роль для всех</span>
+            <select
+              className="refInput"
+              value={sharedRole}
+              disabled={sandbox.sharedWithAllRole === null || shareAllM.isPending}
+              onChange={(e) => {
+                const nextRole = e.target.value as "EDITOR" | "VIEWER";
+                setSharedRole(nextRole);
+                shareAllM.mutate(nextRole);
+              }}
+            >
+              <option value="VIEWER">Наблюдатель</option>
+              <option value="EDITOR">Редактор</option>
+            </select>
+          </label>
+        </div>
+        {shareAllM.isError ? <div className="errorMsg">{String((shareAllM.error as Error)?.message ?? shareAllM.error)}</div> : null}
+
+        <div className="sandboxShareDivider"><span>Индивидуальный доступ</span></div>
         <div className="sandboxShareAddRow">
           <input
             className="refInput"
@@ -836,15 +908,20 @@ function PromoteSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; on
             </div>
 
             <div className="sandboxPromoteDangerZone">
-              <label className="sandboxPromoteCheckbox">
-                <input type="checkbox" checked={deleteProd} onChange={(e) => { setDeleteProd(e.target.checked); setDeleteConfirmed(false); }} />
-                Удалить события рабочего контура за период перед переносом
-              </label>
+              <SwitchToggle
+                checked={deleteProd}
+                onChange={(v) => {
+                  setDeleteProd(v);
+                  setDeleteConfirmed(false);
+                }}
+                label="Удалить события рабочего контура за период перед переносом"
+              />
               {deleteProd ? (
-                <label className="sandboxPromoteCheckbox warn">
-                  <input type="checkbox" checked={deleteConfirmed} onChange={(e) => setDeleteConfirmed(e.target.checked)} />
-                  Я понимаю, что это необратимо удалит {diff.summary.prodEventsInRange} событий из прода.
-                </label>
+                <SwitchToggle
+                  checked={deleteConfirmed}
+                  onChange={setDeleteConfirmed}
+                  label={`Я понимаю, что это необратимо удалит ${diff.summary.prodEventsInRange} событий из прода.`}
+                />
               ) : null}
             </div>
           </>

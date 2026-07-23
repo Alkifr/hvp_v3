@@ -14,6 +14,7 @@ export type SandboxSummary = {
   owner: { id: string; email: string; displayName: string | null };
   isOwner: boolean;
   myRole: "OWNER" | "EDITOR" | "VIEWER" | null;
+  sharedWithAllRole: "EDITOR" | "VIEWER" | null;
   eventCount: number;
   updatedAt: string;
   createdAt: string;

@@ -5,6 +5,9 @@ import * as XLSX from "xlsx";
 
 import { apiGet, apiPost } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
+import { downloadMassPlanBatchTemplate } from "../../lib/importTemplates";
+import { endOfMskDayIso, fromInputMskOptional, startOfMskDayIso } from "../../lib/localDate";
+import { SwitchToggle } from "../components/SwitchToggle";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 type Hangar = { id: string; name: string; code: string };
@@ -192,9 +195,7 @@ type BatchRow = {
 };
 
 function fromInputLocalOptional(value: string): string | null {
-  if (!value) return null;
-  const d = dayjs(value).second(0).millisecond(0);
-  return d.isValid() ? d.toISOString() : null;
+  return fromInputMskOptional(value);
 }
 
 function makeClientId(): string {
@@ -413,8 +414,12 @@ export function MassPlanView() {
     aircraftTypeId,
     eventTypeId,
     count: Math.max(1, Math.min(200, Number(count) || 1)),
-    startFrom: isValidDateInput(startFrom) ? dayjs(startFrom).startOf("day").toISOString() : dayjs().startOf("day").toISOString(),
-    endTo: isValidDateInput(endTo) ? dayjs(endTo).endOf("day").toISOString() : dayjs().add(30, "day").endOf("day").toISOString(),
+    startFrom: isValidDateInput(startFrom)
+      ? startOfMskDayIso(startFrom)!
+      : startOfMskDayIso(dayjs().format("YYYY-MM-DD"))!,
+    endTo: isValidDateInput(endTo)
+      ? endOfMskDayIso(endTo)!
+      : endOfMskDayIso(dayjs().add(30, "day").format("YYYY-MM-DD"))!,
     hangarIds: hangarPriority.length > 0 ? hangarPriority : undefined,
     titleTemplate: titleTemplate.trim() || undefined,
     scheduleMode,
@@ -464,11 +469,11 @@ export function MassPlanView() {
       eventTypeId: row.eventTypeId,
       count: Math.max(1, Math.min(200, Number(row.count) || 1)),
       startFrom: isValidDateInput(row.startFrom)
-        ? dayjs(row.startFrom).startOf("day").toISOString()
-        : dayjs().startOf("day").toISOString(),
+        ? startOfMskDayIso(row.startFrom)!
+        : startOfMskDayIso(dayjs().format("YYYY-MM-DD"))!,
       endTo: isValidDateInput(row.endTo)
-        ? dayjs(row.endTo).endOf("day").toISOString()
-        : dayjs().add(30, "day").endOf("day").toISOString(),
+        ? endOfMskDayIso(row.endTo)!
+        : endOfMskDayIso(dayjs().add(30, "day").format("YYYY-MM-DD"))!,
       titleTemplate: row.titleTemplate.trim() || undefined,
       scheduleMode,
       spacingHours: Math.max(0, Number(spacingHours) || 0),
@@ -762,11 +767,12 @@ export function MassPlanView() {
                     <label className="massField">
                       <span className="muted">Начало периода</span>
                       <input type="date" value={startFrom} onChange={(e) => setStartFrom(e.target.value)} />
+                      <span className="massFieldHint">Местное время (MSK)</span>
                     </label>
                     <label className="massField">
                       <span className="muted" title="Крайняя допустимая дата старта события">Крайний старт</span>
                       <input type="date" value={endTo} onChange={(e) => setEndTo(e.target.value)} />
-                      <span className="massFieldHint">Событие может закончиться позже этой даты</span>
+                      <span className="massFieldHint">Событие может закончиться позже этой даты · MSK</span>
                     </label>
                   </div>
                   <label className="massField massFieldWide">
@@ -784,10 +790,34 @@ export function MassPlanView() {
               <div className="massBatchBox">
                 <div className="massBatchToolbar">
                   <div className="muted small">
-                    Заполните строки вручную или импортируйте XLSX/CSV
+                    Заполните строки вручную или импортируйте XLSX/CSV по шаблону
                     (operator, aircraftType, eventType, tatHours, count, startFrom, endTo).
                   </div>
                   <div className="massBatchToolbarActions">
+                    <button
+                      type="button"
+                      className="btn btnGhost"
+                      title="Скачать Excel-шаблон с колонками и примером строки"
+                      onClick={() =>
+                        downloadMassPlanBatchTemplate({
+                          operator: operators.find((o) => o.id === operatorId)?.code || operators[0]?.code || operators[0]?.name,
+                          aircraftType:
+                            aircraftTypes.find((t) => t.id === aircraftTypeId)?.icaoType ||
+                            aircraftTypes.find((t) => t.id === aircraftTypeId)?.name ||
+                            aircraftTypes[0]?.icaoType ||
+                            aircraftTypes[0]?.name,
+                          eventType:
+                            eventTypes.find((t) => t.id === eventTypeId)?.code ||
+                            eventTypes.find((t) => t.id === eventTypeId)?.name ||
+                            eventTypes[0]?.code ||
+                            eventTypes[0]?.name,
+                          startFrom,
+                          endTo
+                        })
+                      }
+                    >
+                      Скачать шаблон
+                    </button>
                     <input
                       type="file"
                       accept=".xlsx,.xls,.csv,text/csv"
@@ -1020,17 +1050,15 @@ export function MassPlanView() {
                       }}
                     />
                   </label>
-                  <label className="massCheckbox">
-                    <input
-                      type="checkbox"
-                      checked={towBlocksStand}
-                      onChange={(e) => {
-                        setTowBlocksStand(e.target.checked);
-                        clearPlanOutput();
-                      }}
-                    />
-                    <span>Учитывать как занятость места</span>
-                  </label>
+                  <SwitchToggle
+                    compact
+                    checked={towBlocksStand}
+                    onChange={(v) => {
+                      setTowBlocksStand(v);
+                      clearPlanOutput();
+                    }}
+                    label="Учитывать как занятость места"
+                  />
                 </div>
               </div>
 
