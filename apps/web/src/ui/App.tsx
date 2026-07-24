@@ -17,6 +17,7 @@ import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { NotificationBell } from "./components/NotificationBell";
 import { authMe } from "./auth/authApi";
 import { getActiveSandboxId, setActiveSandboxId } from "../lib/api";
+import { installFourDigitDateYearLimit } from "../lib/dateInput";
 import {
   applyEventDeepLink,
   eventDeepLinkFromHashQuery,
@@ -254,6 +255,8 @@ function AppShell(props: {
   const inSandbox = Boolean(activeSandbox);
   const canWriteInActiveContext =
     canWrite || activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
+
+  useEffect(() => installFourDigitDateYearLimit(), []);
 
   return (
     <div className={inSandbox ? "appShell appShellSandbox" : "appShell appShellProd"}>

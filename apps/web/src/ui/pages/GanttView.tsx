@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
@@ -1168,6 +1168,7 @@ function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: num
   );
 }
 
+/** Модальный drawer (легенда, подтверждения) — блокирует фон. */
 function Drawer(props: {
   open: boolean;
   title: string;
@@ -1204,6 +1205,192 @@ function Drawer(props: {
         <div className="drawerBody">{props.children}</div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Плавающая карточка события (VS Code tool window / Chakra FloatingPanel):
+ * — modeless: план остаётся доступен;
+ * — drag за заголовок;
+ * — свернуть → компактная полоса в правой половине экрана;
+ * — один экземпляр: при свёрнутом новая карточка не открывается.
+ */
+function FloatingEditorPanel(props: {
+  open: boolean;
+  collapsed: boolean;
+  onCollapsedChange: (v: boolean) => void;
+  title: string;
+  summary: string;
+  onClose: () => void;
+  headerActions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<null | { pointerId: number; offsetX: number; offsetY: number }>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (!props.open) {
+      setPos(null);
+    }
+  }, [props.open]);
+
+  useEffect(() => {
+    if (!props.open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !props.collapsed) props.onCollapsedChange(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [props.open, props.collapsed, props.onCollapsedChange]);
+
+  const clampPos = useCallback((x: number, y: number, el: HTMLElement) => {
+    const rect = el.getBoundingClientRect();
+    const maxX = Math.max(8, window.innerWidth - Math.min(rect.width, window.innerWidth - 8));
+    const maxY = Math.max(8, window.innerHeight - 48);
+    return {
+      x: Math.min(maxX, Math.max(8, x)),
+      y: Math.min(maxY, Math.max(8, y))
+    };
+  }, []);
+
+  const onHeaderPointerDown = (e: ReactPointerEvent<HTMLElement>) => {
+    if (props.collapsed) return;
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.("button, a, input, select, textarea, label")) return;
+    const el = panelRef.current;
+    if (!el) return;
+    e.preventDefault();
+    const rect = el.getBoundingClientRect();
+    dragRef.current = {
+      pointerId: e.pointerId,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top
+    };
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  const onHeaderPointerMove = (e: ReactPointerEvent<HTMLElement>) => {
+    const d = dragRef.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    const el = panelRef.current;
+    if (!el) return;
+    setPos(clampPos(e.clientX - d.offsetX, e.clientY - d.offsetY, el));
+  };
+
+  const onHeaderPointerUp = (e: ReactPointerEvent<HTMLElement>) => {
+    const d = dragRef.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  if (!props.open) return null;
+
+  if (props.collapsed) {
+    return createPortal(
+      <div
+        className="floatingEditor floatingEditorCollapsed"
+        role="dialog"
+        aria-label={props.summary}
+      >
+        <button
+          type="button"
+          className="floatingEditorCollapsedMain"
+          onClick={() => props.onCollapsedChange(false)}
+          title="Развернуть карточку"
+        >
+          <span className="floatingEditorCollapsedTitle">{props.summary}</span>
+        </button>
+        <div className="floatingEditorCollapsedActions">
+          <button
+            type="button"
+            className="drawerCloseBtn"
+            onClick={() => props.onCollapsedChange(false)}
+            aria-label="Развернуть"
+            title="Развернуть"
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 12l6-6 6 6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="drawerCloseBtn"
+            onClick={props.onClose}
+            aria-label="Закрыть"
+            title="Закрыть"
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <path d="M5 5l10 10M15 5L5 15" />
+            </svg>
+          </button>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      className="floatingEditor floatingEditorExpanded drawer drawerV2"
+      role="dialog"
+      aria-modal="false"
+      aria-label={props.title}
+      style={pos ? { left: pos.x, top: pos.y, transform: "none" } : undefined}
+    >
+      <header
+        className="drawerHeader floatingEditorHeader"
+        onPointerDown={onHeaderPointerDown}
+        onPointerMove={onHeaderPointerMove}
+        onPointerUp={onHeaderPointerUp}
+        onPointerCancel={onHeaderPointerUp}
+      >
+        <div className="drawerHeaderText">
+          <div className="drawerTitle">{props.title}</div>
+          <div className="drawerSubtitle floatingEditorSummary">{props.summary}</div>
+        </div>
+        <div className="drawerHeaderActions">
+          {props.headerActions}
+          <button
+            type="button"
+            className="drawerCloseBtn"
+            onClick={() => props.onCollapsedChange(true)}
+            aria-label="Свернуть"
+            title="Свернуть"
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <path d="M5 10h10" />
+            </svg>
+            <span className="drawerCloseBtnLabel">Свернуть</span>
+          </button>
+          <button
+            type="button"
+            className="drawerCloseBtn"
+            onClick={props.onClose}
+            aria-label="Закрыть"
+            title="Закрыть"
+          >
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <path d="M5 5l10 10M15 5L5 15" />
+            </svg>
+            <span className="drawerCloseBtnLabel">Закрыть</span>
+          </button>
+        </div>
+      </header>
+      <div className="drawerBody">{props.children}</div>
+    </div>,
+    document.body
   );
 }
 
@@ -1382,6 +1569,8 @@ export function GanttView() {
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
   const histogramViewportRef = useRef<HTMLDivElement | null>(null);
   const bottomScrollRef = useRef<HTMLDivElement | null>(null);
+  const ganttFiltersStickyRef = useRef<HTMLDivElement | null>(null);
+  const ganttPageMainRef = useRef<HTMLDivElement | null>(null);
 
   const ptrPreviewRef = useRef<null | { startAt: string; endAt: string; x: number; w: number }>(null);
   const ptrTargetRef = useRef<
@@ -1966,6 +2155,25 @@ export function GanttView() {
   }, [canvasWidth, dayWidth, from, majorScale, ticks]);
 
   useEffect(() => {
+    // Высота закреплённого блока фильтров — для sticky шкалы Гантта и высоты таблицы.
+    const el = ganttFiltersStickyRef.current;
+    if (!el) return;
+    const apply = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      document.documentElement.style.setProperty("--gantt-filters-sticky-height", `${h}px`);
+    };
+    apply();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", apply);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", apply);
+      document.documentElement.style.removeProperty("--gantt-filters-sticky-height");
+    };
+  }, []);
+
+  useEffect(() => {
     // Ширину viewport меряем только для «по ширине» — иначе ResizeObserver
     // даёт лишние ререндеры и дёрганый горизонтальный скролл.
     if (!fitWidth) return;
@@ -2137,8 +2345,207 @@ export function GanttView() {
     syncGanttScrollLeft(s.scrollLeft, "bottom");
   };
 
+  // Pan без setState (ререндер mid-drag ломал capture/клики).
+  // Ghost-click после pan глушим одноразовым listener'ом с авто-снятием.
+  const spacePanRef = useRef(false);
+  const panSessionRef = useRef<null | {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    moved: boolean;
+  }>(null);
+  const panWinCleanupRef = useRef<null | (() => void)>(null);
+  const panGhostCleanupRef = useRef<null | (() => void)>(null);
+
+  const setGanttPanClass = useCallback((kind: "ready" | "panning", on: boolean) => {
+    const el = bodyScrollRef.current;
+    if (!el) return;
+    el.classList.toggle(kind === "ready" ? "ganttPanReady" : "ganttPanning", on);
+  }, []);
+
+  const clearGanttPanDom = useCallback(() => {
+    document.body.style.removeProperty("user-select");
+    document.body.style.removeProperty("-webkit-user-select");
+    document.body.style.removeProperty("cursor");
+    setGanttPanClass("panning", false);
+  }, [setGanttPanClass]);
+
+  const swallowGhostClickOnce = useCallback(() => {
+    panGhostCleanupRef.current?.();
+    let done = false;
+    const handler = (e: Event) => {
+      if (done) return;
+      done = true;
+      e.preventDefault();
+      e.stopPropagation();
+      (e as MouseEvent).stopImmediatePropagation?.();
+      cleanup();
+    };
+    const cleanup = () => {
+      document.removeEventListener("click", handler, true);
+      document.removeEventListener("auxclick", handler, true);
+      window.clearTimeout(timer);
+      if (panGhostCleanupRef.current === cleanup) panGhostCleanupRef.current = null;
+    };
+    document.addEventListener("click", handler, true);
+    document.addEventListener("auxclick", handler, true);
+    // Ghost-click приходит сразу после pointerup; дольше не держим — иначе «залипание».
+    const timer = window.setTimeout(cleanup, 80);
+    panGhostCleanupRef.current = cleanup;
+  }, []);
+
+  const endGanttPanSession = useCallback(() => {
+    const session = panSessionRef.current;
+    if (!session) return;
+    const didMove = session.moved;
+    panSessionRef.current = null;
+    panWinCleanupRef.current?.();
+    panWinCleanupRef.current = null;
+    clearGanttPanDom();
+    if (didMove) swallowGhostClickOnce();
+  }, [clearGanttPanDom, swallowGhostClickOnce]);
+
+  useEffect(() => {
+    const isTypingTarget = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      return Boolean(el.isContentEditable);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" && e.key !== " ") return;
+      if (e.repeat) return;
+      if (isTypingTarget(e.target)) return;
+      spacePanRef.current = true;
+      setGanttPanClass("ready", true);
+      e.preventDefault();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space" && e.key !== " ") return;
+      spacePanRef.current = false;
+      setGanttPanClass("ready", false);
+    };
+    const clearSpace = () => {
+      spacePanRef.current = false;
+      setGanttPanClass("ready", false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("blur", clearSpace);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("blur", clearSpace);
+      panWinCleanupRef.current?.();
+      panGhostCleanupRef.current?.();
+      clearGanttPanDom();
+    };
+  }, [setGanttPanClass, clearGanttPanDom]);
+
+  useEffect(() => {
+    const onSelectStart = (e: Event) => {
+      if (panSessionRef.current) e.preventDefault();
+    };
+    document.addEventListener("selectstart", onSelectStart, true);
+    return () => document.removeEventListener("selectstart", onSelectStart, true);
+  }, []);
+
+  const onGanttPanPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLElement>) => {
+      if (panelView !== "DIAGRAM") return;
+      if (ptrDragRef.current?.started) return;
+      if (panSessionRef.current) return;
+
+      const isMMB = e.button === 1;
+      const isLMB = e.button === 0;
+      if (!isMMB && !isLMB) return;
+
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.("button, a, input, textarea, select, label, .ganttAxisResizeHandle")) return;
+
+      const onBar = Boolean(target?.closest?.(".bar, .factBar, [data-dnd-bar='1']"));
+      const spaceHeld = spacePanRef.current;
+      if (isLMB && onBar && !spaceHeld) return;
+
+      const immediate = isMMB || spaceHeld;
+      if (immediate) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+
+      document.body.style.userSelect = "none";
+      document.body.style.setProperty("-webkit-user-select", "none");
+
+      panSessionRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        moved: immediate
+      };
+
+      if (immediate) {
+        setGanttPanClass("panning", true);
+        document.body.style.cursor = "grabbing";
+      }
+
+      const onMove = (ev: PointerEvent) => {
+        const s = panSessionRef.current;
+        if (!s || s.pointerId !== ev.pointerId) return;
+        const dx = ev.clientX - s.lastX;
+        const dy = ev.clientY - s.lastY;
+        if (!s.moved) {
+          if (Math.hypot(ev.clientX - s.startX, ev.clientY - s.startY) < 4) return;
+          s.moved = true;
+          setGanttPanClass("panning", true);
+          document.body.style.cursor = "grabbing";
+        }
+        s.lastX = ev.clientX;
+        s.lastY = ev.clientY;
+
+        const body = bodyScrollRef.current;
+        if (body && dx !== 0) {
+          const max = Math.max(0, body.scrollWidth - body.clientWidth);
+          const next = Math.max(0, Math.min(max, body.scrollLeft - dx));
+          if (next !== body.scrollLeft) {
+            body.scrollLeft = next;
+            applyGanttScrollLeft(next, "body");
+          }
+        }
+        if (dy !== 0) {
+          const main = ganttPageMainRef.current;
+          if (main) main.scrollTop -= dy;
+          else window.scrollBy(0, -dy);
+        }
+        ev.preventDefault();
+      };
+
+      const onUp = (ev: PointerEvent) => {
+        const s = panSessionRef.current;
+        if (!s || s.pointerId !== ev.pointerId) return;
+        endGanttPanSession();
+      };
+
+      panWinCleanupRef.current?.();
+      window.addEventListener("pointermove", onMove, { passive: false });
+      window.addEventListener("pointerup", onUp, true);
+      window.addEventListener("pointercancel", onUp, true);
+      panWinCleanupRef.current = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp, true);
+        window.removeEventListener("pointercancel", onUp, true);
+      };
+    },
+    [panelView, applyGanttScrollLeft, setGanttPanClass, endGanttPanSession]
+  );
+
   // редактор
   const [editorOpen, setEditorOpen] = useState(false);
+  const [editorCollapsed, setEditorCollapsed] = useState(false);
   const [draft, setDraft] = useState<EditorDraft | null>(null);
   const [original, setOriginal] = useState<EditorDraft | null>(null);
   // режим копирования: когда включён, клик по событию открывает редактор с предзаполненной
@@ -2188,6 +2595,27 @@ export function GanttView() {
     if (!draft?.id) return null;
     return events.find((ev) => ev.id === draft.id) ?? null;
   }, [draft?.id, events]);
+
+  const editorSummary = useMemo(() => {
+    if (!draft) return "";
+    const typeName =
+      (eventTypesQ.data ?? []).find((t) => t.id === draft.eventTypeId)?.name ??
+      selectedDraftEvent?.eventType?.name ??
+      "Тип не указан";
+    const aircraftLabel =
+      selectedAircraft?.tailNumber ??
+      selectedDraftEvent?.aircraft?.tailNumber ??
+      selectedDraftEvent?.virtualAircraft?.label ??
+      "Борт не указан";
+    const title = draft.title?.trim() || "Без названия";
+    const fmt = (v: string) => {
+      if (!v) return "—";
+      const d = dayjs(v);
+      return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : v;
+    };
+    return `${typeName} · ${aircraftLabel} · ${title} · ${fmt(draft.startAtLocal)} – ${fmt(draft.endAtLocal)}`;
+  }, [draft, eventTypesQ.data, selectedAircraft, selectedDraftEvent]);
+
   const selectedVirtualAircraft = selectedDraftEvent?.virtualAircraft ?? null;
   const selectedVirtualOperatorName = selectedVirtualAircraft?.operatorId
     ? ((operatorsQ.data ?? []).find((operator) => operator.id === selectedVirtualAircraft.operatorId)?.name ?? "—")
@@ -2207,6 +2635,7 @@ export function GanttView() {
   const [changeReason, setChangeReason] = useState("");
 
   const openEditorForNew = () => {
+    if (editorOpen && editorCollapsed) return;
     const defaultAircraft = aircraftQ.data?.[0]?.id ?? "";
     const defaultEventType = eventTypesQ.data?.[0]?.id ?? "";
     const defaultStart = dayjs().add(1, "day").hour(9).minute(0).second(0).format("YYYY-MM-DDTHH:mm");
@@ -2249,10 +2678,12 @@ export function GanttView() {
     setOriginal(d);
     setChangeReason("");
     setCopyFromTitle(null);
+    setEditorCollapsed(false);
     setEditorOpen(true);
   };
 
   const openEditorForExisting = (ev: EventRow) => {
+    if (editorOpen && editorCollapsed) return;
     const startAtLocal = toInputLocal(ev.startAt);
     const endAtLocal = toInputLocal(ev.endAt);
     const placements = placementDraftFromEvent(ev);
@@ -2283,6 +2714,7 @@ export function GanttView() {
     setOriginal(d);
     setChangeReason("");
     setCopyFromTitle(null);
+    setEditorCollapsed(false);
     setEditorOpen(true);
   };
 
@@ -2290,6 +2722,7 @@ export function GanttView() {
   // все данные переносятся, id НЕ копируется (draft.id = undefined),
   // статус сбрасывается в PLANNED, к названию добавляется « (копия)»
   const openEditorForCopy = (ev: EventRow) => {
+    if (editorOpen && editorCollapsed) return;
     const startAtLocal = toInputLocal(ev.startAt);
     const endAtLocal = toInputLocal(ev.endAt);
     const placements = placementDraftFromEvent(ev);
@@ -2320,12 +2753,14 @@ export function GanttView() {
     setChangeReason("");
     setCopyFromTitle(ev.title);
     setCopySelectMode(false);
+    setEditorCollapsed(false);
     setEditorOpen(true);
   };
 
   // Унифицированный выбор события: в обычном режиме — редактирование,
   // в режиме копирования — открытие мастера копии.
   const pickEvent = (ev: EventRow) => {
+    if (editorOpen && editorCollapsed) return;
     const fullEvent = events.find((candidate) => candidate.id === ev.id) ?? ev;
     if (copySelectMode) openEditorForCopy(fullEvent);
     else openEditorForExisting(fullEvent);
@@ -2616,6 +3051,7 @@ export function GanttView() {
     },
     onSuccess: () => {
       setEditorOpen(false);
+      setEditorCollapsed(false);
       setDraft(null);
       setOriginal(null);
       setCopyFromTitle(null);
@@ -3890,8 +4326,8 @@ export function GanttView() {
   };
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <div className="card ganttPanel">
+    <div className="ganttPage">
+      <div className="card ganttPanel" ref={ganttFiltersStickyRef}>
         <div className="ganttPanelHeader">
           <div className="ganttPanelTitle">
             <strong>План</strong>
@@ -4377,6 +4813,7 @@ export function GanttView() {
 
       </div>
 
+      <div className="ganttPageMain" ref={ganttPageMainRef}>
       {panelView === "TABLE" ? (
         <div className="card ganttTableCard">
           <GanttEventsTable
@@ -4577,7 +5014,16 @@ export function GanttView() {
 
           <div className="ganttRightCol">
             <div className="ganttRightScroll" ref={bodyScrollRef} onScroll={onBodyScroll}>
-              <div key={`gantt-inner-${fitLayoutEpoch}`} className="ganttRightInner" style={{ width: canvasWidth, minWidth: canvasWidth }}>
+              <div
+                key={`gantt-inner-${fitLayoutEpoch}`}
+                className="ganttRightInner"
+                style={{ width: canvasWidth, minWidth: canvasWidth }}
+                onPointerDown={onGanttPanPointerDown}
+                onDragStart={(e) => e.preventDefault()}
+                onAuxClick={(e) => {
+                  if (e.button === 1) e.preventDefault();
+                }}
+              >
                 {groupMode === "HANGAR_STAND" && placementLinks.length > 0 ? (
                   <svg
                     className="placementLinkLayer"
@@ -4749,6 +5195,7 @@ export function GanttView() {
                               onPointerDown={(e) => {
                                 if (!dndActive) return;
                                 if (e.button !== 0) return;
+                                if (spacePanRef.current) return; // Space = pan, не DnD
                                 // Ctrl/Cmd/Shift — мультивыбор без старта drag
                                 if (e.metaKey || e.ctrlKey || e.shiftKey) {
                                   e.preventDefault();
@@ -4899,12 +5346,17 @@ export function GanttView() {
         </div>
       </div>
       )}
+      </div>
 
-      <Drawer
+      <FloatingEditorPanel
         open={editorOpen}
+        collapsed={editorCollapsed}
+        onCollapsedChange={setEditorCollapsed}
         title={draft?.id ? "Редактирование события" : copyFromTitle ? "Копия события" : "Новое событие"}
+        summary={editorSummary || "Карточка события"}
         onClose={() => {
           setEditorOpen(false);
+          setEditorCollapsed(false);
           setCopyFromTitle(null);
           setShareHint(null);
         }}
@@ -4993,30 +5445,41 @@ export function GanttView() {
                   </label>
 
                   <div className="evMainInfoGroup" aria-label="Параметры события">
-                    <label className="evField">
+                    <div className="evField">
                       <span className="evFieldLabel">Статус</span>
-                      <select
-                        className="evInput"
+                      <SingleSelectDropdown
+                        className="evSelect"
+                        searchable
+                        allowEmpty={false}
+                        searchPlaceholder="Введите статус"
+                        options={[
+                          { id: "DRAFT", label: "Черновик" },
+                          { id: "PLANNED", label: "Запланировано" },
+                          { id: "CONFIRMED", label: "Подтверждено" },
+                          { id: "IN_PROGRESS", label: "В работе" },
+                          { id: "DONE", label: "Завершено" },
+                          { id: "CANCELLED", label: "Отменено" }
+                        ]}
                         value={draft.status}
-                        onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
-                      >
-                        <option value="DRAFT">Черновик</option>
-                        <option value="PLANNED">Запланировано</option>
-                        <option value="CONFIRMED">Подтверждено</option>
-                        <option value="IN_PROGRESS">В работе</option>
-                        <option value="DONE">Завершено</option>
-                        <option value="CANCELLED">Отменено</option>
-                      </select>
-                    </label>
-                    <label className="evField">
+                        onChange={(status) => setDraft({ ...draft, status: status as EditorDraft["status"] })}
+                        width="100%"
+                      />
+                    </div>
+                    <div className="evField">
                       <span className="evFieldLabel">Тип планирования</span>
-                      <select
-                        className={`evInput${scheduleLockedByDone ? " evInputReadonly" : ""}`}
+                      <SingleSelectDropdown
+                        className="evSelect"
+                        searchable
+                        allowEmpty={false}
+                        searchPlaceholder="Введите тип планирования"
+                        options={[
+                          { id: "PLANNED", label: "Плановое" },
+                          { id: "UNPLANNED", label: "Внеплановое" }
+                        ]}
                         value={draft.planningKind}
                         disabled={scheduleLockedByDone}
-                        title={scheduleLockedByDone ? "Нельзя менять у завершённого события" : undefined}
-                        onChange={(e) => {
-                          const planningKind = e.target.value as EditorDraft["planningKind"];
+                        onChange={(next) => {
+                          const planningKind = next as EditorDraft["planningKind"];
                           setDraft({
                             ...draft,
                             planningKind,
@@ -5033,28 +5496,25 @@ export function GanttView() {
                             )
                           });
                         }}
-                      >
-                        <option value="PLANNED">Плановое</option>
-                        <option value="UNPLANNED">Внеплановое</option>
-                      </select>
-                    </label>
-                    <label className="evField">
+                        width="100%"
+                      />
+                    </div>
+                    <div className="evField">
                       <span className="evFieldLabel">Тип события</span>
-                      <select
-                        className={`evInput${scheduleLockedByDone ? " evInputReadonly" : ""}`}
+                      <SingleSelectDropdown
+                        className="evSelect"
+                        searchable
+                        searchPlaceholder="Введите тип события"
+                        placeholder="— выберите —"
+                        emptyLabel="— выберите —"
+                        options={(eventTypesQ.data ?? []).map((type) => ({ id: type.id, label: type.name }))}
                         value={draft.eventTypeId}
                         disabled={scheduleLockedByDone}
-                        title={scheduleLockedByDone ? "Нельзя менять у завершённого события" : undefined}
-                        onChange={(e) => setDraft({ ...draft, eventTypeId: e.target.value })}
-                      >
-                        <option value="">— выберите —</option>
-                        {(eventTypesQ.data ?? []).map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        onChange={(eventTypeId) => setDraft({ ...draft, eventTypeId })}
+                        width="100%"
+                        maxHeight={280}
+                      />
+                    </div>
                   </div>
 
                   <div className="evMainInfoGroup" aria-label="Воздушное судно">
@@ -5118,23 +5578,26 @@ export function GanttView() {
                     </label>
                   </div>
 
-                  <label className="evField evWorkshopField">
+                  <div className="evField evWorkshopField">
                     <span className="evFieldLabel">Ответственный цех</span>
-                    <select
-                      className="evInput"
+                    <SingleSelectDropdown
+                      className="evSelect"
+                      searchable
+                      searchPlaceholder="Введите код или название цеха"
+                      placeholder="— не задан —"
+                      emptyLabel="— не задан —"
+                      options={(workshopsQ.data ?? [])
+                        .filter((workshop) => workshop.isActive !== false || workshop.id === draft.workshopId)
+                        .map((workshop) => ({
+                          id: workshop.id,
+                          label: workshop.code ? `${workshop.code} • ${workshop.name}` : workshop.name
+                        }))}
                       value={draft.workshopId}
-                      onChange={(e) => setDraft({ ...draft, workshopId: e.target.value })}
-                    >
-                      <option value="">— не задан —</option>
-                      {(workshopsQ.data ?? [])
-                        .filter((w) => w.isActive !== false || w.id === draft.workshopId)
-                        .map((w) => (
-                          <option key={w.id} value={w.id}>
-                            {w.code ? `${w.code} • ${w.name}` : w.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
+                      onChange={(workshopId) => setDraft({ ...draft, workshopId })}
+                      width="100%"
+                      maxHeight={280}
+                    />
+                  </div>
                 </div>
               </div>
             </section>
@@ -5265,56 +5728,62 @@ export function GanttView() {
                   disabled={scheduleLockedByDone}
                 >
                 <div className="evLocationGrid">
-                  <label className="evField">
+                  <div className="evField">
                     <span className="evFieldLabel">Ангар</span>
-                    <select
-                      className="evInput"
+                    <SingleSelectDropdown
+                      className="evSelect"
+                      searchable
+                      searchPlaceholder="Введите ангар"
+                      placeholder="— не задан —"
+                      emptyLabel="— не задан —"
+                      options={(hangarsQ.data ?? []).map((hangar) => ({ id: hangar.id, label: hangar.name }))}
                       value={draft.hangarId}
-                      onChange={(e) => setDraft({ ...draft, hangarId: e.target.value, layoutId: "", standId: "" })}
-                    >
-                      <option value="">— не задан —</option>
-                      {(hangarsQ.data ?? []).map((h) => (
-                        <option key={h.id} value={h.id}>
-                          {h.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="evField">
+                      onChange={(hangarId) => setDraft({ ...draft, hangarId, layoutId: "", standId: "" })}
+                      width="100%"
+                    />
+                  </div>
+                  <div className="evField">
                     <span className="evFieldLabel">Вариант размещения</span>
-                    <select
-                      className="evInput"
+                    <SingleSelectDropdown
+                      className="evSelect"
+                      searchable
+                      searchPlaceholder="Введите вариант размещения"
+                      placeholder="— не задан —"
+                      emptyLabel="— не задан —"
+                      options={(layoutsForEditorQ.data ?? []).map((layout) => ({
+                        id: layout.id,
+                        label: `${layout.name}${layout.capacitySummary ? ` — ${layout.capacitySummary}` : ""}${
+                          layout.isCompatible === false ? " — недоступно для типа ВС" : ""
+                        }`,
+                        disabled: layout.isCompatible === false
+                      }))}
                       value={draft.layoutId}
-                      onChange={(e) => setDraft({ ...draft, layoutId: e.target.value, standId: "" })}
                       disabled={!draft.hangarId}
-                    >
-                      <option value="">— не задан —</option>
-                      {(layoutsForEditorQ.data ?? []).map((l) => (
-                        <option key={l.id} value={l.id} disabled={l.isCompatible === false}>
-                          {l.name}
-                          {l.capacitySummary ? ` — ${l.capacitySummary}` : ""}
-                          {l.isCompatible === false ? " — недоступно для типа ВС" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="evField">
+                      onChange={(layoutId) => setDraft({ ...draft, layoutId, standId: "" })}
+                      width="100%"
+                    />
+                  </div>
+                  <div className="evField">
                     <span className="evFieldLabel">Место</span>
-                    <select
-                      className="evInput"
+                    <SingleSelectDropdown
+                      className="evSelect"
+                      searchable
+                      searchPlaceholder="Введите код или название места"
+                      placeholder="— не выбрано —"
+                      emptyLabel="— не выбрано —"
+                      options={(standsForEditorQ.data ?? []).map((stand) => ({
+                        id: stand.id,
+                        label: `${stand.code} • ${stand.name}${
+                          stand.isCompatible === false ? " — недоступно для типа ВС" : ""
+                        }`,
+                        disabled: stand.isCompatible === false
+                      }))}
                       value={draft.standId}
-                      onChange={(e) => setDraft({ ...draft, standId: e.target.value })}
                       disabled={!draft.layoutId}
-                    >
-                      <option value="">— не выбрано —</option>
-                      {(standsForEditorQ.data ?? []).map((s) => (
-                        <option key={s.id} value={s.id} disabled={s.isCompatible === false}>
-                          {s.code} • {s.name}
-                          {s.isCompatible === false ? " — недоступно для типа ВС" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      onChange={(standId) => setDraft({ ...draft, standId })}
+                      width="100%"
+                    />
+                  </div>
                 </div>
                 <div className="evToggleStack">
                   <EvToggle
@@ -5398,54 +5867,67 @@ export function GanttView() {
                               </label>
                             </div>
                             <div className="evLocationGrid">
-                            <label className="evField">
+                            <div className="evField">
                               <span className="evFieldLabel">Ангар</span>
-                              <select
-                                className="evInput"
+                              <SingleSelectDropdown
+                                className="evSelect"
+                                searchable
+                                searchPlaceholder="Введите ангар"
+                                placeholder="— не задан —"
+                                emptyLabel="— не задан —"
+                                options={(hangarsQ.data ?? []).map((hangar) => ({
+                                  id: hangar.id,
+                                  label: hangar.name
+                                }))}
                                 value={p.hangarId}
-                                onChange={(e) => setDraftPlacement(idx, { hangarId: e.target.value, layoutId: "", standId: "" })}
-                              >
-                                <option value="">— не задан —</option>
-                                {(hangarsQ.data ?? []).map((h) => (
-                                  <option key={h.id} value={h.id}>{h.name}</option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="evField">
+                                onChange={(hangarId) =>
+                                  setDraftPlacement(idx, { hangarId, layoutId: "", standId: "" })
+                                }
+                                width="100%"
+                              />
+                            </div>
+                            <div className="evField">
                               <span className="evFieldLabel">Вариант</span>
-                              <select
-                                className="evInput"
+                              <SingleSelectDropdown
+                                className="evSelect"
+                                searchable
+                                searchPlaceholder="Введите вариант"
+                                placeholder="— не задан —"
+                                emptyLabel="— не задан —"
+                                options={layoutOptions.map((layout) => ({
+                                  id: layout.id,
+                                  label: `${layout.name}${layout.capacitySummary ? ` — ${layout.capacitySummary}` : ""}${
+                                    layout.isCompatible === false ? " — недоступно для типа ВС" : ""
+                                  }`,
+                                  disabled: layout.isCompatible === false
+                                }))}
                                 value={p.layoutId}
-                                onChange={(e) => setDraftPlacement(idx, { layoutId: e.target.value, standId: "" })}
                                 disabled={!p.hangarId}
-                              >
-                                <option value="">— не задан —</option>
-                                {layoutOptions.map((l) => (
-                                  <option key={l.id} value={l.id} disabled={l.isCompatible === false}>
-                                    {l.name}
-                                    {l.capacitySummary ? ` — ${l.capacitySummary}` : ""}
-                                    {l.isCompatible === false ? " — недоступно для типа ВС" : ""}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="evField">
+                                onChange={(layoutId) => setDraftPlacement(idx, { layoutId, standId: "" })}
+                                width="100%"
+                              />
+                            </div>
+                            <div className="evField">
                               <span className="evFieldLabel">Место</span>
-                              <select
-                                className="evInput"
+                              <SingleSelectDropdown
+                                className="evSelect"
+                                searchable
+                                searchPlaceholder="Введите место"
+                                placeholder="— не выбрано —"
+                                emptyLabel="— не выбрано —"
+                                options={standOptions.map((stand) => ({
+                                  id: stand.id,
+                                  label: `${stand.code} • ${stand.name}${
+                                    stand.isCompatible === false ? " — недоступно для типа ВС" : ""
+                                  }`,
+                                  disabled: stand.isCompatible === false
+                                }))}
                                 value={p.standId}
-                                onChange={(e) => setDraftPlacement(idx, { standId: e.target.value })}
                                 disabled={!p.layoutId}
-                              >
-                                <option value="">— не выбрано —</option>
-                                {standOptions.map((s) => (
-                                  <option key={s.id} value={s.id} disabled={s.isCompatible === false}>
-                                    {s.code} • {s.name}
-                                    {s.isCompatible === false ? " — недоступно для типа ВС" : ""}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
+                                onChange={(standId) => setDraftPlacement(idx, { standId })}
+                                width="100%"
+                              />
+                            </div>
                             </div>
                           </div>
                         </div>
@@ -5700,6 +6182,7 @@ export function GanttView() {
                   className="btn"
                   onClick={() => {
                     setEditorOpen(false);
+                    setEditorCollapsed(false);
                     setCopyFromTitle(null);
                   }}
                   type="button"
@@ -5742,7 +6225,7 @@ export function GanttView() {
             </footer>
           </div>
         )}
-      </Drawer>
+      </FloatingEditorPanel>
 
       <Drawer
         open={legendOpen}

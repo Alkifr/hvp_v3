@@ -125,11 +125,22 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
           .union([
             z.literal("empty"),
             z.literal("prod"),
-            z.object({
-              from: zDateTime.optional(),
-              to: zDateTime.optional(),
-              source: z.enum(["prod"]).default("prod")
-            })
+            z
+              .object({
+                from: zDateTime.optional(),
+                to: zDateTime.optional(),
+                source: z.enum(["prod", "sandbox"]).default("prod"),
+                sandboxId: zUuid.optional()
+              })
+              .superRefine((val, ctx) => {
+                if (val.source === "sandbox" && !val.sandboxId) {
+                  ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: "sandboxId required when source is sandbox",
+                    path: ["sandboxId"]
+                  });
+                }
+              })
           ])
           .optional()
       })
@@ -137,6 +148,12 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
 
     const actor = getActor(req);
     const copyFrom = body.copyFrom ?? "empty";
+
+    let sourceSandboxId: string | null = null;
+    if (typeof copyFrom === "object" && copyFrom.source === "sandbox") {
+      sourceSandboxId = copyFrom.sandboxId!;
+      await assertMember(app, sourceSandboxId, me.id);
+    }
 
     const result = await app.prisma.$transaction(
       async (tx: Prisma.TransactionClient) => {
@@ -151,18 +168,24 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
         if (copyFrom !== "empty") {
           const range = typeof copyFrom === "object" ? { from: copyFrom.from, to: copyFrom.to } : undefined;
           copiedCounts = await copyPlanToSandbox(tx, {
-            sourceSandboxId: null,
+            sourceSandboxId,
             targetSandboxId: sandbox.id,
             range,
             actor
           });
         }
+        const reason =
+          copyFrom === "empty"
+            ? "Создание пустой песочницы"
+            : sourceSandboxId
+              ? "Создание песочницы с копированием из другой песочницы"
+              : "Создание песочницы с копированием плана";
         await logUserActivity(tx, {
           userId: me.id,
           actor,
           action: UserActivityAction.SANDBOX_CREATE,
           title: `Песочница «${sandbox.name}»`,
-          reason: copyFrom === "empty" ? "Создание пустой песочницы" : "Создание песочницы с копированием плана",
+          reason,
           sourceKind: "sandbox",
           sandboxId: sandbox.id,
           sandboxName: sandbox.name,

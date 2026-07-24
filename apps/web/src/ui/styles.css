@@ -4,6 +4,7 @@
   color: #0f172a;
   background: #f8fafc;
   --topbar-sticky-height: 0px;
+  --gantt-filters-sticky-height: 0px;
 }
 
 * {
@@ -2636,6 +2637,39 @@ a {
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 5;
+  background: #fff;
+}
+
+.ganttPage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  /* Фильтры статичны: скроллится только .ganttPageMain */
+  height: 100%;
+  max-height: 100%;
+}
+
+.ganttPageMain {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #f8fafc;
+  border-radius: 14px;
+}
+
+/* На странице Гантта не скроллим весь document — только .ganttPageMain */
+main.content:has(.ganttPage) {
+  overflow: hidden;
+  height: 100dvh;
+  max-height: 100dvh;
+  box-sizing: border-box;
 }
 
 .ganttPanelHeader {
@@ -2998,6 +3032,70 @@ a {
   left: auto;
   min-width: 180px;
   z-index: 1200;
+}
+
+.ssdCombobox {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 9px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.ssdCombobox:focus-within {
+  border-color: rgba(37, 99, 235, 0.75);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.ssdComboboxInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #0f172a;
+  padding: 7px 9px;
+  font: inherit;
+}
+
+.ssdComboboxToggle {
+  flex: 0 0 30px;
+  width: 30px;
+  border: 0;
+  border-left: 1px solid rgba(148, 163, 184, 0.25);
+  background: #f8fafc;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.ssdComboboxDisabled {
+  opacity: 0.65;
+  background: #f1f5f9;
+}
+
+.ssdComboboxDisabled .ssdComboboxToggle,
+.ssdComboboxDisabled .ssdComboboxInput {
+  cursor: not-allowed;
+}
+
+.msdCompact .ssdCombobox {
+  min-height: 30px;
+  border-radius: 7px;
+}
+
+.msdCompact .ssdComboboxInput {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.ssdOption:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+  background: transparent;
 }
 
 .ssdOption {
@@ -3646,7 +3744,7 @@ textarea {
 
 .ganttHeaderRow {
   position: sticky;
-  top: var(--topbar-sticky-height);
+  top: 0;
   background: white;
   z-index: 20;
   border-bottom: 1px solid rgba(148, 163, 184, 0.35);
@@ -3750,6 +3848,24 @@ textarea {
   max-width: 100%;
   min-width: 0;
   scrollbar-width: none;
+}
+
+.ganttRightInner {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+
+.ganttRightScroll.ganttPanReady {
+  cursor: grab;
+}
+
+.ganttRightScroll.ganttPanning {
+  cursor: grabbing !important;
+}
+
+.ganttRightScroll.ganttPanning .ganttCanvas {
+  cursor: grabbing !important;
 }
 
 .ganttRightScroll::-webkit-scrollbar {
@@ -5490,7 +5606,98 @@ textarea {
   border-color: rgba(37, 99, 235, 0.55);
 }
 
-/* ===== Модалка создания/редактирования события (v2) ===== */
+/* ===== Плавающая карточка события (modeless) ===== */
+
+.floatingEditor {
+  position: fixed;
+  z-index: 60;
+  box-shadow: 0 18px 60px rgba(2, 6, 23, 0.28);
+}
+
+.floatingEditorExpanded {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(880px, 96vw);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 14px;
+}
+
+.floatingEditorHeader {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.floatingEditorHeader:active {
+  cursor: grabbing;
+}
+
+.floatingEditorSummary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: min(520px, 55vw);
+}
+
+.floatingEditorCollapsed {
+  left: 50%;
+  right: 12px;
+  bottom: 12px;
+  width: auto;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  background: #fff;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(2, 6, 23, 0.2);
+}
+
+.floatingEditorCollapsedMain {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.floatingEditorCollapsedTitle {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floatingEditorCollapsedActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.floatingEditorCollapsedActions .drawerCloseBtn {
+  padding: 7px 9px;
+}
+
+.floatingEditorCollapsedActions .drawerCloseBtnLabel {
+  display: none;
+}
+
+/* ===== Модалка / карточка события (v2) ===== */
 
 .drawerV2 {
   padding: 0;
@@ -8183,17 +8390,31 @@ textarea {
   background: #f8fafc;
 }
 
-.sandboxModeOption:hover {
+.sandboxModeOption:hover:not(.isDisabled) {
   border-color: rgba(37, 99, 235, 0.4);
+}
+
+.sandboxModeOption.isDisabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #f1f5f9;
 }
 
 .sandboxModeOption input {
   margin-top: 3px;
 }
 
+.sandboxFieldDisabled {
+  opacity: 0.55;
+}
+
+.sandboxFieldDisabled .refInput:disabled {
+  cursor: not-allowed;
+}
+
 .sandboxRangeRow {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
   align-items: end;
 }
@@ -8383,6 +8604,11 @@ textarea {
     width: 100%;
   }
 
+  main.content:has(.ganttPage) {
+    height: calc(100dvh - var(--topbar-sticky-height) - 62px);
+    max-height: calc(100dvh - var(--topbar-sticky-height) - 62px);
+  }
+
   .ganttPanelActions {
     justify-content: flex-start;
     overflow-x: auto;
@@ -8477,6 +8703,23 @@ textarea {
     height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;
+  }
+
+  .floatingEditorExpanded {
+    left: 0 !important;
+    top: 0 !important;
+    transform: none !important;
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .floatingEditorCollapsed {
+    left: 8px;
+    right: 8px;
+    bottom: 70px;
   }
 
   .drawerBackdrop {

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
 import { apiDelete, apiGet, apiPost } from "../../lib/api";
+import { SingleSelectDropdown } from "./SingleSelectDropdown";
 
 type Skill = { id: string; code: string; name: string };
 type Shift = { id: string; code: string; name: string; startMin: number; endMin: number };
@@ -59,6 +60,15 @@ export function EventResourcesPanel(props: { eventId: string }) {
   const [actualShiftId, setActualShiftId] = useState(defaultShiftId);
   const [actualSkillId, setActualSkillId] = useState(defaultSkillId);
   const [actualPeople, setActualPeople] = useState(1);
+
+  const shiftOptions = useMemo(
+    () => (shiftsQ.data ?? []).map((shift) => ({ id: shift.id, label: `${shift.code} • ${shift.name}` })),
+    [shiftsQ.data]
+  );
+  const skillOptions = useMemo(
+    () => (skillsQ.data ?? []).map((skill) => ({ id: skill.id, label: `${skill.code} • ${skill.name}` })),
+    [skillsQ.data]
+  );
 
   // синхронизация дефолтов после загрузки справочников (простая)
   useEffect(() => {
@@ -154,26 +164,30 @@ export function EventResourcesPanel(props: { eventId: string }) {
             <span className="muted">Дата</span>
             <input type="date" value={planDate} onChange={(e) => setPlanDate(e.target.value)} />
           </label>
-          <label style={{ display: "grid", gap: 6 }}>
+          <div style={{ display: "grid", gap: 6, minWidth: 180 }}>
             <span className="muted">Смена</span>
-            <select value={planShiftId} onChange={(e) => setPlanShiftId(e.target.value)}>
-              {(shiftsQ.data ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code} • {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: "grid", gap: 6 }}>
+            <SingleSelectDropdown
+              searchable
+              allowEmpty={false}
+              searchPlaceholder="Введите смену"
+              options={shiftOptions}
+              value={planShiftId}
+              onChange={setPlanShiftId}
+              width="100%"
+            />
+          </div>
+          <div style={{ display: "grid", gap: 6, minWidth: 220 }}>
             <span className="muted">Квалификация</span>
-            <select value={planSkillId} onChange={(e) => setPlanSkillId(e.target.value)}>
-              {(skillsQ.data ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code} • {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
+            <SingleSelectDropdown
+              searchable
+              allowEmpty={false}
+              searchPlaceholder="Введите квалификацию"
+              options={skillOptions}
+              value={planSkillId}
+              onChange={setPlanSkillId}
+              width="100%"
+            />
+          </div>
           <label style={{ display: "grid", gap: 6 }}>
             <span className="muted">Кол-во (чел.)</span>
             <input type="number" step={1} value={planPeople} onChange={(e) => setPlanPeople(Number(e.target.value))} style={{ width: 140 }} />
@@ -198,26 +212,30 @@ export function EventResourcesPanel(props: { eventId: string }) {
             <span className="muted">Дата</span>
             <input type="date" value={actualDate} onChange={(e) => setActualDate(e.target.value)} />
           </label>
-          <label style={{ display: "grid", gap: 6 }}>
+          <div style={{ display: "grid", gap: 6, minWidth: 220 }}>
             <span className="muted">Квалификация</span>
-            <select value={actualSkillId} onChange={(e) => setActualSkillId(e.target.value)}>
-              {(skillsQ.data ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code} • {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: "grid", gap: 6 }}>
+            <SingleSelectDropdown
+              searchable
+              allowEmpty={false}
+              searchPlaceholder="Введите квалификацию"
+              options={skillOptions}
+              value={actualSkillId}
+              onChange={setActualSkillId}
+              width="100%"
+            />
+          </div>
+          <div style={{ display: "grid", gap: 6, minWidth: 180 }}>
             <span className="muted">Смена</span>
-            <select value={actualShiftId} onChange={(e) => setActualShiftId(e.target.value)} style={{ width: 180 }}>
-              {(shiftsQ.data ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code} • {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
+            <SingleSelectDropdown
+              searchable
+              allowEmpty={false}
+              searchPlaceholder="Введите смену"
+              options={shiftOptions}
+              value={actualShiftId}
+              onChange={setActualShiftId}
+              width="100%"
+            />
+          </div>
           <label style={{ display: "grid", gap: 6 }}>
             <span className="muted">Кол-во (чел.)</span>
             <input type="number" step={1} value={actualPeople} onChange={(e) => setActualPeople(Number(e.target.value))} style={{ width: 140 }} />

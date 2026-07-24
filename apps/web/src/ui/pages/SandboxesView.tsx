@@ -5,7 +5,7 @@ import { apiDelete, apiGet, apiPatch, apiPost, getActiveSandboxId, setActiveSand
 import { sandboxIsArchived, type SandboxSummary } from "../components/SandboxSwitcher";
 import { SwitchToggle } from "../components/SwitchToggle";
 
-type CopyMode = "empty" | "prod" | "prodRange";
+type CopyScope = "full" | "range";
 type SandboxTab = "mine" | "shared" | "archived";
 
 function formatDate(v: string | Date | null | undefined) {
@@ -490,16 +490,48 @@ function CreateSandboxModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState("Моя песочница");
   const [description, setDescription] = useState("");
-  const [mode, setMode] = useState<CopyMode>("prod");
+  /** "empty" | "prod" | sandboxId */
+  const [sourceKey, setSourceKey] = useState("prod");
+  const [scope, setScope] = useState<CopyScope>("full");
   const [from, setFrom] = useState<string>(() => toInputLocal(new Date()));
   const [to, setTo] = useState<string>(() => toInputLocal(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)));
+
+  const sandboxesQ = useQuery<SandboxSummary[]>({
+    queryKey: ["sandboxes", "mine"],
+    queryFn: () => apiGet<SandboxSummary[]>("/api/sandboxes"),
+    staleTime: 5_000
+  });
+  // GET /api/sandboxes уже отдаёт только доступные пользователю; архив не предлагаем как источник.
+  const sourceOptions = useMemo(
+    () => (sandboxesQ.data ?? []).filter((s) => !sandboxIsArchived(s)),
+    [sandboxesQ.data]
+  );
+
+  const isEmpty = sourceKey === "empty";
+  const copyEnabled = !isEmpty;
+  const rangeEnabled = copyEnabled && scope === "range";
 
   const createM = useMutation({
     mutationFn: async () => {
       const payload: any = { name: name.trim(), description: description.trim() || undefined };
-      if (mode === "empty") payload.copyFrom = "empty";
-      else if (mode === "prod") payload.copyFrom = "prod";
-      else payload.copyFrom = { source: "prod", from: fromInputLocal(from).toISOString(), to: fromInputLocal(to).toISOString() };
+      if (sourceKey === "empty") {
+        payload.copyFrom = "empty";
+      } else if (sourceKey === "prod") {
+        payload.copyFrom =
+          scope === "full"
+            ? "prod"
+            : { source: "prod", from: fromInputLocal(from).toISOString(), to: fromInputLocal(to).toISOString() };
+      } else {
+        payload.copyFrom =
+          scope === "full"
+            ? { source: "sandbox", sandboxId: sourceKey }
+            : {
+                source: "sandbox",
+                sandboxId: sourceKey,
+                from: fromInputLocal(from).toISOString(),
+                to: fromInputLocal(to).toISOString()
+              };
+      }
       return await apiPost<{ ok: boolean; sandbox: { id: string; name: string }; copied: any }>("/api/sandboxes", payload);
     },
     onSuccess: (res) => {
@@ -522,45 +554,71 @@ function CreateSandboxModal({ onClose }: { onClose: () => void }) {
           <textarea className="refInput" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={1000} />
         </label>
 
-        <div className="refLabel">
-          <span>Что скопировать</span>
+        <label className="refLabel">
+          <span>Источник</span>
+          <select className="refInput" value={sourceKey} onChange={(e) => setSourceKey(e.target.value)}>
+            <option value="empty">Пустая (без копирования)</option>
+            <option value="prod">Рабочий контур</option>
+            {sourceOptions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} ({s.eventCount})
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className={`refLabel${copyEnabled ? "" : " sandboxFieldDisabled"}`}>
+          <span>Объём копирования</span>
           <div className="sandboxModeRow">
-            <label className="sandboxModeOption">
-              <input type="radio" checked={mode === "prod"} onChange={() => setMode("prod")} />
+            <label className={`sandboxModeOption${copyEnabled ? "" : " isDisabled"}`}>
+              <input
+                type="radio"
+                checked={scope === "full"}
+                onChange={() => setScope("full")}
+                disabled={!copyEnabled}
+              />
               <div>
-                <b>Текущий план целиком</b>
-                <div className="muted small">Все события и связанные записи продакшена</div>
+                <b>Целиком</b>
+                <div className="muted small">Все события и связанные записи</div>
               </div>
             </label>
-            <label className="sandboxModeOption">
-              <input type="radio" checked={mode === "prodRange"} onChange={() => setMode("prodRange")} />
+            <label className={`sandboxModeOption${copyEnabled ? "" : " isDisabled"}`}>
+              <input
+                type="radio"
+                checked={scope === "range"}
+                onChange={() => setScope("range")}
+                disabled={!copyEnabled}
+              />
               <div>
                 <b>Диапазон дат</b>
-                <div className="muted small">Скопируются только события, пересекающие период</div>
-              </div>
-            </label>
-            <label className="sandboxModeOption">
-              <input type="radio" checked={mode === "empty"} onChange={() => setMode("empty")} />
-              <div>
-                <b>Пустая</b>
-                <div className="muted small">Без копирования — чистый холст</div>
+                <div className="muted small">Только события, пересекающие период</div>
               </div>
             </label>
           </div>
         </div>
 
-        {mode === "prodRange" ? (
-          <div className="sandboxRangeRow">
-            <label className="refLabel">
-              <span>С</span>
-              <input className="refInput" type="datetime-local" value={from} onChange={(e) => setFrom(e.target.value)} />
-            </label>
-            <label className="refLabel">
-              <span>По</span>
-              <input className="refInput" type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)} />
-            </label>
-          </div>
-        ) : null}
+        <div className={`sandboxRangeRow${rangeEnabled ? "" : " sandboxFieldDisabled"}`}>
+          <label className="refLabel">
+            <span>С</span>
+            <input
+              className="refInput"
+              type="datetime-local"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              disabled={!rangeEnabled}
+            />
+          </label>
+          <label className="refLabel">
+            <span>По</span>
+            <input
+              className="refInput"
+              type="datetime-local"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              disabled={!rangeEnabled}
+            />
+          </label>
+        </div>
 
         {createM.isError ? <div className="errorMsg">{String((createM.error as Error)?.message ?? createM.error)}</div> : null}
       </div>
