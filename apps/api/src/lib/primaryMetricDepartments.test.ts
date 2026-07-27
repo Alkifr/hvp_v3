@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { skillCodeToDepartment, PRIMARY_METRIC_DEPARTMENTS, collectLaborMetricsFromImportRow } from "./primaryMetricDepartments.js";
+import { skillCodeToDepartment, collectLaborMetricsFromImportRow } from "./primaryMetricDepartments.js";
 
 test("maps skill codes to PrimaryMetricDepartment", () => {
   assert.equal(skillCodeToDepartment("ME"), "ME");

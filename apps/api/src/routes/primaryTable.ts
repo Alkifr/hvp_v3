@@ -140,7 +140,7 @@ function toQueryInput(body: z.infer<typeof zQueryBody>, opts?: { rawDates?: bool
 function csvCell(value: unknown): string {
   if (value == null) return "";
   const text = String(value);
-  return /[\";\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  return /[";\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 export const primaryTableRoutes: FastifyPluginAsync = async (app) => {
@@ -248,7 +248,7 @@ export const primaryTableRoutes: FastifyPluginAsync = async (app) => {
 
     if (parsed.format === "csv") {
       reply.header("content-type", "text/csv; charset=utf-8");
-      reply.header("content-disposition", `attachment; filename=\"primary-table-${fileStamp}.csv\"`);
+      reply.header("content-disposition", `attachment; filename="primary-table-${fileStamp}.csv"`);
       reply.hijack();
       reply.raw.write(`\uFEFF${columns.map((column) => csvCell(column.label)).join(";")}\r\n`);
       do {
@@ -274,7 +274,7 @@ export const primaryTableRoutes: FastifyPluginAsync = async (app) => {
     }
 
     reply.header("content-type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    reply.header("content-disposition", `attachment; filename=\"primary-table-${fileStamp}.xlsx\"`);
+    reply.header("content-disposition", `attachment; filename="primary-table-${fileStamp}.xlsx"`);
     reply.hijack();
     const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: reply.raw, useStyles: true });
     const worksheet = workbook.addWorksheet("Первичная таблица");
