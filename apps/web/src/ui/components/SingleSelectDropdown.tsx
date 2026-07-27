@@ -12,7 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-export type SingleSelectOption = { id: string; label: string; disabled?: boolean };
+export type SingleSelectOption = { id: string; label: string; description?: string; disabled?: boolean };
 
 type PanelPos = { top: number; left: number; width: number; maxHeight: number; openUp: boolean };
 
@@ -118,12 +118,17 @@ export function SingleSelectDropdown(props: {
   const filteredOptions = useMemo(() => {
     const q = search.trim().toLocaleLowerCase("ru-RU");
     if (!q) return props.options;
-    return props.options.filter((o) => o.label.toLocaleLowerCase("ru-RU").includes(q));
+    return props.options.filter((o) => {
+      const hay = `${o.label} ${o.description ?? ""}`.toLocaleLowerCase("ru-RU");
+      return hay.includes(q);
+    });
   }, [props.options, search]);
 
   const selectedLabel = useMemo(() => {
     if (!props.value) return props.placeholder ?? "— выберите —";
-    return props.options.find((o) => o.id === props.value)?.label ?? props.placeholder ?? "— выберите —";
+    const selected = props.options.find((o) => o.id === props.value);
+    if (!selected) return props.placeholder ?? "— выберите —";
+    return selected.description ? `${selected.label} — ${selected.description}` : selected.label;
   }, [props.value, props.options, props.placeholder]);
 
   const keepWheelInsidePanel = (e: WheelEvent<HTMLDivElement>) => {
@@ -219,11 +224,13 @@ export function SingleSelectDropdown(props: {
                 <button
                   key={o.id}
                   type="button"
-                  className={`ssdOption${o.id === props.value ? " ssdOptionActive" : ""}`}
+                  className={`ssdOption${o.description ? " ssdOptionWithDesc" : ""}${o.id === props.value ? " ssdOptionActive" : ""}`}
                   onClick={() => pick(o.id)}
                   disabled={o.disabled}
+                  title={o.description ? `${o.label} — ${o.description}` : o.label}
                 >
-                  {o.label}
+                  <span className="ssdOptionLabel">{o.label}</span>
+                  {o.description ? <span className="ssdOptionDesc">{o.description}</span> : null}
                 </button>
               ))
             )}

@@ -5,7 +5,12 @@ import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { DONE_SCHEDULE_LOCK_MESSAGE, isDoneScheduleLocked } from "../../lib/eventStatus.js";
-import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
+import {
+  assertChangeReasonIfNeeded,
+  canWriteInContext,
+  sandboxFilter,
+  sandboxIdFor
+} from "../../plugins/sandbox.js";
 
 function assertCanWrite(req: any) {
   if (!canWriteInContext(req)) {
@@ -60,6 +65,10 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       actualEndAt?: Date | null;
     }
   ) => {
+    const placementCount = await tx.eventPlacement.count({ where: { eventId: params.eventId } });
+    if (placementCount > 1) {
+      throw new Error("Многоэтапное событие изменяется только через карточку события");
+    }
     await tx.standReservation.deleteMany({ where: { eventId: params.eventId } });
     await tx.eventPlacement.deleteMany({ where: { eventId: params.eventId } });
     const placement = await tx.eventPlacement.create({
@@ -257,9 +266,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       existingReservation.startAt.toISOString() !== reservation.startAt.toISOString() ||
       existingReservation.endAt.toISOString() !== reservation.endAt.toISOString();
 
-    if (changed && !body.changeReason) {
-      throw app.httpErrors.badRequest("changeReason is required when changing reservation");
-    }
+    assertChangeReasonIfNeeded(
+      req,
+      changed,
+      body.changeReason,
+      "changeReason is required when changing reservation"
+    );
 
     await app.prisma.maintenanceEventAudit.create({
       data: {
@@ -310,9 +322,11 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         standId: zUuid,
         bumpOnConflict: z.boolean().optional(),
         bumpedEventId: zUuid.optional(),
-        changeReason: z.string().trim().min(1).max(1000)
+        changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .parse(req.body);
+
+    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required for drag-and-drop move");
 
     const bump = Boolean(body.bumpOnConflict);
     const sbId = sandboxIdFor(req);
@@ -393,10 +407,10 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         // 1) снять резервы у всех конфликтующих
         await tx.standReservation.deleteMany({ where: { eventId: { in: toBump } } });
         await tx.eventPlacement.deleteMany({ where: { eventId: { in: toBump } } });
-        // 2) убрать ангар/вариант и перевести в DRAFT (без ангара/места)
+        // 2) убрать ангар/вариант и перевести в PENDING_EXECUTOR_APPROVAL (без ангара/места)
         await tx.maintenanceEvent.updateMany({
           where: { id: { in: toBump } },
-          data: { hangarId: null, layoutId: null, status: EventStatus.DRAFT }
+          data: { hangarId: null, layoutId: null, status: EventStatus.PENDING_EXECUTOR_APPROVAL }
         });
         // 3) аудит по каждому "вытолкнутому"
         for (const bumpedEventId of toBump) {
@@ -406,12 +420,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
               sandboxId: sbId,
               action: EventAuditAction.UPDATE,
               actor: getActor(req),
-              reason: body.changeReason,
+              reason: body.changeReason ?? null,
               changes: {
                 dnd: {
                   bumpedByEventId: body.eventId,
                   reservationTo: null,
-                  statusTo: EventStatus.DRAFT,
+                  statusTo: EventStatus.PENDING_EXECUTOR_APPROVAL,
                   hangarIdTo: null,
                   layoutIdTo: null
                 }
@@ -455,7 +469,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: sbId,
           action: EventAuditAction.RESERVE,
           actor: getActor(req),
-          reason: body.changeReason,
+          reason: body.changeReason ?? null,
           changes: {
             dnd: { bumpOnConflict: bump, bumpedEventIds },
             reservation: {
@@ -504,10 +518,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         endAt: zDateTime,
         bumpOnConflict: z.boolean().optional(),
         bumpedEventId: zUuid.optional(),
-        changeReason: z.string().trim().min(1).max(1000)
+        changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
       .parse(req.body);
+
+    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required for drag-and-drop move");
 
     const bump = Boolean(body.bumpOnConflict);
     const sbId = sandboxIdFor(req);
@@ -586,7 +602,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         await tx.eventPlacement.deleteMany({ where: { eventId: { in: toBump } } });
         await tx.maintenanceEvent.updateMany({
           where: { id: { in: toBump } },
-          data: { hangarId: null, layoutId: null, status: EventStatus.DRAFT }
+          data: { hangarId: null, layoutId: null, status: EventStatus.PENDING_EXECUTOR_APPROVAL }
         });
         for (const bumpedEventId of toBump) {
           await tx.maintenanceEventAudit.create({
@@ -595,12 +611,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
               sandboxId: sbId,
               action: EventAuditAction.UPDATE,
               actor: getActor(req),
-              reason: body.changeReason,
+              reason: body.changeReason ?? null,
               changes: {
                 dnd: {
                   bumpedByEventId: body.eventId,
                   reservationTo: null,
-                  statusTo: EventStatus.DRAFT,
+                  statusTo: EventStatus.PENDING_EXECUTOR_APPROVAL,
                   hangarIdTo: null,
                   layoutIdTo: null
                 }
@@ -651,7 +667,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: sbId,
           action: EventAuditAction.UPDATE,
           actor: getActor(req),
-          reason: body.changeReason,
+          reason: body.changeReason ?? null,
           changes: {
             dnd: { bumpOnConflict: bump, bumpedEventIds },
             from: prev,
@@ -693,10 +709,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         hangarId: zUuid,
         startAt: zDateTime,
         endAt: zDateTime,
-        changeReason: z.string().trim().min(1).max(1000)
+        changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
       .parse(req.body);
+
+    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required for drag-and-drop move");
 
     const sbId = sandboxIdFor(req);
 
@@ -815,7 +833,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: sbId,
           action: EventAuditAction.UPDATE,
           actor: getActor(req),
-          reason: body.changeReason,
+          reason: body.changeReason ?? null,
           changes: {
             dnd: { mode: "hangar-auto-placement" },
             from: prev,
@@ -870,10 +888,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         startAt: zDateTime,
         endAt: zDateTime,
         /** Смещение длительности сохраняется per-event; startAt/endAt — якорь лидера. */
-        changeReason: z.string().trim().min(1).max(1000)
+        changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
       .parse(req.body);
+
+    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required for drag-and-drop move");
 
     const sbId = sandboxIdFor(req);
     const uniqueIds = Array.from(new Set(body.eventIds));
@@ -1031,7 +1051,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
                 sandboxId: sbId,
                 action: EventAuditAction.UPDATE,
                 actor: getActor(req),
-                reason: body.changeReason,
+                reason: body.changeReason ?? null,
                 changes: {
                   dnd: { mode: "hangar-auto-placement-batch", batchSize: ordered.length },
                   from: prev,
@@ -1098,6 +1118,10 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     if (!event) throw app.httpErrors.notFound("Event not found");
     if (isDoneScheduleLocked(event.status)) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
+    const placementCount = await app.prisma.eventPlacement.count({ where: { eventId, ...sandboxFilter(req) } });
+    if (placementCount > 1) {
+      throw app.httpErrors.badRequest("Многоэтапное событие изменяется только через карточку события");
     }
     const existing = await app.prisma.standReservation.findFirst({ where: { eventId, ...sandboxFilter(req) }, orderBy: [{ startAt: "asc" }] });
     if (!existing) {

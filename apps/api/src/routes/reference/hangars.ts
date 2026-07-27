@@ -18,6 +18,7 @@ export const hangarsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         code: z.string().trim().min(1).max(32),
         name: z.string().trim().min(1).max(200),
+        station: z.string().trim().min(1).max(32).nullable().optional(),
         isPhysical: z.boolean().optional(),
         isActive: z.boolean().optional()
       })
@@ -33,6 +34,7 @@ export const hangarsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         code: z.string().trim().min(1).max(32).optional(),
         name: z.string().trim().min(1).max(200).optional(),
+        station: z.string().trim().min(1).max(32).nullable().optional(),
         isPhysical: z.boolean().optional(),
         isActive: z.boolean().optional()
       })

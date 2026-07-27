@@ -13,9 +13,10 @@ enum PlanningLevel {
 }
 
 enum EventStatus {
-  DRAFT
-  PLANNED
-  CONFIRMED
+  PENDING_EXECUTOR_APPROVAL
+  PENDING_CUSTOMER_APPROVAL
+  APPROVED_BY_EXECUTOR
+  APPROVED_BY_CUSTOMER
   IN_PROGRESS
   DONE
   CANCELLED
@@ -25,6 +26,11 @@ enum EventStatus {
 enum EventPlanningKind {
   PLANNED
   UNPLANNED
+}
+
+enum EventPlacementOrigin {
+  MANUAL
+  AUTO_GAP
 }
 
 enum EventAuditAction {
@@ -86,8 +92,8 @@ enum StockMovementType {
 
 // Узкий/широкий фюзеляж — для подбора варианта расстановки под типы ВС
 enum BodyType {
-  NARROW_BODY   // узкий (A320, B737, …)
-  WIDE_BODY     // широкий (A330, B777, …)
+  NARROW_BODY // узкий (A320, B737, …)
+  WIDE_BODY // широкий (A330, B777, …)
 }
 
 enum OptimizationScoreCategory {
@@ -131,6 +137,37 @@ enum ReportShareRole {
   EDITOR
 }
 
+enum PrimaryMetricBlock {
+  WP_PLAN_MPS
+  WP_ACTUAL
+  FIXED_COST_PLAN
+  TM_PLAN
+  ACCESS_LABOR_PLAN
+  NRC_PLAN
+  ADD_PLAN
+  FIXED_COST_ACTUAL
+  TM_ACTUAL
+  NRC_ACTUAL
+  ADD_ACTUAL
+  LABOR_BUDGET
+}
+
+enum PrimaryMetricDepartment {
+  ME
+  AV
+  INT
+  NDT
+  SHOP
+  CAB_REP
+}
+
+enum PrimaryMetricSource {
+  MANUAL
+  IMPORT
+  MPS
+  SAP
+}
+
 model Shift {
   id        String   @id @default(uuid())
   code      String   @unique
@@ -142,7 +179,7 @@ model Shift {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  planLines  EventWorkPlanLine[]
+  planLines   EventWorkPlanLine[]
   actualLines EventWorkActualLine[]
   timeEntries TimeEntry[]
 
@@ -157,8 +194,8 @@ model Person {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  skills        PersonSkill[]
-  timeEntries   TimeEntry[]
+  skills         PersonSkill[]
+  timeEntries    TimeEntry[]
   unavailability PersonUnavailability[]
 
   @@index([isActive])
@@ -172,8 +209,8 @@ model Skill {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  people     PersonSkill[]
-  planLines  EventWorkPlanLine[]
+  people      PersonSkill[]
+  planLines   EventWorkPlanLine[]
   actualLines EventWorkActualLine[]
   timeEntries TimeEntry[]
 
@@ -209,30 +246,30 @@ model PersonUnavailability {
 }
 
 model EventWorkPlanLine {
-  id            String   @id @default(uuid())
-  eventId       String
+  id               String   @id @default(uuid())
+  eventId          String
   // контекст планирования: null = рабочий контур, иначе — песочница
-  sandboxId     String?
-  date          DateTime // начало суток (UTC) для планирования по дням
-  shiftId       String
-  skillId       String
+  sandboxId        String?
+  date             DateTime // начало суток (UTC) для планирования по дням
+  shiftId          String
+  skillId          String
   // потребность: сколько людей нужно на смену по квалификации
   plannedHeadcount Int?
-  plannedMinutes Int
-  notes         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  plannedMinutes   Int
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
   shift   Shift            @relation(fields: [shiftId], references: [id])
   skill   Skill            @relation(fields: [skillId], references: [id])
   sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
+  @@unique([eventId, date, shiftId, skillId])
   @@index([eventId, date])
   @@index([skillId])
   @@index([shiftId])
   @@index([sandboxId])
-  @@unique([eventId, date, shiftId, skillId])
 }
 
 model EventWorkActualLine {
@@ -252,11 +289,11 @@ model EventWorkActualLine {
   skill   Skill            @relation(fields: [skillId], references: [id])
   sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
+  @@unique([eventId, date, shiftId, skillId])
   @@index([eventId, date])
   @@index([skillId])
   @@index([shiftId])
   @@index([sandboxId])
-  @@unique([eventId, date, shiftId, skillId])
 }
 
 model TimeEntry {
@@ -304,7 +341,7 @@ model Material {
   id        String   @id @default(uuid())
   code      String   @unique
   name      String
-  uom       String   // например "EA", "KG"
+  uom       String // например "EA", "KG"
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -327,10 +364,10 @@ model StockMovement {
   notes       String?
   createdAt   DateTime          @default(now())
 
-  material  Material           @relation(fields: [materialId], references: [id])
-  warehouse Warehouse          @relation(fields: [warehouseId], references: [id])
-  event     MaintenanceEvent?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
-  sandbox   Sandbox?           @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  material  Material          @relation(fields: [materialId], references: [id])
+  warehouse Warehouse         @relation(fields: [warehouseId], references: [id])
+  event     MaintenanceEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  sandbox   Sandbox?          @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@index([warehouseId, materialId, createdAt])
   @@index([eventId])
@@ -354,10 +391,10 @@ model MaterialReservation {
   warehouse Warehouse        @relation(fields: [warehouseId], references: [id])
   sandbox   Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
+  @@unique([eventId, materialId, warehouseId, needByDate])
   @@index([eventId, needByDate])
   @@index([warehouseId, materialId])
   @@index([sandboxId])
-  @@unique([eventId, materialId, warehouseId, needByDate])
 }
 
 model MaterialIssue {
@@ -394,10 +431,10 @@ model User {
 
   roles UserRole[]
 
-  ownedSandboxes     Sandbox[]       @relation("SandboxOwner")
+  ownedSandboxes     Sandbox[]             @relation("SandboxOwner")
   sandboxMemberships SandboxMember[]
   activityLogs       UserActivityLog[]
-  ownedReports       SavedReport[]   @relation("ReportOwner")
+  ownedReports       SavedReport[]         @relation("ReportOwner")
   reportShares       SavedReportShare[]
   notificationReads  AppNotificationRead[]
 
@@ -418,20 +455,27 @@ model Sandbox {
   owner   User            @relation("SandboxOwner", fields: [ownerId], references: [id])
   members SandboxMember[]
 
-  events            MaintenanceEvent[]
-  placements        EventPlacement[]
-  reservations      StandReservation[]
-  towSegments       EventTow[]
-  auditTrail        MaintenanceEventAudit[]
-  workPlanLines     EventWorkPlanLine[]
-  workActualLines   EventWorkActualLine[]
-  timeEntries       TimeEntry[]
+  events               MaintenanceEvent[]
+  placements           EventPlacement[]
+  reservations         StandReservation[]
+  towSegments          EventTow[]
+  auditTrail           MaintenanceEventAudit[]
+  workPlanLines        EventWorkPlanLine[]
+  workActualLines      EventWorkActualLine[]
+  timeEntries          TimeEntry[]
   materialReservations MaterialReservation[]
-  materialIssues    MaterialIssue[]
-  stockMovements    StockMovement[]
-  technicalPlans    EventTechnicalPlan[]
-  technicalNeeds    EventTechnicalNeed[]
-  technicalSteps    EventTechnicalStep[]
+  materialIssues       MaterialIssue[]
+  stockMovements       StockMovement[]
+  technicalPlans       EventTechnicalPlan[]
+  technicalNeeds       EventTechnicalNeed[]
+  technicalSteps       EventTechnicalStep[]
+  primaryExtensions    EventPrimaryExtension[]
+  customerSlots        EventCustomerSlot[]
+  slotDeviations       EventSlotDeviation[]
+  reportMetrics        EventReportMetric[]
+  reportScalars        EventReportScalar[]
+  ptoRollingEntries    EventPtoRollingEntry[]
+  aCheckAnalyses       EventACheckAnalysis[]
 
   @@index([ownerId])
   @@index([status])
@@ -502,23 +546,23 @@ model Operator {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  aircraft  Aircraft[]
-  palettes  AircraftTypePalette[]
+  aircraft Aircraft[]
+  palettes AircraftTypePalette[]
 }
 
 model AircraftType {
-  id          String    @id @default(uuid())
-  icaoType    String?   @unique
-  name        String
+  id           String    @id @default(uuid())
+  icaoType     String?   @unique
+  name         String
   manufacturer String?
-  bodyType    BodyType? // узкий/широкий фюзеляж — для подбора варианта расстановки
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  bodyType     BodyType? // узкий/широкий фюзеляж — для подбора варианта расстановки
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  aircraft  Aircraft[]
-  palettes  AircraftTypePalette[]
-  hangarStandRules HangarStandAircraftType[]
+  aircraft               Aircraft[]
+  palettes               AircraftTypePalette[]
+  hangarStandRules       HangarStandAircraftType[]
   placementPriorityRules PlacementPriorityRuleAircraftType[]
 }
 
@@ -533,7 +577,7 @@ model AircraftTypePalette {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  operator    Operator    @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  operator     Operator     @relation(fields: [operatorId], references: [id], onDelete: Cascade)
   aircraftType AircraftType @relation(fields: [aircraftTypeId], references: [id], onDelete: Cascade)
 
   @@unique([operatorId, aircraftTypeId])
@@ -543,16 +587,17 @@ model AircraftTypePalette {
 }
 
 model Aircraft {
-  id           String      @id @default(uuid())
-  tailNumber   String      @unique
-  serialNumber String?
-  operatorId   String
-  typeId       String
-  isActive     Boolean     @default(true)
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id              String    @id @default(uuid())
+  tailNumber      String    @unique
+  serialNumber    String?
+  manufactureDate DateTime? // дата производства ВС (день); возраст считается на клиенте/в UI
+  operatorId      String
+  typeId          String
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  operator Operator    @relation(fields: [operatorId], references: [id])
+  operator Operator     @relation(fields: [operatorId], references: [id])
   type     AircraftType @relation(fields: [typeId], references: [id])
 
   events MaintenanceEvent[]
@@ -565,12 +610,12 @@ model EventType {
   id        String   @id @default(uuid())
   code      String   @unique
   name      String
-  color     String?  // hex, например #3b82f6
+  color     String? // hex, например #3b82f6
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  events MaintenanceEvent[]
+  events                 MaintenanceEvent[]
   placementPriorityRules PlacementPriorityRuleEventType[]
 }
 
@@ -591,24 +636,26 @@ model Hangar {
   id         String   @id @default(uuid())
   code       String   @unique
   name       String
+  /// Код станции выполнения ТО (например SVO, REN)
+  station    String?
   /// false = внешний MRO / «сторонний» контур (не физический ангар площадки)
   isPhysical Boolean  @default(true)
   isActive   Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  layouts HangarLayout[]
-  events  MaintenanceEvent[]
-  placements EventPlacement[]
+  layouts                HangarLayout[]
+  events                 MaintenanceEvent[]
+  placements             EventPlacement[]
   placementPriorityRules PlacementPriorityRule[]
 }
 
 model HangarLayout {
-  id          String   @id @default(uuid())
-  hangarId    String
-  code        String
-  name        String
-  description String?
+  id           String   @id @default(uuid())
+  hangarId     String
+  code         String
+  name         String
+  description  String?
   // Геометрия площади (для базовой визуализации)
   widthMeters  Float?
   heightMeters Float?
@@ -618,12 +665,12 @@ model HangarLayout {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  hangar Hangar @relation(fields: [hangarId], references: [id])
+  hangar Hangar        @relation(fields: [hangarId], references: [id])
   stands HangarStand[]
 
-  reservations StandReservation[]
-  events       MaintenanceEvent[]
-  placements  EventPlacement[]
+  reservations           StandReservation[]
+  events                 MaintenanceEvent[]
+  placements             EventPlacement[]
   placementPriorityRules PlacementPriorityRule[]
 
   @@unique([hangarId, code])
@@ -631,12 +678,12 @@ model HangarLayout {
 }
 
 model HangarStand {
-  id        String    @id @default(uuid())
-  layoutId  String
-  code      String
-  name      String
+  id       String    @id @default(uuid())
+  layoutId String
+  code     String
+  name     String
   // Deprecated: совместимость теперь задаётся через HangarStandAircraftType.
-  bodyType  BodyType?
+  bodyType BodyType?
 
   // Прямоугольник места в координатах "метры" (простой SVG план)
   x      Float
@@ -649,10 +696,10 @@ model HangarStand {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  layout HangarLayout @relation(fields: [layoutId], references: [id])
-  allowedAircraftTypes HangarStandAircraftType[]
-  reservations StandReservation[]
-  placements EventPlacement[]
+  layout                 HangarLayout              @relation(fields: [layoutId], references: [id])
+  allowedAircraftTypes   HangarStandAircraftType[]
+  reservations           StandReservation[]
+  placements             EventPlacement[]
   placementPriorityRules PlacementPriorityRule[]
 
   @@unique([layoutId, code])
@@ -672,19 +719,19 @@ model HangarStandAircraftType {
 }
 
 model PlacementPriorityRule {
-  id            String   @id @default(uuid())
-  hangarId      String
-  layoutId      String
-  standId       String
-  priorityScore Int      @default(500)
-  sourceEventName String?
+  id                     String   @id @default(uuid())
+  hangarId               String
+  layoutId               String
+  standId                String
+  priorityScore          Int      @default(500)
+  sourceEventName        String?
   sourceAircraftTypeText String?
-  conditionText String?
-  comment       String?
-  source        String?
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  conditionText          String?
+  comment                String?
+  source                 String?
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   hangar Hangar       @relation(fields: [hangarId], references: [id])
   layout HangarLayout @relation(fields: [layoutId], references: [id], onDelete: Cascade)
@@ -762,20 +809,20 @@ model OptimizationScoreRule {
 }
 
 model MaintenanceEvent {
-  id            String        @id @default(uuid())
-  level         PlanningLevel
-  status        EventStatus   @default(PLANNED)
-  planningKind  EventPlanningKind @default(PLANNED)
-  title         String
+  id           String            @id @default(uuid())
+  level        PlanningLevel
+  status       EventStatus       @default(PENDING_EXECUTOR_APPROVAL)
+  planningKind EventPlanningKind @default(PLANNED)
+  title        String
 
   // контекст планирования: null = рабочий контур, иначе — песочница
-  sandboxId     String?
+  sandboxId String?
 
-  aircraftId    String?       // null при виртуальном борте (массовое планирование)
-  eventTypeId   String
+  aircraftId  String? // null при виртуальном борте (массовое планирование)
+  eventTypeId String
 
   // Виртуальный борт: заполняется при массовом планировании; при закрытии события создаётся Aircraft и сюда записывается aircraftId
-  virtualAircraft Json?      // { operatorId, aircraftTypeId, label }
+  virtualAircraft Json? // { operatorId, aircraftTypeId, label }
 
   startAt       DateTime
   endAt         DateTime
@@ -785,13 +832,13 @@ model MaintenanceEvent {
   actualEndAt   DateTime?
 
   // Опционально можно заранее закрепить в ангаре/варианте (даже без конкретного места)
-  hangarId      String?
-  layoutId      String?
+  hangarId String?
+  layoutId String?
 
   // Цех (справочник) — одинарный выбор
-  workshopId    String?
+  workshopId String?
 
-  notes         String?
+  notes String?
 
   // Lineage: связь копии с источником (для merge/dedup между песочницами)
   // originEventId — корень в рабочем контуре (null = событие создано с нуля или само является корнем в prod)
@@ -801,8 +848,8 @@ model MaintenanceEvent {
   sourceEventId   String?
   sourceSandboxId String?
 
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   aircraft  Aircraft? @relation(fields: [aircraftId], references: [id])
   eventType EventType @relation(fields: [eventTypeId], references: [id])
@@ -814,8 +861,8 @@ model MaintenanceEvent {
 
   reservations StandReservation[]
   placements   EventPlacement[]
-  auditTrail  MaintenanceEventAudit[]
-  towSegments EventTow[]
+  auditTrail   MaintenanceEventAudit[]
+  towSegments  EventTow[]
 
   workPlanLines        EventWorkPlanLine[]
   workActualLines      EventWorkActualLine[]
@@ -825,6 +872,13 @@ model MaintenanceEvent {
   stockMovements       StockMovement[]
   technicalPlan        EventTechnicalPlan?
   notifications        AppNotification[]
+  primaryExtension     EventPrimaryExtension?
+  customerSlot         EventCustomerSlot?
+  slotDeviations       EventSlotDeviation[]
+  reportMetrics        EventReportMetric[]
+  reportScalars        EventReportScalar[]
+  ptoRollingEntries    EventPtoRollingEntry[]
+  aCheckAnalysis       EventACheckAnalysis?
 
   @@index([aircraftId])
   @@index([eventTypeId])
@@ -834,8 +888,144 @@ model MaintenanceEvent {
   @@index([layoutId])
   @@index([workshopId])
   @@index([sandboxId])
+  @@index([sandboxId, startAt, id])
   @@index([originEventId, sandboxId])
   @@index([sourceEventId])
+}
+
+model EventPrimaryExtension {
+  id                   String   @id @default(uuid())
+  eventId              String   @unique
+  sandboxId            String?
+  fleetCode            String?
+  externalExecution    Boolean?
+  normalizedForm       String?
+  normalizedFormDetail String?
+  stationCode          String?
+  phaseKind            String?
+  agreementStatus      String?
+  iiCCheckFact         Boolean?
+  wpNumberFact         String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@index([sandboxId])
+  @@index([fleetCode])
+  @@index([normalizedForm])
+}
+
+model EventCustomerSlot {
+  id        String    @id @default(uuid())
+  eventId   String    @unique
+  sandboxId String?
+  startAt   DateTime?
+  endAt     DateTime?
+  dlFlag    String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@index([sandboxId])
+  @@index([startAt, endAt])
+}
+
+model EventSlotDeviation {
+  id        String   @id @default(uuid())
+  eventId   String
+  sandboxId String?
+  kind      String
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, kind])
+  @@index([sandboxId])
+  @@index([kind])
+}
+
+model EventReportMetric {
+  id         String                  @id @default(uuid())
+  eventId    String
+  sandboxId  String?
+  block      PrimaryMetricBlock
+  department PrimaryMetricDepartment
+  manHours   Decimal?                @db.Decimal(18, 4)
+  costAmount Decimal?                @db.Decimal(18, 4)
+  currency   String?
+  source     PrimaryMetricSource     @default(MANUAL)
+  createdAt  DateTime                @default(now())
+  updatedAt  DateTime                @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, block, department])
+  @@index([sandboxId, block])
+  @@index([eventId])
+}
+
+model EventReportScalar {
+  id        String   @id @default(uuid())
+  eventId   String
+  sandboxId String?
+  metricKey String
+  valueNum  Decimal? @db.Decimal(18, 4)
+  valueText String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, metricKey])
+  @@index([sandboxId, metricKey])
+  @@index([eventId])
+}
+
+model EventPtoRollingEntry {
+  id          String   @id @default(uuid())
+  eventId     String
+  sandboxId   String?
+  externalKey String?
+  status      String?
+  kippHours   Decimal? @db.Decimal(18, 4)
+  laborTotal  Decimal? @db.Decimal(18, 4)
+  amount      Decimal? @db.Decimal(18, 4)
+  category    String?
+  comments    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([sandboxId])
+  @@index([externalKey])
+}
+
+model EventACheckAnalysis {
+  id        String   @id @default(uuid())
+  eventId   String   @unique
+  sandboxId String?
+  status    String?
+  quantity  Int?
+  program   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@index([sandboxId])
 }
 
 model EventTechnicalPlan {
@@ -928,21 +1118,22 @@ model EventTechnicalStepDependency {
 // Один MaintenanceEvent остаётся логическим событием, а placements описывают,
 // где и когда выполнялась работа при перебуксировках между ангарами.
 model EventPlacement {
-  id        String   @id @default(uuid())
-  eventId   String
-  sandboxId String?
-  startAt   DateTime
-  endAt     DateTime
+  id            String               @id @default(uuid())
+  eventId       String
+  sandboxId     String?
+  origin        EventPlacementOrigin @default(MANUAL)
+  startAt       DateTime
+  endAt         DateTime
   budgetStartAt DateTime?
   budgetEndAt   DateTime?
   actualStartAt DateTime?
   actualEndAt   DateTime?
-  hangarId  String?
-  layoutId  String?
-  standId   String?
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  hangarId      String?
+  layoutId      String?
+  standId       String?
+  sortOrder     Int                  @default(0)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
 
   event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
   sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
@@ -954,6 +1145,7 @@ model EventPlacement {
 
   @@index([eventId, sortOrder])
   @@index([sandboxId])
+  @@index([origin])
   @@index([hangarId])
   @@index([layoutId])
   @@index([standId, startAt, endAt])
@@ -1051,8 +1243,23 @@ model UserActivityLog {
   @@index([action, createdAt])
 }
 
+/// Singleton-настройки SMTP и получателей email-дайджеста изменений.
+model MailDigestSettings {
+  id              String   @id @default("default")
+  smtpHost        String?
+  smtpPort        Int      @default(465)
+  smtpSecure      Boolean  @default(true)
+  smtpUser        String?
+  smtpPass        String?
+  mailFrom        String?
+  /// string[] — список email получателей
+  recipients      Json     @default("[]")
+  subjectTemplate String   @default("Изменения плана ТО")
+  updatedAt       DateTime @updatedAt
+}
+
 model StandReservation {
-  id        String   @id @default(uuid())
+  id String @id @default(uuid())
 
   // Резервирование привязано к событию и, для многоангарных событий, к конкретному этапу.
   eventId     String
@@ -1062,8 +1269,8 @@ model StandReservation {
   standId     String
 
   // Диапазон резерва (может совпадать с event.startAt/endAt или отличаться)
-  startAt   DateTime
-  endAt     DateTime
+  startAt DateTime
+  endAt   DateTime
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1110,4 +1317,3 @@ model SavedReportShare {
   @@id([reportId, userId])
   @@index([userId])
 }
-

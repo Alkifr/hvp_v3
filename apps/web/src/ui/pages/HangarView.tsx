@@ -41,6 +41,7 @@ type Layout = {
   code: string;
   hangarId: string;
   capacitySummary?: string;
+  standsSummary?: string;
 };
 type SummaryEvent = {
   id: string;
@@ -994,8 +995,9 @@ export function HangarView() {
                 }}
               >
                 {layouts.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name}{l.capacitySummary ? ` · ${l.capacitySummary}` : ""}
+                  <option key={l.id} value={l.id} title={l.standsSummary || undefined}>
+                    {l.name}
+                    {l.standsSummary ? ` · ${l.standsSummary}` : l.capacitySummary ? ` · ${l.capacitySummary}` : ""}
                   </option>
                 ))}
               </select>

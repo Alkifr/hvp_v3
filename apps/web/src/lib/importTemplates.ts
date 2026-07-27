@@ -2,6 +2,22 @@ import * as XLSX from "xlsx";
 
 type SheetRow = Record<string, string | number>;
 
+const LABOR_IMPORT_DEPARTMENTS = ["ME", "AV", "INT", "NDT", "SHOP", "CabRep"] as const;
+const LABOR_IMPORT_BLOCKS = [
+  { prefix: "laborBudget", title: "Трудоемкость (Бюджет)" },
+  { prefix: "laborMps", title: "Плановая трудоемкость WP согласно MPS" },
+  { prefix: "laborActual", title: "Фактическая трудоемкость WP (завершенное)" }
+] as const;
+
+function laborImportExampleValues(prefix: string): Record<string, number | ""> {
+  const out: Record<string, number | ""> = {};
+  for (const dep of LABOR_IMPORT_DEPARTMENTS) {
+    // В примере заполняем только MPS — бюджет/факт оставляем пустыми.
+    out[`${prefix}_${dep}`] = prefix === "laborMps" ? (dep === "ME" ? 120 : dep === "AV" ? 40 : 0) : "";
+  }
+  return out;
+}
+
 function downloadWorkbook(filename: string, sheets: Array<{ name: string; rows: SheetRow[] }>) {
   const wb = XLSX.utils.book_new();
   for (const sheet of sheets) {
@@ -83,6 +99,20 @@ export function downloadEventImportTemplate(params?: {
   const hangar = params?.hangar || "";
   const hangarStand = params?.hangarStand || "";
 
+  const laborExample = {
+    ...laborImportExampleValues("laborBudget"),
+    ...laborImportExampleValues("laborMps"),
+    ...laborImportExampleValues("laborActual")
+  };
+
+  const laborInstructionRows = LABOR_IMPORT_BLOCKS.flatMap((block) =>
+    LABOR_IMPORT_DEPARTMENTS.map((dep) => ({
+      Колонка: `${block.prefix}_${dep}`,
+      Обязательно: "нет",
+      Описание: `${block.title} / ${dep}, ч/ч (≥ 0). Пусто = не импортировать`
+    }))
+  );
+
   downloadWorkbook("event-import-template.xlsx", [
     {
       name: "Данные",
@@ -102,7 +132,8 @@ export function downloadEventImportTemplate(params?: {
           towStartAt: "",
           towEndAt: "",
           Hangar: hangar,
-          HangarStand: hangarStand
+          HangarStand: hangarStand,
+          ...laborExample
         }
       ]
     },
@@ -121,6 +152,12 @@ export function downloadEventImportTemplate(params?: {
         { Колонка: "towStartAt / towEndAt", Обязательно: "нет", Описание: "Период буксировки (обе даты или пусто)" },
         { Колонка: "Hangar", Обязательно: "нет", Описание: "Ангар: код или название (активный)" },
         { Колонка: "HangarStand", Обязательно: "нет", Описание: "Место в активном варианте расстановки" },
+        ...laborInstructionRows,
+        {
+          Колонка: "Алиас CabRep",
+          Обязательно: "—",
+          Описание: "Допустимо laborBudget_CAB_REP / laborMps_CAB_REP / laborActual_CAB_REP вместо *_CabRep"
+        },
         {
           Колонка: "Даты",
           Обязательно: "—",

@@ -7,8 +7,11 @@ import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { logUserActivity } from "../../lib/userActivity.js";
 import { queryActivityFeed } from "../../lib/activityFeed.js";
+import { mailDigestRoutes } from "./mailDigest.js";
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
+  await app.register(mailDigestRoutes);
+
   // Журнал активности по всем пользователям (или фильтр по email)
   app.get("/activity", async (req) => {
     assertPermission(req as any, "admin:users");

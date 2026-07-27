@@ -124,6 +124,30 @@ export function sandboxIdFor(req: FastifyRequest): string | null {
   return req.sandbox?.id ?? null;
 }
 
+/** Причина изменения обязательна только в рабочем контуре. */
+export function changeReasonRequired(req: FastifyRequest): boolean {
+  return sandboxIdFor(req) == null;
+}
+
+/**
+ * В рабочем контуре при наличии изменений требует непустую причину.
+ * В песочнице пропускает (причина опциональна).
+ */
+export function assertChangeReasonIfNeeded(
+  req: FastifyRequest,
+  changed: boolean,
+  changeReason: string | null | undefined,
+  message = "changeReason is required when updating"
+): void {
+  if (!changed) return;
+  if (!changeReasonRequired(req)) return;
+  if (!String(changeReason ?? "").trim()) {
+    const err: any = new Error(message);
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
 /**
  * Проверка права на запись в активном контексте:
  * - в рабочем контуре — всегда true (права уже проверены через permissions)

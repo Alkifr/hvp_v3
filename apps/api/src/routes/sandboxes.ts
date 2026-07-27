@@ -830,6 +830,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
               id: placementIdMap.get(p.id)!,
               eventId: eventIdMap.get(p.eventId)!,
               sandboxId: null,
+              origin: p.origin,
               startAt: p.startAt,
               endAt: p.endAt,
               budgetStartAt: p.budgetStartAt,

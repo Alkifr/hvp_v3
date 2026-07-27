@@ -1,17 +1,29 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { EventAuditAction, EventStatus, PlanningLevel, Prisma } from "@prisma/client";
+import { EventAuditAction, EventPlacementOrigin, EventStatus, PlanningLevel, Prisma } from "@prisma/client";
 
 import { parseImportDateTime } from "../../lib/localDate.js";
+import { normalizePlacementGaps } from "../../lib/placementGaps.js";
 import {
   DONE_SCHEDULE_LOCK_MESSAGE,
   isDoneScheduleLocked,
   patchTouchesDoneScheduleLock,
   reconcileEventStatus
 } from "../../lib/eventStatus.js";
+import { DEFAULT_EVENT_STATUS } from "../../lib/eventStatusCatalog.js";
+import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
-import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
+import {
+  assertChangeReasonIfNeeded,
+  canWriteInContext,
+  sandboxFilter,
+  sandboxIdFor
+} from "../../plugins/sandbox.js";
+import {
+  collectLaborMetricsFromImportRow,
+  laborImportFieldAliases
+} from "../../lib/primaryMetricDepartments.js";
 
 const PLANNING_KIND_VALUES = ["PLANNED", "UNPLANNED"] as const;
 type PlanningKind = (typeof PLANNING_KIND_VALUES)[number];
@@ -41,7 +53,10 @@ const IMPORT_FIELD_LABELS: Record<string, string> = {
   AircraftType: "AircraftType (тип ВС)",
   Event_Title: "Event_Title (название)",
   Hangar: "Hangar (ангар)",
-  HangarStand: "HangarStand (место)"
+  HangarStand: "HangarStand (место)",
+  ...Object.fromEntries(
+    laborImportFieldAliases().map((col) => [col.field, `${col.field} (${col.title}, ч/ч)`])
+  )
 };
 
 function formatEventImportSchemaError(error: z.ZodError): string {
@@ -72,7 +87,7 @@ function formatEventImportSchemaError(error: z.ZodError): string {
   }
 
   parts.push(
-    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand)."
+    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand, laborBudget_*/laborMps_*/laborActual_*)."
   );
   parts.push("Если это файл массового планирования — откройте раздел «Массовое планирование», а не «Импорт».");
 
@@ -228,6 +243,7 @@ function defaultPlacementFromEvent(event: any) {
 
 const zPlacementInput = z.object({
   id: zUuid.optional(),
+  origin: z.nativeEnum(EventPlacementOrigin).optional(),
   startAt: zDateTime,
   endAt: zDateTime,
   budgetStartAt: zDateTime.nullable().optional(),
@@ -354,10 +370,12 @@ async function replaceEventPlacements(tx: any, params: {
   eventEnd: Date;
   placements: PlacementInput[];
   allowOverlap?: boolean;
+  autoFillGapPlacements?: boolean;
 }) {
-  const placements = params.placements.length
+  const sourcePlacements: PlacementInput[] = params.placements.length
     ? [...params.placements].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.startAt.getTime() - b.startAt.getTime())
     : [{
+        origin: EventPlacementOrigin.MANUAL,
         startAt: params.eventStart,
         endAt: params.eventEnd,
         budgetStartAt: null,
@@ -369,6 +387,9 @@ async function replaceEventPlacements(tx: any, params: {
         standId: null,
         sortOrder: 0
       }];
+  const placements = normalizePlacementGaps(sourcePlacements, {
+    enabled: params.autoFillGapPlacements ?? true
+  }) as PlacementInput[];
 
   assertPlacementPeriods(placements, params.eventStart, params.eventEnd);
 
@@ -394,6 +415,7 @@ async function replaceEventPlacements(tx: any, params: {
       data: {
         eventId: params.eventId,
         sandboxId: params.sandboxId,
+        origin: p.origin ?? EventPlacementOrigin.MANUAL,
         startAt: p.startAt,
         endAt: p.endAt,
         budgetStartAt: p.budgetStartAt ?? null,
@@ -426,6 +448,8 @@ async function replaceEventPlacements(tx: any, params: {
     where: { id: params.eventId },
     data: { hangarId: firstLocation.hangarId, layoutId: firstLocation.layoutId }
   });
+
+  return placements;
 }
 
 export const eventsRoutes: FastifyPluginAsync = async (app) => {
@@ -595,10 +619,13 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const body = z
       .object({
         placements: z.array(zPlacementInput).min(1).max(50),
-        changeReason: z.string().trim().min(1).max(1000),
-        allowOverlap: z.boolean().optional().default(false)
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        allowOverlap: z.boolean().optional().default(false),
+        autoFillGapPlacements: z.boolean().optional().default(true)
       })
       .parse(req.body);
+
+    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required when changing placements");
 
     const event = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req) },
@@ -617,19 +644,21 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
       actualStartAt: p.actualStartAt?.toISOString() ?? null,
       actualEndAt: p.actualEndAt?.toISOString() ?? null,
+      origin: p.origin,
       hangarId: p.hangarId ?? null,
       layoutId: p.layoutId ?? null,
       standId: p.standId ?? null
     }));
 
     await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await replaceEventPlacements(tx, {
+      const normalizedPlacements = await replaceEventPlacements(tx, {
         eventId,
         sandboxId: sbId,
         eventStart: event.startAt,
         eventEnd: event.endAt,
         placements: body.placements,
-        allowOverlap: body.allowOverlap
+        allowOverlap: body.allowOverlap,
+        autoFillGapPlacements: body.autoFillGapPlacements
       });
       await tx.maintenanceEventAudit.create({
         data: {
@@ -637,17 +666,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: sbId,
           action: EventAuditAction.UPDATE,
           actor: getActor(req),
-          reason: body.changeReason,
+          reason: body.changeReason ?? null,
           changes: {
             placements: {
               from: before,
-              to: body.placements.map((p) => ({
+              to: normalizedPlacements.map((p) => ({
                 startAt: p.startAt.toISOString(),
                 endAt: p.endAt.toISOString(),
                 budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
                 budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
                 actualStartAt: p.actualStartAt?.toISOString() ?? null,
                 actualEndAt: p.actualEndAt?.toISOString() ?? null,
+                origin: p.origin ?? EventPlacementOrigin.MANUAL,
                 hangarId: p.hangarId ?? null,
                 layoutId: p.layoutId ?? null,
                 standId: p.standId ?? null
@@ -668,28 +698,35 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     assertCanWriteEvent(req);
 
     const zOptionalDateCell = z.union([z.string(), z.date(), z.number(), z.null()]).optional();
+    const zOptionalLaborCell = z.union([z.string(), z.number(), z.null()]).optional();
+    const laborImportShape = Object.fromEntries(
+      laborImportFieldAliases().map((col) => [col.field, zOptionalLaborCell])
+    ) as Record<string, typeof zOptionalLaborCell>;
     const parsed = z
       .object({
         dryRun: z.boolean().optional(),
         rows: z
           .array(
-            z.object({
-              Operator: z.string().optional(),
-              Aircraft: z.string(),
-              AircraftType: z.string().optional(),
-              Event_Title: z.string().optional(),
-              Event_name: z.string(),
-              startAt: z.union([z.string(), z.date(), z.number()]),
-              endAt: z.union([z.string(), z.date(), z.number()]),
-              budgetStartAt: zOptionalDateCell,
-              budgetEndAt: zOptionalDateCell,
-              actualStartAt: zOptionalDateCell,
-              actualEndAt: zOptionalDateCell,
-              towStartAt: zOptionalDateCell,
-              towEndAt: zOptionalDateCell,
-              Hangar: z.string().optional(),
-              HangarStand: z.string().optional()
-            })
+            z
+              .object({
+                Operator: z.string().optional(),
+                Aircraft: z.string(),
+                AircraftType: z.string().optional(),
+                Event_Title: z.string().optional(),
+                Event_name: z.string(),
+                startAt: z.union([z.string(), z.date(), z.number()]),
+                endAt: z.union([z.string(), z.date(), z.number()]),
+                budgetStartAt: zOptionalDateCell,
+                budgetEndAt: zOptionalDateCell,
+                actualStartAt: zOptionalDateCell,
+                actualEndAt: zOptionalDateCell,
+                towStartAt: zOptionalDateCell,
+                towEndAt: zOptionalDateCell,
+                Hangar: z.string().optional(),
+                HangarStand: z.string().optional(),
+                ...laborImportShape
+              })
+              .passthrough()
           )
           .min(1)
           .max(5000)
@@ -991,6 +1028,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       standId?: string | null;
       layoutId?: string | null;
       hangarId?: string | null;
+      laborMetricsCount?: number;
       warnings?: string[];
       error?: string;
     }> = [];
@@ -1028,6 +1066,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         if (towStartAt && towEndAt && (towStartAt < startAt || towEndAt > endAt)) {
           throw new Error("Период буксировки должен быть внутри startAt/endAt");
         }
+
+        const laborMetrics = collectLaborMetricsFromImportRow(r as Record<string, unknown>);
 
         const aircraft = aircraftByTail.get(aircraftTail);
         if (!aircraft) throw new Error(`Не найден борт: ${aircraftTail}`);
@@ -1083,7 +1123,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           layout: resolvedStand?.layoutLabel ?? null,
           standId: resolvedStand?.standId ?? null,
           layoutId: resolvedStand?.layoutId ?? null,
-          warnings
+          warnings,
+          laborMetricsCount: laborMetrics.length
         });
 
         wouldCreateEvents += 1;
@@ -1164,7 +1205,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           const created = await tx.maintenanceEvent.create({
             data: {
               level: PlanningLevel.OPERATIONAL,
-              status: EventStatus.PLANNED,
+              status: DEFAULT_EVENT_STATUS,
               planningKind: planningKindFromBudget(budgetStartAt, budgetEndAt),
               title,
               aircraftId: aircraft.id,
@@ -1204,7 +1245,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                   towStartAt: towStartAt?.toISOString() ?? null,
                   towEndAt: towEndAt?.toISOString() ?? null,
                   Hangar: hangarStr,
-                  HangarStand: standCode
+                  HangarStand: standCode,
+                  laborMetrics: collectLaborMetricsFromImportRow(r as Record<string, unknown>)
                 }
               }
             }
@@ -1317,6 +1359,20 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             result.createdTows += 1;
           }
 
+          const laborMetrics = collectLaborMetricsFromImportRow(r as Record<string, unknown>);
+          if (laborMetrics.length > 0) {
+            await tx.eventReportMetric.createMany({
+              data: laborMetrics.map((metric) => ({
+                eventId: created.id,
+                sandboxId: sbId,
+                block: metric.block,
+                department: metric.department,
+                manHours: metric.manHours,
+                source: "IMPORT"
+              }))
+            });
+          }
+
           result.createdEvents += 1;
         });
         if (createdEventId) importedEventIds.add(createdEventId);
@@ -1357,6 +1413,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional().default(false),
+        autoFillGapPlacements: z.boolean().optional().default(true),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
@@ -1371,7 +1428,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: "aircraftId or virtualAircraft required" })
       .parse(req.body);
 
-    const { changeReason, placements, allowOverlap, ...data } = body;
+    const { changeReason, placements, allowOverlap, autoFillGapPlacements, ...data } = body;
     const sbId = sandboxIdFor(req);
     const planning = normalizeCreatePlanningPeriod({
       planningKind: data.planningKind,
@@ -1381,7 +1438,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       budgetEndAt: data.budgetEndAt
     });
     const statusReconciled = reconcileEventStatus({
-      status: data.status ?? EventStatus.PLANNED,
+      status: data.status ?? DEFAULT_EVENT_STATUS,
       startAt: data.startAt,
       endAt: data.endAt,
       actualStartAt: data.actualStartAt ?? null,
@@ -1404,7 +1461,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         } as any
       });
 
-      await replaceEventPlacements(tx, {
+      const normalizedPlacements = await replaceEventPlacements(tx, {
         eventId: event.id,
         sandboxId: sbId,
         eventStart: event.startAt,
@@ -1425,7 +1482,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                 sortOrder: 0
               }
             ],
-        allowOverlap
+        allowOverlap,
+        autoFillGapPlacements
       });
 
       await tx.maintenanceEventAudit.create({
@@ -1452,13 +1510,14 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               hangarId: event.hangarId ?? null,
               layoutId: event.layoutId ?? null,
               workshopId: (event as any).workshopId ?? null,
-              placements: (placements ?? []).map((p) => ({
+              placements: normalizedPlacements.map((p) => ({
                 startAt: p.startAt.toISOString(),
                 endAt: p.endAt.toISOString(),
                 budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
                 budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
                 actualStartAt: p.actualStartAt?.toISOString() ?? null,
                 actualEndAt: p.actualEndAt?.toISOString() ?? null,
+                origin: p.origin ?? EventPlacementOrigin.MANUAL,
                 hangarId: p.hangarId ?? null,
                 layoutId: p.layoutId ?? null,
                 standId: p.standId ?? null
@@ -1470,6 +1529,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
       return await tx.maintenanceEvent.findUniqueOrThrow({ where: { id: event.id }, include: eventInclude });
     });
+
+    if (statusReconciled.statusChanged) {
+      await emitStatusChangeNotifications(app.prisma, {
+        eventId: created.id,
+        sandboxId: sbId,
+        title: created.title,
+        fromStatus: data.status ?? DEFAULT_EVENT_STATUS,
+        toStatus: statusReconciled.status,
+        aircraft: created.aircraft,
+        virtualAircraft: created.virtualAircraft
+      });
+    }
 
     return serializeEvent(created);
   });
@@ -1497,6 +1568,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional().default(false),
+        autoFillGapPlacements: z.boolean().optional().default(true),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .parse(req.body);
@@ -1504,6 +1576,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const existing = await app.prisma.maintenanceEvent.findFirst({
       where: { id, ...sandboxFilter(req) },
       include: {
+        aircraft: { select: { tailNumber: true } },
         reservations: { include: { stand: true }, orderBy: [{ startAt: "asc" }] },
         placements: { include: placementInclude, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
         layout: true
@@ -1511,7 +1584,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!existing) throw app.httpErrors.notFound("Event not found");
 
-    let { changeReason, placements, allowOverlap, ...patch } = body;
+    let { changeReason, placements, allowOverlap, autoFillGapPlacements, ...patch } = body;
     const scheduleLocked = isDoneScheduleLocked(existing.status, body.status);
     if (
       patchTouchesDoneScheduleLock(
@@ -1625,11 +1698,13 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       forceDone: body.status === EventStatus.DONE
     });
 
-    // При закрытии события (DONE/CONFIRMED) с виртуальным бортом — создаём Aircraft и привязываем
+    // При закрытии/согласовании события с виртуальным бортом — создаём Aircraft и привязываем
     const virtualAircraft = existing.virtualAircraft as { operatorId: string; aircraftTypeId: string; label: string } | null;
     if (
       virtualAircraft &&
-      (statusReconciled.status === EventStatus.DONE || statusReconciled.status === EventStatus.CONFIRMED) &&
+      (statusReconciled.status === EventStatus.DONE ||
+        statusReconciled.status === EventStatus.APPROVED_BY_EXECUTOR ||
+        statusReconciled.status === EventStatus.APPROVED_BY_CUSTOMER) &&
       !existing.aircraftId
     ) {
       const aircraft = await app.prisma.aircraft.create({
@@ -1658,6 +1733,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         body.layoutId !== undefined) &&
       ((existing.placements ?? []).length <= 1);
 
+    let normalizedPlacements: PlacementInput[] | undefined;
     const updated = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const event = await tx.maintenanceEvent.update({
         where: { id },
@@ -1665,16 +1741,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       });
 
       if (placementChanged) {
-        await replaceEventPlacements(tx, {
+        normalizedPlacements = await replaceEventPlacements(tx, {
           eventId: id,
           sandboxId: sandboxIdFor(req),
           eventStart: nextStart,
           eventEnd: nextEnd,
           placements: placements ?? [],
-          allowOverlap
+          allowOverlap,
+          autoFillGapPlacements
         });
       } else if (singlePlacementSyncNeeded) {
-        await replaceEventPlacements(tx, {
+        normalizedPlacements = await replaceEventPlacements(tx, {
           eventId: id,
           sandboxId: sandboxIdFor(req),
           eventStart: nextStart,
@@ -1694,7 +1771,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               sortOrder: 0
             }
           ],
-          allowOverlap
+          allowOverlap,
+          autoFillGapPlacements
         });
       }
 
@@ -1711,17 +1789,19 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
           actualStartAt: p.actualStartAt?.toISOString() ?? null,
           actualEndAt: p.actualEndAt?.toISOString() ?? null,
+          origin: p.origin ?? EventPlacementOrigin.MANUAL,
           hangarId: p.hangarId ?? null,
           layoutId: p.layoutId ?? null,
           standId: p.standId ?? null
         })),
-        to: (placements ?? []).map((p) => ({
+        to: (normalizedPlacements ?? placements ?? []).map((p) => ({
           startAt: p.startAt.toISOString(),
           endAt: p.endAt.toISOString(),
           budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
           budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
           actualStartAt: p.actualStartAt?.toISOString() ?? null,
           actualEndAt: p.actualEndAt?.toISOString() ?? null,
+          origin: p.origin ?? EventPlacementOrigin.MANUAL,
           hangarId: p.hangarId ?? null,
           layoutId: p.layoutId ?? null,
           standId: p.standId ?? null
@@ -1729,9 +1809,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       };
     }
     const changedKeys = Object.keys(changes);
-    if (changedKeys.length > 0 && !changeReason) {
-      throw app.httpErrors.badRequest("changeReason is required when updating an event");
-    }
+    assertChangeReasonIfNeeded(
+      req,
+      changedKeys.length > 0,
+      changeReason,
+      "changeReason is required when updating an event"
+    );
 
     if (changedKeys.length > 0) {
       await app.prisma.maintenanceEventAudit.create({
@@ -1743,6 +1826,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           reason: changeReason ?? null,
           changes
         }
+      });
+    }
+
+    if (statusReconciled.statusChanged) {
+      await emitStatusChangeNotifications(app.prisma, {
+        eventId: id,
+        sandboxId: sandboxIdFor(req),
+        title: updated.title,
+        fromStatus: existing.status,
+        toStatus: statusReconciled.status,
+        aircraft: (existing as any).aircraft,
+        virtualAircraft: existing.virtualAircraft
       });
     }
 

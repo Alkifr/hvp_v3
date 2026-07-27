@@ -238,6 +238,80 @@ export async function copyPlanToSandbox(
 
   const sourceEventIds = Array.from(eventIdMap.keys());
 
+  const [primaryExtensions, customerSlots, slotDeviations, reportMetrics, reportScalars, rollingEntries, aCheckAnalyses] =
+    await Promise.all([
+      tx.eventPrimaryExtension.findMany({ where: { eventId: { in: sourceEventIds } } }),
+      tx.eventCustomerSlot.findMany({ where: { eventId: { in: sourceEventIds } } }),
+      tx.eventSlotDeviation.findMany({ where: { eventId: { in: sourceEventIds } } }),
+      tx.eventReportMetric.findMany({ where: { eventId: { in: sourceEventIds } } }),
+      tx.eventReportScalar.findMany({ where: { eventId: { in: sourceEventIds } } }),
+      tx.eventPtoRollingEntry.findMany({ where: { eventId: { in: sourceEventIds } } }),
+      tx.eventACheckAnalysis.findMany({ where: { eventId: { in: sourceEventIds } } })
+    ]);
+  if (primaryExtensions.length) {
+    await tx.eventPrimaryExtension.createMany({
+      data: primaryExtensions.map(({ id: _id, eventId, sandboxId: _sandboxId, createdAt: _c, updatedAt: _u, ...data }) => ({
+        ...data,
+        eventId: eventIdMap.get(eventId)!,
+        sandboxId: targetSandboxId
+      }))
+    });
+  }
+  if (customerSlots.length) {
+    await tx.eventCustomerSlot.createMany({
+      data: customerSlots.map(({ id: _id, eventId, sandboxId: _sandboxId, createdAt: _c, updatedAt: _u, ...data }) => ({
+        ...data,
+        eventId: eventIdMap.get(eventId)!,
+        sandboxId: targetSandboxId
+      }))
+    });
+  }
+  if (slotDeviations.length) {
+    await tx.eventSlotDeviation.createMany({
+      data: slotDeviations.map(({ id: _id, eventId, sandboxId: _sandboxId, createdAt: _c, updatedAt: _u, ...data }) => ({
+        ...data,
+        eventId: eventIdMap.get(eventId)!,
+        sandboxId: targetSandboxId
+      }))
+    });
+  }
+  if (reportMetrics.length) {
+    await tx.eventReportMetric.createMany({
+      data: reportMetrics.map(({ id: _id, eventId, sandboxId: _sandboxId, createdAt: _c, updatedAt: _u, ...data }) => ({
+        ...data,
+        eventId: eventIdMap.get(eventId)!,
+        sandboxId: targetSandboxId
+      }))
+    });
+  }
+  if (reportScalars.length) {
+    await tx.eventReportScalar.createMany({
+      data: reportScalars.map(({ id: _id, eventId, sandboxId: _sandboxId, createdAt: _c, updatedAt: _u, ...data }) => ({
+        ...data,
+        eventId: eventIdMap.get(eventId)!,
+        sandboxId: targetSandboxId
+      }))
+    });
+  }
+  if (rollingEntries.length) {
+    await tx.eventPtoRollingEntry.createMany({
+      data: rollingEntries.map(({ id: _id, eventId, sandboxId: _sandboxId, createdAt: _c, updatedAt: _u, ...data }) => ({
+        ...data,
+        eventId: eventIdMap.get(eventId)!,
+        sandboxId: targetSandboxId
+      }))
+    });
+  }
+  if (aCheckAnalyses.length) {
+    await tx.eventACheckAnalysis.createMany({
+      data: aCheckAnalyses.map(({ id: _id, eventId, sandboxId: _sandboxId, createdAt: _c, updatedAt: _u, ...data }) => ({
+        ...data,
+        eventId: eventIdMap.get(eventId)!,
+        sandboxId: targetSandboxId
+      }))
+    });
+  }
+
   const placementIdMap = new Map<string, string>();
   const placements = await tx.eventPlacement.findMany({
     where: { eventId: { in: sourceEventIds }, sandboxId: sourceSandboxId }
@@ -249,6 +323,7 @@ export async function copyPlanToSandbox(
         id: placementIdMap.get(p.id)!,
         eventId: eventIdMap.get(p.eventId)!,
         sandboxId: targetSandboxId,
+        origin: p.origin,
         startAt: p.startAt,
         endAt: p.endAt,
         budgetStartAt: p.budgetStartAt,

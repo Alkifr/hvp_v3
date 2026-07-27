@@ -25,6 +25,7 @@ async function main() {
     { code: "admin:users", name: "Администрирование пользователей" },
     { code: "admin:roles", name: "Администрирование ролей/прав" },
     { code: "admin:cleanup", name: "Очистка рабочего контура" },
+    { code: "admin:mail", name: "Email-рассылка изменений плана" },
     { code: "resources:read", name: "Просмотр ресурсов по событиям" },
     { code: "resources:plan", name: "Планирование ресурсов по событиям" },
     { code: "resources:actual", name: "Факт ресурсов по событиям" },
@@ -289,7 +290,7 @@ async function main() {
     (await prisma.maintenanceEvent.create({
       data: {
         level: PlanningLevel.OPERATIONAL,
-        status: EventStatus.PLANNED,
+        status: EventStatus.PENDING_EXECUTOR_APPROVAL,
         planningKind: "PLANNED",
         title: "Демо: A‑check",
         aircraftId: aircraft.id,
@@ -347,16 +348,28 @@ async function main() {
   });
   void shiftNight;
 
-  const skillMech = await prisma.skill.upsert({
-    where: { code: "MECH" },
-    update: { name: "Механик", isActive: true },
-    create: { code: "MECH", name: "Механик", isActive: true }
+  const skillDefs = [
+    { code: "ME", name: "ME (Mechanic)" },
+    { code: "AV", name: "AV (Avionics)" },
+    { code: "INT", name: "INT (Interior)" },
+    { code: "NDT", name: "NDT / BORO" },
+    { code: "SHOP", name: "SHOP" },
+    { code: "CAB_REP", name: "CabRep" }
+  ] as const;
+  const skillsByCode: Record<string, { id: string }> = {};
+  for (const def of skillDefs) {
+    skillsByCode[def.code] = await prisma.skill.upsert({
+      where: { code: def.code },
+      update: { name: def.name, isActive: true },
+      create: { code: def.code, name: def.name, isActive: true }
+    });
+  }
+  await prisma.skill.updateMany({
+    where: { code: { in: ["MECH", "AVIO"] } },
+    data: { isActive: false }
   });
-  const skillAvio = await prisma.skill.upsert({
-    where: { code: "AVIO" },
-    update: { name: "Авионика", isActive: true },
-    create: { code: "AVIO", name: "Авионика", isActive: true }
-  });
+  const skillMe = skillsByCode.ME!;
+  const skillAv = skillsByCode.AV!;
 
   const p1 = await prisma.person.upsert({
     where: { code: "P001" },
@@ -370,14 +383,14 @@ async function main() {
   });
 
   await prisma.personSkill.upsert({
-    where: { personId_skillId: { personId: p1.id, skillId: skillMech.id } },
+    where: { personId_skillId: { personId: p1.id, skillId: skillMe.id } },
     update: { level: 5 },
-    create: { personId: p1.id, skillId: skillMech.id, level: 5 }
+    create: { personId: p1.id, skillId: skillMe.id, level: 5 }
   });
   await prisma.personSkill.upsert({
-    where: { personId_skillId: { personId: p2.id, skillId: skillAvio.id } },
+    where: { personId_skillId: { personId: p2.id, skillId: skillAv.id } },
     update: { level: 4 },
-    create: { personId: p2.id, skillId: skillAvio.id, level: 4 }
+    create: { personId: p2.id, skillId: skillAv.id, level: 4 }
   });
 
   const wh = await prisma.warehouse.upsert({
@@ -413,14 +426,14 @@ async function main() {
   // демо-план по событию: 2 дня по дневной смене
   const startDayUtc = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate(), 0, 0, 0, 0));
   await prisma.eventWorkPlanLine.upsert({
-    where: { eventId_date_shiftId_skillId: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillMech.id } },
+    where: { eventId_date_shiftId_skillId: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillMe.id } },
     update: { plannedMinutes: 8 * 60, notes: "План" },
-    create: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillMech.id, plannedMinutes: 8 * 60, notes: "План" }
+    create: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillMe.id, plannedMinutes: 8 * 60, notes: "План" }
   });
   await prisma.eventWorkPlanLine.upsert({
-    where: { eventId_date_shiftId_skillId: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillAvio.id } },
+    where: { eventId_date_shiftId_skillId: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillAv.id } },
     update: { plannedMinutes: 4 * 60, notes: "План" },
-    create: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillAvio.id, plannedMinutes: 4 * 60, notes: "План" }
+    create: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillAv.id, plannedMinutes: 4 * 60, notes: "План" }
   });
 
   // резерв материалов

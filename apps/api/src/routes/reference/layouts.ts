@@ -13,6 +13,51 @@ function capacitySummaryFromStands(stands: { allowedAircraftTypes?: unknown[] }[
   return parts.length ? parts.join(", ") : "нет мест";
 }
 
+/** Короткие метки типов ВС для подсказки в выборе схемы (A320 CEO/NEO → A320). */
+const COMPACT_ICAO_ALIASES: Record<string, string> = {
+  "737-800": "B738",
+  "747-400": "B747",
+  "777-300": "B777",
+  "RRJ-95": "RRJ95"
+};
+
+function compactAircraftLabel(icaoType: string): string {
+  const stripped = icaoType.trim().replace(/\s+(CEO|NEO)$/i, "");
+  return COMPACT_ICAO_ALIASES[stripped] ?? stripped;
+}
+
+type StandForSummary = {
+  code: string;
+  allowedAircraftTypes?: Array<{ aircraftType?: { icaoType: string | null } | null } | null>;
+};
+
+/** Компактная сводка мест схемы: «MC-1/MC-2: A321 · MC-3: B738». */
+function standsSummaryFromStands(stands: StandForSummary[]): string {
+  if (!stands.length) return "нет мест";
+
+  const byTypes = new Map<string, string[]>();
+  const order: string[] = [];
+
+  for (const stand of [...stands].sort((a, b) => a.code.localeCompare(b.code, "ru", { numeric: true }))) {
+    const labels = [
+      ...new Set(
+        (stand.allowedAircraftTypes ?? [])
+          .map((link) => link?.aircraftType?.icaoType)
+          .filter((icao): icao is string => Boolean(icao))
+          .map(compactAircraftLabel)
+      )
+    ].sort((a, b) => a.localeCompare(b, "ru", { numeric: true }));
+    const typesKey = labels.length === 0 ? "любой" : labels.join("/");
+    if (!byTypes.has(typesKey)) {
+      byTypes.set(typesKey, []);
+      order.push(typesKey);
+    }
+    byTypes.get(typesKey)!.push(stand.code);
+  }
+
+  return order.map((typesKey) => `${byTypes.get(typesKey)!.join("/")}: ${typesKey}`).join(" · ");
+}
+
 function standAcceptsAircraftType(stand: { allowedAircraftTypes?: Array<{ aircraftTypeId: string }> }, aircraftTypeId?: string): boolean {
   if (!aircraftTypeId) return true;
   const allowed = stand.allowedAircraftTypes ?? [];
@@ -75,13 +120,28 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
         ...(activeOnly ? { isActive: true } : {})
       },
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
-      include: { stands: { where: { isActive: true }, select: { allowedAircraftTypes: { select: { aircraftTypeId: true } } } } }
+      include: {
+        stands: {
+          where: { isActive: true },
+          orderBy: { code: "asc" },
+          select: {
+            code: true,
+            allowedAircraftTypes: {
+              select: {
+                aircraftTypeId: true,
+                aircraftType: { select: { icaoType: true } }
+              }
+            }
+          }
+        }
+      }
     });
     return rows.map((r) => {
       const { stands, ...rest } = r;
       return {
         ...rest,
         capacitySummary: capacitySummaryFromStands(stands),
+        standsSummary: standsSummaryFromStands(stands),
         isCompatible: stands.some((stand) => standAcceptsAircraftType(stand, aircraftTypeId))
       };
     });
@@ -108,7 +168,8 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
     });
     return {
       ...row,
-      capacitySummary: capacitySummaryFromStands(row.stands)
+      capacitySummary: capacitySummaryFromStands(row.stands),
+      standsSummary: standsSummaryFromStands(row.stands)
     };
   });
 

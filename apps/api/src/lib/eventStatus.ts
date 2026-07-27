@@ -1,5 +1,10 @@
 import { EventStatus } from "@prisma/client";
 
+import {
+  AUTO_IN_PROGRESS_STATUSES,
+  MANUAL_ONLY_STATUSES
+} from "./eventStatusCatalog.js";
+
 /** Truncate to minute precision (seconds/ms = 0). */
 export function floorToMinute(d: Date): Date {
   const x = new Date(d.getTime());
@@ -26,16 +31,16 @@ export type StatusReconcileResult = {
   actualFilledFromOper: boolean;
 };
 
-const MANUAL_ONLY = new Set<EventStatus>([EventStatus.DRAFT, EventStatus.CANCELLED, EventStatus.DELETED]);
+const TERMINAL_MANUAL = new Set<EventStatus>([EventStatus.CANCELLED, EventStatus.DELETED]);
 
 /**
  * Auto status rules:
- * - DRAFT / CANCELLED / DELETED — untouched
- * - CONFIRMED — only auto-advances to IN_PROGRESS after start (never auto-set TO confirmed)
- * - PLANNED/CONFIRMED + now >= startAt (minute) → IN_PROGRESS
+ * - CANCELLED / DELETED — untouched
+ * - PENDING_* — no auto IN_PROGRESS; fact / forceDone still → DONE
+ * - APPROVED_BY_* + now >= startAt (minute) → IN_PROGRESS
  * - both actual dates → DONE
  * - forceDone / DONE with empty actual → fill actual from operational period
- * - DONE with actual cleared → recompute PLANNED/IN_PROGRESS
+ * - DONE with actual cleared → recompute APPROVED_BY_EXECUTOR / IN_PROGRESS
  */
 export function reconcileEventStatus(input: StatusReconcileInput): StatusReconcileResult {
   const now = floorToMinute(input.now ?? new Date());
@@ -47,7 +52,7 @@ export function reconcileEventStatus(input: StatusReconcileInput): StatusReconci
   let actualEndAt = input.actualEndAt ?? null;
   let actualFilledFromOper = false;
 
-  if (MANUAL_ONLY.has(status)) {
+  if (TERMINAL_MANUAL.has(status)) {
     return {
       status,
       actualStartAt,
@@ -71,10 +76,10 @@ export function reconcileEventStatus(input: StatusReconcileInput): StatusReconci
     status = EventStatus.DONE;
   } else if (!hasFact && status === EventStatus.DONE) {
     // Fact cleared while DONE → fall back by time
-    status = now.valueOf() >= startAt.valueOf() ? EventStatus.IN_PROGRESS : EventStatus.PLANNED;
+    status = now.valueOf() >= startAt.valueOf() ? EventStatus.IN_PROGRESS : EventStatus.APPROVED_BY_EXECUTOR;
   } else if (
     !hasFact &&
-    (status === EventStatus.PLANNED || status === EventStatus.CONFIRMED) &&
+    AUTO_IN_PROGRESS_STATUSES.has(status) &&
     now.valueOf() >= startAt.valueOf()
   ) {
     status = EventStatus.IN_PROGRESS;
@@ -96,7 +101,8 @@ export function isEventOverdueNoFact(params: {
   actualEndAt: Date | null | undefined;
   now?: Date;
 }): boolean {
-  if (MANUAL_ONLY.has(params.status) || params.status === EventStatus.DONE) return false;
+  // Pending approval / cancelled / deleted / done — no overdue nag
+  if (MANUAL_ONLY_STATUSES.has(params.status) || params.status === EventStatus.DONE) return false;
   if (params.actualStartAt && params.actualEndAt) return false;
   const now = floorToMinute(params.now ?? new Date());
   return now.valueOf() > floorToMinute(params.endAt).valueOf();

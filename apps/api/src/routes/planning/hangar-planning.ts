@@ -299,7 +299,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     };
     const summaryEvents: SummaryEvent[] = events.flatMap((e: any) => {
       const base = summaryEventFields(e, bodyTypeByAircraftTypeId);
-      const placements = e.placements?.length ? e.placements : [];
+      const placements = e.placements?.filter((placement: any) => placement.origin !== "AUTO_GAP") ?? [];
       if (placements.length === 0) {
         const reservation = e.reservations?.[0] ?? null;
         return [{
@@ -512,6 +512,9 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     if (!event) throw app.httpErrors.notFound("Event not found");
+    if ((event.placements?.length ?? 0) > 1) {
+      throw app.httpErrors.badRequest("Многоэтапное событие размещается только через карточку события");
+    }
     if (layouts.length === 0) {
       return { ok: true, event: null, candidates: [], blockedLayouts: [], summary: { candidates: 0, activeLayoutIds: [] } };
     }
@@ -631,7 +634,12 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
           startAt: { lt: body.to },
           endAt: { gt: body.from }
         },
-        include: { aircraft: { include: { type: true } }, eventType: true, reservations: { orderBy: [{ startAt: "asc" }] } },
+        include: {
+          aircraft: { include: { type: true } },
+          eventType: true,
+          reservations: { orderBy: [{ startAt: "asc" }] },
+          placements: { select: { id: true } }
+        },
         orderBy: [{ startAt: "asc" }]
       }),
       app.prisma.aircraftType.findMany({ select: { id: true, bodyType: true } }),
@@ -674,6 +682,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
     );
     const candidates = events
       .filter((e: any) => {
+        if ((e.placements?.length ?? 0) > 1) return false;
         const reservation = e.reservations?.[0] ?? null;
         return !reservation || !body.layouts.some((l) => l.layoutId === reservation.layoutId);
       })

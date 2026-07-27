@@ -1,303 +1,169 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import dayjs from "dayjs";
 
-import { apiDelete, apiGet, apiPost } from "../../lib/api";
-import { SingleSelectDropdown } from "./SingleSelectDropdown";
+import { apiGet, apiPut } from "../../lib/api";
 
-type Skill = { id: string; code: string; name: string };
-type Shift = { id: string; code: string; name: string; startMin: number; endMin: number };
+type LaborDepartment = "ME" | "AV" | "INT" | "NDT" | "SHOP" | "CAB_REP";
+type LaborBlockCode = "LABOR_BUDGET" | "WP_PLAN_MPS" | "WP_ACTUAL";
 
-type PlanLine = {
-  id: string;
-  date: string;
-  plannedHeadcount?: number | null;
-  notes?: string | null;
-  skill: Skill;
-  shift: Shift;
+type LaborMetricsResponse = {
+  ok: true;
+  eventId: string;
+  blocks: Array<{
+    block: LaborBlockCode;
+    label: string;
+    hint: string;
+    total: number | null;
+    departments: Array<{
+      department: LaborDepartment;
+      label: string;
+      skillId: string | null;
+      skillCode: string;
+      manHours: number | null;
+    }>;
+  }>;
 };
 
-type ActualLine = {
-  id: string;
-  date: string;
-  actualHeadcount: number;
-  notes?: string | null;
-  skill: Skill;
-  shift: Shift;
-};
+type DraftMap = Record<string, string>;
+
+function cellKey(block: LaborBlockCode, department: LaborDepartment) {
+  return `${block}:${department}`;
+}
+
+function parseHours(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(",", ".");
+  const value = Number(normalized);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+function formatHours(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "";
+  return String(value);
+}
 
 export function EventResourcesPanel(props: { eventId: string }) {
   const qc = useQueryClient();
-
-  const skillsQ = useQuery({ queryKey: ["ref", "skills"], queryFn: () => apiGet<Skill[]>("/api/ref/skills") });
-  const shiftsQ = useQuery({ queryKey: ["ref", "shifts"], queryFn: () => apiGet<Shift[]>("/api/ref/shifts") });
-
-  const planQ = useQuery({
-    queryKey: ["resources", "plan", props.eventId],
-    queryFn: () => apiGet<PlanLine[]>(`/api/resources/events/${props.eventId}/plan`)
+  const laborQ = useQuery({
+    queryKey: ["resources", "labor-metrics", props.eventId],
+    queryFn: () => apiGet<LaborMetricsResponse>(`/api/resources/events/${props.eventId}/labor-metrics`)
   });
 
-  const actualQ = useQuery({
-    queryKey: ["resources", "actual", props.eventId],
-    queryFn: () => apiGet<ActualLine[]>(`/api/resources/events/${props.eventId}/actual`)
-  });
+  const [draft, setDraft] = useState<DraftMap>({});
+  const [dirty, setDirty] = useState(false);
 
-  const invalidateAll = async () => {
-    await qc.invalidateQueries({ queryKey: ["resources", "plan", props.eventId] });
-    await qc.invalidateQueries({ queryKey: ["resources", "actual", props.eventId] });
-  };
-
-  // ---- формы ----
-  const defaultSkillId = skillsQ.data?.[0]?.id ?? "";
-  const defaultShiftId = shiftsQ.data?.[0]?.id ?? "";
-
-  const [planDate, setPlanDate] = useState(() => dayjs().format("YYYY-MM-DD"));
-  const [planShiftId, setPlanShiftId] = useState(defaultShiftId);
-  const [planSkillId, setPlanSkillId] = useState(defaultSkillId);
-  const [planPeople, setPlanPeople] = useState(1);
-
-  const [actualDate, setActualDate] = useState(() => dayjs().format("YYYY-MM-DD"));
-  const [actualShiftId, setActualShiftId] = useState(defaultShiftId);
-  const [actualSkillId, setActualSkillId] = useState(defaultSkillId);
-  const [actualPeople, setActualPeople] = useState(1);
-
-  const shiftOptions = useMemo(
-    () => (shiftsQ.data ?? []).map((shift) => ({ id: shift.id, label: `${shift.code} • ${shift.name}` })),
-    [shiftsQ.data]
-  );
-  const skillOptions = useMemo(
-    () => (skillsQ.data ?? []).map((skill) => ({ id: skill.id, label: `${skill.code} • ${skill.name}` })),
-    [skillsQ.data]
-  );
-
-  // синхронизация дефолтов после загрузки справочников (простая)
   useEffect(() => {
-    if (!planShiftId && defaultShiftId) setPlanShiftId(defaultShiftId);
-    if (!planSkillId && defaultSkillId) setPlanSkillId(defaultSkillId);
-    if (!actualShiftId && defaultShiftId) setActualShiftId(defaultShiftId);
-    if (!actualSkillId && defaultSkillId) setActualSkillId(defaultSkillId);
-  }, [planShiftId, planSkillId, actualShiftId, actualSkillId, defaultShiftId, defaultSkillId]);
-
-  const addPlanM = useMutation({
-    mutationFn: () =>
-      apiPost(`/api/resources/events/${props.eventId}/plan`, {
-        date: dayjs(planDate).startOf("day").toISOString(),
-        shiftId: planShiftId,
-        skillId: planSkillId,
-        plannedHeadcount: planPeople
-      }),
-    onSuccess: invalidateAll
-  });
-
-  const delPlanM = useMutation({
-    mutationFn: (id: string) => apiDelete(`/api/resources/events/plan/${id}`),
-    onSuccess: invalidateAll
-  });
-
-  const addActualM = useMutation({
-    mutationFn: () =>
-      apiPost(`/api/resources/events/${props.eventId}/actual`, {
-        date: dayjs(actualDate).startOf("day").toISOString(),
-        shiftId: actualShiftId,
-        skillId: actualSkillId,
-        actualHeadcount: actualPeople
-      }),
-    onSuccess: invalidateAll
-  });
-
-  const delActualM = useMutation({
-    mutationFn: (id: string) => apiDelete(`/api/resources/events/actual/${id}`),
-    onSuccess: invalidateAll
-  });
-
-  const summary = useMemo(() => {
-    const plan = planQ.data ?? [];
-    const actual = actualQ.data ?? [];
-    const keyOf = (d: string, shiftCode: string, skillCode: string) => `${dayjs(d).format("YYYY-MM-DD")}|${shiftCode}|${skillCode}`;
-    const map = new Map<string, { date: string; shift: Shift; skill: Skill; planned: number; actual: number }>();
-    for (const p of plan) {
-      const k = keyOf(p.date, p.shift.code, p.skill.code);
-      map.set(k, {
-        date: p.date,
-        shift: p.shift,
-        skill: p.skill,
-        planned: Number(p.plannedHeadcount ?? 0),
-        actual: map.get(k)?.actual ?? 0
-      });
+    if (!laborQ.data) return;
+    const next: DraftMap = {};
+    for (const block of laborQ.data.blocks) {
+      for (const row of block.departments) {
+        next[cellKey(block.block, row.department)] = formatHours(row.manHours);
+      }
     }
-    for (const a of actual) {
-      const k = keyOf(a.date, a.shift.code, a.skill.code);
-      map.set(k, {
-        date: a.date,
-        shift: a.shift,
-        skill: a.skill,
-        planned: map.get(k)?.planned ?? 0,
-        actual: Number(a.actualHeadcount ?? 0)
-      });
+    setDraft(next);
+    setDirty(false);
+  }, [laborQ.data]);
+
+  const saveM = useMutation({
+    mutationFn: async () => {
+      if (!laborQ.data) return;
+      const values: Array<{ block: LaborBlockCode; department: LaborDepartment; manHours: number | null }> = [];
+      for (const block of laborQ.data.blocks) {
+        for (const row of block.departments) {
+          const key = cellKey(block.block, row.department);
+          const raw = draft[key] ?? "";
+          const parsed = parseHours(raw);
+          if (raw.trim() && parsed == null) {
+            throw new Error(`Некорректное значение ч/ч: ${block.label} / ${row.label}`);
+          }
+          values.push({ block: block.block, department: row.department, manHours: parsed });
+        }
+      }
+      return apiPut<{ ok: true }>(`/api/resources/events/${props.eventId}/labor-metrics`, { values });
+    },
+    onSuccess: async () => {
+      setDirty(false);
+      await qc.invalidateQueries({ queryKey: ["resources", "labor-metrics", props.eventId] });
     }
-    return Array.from(map.values()).sort((x, y) => {
-      const d = String(x.date).localeCompare(String(y.date));
-      if (d !== 0) return d;
-      const s = x.shift.code.localeCompare(y.shift.code);
-      if (s !== 0) return s;
-      return x.skill.code.localeCompare(y.skill.code);
-    });
-  }, [planQ.data, actualQ.data]);
+  });
+
+  const blockTotals = useMemo(() => {
+    const totals: Record<string, number | null> = {};
+    for (const block of laborQ.data?.blocks ?? []) {
+      let sum: number | null = null;
+      for (const row of block.departments) {
+        const parsed = parseHours(draft[cellKey(block.block, row.department)] ?? "");
+        if (parsed == null) continue;
+        sum = (sum ?? 0) + parsed;
+      }
+      totals[block.block] = sum;
+    }
+    return totals;
+  }, [draft, laborQ.data]);
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div className="laborMetricsPanel">
       <div>
-        <strong>Ресурсы (персонал без персоналий)</strong>
+        <strong>Трудоёмкость (ч/ч)</strong>
         <div className="muted" style={{ marginTop: 4 }}>
-          План/факт: сколько людей нужно/было по сменам и квалификациям.
+          Три блока по квалификациям ME / AV / INT / NDT / SHOP / CabRep. Значения пишутся в первичную таблицу
+          (EventReportMetric). Выработка в сутки для MPS и факта считается в отчёте как TOTAL / TAT; для бюджета
+          используется TAT бюджета (W).
         </div>
       </div>
 
-      <div style={{ borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 10 }}>
-        <div className="row" style={{ marginBottom: 8 }}>
-          <strong>План (квалификации/смены)</strong>
-          {planQ.isFetching ? <span className="muted">обновление…</span> : null}
-        </div>
-        {planQ.error ? <div className="error">{String((planQ.error as any)?.message ?? planQ.error)}</div> : null}
-        <div className="row" style={{ alignItems: "flex-end" }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span className="muted">Дата</span>
-            <input type="date" value={planDate} onChange={(e) => setPlanDate(e.target.value)} />
-          </label>
-          <div style={{ display: "grid", gap: 6, minWidth: 180 }}>
-            <span className="muted">Смена</span>
-            <SingleSelectDropdown
-              searchable
-              allowEmpty={false}
-              searchPlaceholder="Введите смену"
-              options={shiftOptions}
-              value={planShiftId}
-              onChange={setPlanShiftId}
-              width="100%"
-            />
-          </div>
-          <div style={{ display: "grid", gap: 6, minWidth: 220 }}>
-            <span className="muted">Квалификация</span>
-            <SingleSelectDropdown
-              searchable
-              allowEmpty={false}
-              searchPlaceholder="Введите квалификацию"
-              options={skillOptions}
-              value={planSkillId}
-              onChange={setPlanSkillId}
-              width="100%"
-            />
-          </div>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span className="muted">Кол-во (чел.)</span>
-            <input type="number" step={1} value={planPeople} onChange={(e) => setPlanPeople(Number(e.target.value))} style={{ width: 140 }} />
-          </label>
-          <button className="btn btnPrimary" onClick={() => addPlanM.mutate()} disabled={addPlanM.isPending || !planSkillId || !planShiftId}>
-            Добавить
-          </button>
-          {addPlanM.error ? <span className="error">{String((addPlanM.error as any)?.message ?? addPlanM.error)}</span> : null}
-        </div>
+      {laborQ.isLoading ? <div className="muted">Загрузка…</div> : null}
+      {laborQ.error ? <div className="error">{String((laborQ.error as any)?.message ?? laborQ.error)}</div> : null}
 
-        {(planQ.data ?? []).length === 0 ? <div className="muted" style={{ marginTop: 8 }}>План пока пустой.</div> : null}
-      </div>
-
-      <div style={{ borderTop: "1px solid rgba(148,163,184,0.35)", paddingTop: 10 }}>
-        <div className="row" style={{ marginBottom: 8 }}>
-          <strong>Факт (по сменам)</strong>
-          {actualQ.isFetching ? <span className="muted">обновление…</span> : null}
-        </div>
-        {actualQ.error ? <div className="error">{String((actualQ.error as any)?.message ?? actualQ.error)}</div> : null}
-        <div className="row" style={{ alignItems: "flex-end" }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span className="muted">Дата</span>
-            <input type="date" value={actualDate} onChange={(e) => setActualDate(e.target.value)} />
-          </label>
-          <div style={{ display: "grid", gap: 6, minWidth: 220 }}>
-            <span className="muted">Квалификация</span>
-            <SingleSelectDropdown
-              searchable
-              allowEmpty={false}
-              searchPlaceholder="Введите квалификацию"
-              options={skillOptions}
-              value={actualSkillId}
-              onChange={setActualSkillId}
-              width="100%"
-            />
+      {(laborQ.data?.blocks ?? []).map((block) => (
+        <div key={block.block} className="laborMetricsBlock">
+          <div className="laborMetricsBlockHead">
+            <strong>{block.label}</strong>
+            <span className="muted small">{block.hint}</span>
           </div>
-          <div style={{ display: "grid", gap: 6, minWidth: 180 }}>
-            <span className="muted">Смена</span>
-            <SingleSelectDropdown
-              searchable
-              allowEmpty={false}
-              searchPlaceholder="Введите смену"
-              options={shiftOptions}
-              value={actualShiftId}
-              onChange={setActualShiftId}
-              width="100%"
-            />
-          </div>
-          <label style={{ display: "grid", gap: 6 }}>
-            <span className="muted">Кол-во (чел.)</span>
-            <input type="number" step={1} value={actualPeople} onChange={(e) => setActualPeople(Number(e.target.value))} style={{ width: 140 }} />
-          </label>
-          <button className="btn btnPrimary" onClick={() => addActualM.mutate()} disabled={addActualM.isPending || !actualShiftId || !actualSkillId}>
-            Добавить
-          </button>
-          {addActualM.error ? <span className="error">{String((addActualM.error as any)?.message ?? addActualM.error)}</span> : null}
-        </div>
-
-        <div style={{ marginTop: 10 }}>
-          <div className="row" style={{ marginBottom: 6 }}>
-            <strong>Сводка (план vs факт)</strong>
-          </div>
-          <div style={{ display: "grid", gap: 6 }}>
-            {summary.map((r) => (
-              <div key={`${r.date}|${r.shift.code}|${r.skill.code}`} className="row">
-                <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{dayjs(r.date).format("DD.MM.YYYY")}</span>
-                <span className="muted">{r.shift.code}</span>
-                <span>
-                  <strong>{r.skill.code}</strong> <span className="muted">({r.skill.name})</span>
-                </span>
-                <span className="muted">план: {r.planned}</span>
-                <span className="muted">факт: {r.actual}</span>
-                <span className="muted">Δ: {r.actual - r.planned}</span>
-                <span style={{ flex: "1 1 auto" }} />
+          <div className="laborMetricsGrid">
+            {block.departments.map((row) => {
+              const key = cellKey(block.block, row.department);
+              return (
+                <label key={key} className="laborMetricsCell">
+                  <span className="laborMetricsCellLabel">{row.label}</span>
+                  <input
+                    className="evInput"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="—"
+                    value={draft[key] ?? ""}
+                    onChange={(e) => {
+                      setDraft((prev) => ({ ...prev, [key]: e.target.value }));
+                      setDirty(true);
+                    }}
+                  />
+                </label>
+              );
+            })}
+            <div className="laborMetricsCell laborMetricsTotal">
+              <span className="laborMetricsCellLabel">TOTAL</span>
+              <div className="laborMetricsTotalValue">
+                {blockTotals[block.block] == null ? "—" : blockTotals[block.block]!.toLocaleString("ru-RU")}
               </div>
-            ))}
-            {summary.length === 0 ? <div className="muted">Пока нет ни плана, ни факта.</div> : null}
-          </div>
-
-          <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
-            {(planQ.data ?? []).map((l) => (
-              <div key={l.id} className="row">
-                <span className="muted">План</span>
-                <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{dayjs(l.date).format("DD.MM.YYYY")}</span>
-                <span className="muted">{l.shift.code}</span>
-                <span className="muted">{l.skill.code}</span>
-                <span className="muted">{Number(l.plannedHeadcount ?? 0)} чел.</span>
-                <span style={{ flex: "1 1 auto" }} />
-                <button className="btn" onClick={() => delPlanM.mutate(l.id)} disabled={delPlanM.isPending}>
-                  Удалить
-                </button>
-              </div>
-            ))}
-            {(actualQ.data ?? []).map((a) => (
-              <div key={a.id} className="row">
-                <span className="muted">Факт</span>
-                <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{dayjs(a.date).format("DD.MM.YYYY")}</span>
-                <span className="muted">{a.shift.code}</span>
-                <span className="muted">{a.skill.code}</span>
-                <span className="muted">{Number(a.actualHeadcount ?? 0)} чел.</span>
-                <span style={{ flex: "1 1 auto" }} />
-                <button className="btn" onClick={() => delActualM.mutate(a.id)} disabled={delActualM.isPending}>
-                  Удалить
-                </button>
-              </div>
-            ))}
+            </div>
           </div>
         </div>
+      ))}
+
+      <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+        {saveM.error ? <span className="error">{String((saveM.error as any)?.message ?? saveM.error)}</span> : null}
+        <button
+          type="button"
+          className="btn btnPrimary"
+          disabled={!dirty || saveM.isPending || !laborQ.data}
+          onClick={() => saveM.mutate()}
+        >
+          {saveM.isPending ? "Сохранение…" : "Сохранить трудоёмкость"}
+        </button>
       </div>
     </div>
   );
 }
-

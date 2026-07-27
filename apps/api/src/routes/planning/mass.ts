@@ -966,7 +966,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
    * Массовое планирование: виртуальные борта (без реального Aircraft), период [startFrom, endTo].
    * endTo — крайний допустимый старт события; окончание может выходить за endTo (переходные события).
    * dryRun: true — предпросмотр (placements + unplaced). dryRun: false — создание событий.
-   * Непоместившиеся создаются в статусе DRAFT без ангара/места.
+   * Непоместившиеся создаются в статусе PENDING_EXECUTOR_APPROVAL без ангара/места.
    */
   app.post("/", async (req) => {
     assertCanWriteEvent(req);
@@ -1265,7 +1265,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           const ev = await tx.maintenanceEvent.create({
             data: {
               level: PlanningLevel.OPERATIONAL,
-              status: EventStatus.PLANNED,
+              status: EventStatus.PENDING_EXECUTOR_APPROVAL,
               planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
               title,
               sandboxId: sbId,
@@ -1354,7 +1354,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             hangarId: p.hangarId,
             layoutId: p.layoutId,
             standId: p.standId,
-            status: EventStatus.PLANNED,
+            status: EventStatus.PENDING_EXECUTOR_APPROVAL,
             towBeforeStartAt: p.towBeforeStartAt != null ? new Date(p.towBeforeStartAt) : undefined,
             towBeforeEndAt: p.towBeforeEndAt != null ? new Date(p.towBeforeEndAt) : undefined,
             towAfterStartAt: p.towAfterStartAt != null ? new Date(p.towAfterStartAt) : undefined,
@@ -1379,7 +1379,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           const ev = await tx.maintenanceEvent.create({
             data: {
               level: PlanningLevel.OPERATIONAL,
-              status: EventStatus.DRAFT,
+              status: EventStatus.PENDING_EXECUTOR_APPROVAL,
               planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
               title,
               sandboxId: sbId,
@@ -1435,7 +1435,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             hangarId: null,
             layoutId: null,
             standId: null,
-            status: EventStatus.DRAFT
+            status: EventStatus.PENDING_EXECUTOR_APPROVAL
           });
         }
       }
@@ -1449,8 +1449,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       ok: true,
       dryRun: false,
       created: result.length,
-      placed: result.filter((r) => r.status === EventStatus.PLANNED).length,
-      unplaced: result.filter((r) => r.status === EventStatus.DRAFT).length,
+      placed: result.filter((r) => r.standId != null || r.hangarId != null).length,
+      unplaced: result.filter((r) => r.standId == null && r.hangarId == null).length,
       createdTowsBefore: result.filter((r) => r.towBeforeStartAt != null).length,
       createdTowsAfter: result.filter((r) => r.towAfterStartAt != null).length,
       events: result.map((r) => ({
@@ -2581,7 +2581,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         eventRows.push({
           id: eventId,
           level: PlanningLevel.OPERATIONAL,
-          status: EventStatus.PLANNED,
+          status: EventStatus.PENDING_EXECUTOR_APPROVAL,
           planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
           title: p.title,
           sandboxId: sbId,
@@ -2626,7 +2626,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         if (p.towAfterStartAt != null && p.towAfterEndAt != null) {
           towRows.push({ eventId, sandboxId: sbId, startAt: new Date(p.towAfterStartAt), endAt: new Date(p.towAfterEndAt) });
         }
-        created.push({ eventId, label: p.label, title: p.title, startAt, endAt, hangarId: p.hangarId, layoutId: p.layoutId, standId: p.standId, status: EventStatus.PLANNED });
+        created.push({ eventId, label: p.label, title: p.title, startAt, endAt, hangarId: p.hangarId, layoutId: p.layoutId, standId: p.standId, status: EventStatus.PENDING_EXECUTOR_APPROVAL });
       }
 
       for (const u of unplacedPreview) {
@@ -2638,7 +2638,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         eventRows.push({
           id: eventId,
           level: PlanningLevel.OPERATIONAL,
-          status: EventStatus.DRAFT,
+          status: EventStatus.PENDING_EXECUTOR_APPROVAL,
           planningKind: body.budgetStartAt && body.budgetEndAt ? "PLANNED" : "UNPLANNED",
           title: u.title,
           sandboxId: sbId,
@@ -2653,7 +2653,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           layoutId: null,
           virtualAircraft: { operatorId: u.operatorId, aircraftTypeId: u.aircraftTypeId, label: u.label } as Prisma.InputJsonValue
         });
-        created.push({ eventId, label: u.label, title: u.title, startAt, endAt, hangarId: null, layoutId: null, standId: null, status: EventStatus.DRAFT });
+        created.push({ eventId, label: u.label, title: u.title, startAt, endAt, hangarId: null, layoutId: null, standId: null, status: EventStatus.PENDING_EXECUTOR_APPROVAL });
       }
 
       if (eventRows.length > 0) await tx.maintenanceEvent.createMany({ data: eventRows });
@@ -2671,8 +2671,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       dryRun: false,
       batch: true,
       created: result.length,
-      placed: result.filter((r) => r.status === EventStatus.PLANNED).length,
-      unplaced: result.filter((r) => r.status === EventStatus.DRAFT).length,
+      placed: result.filter((r) => r.standId != null || r.hangarId != null).length,
+      unplaced: result.filter((r) => r.standId == null && r.hangarId == null).length,
       solver: solverResult.solver,
       solverFallbackReason: solverResult.fallbackReason ?? null,
       events: result.map((r) => ({ ...r, startAt: r.startAt.toISOString(), endAt: r.endAt.toISOString() }))

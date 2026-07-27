@@ -124,6 +124,21 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+export async function apiPostBlob(path: string, body: unknown): Promise<Blob> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: withSandboxHeader({
+      "Content-Type": "application/json",
+      Accept: "application/octet-stream",
+      "X-Actor": "browser"
+    }),
+    credentials: "include",
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return await res.blob();
+}
+
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
     method: "PATCH",

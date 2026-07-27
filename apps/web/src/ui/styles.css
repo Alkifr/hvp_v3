@@ -1800,6 +1800,31 @@ a {
   box-sizing: border-box;
 }
 
+.adminField textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #d0d5dd);
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+}
+
+.adminMailPreview {
+  margin-top: 12px;
+}
+
+.adminMailPreviewFrame {
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+  overflow: auto;
+  max-height: 520px;
+}
+
 .adminFieldGrow {
   flex: 1 1 220px;
 }
@@ -3111,10 +3136,42 @@ main.content:has(.ganttPage) {
   cursor: pointer;
 }
 
+.ssdOptionWithDesc {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.ssdOptionLabel {
+  display: block;
+  line-height: 1.25;
+}
+
+.ssdOptionDesc {
+  display: block;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #64748b;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.ssdOption:disabled .ssdOptionDesc {
+  color: #94a3b8;
+}
+
 .msdCompact .ssdOption,
 .ssdPanelPortal.msdCompact .ssdOption {
   padding: 4px 6px;
   font-size: 11px;
+}
+
+.msdCompact .ssdOptionDesc,
+.ssdPanelPortal.msdCompact .ssdOptionDesc {
+  font-size: 10px;
 }
 
 .ssdOption:hover,
@@ -4461,6 +4518,11 @@ textarea {
   z-index: 50;
 }
 
+/* Поверх плавающей карточки события (z-index: 60); фактический слой задаётся inline style */
+.drawerBackdropElevated {
+  z-index: 12000;
+}
+
 .drawer {
   width: min(980px, 96vw);
   max-height: 92vh;
@@ -4559,6 +4621,30 @@ textarea {
     0 0 0 1px rgba(22, 163, 74, 0.24);
 }
 
+.barAutoGap {
+  opacity: 0.72;
+  outline: 1px dashed rgba(71, 85, 105, 0.9);
+  outline-offset: -2px;
+}
+
+.barEditing {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+  z-index: 5;
+  box-shadow:
+    0 0 0 1px rgba(37, 99, 235, 0.35),
+    0 0 0 4px rgba(37, 99, 235, 0.18);
+}
+
+.factBarEditing {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+  z-index: 5;
+  box-shadow:
+    0 0 0 1px rgba(37, 99, 235, 0.35),
+    0 0 0 4px rgba(37, 99, 235, 0.18);
+}
+
 .factBar {
   position: absolute;
   top: 28px;
@@ -4567,6 +4653,22 @@ textarea {
   pointer-events: none;
   z-index: 2;
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.factBarLabel {
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 1px rgba(15, 23, 42, 0.35);
 }
 
 .factBarGood,
@@ -5606,12 +5708,33 @@ textarea {
   border-color: rgba(37, 99, 235, 0.55);
 }
 
+.tgFieldActive .tgFieldLabel {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.tgFieldActive select,
+.tgFieldActive .msdBtn {
+  border-color: rgba(37, 99, 235, 0.65);
+  background: #eff6ff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
+
+.tgFieldActive .msdBtn:hover {
+  border-color: rgba(37, 99, 235, 0.85);
+}
+
 /* ===== Плавающая карточка события (modeless) ===== */
 
 .floatingEditor {
   position: fixed;
   z-index: 60;
   box-shadow: 0 18px 60px rgba(2, 6, 23, 0.28);
+}
+
+.floatingEditorBeneathModal {
+  z-index: 40 !important;
+  pointer-events: none;
 }
 
 .floatingEditorExpanded {
@@ -5626,6 +5749,10 @@ textarea {
   background: #f8fafc;
   border: 1px solid rgba(148, 163, 184, 0.45);
   border-radius: 14px;
+}
+
+.floatingEditorExpanded > .drawerBody {
+  min-height: 0;
 }
 
 .floatingEditorHeader {
@@ -5646,15 +5773,15 @@ textarea {
 }
 
 .floatingEditorCollapsed {
-  left: 50%;
+  left: auto;
   right: 12px;
   bottom: 12px;
-  width: auto;
-  min-height: 48px;
+  width: min(280px, calc(50vw - 24px));
+  min-height: 96px;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
-  padding: 8px 10px 8px 14px;
+  padding: 10px 10px 10px 14px;
   background: #fff;
   border: 1px solid rgba(148, 163, 184, 0.45);
   border-radius: 12px;
@@ -5670,21 +5797,28 @@ textarea {
   text-align: left;
   cursor: pointer;
   padding: 4px 0;
+  display: flex;
+  align-items: center;
 }
 
 .floatingEditorCollapsedTitle {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
   font-size: 13px;
   font-weight: 600;
   color: #0f172a;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.35;
 }
 
 .floatingEditorCollapsedActions {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   flex-shrink: 0;
 }
@@ -5695,6 +5829,10 @@ textarea {
 
 .floatingEditorCollapsedActions .drawerCloseBtnLabel {
   display: none;
+}
+
+.drawerCloseBtnIcon {
+  padding: 7px 9px;
 }
 
 /* ===== Модалка / карточка события (v2) ===== */
@@ -5800,7 +5938,9 @@ textarea {
 
 .drawerBody {
   flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 12px 14px 16px;
 }
 
@@ -6106,6 +6246,55 @@ textarea {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
 }
 
+.laborMetricsPanel {
+  display: grid;
+  gap: 14px;
+}
+
+.laborMetricsBlock {
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.laborMetricsBlockHead {
+  display: grid;
+  gap: 2px;
+}
+
+.laborMetricsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.laborMetricsCell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.laborMetricsCellLabel {
+  font-size: 11px;
+  font-weight: 650;
+  color: #475569;
+}
+
+.laborMetricsTotal {
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.laborMetricsTotalValue {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 .evInputReadonly {
   background: #f1f5f9;
   color: #475569;
@@ -6337,6 +6526,15 @@ textarea {
   background: #f8fafc;
 }
 
+.evPlacementItemAuto {
+  border-style: dashed;
+  background: #f1f5f9;
+}
+
+.evPlacementItemAuto .evPlacementHead strong {
+  color: #475569;
+}
+
 .evPlacementBody {
   display: grid;
   gap: 10px;
@@ -6370,13 +6568,77 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: min(420px, 55vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+  min-height: 0;
+}
+
+.evHistoryDay {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  background: #f8fafc;
+  overflow: visible;
+  min-width: 0;
+}
+
+.evHistoryDaySummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.evHistoryDaySummary::-webkit-details-marker {
+  display: none;
+}
+
+.evHistoryDaySummary::before {
+  content: "";
+  width: 0.45em;
+  height: 0.45em;
+  border-right: 1.6px solid #64748b;
+  border-bottom: 1.6px solid #64748b;
+  transform: rotate(-45deg);
+  margin-right: 2px;
+  transition: transform 0.12s ease;
+  flex: 0 0 auto;
+}
+
+.evHistoryDay[open] > .evHistoryDaySummary::before {
+  transform: rotate(45deg);
+}
+
+.evHistoryDayLabel {
+  font-weight: 600;
+  font-size: 13px;
+  color: #0f172a;
+  flex: 1 1 auto;
+}
+
+.evHistoryDayCount {
+  font-size: 12px;
+  min-width: 1.5rem;
+  text-align: right;
+}
+
+.evHistoryDayItems {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px 8px;
 }
 
 .evHistoryItem {
   border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 12px;
-  padding: 10px 12px;
-  background: #fafbfd;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fff;
 }
 
 .evHistoryHead {
@@ -6390,6 +6652,58 @@ textarea {
   margin-top: 6px;
   font-size: 13px;
   color: #1f2937;
+}
+
+.evHistoryDiffList {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.evHistoryDiffItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+  font-size: 12.5px;
+  line-height: 1.4;
+  min-width: 0;
+}
+
+.evHistoryDiffField {
+  color: #64748b;
+  min-width: 0;
+}
+
+.evHistoryDiffValues {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.evHistoryDiffFrom,
+.evHistoryDiffTo,
+.evHistoryDiffItem > .muted {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.evHistoryDiffFrom {
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
+.evHistoryDiffArrow {
+  display: none;
+}
+
+.evHistoryDiffTo {
+  color: #0f172a;
+  font-weight: 550;
 }
 
 .evHistoryChanges {
@@ -8717,9 +9031,11 @@ textarea {
   }
 
   .floatingEditorCollapsed {
-    left: 8px;
+    left: auto;
     right: 8px;
     bottom: 70px;
+    width: min(280px, calc(50vw - 16px));
+    min-height: 96px;
   }
 
   .drawerBackdrop {
@@ -9579,6 +9895,53 @@ textarea.refInput {
   color: #475569;
 }
 
+.analyticsTableMultiHeader th {
+  text-align: center;
+  vertical-align: middle;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-bottom-color: rgba(148, 163, 184, 0.35);
+  white-space: normal;
+  line-height: 1.25;
+  min-width: 72px;
+}
+
+.analyticsTableMultiHeader .analyticsThGroup {
+  top: 0;
+  z-index: 4;
+  background: #eef2f7;
+  font-weight: 700;
+  color: #334155;
+}
+
+.analyticsTableMultiHeader .analyticsThSubgroup {
+  top: 34px;
+  z-index: 3;
+  background: #f1f5f9;
+  font-weight: 650;
+  color: #475569;
+}
+
+.analyticsTableMultiHeader .analyticsThLeaf {
+  top: 68px;
+  z-index: 2;
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+.analyticsTableMultiHeader thead tr:nth-child(2) .analyticsThLeaf {
+  top: 34px;
+  z-index: 3;
+}
+
+.analyticsTableMultiHeader .analyticsThIndex {
+  top: 102px;
+  z-index: 1;
+  background: #e2e8f0;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
 .analyticsEventTitle {
   font-weight: 600;
 }
@@ -9797,25 +10160,133 @@ textarea.refInput {
 
 .reportFieldsLayout {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   gap: 16px;
+  align-items: stretch;
+  height: min(70vh, 780px);
+  min-height: 420px;
 }
 
-.reportFieldsAvailable,
-.reportFieldsOrder {
+.reportFieldsToolbar {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.reportFieldsSearch {
+  width: 100%;
+  max-width: 520px;
+}
+
+.reportFieldsToolbarActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.reportFieldsPane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.reportFieldsPaneHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  background: #f8fafc;
+}
+
+.reportFieldsPaneHead strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.reportFieldsPaneBody {
   display: grid;
   gap: 6px;
   align-content: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 12px;
 }
 
 .reportFieldCheck {
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 8px;
-  align-items: center;
+  align-items: start;
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.reportFieldLabelCol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.reportFieldMapBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.reportFieldMap-mapped {
+  color: #166534;
+  background: #dcfce7;
+  border-color: rgba(22, 101, 52, 0.18);
+}
+
+.reportFieldMap-stub {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: rgba(146, 64, 14, 0.18);
+}
+
+.reportFieldMap-unmapped {
+  color: #9a3412;
+  background: #ffedd5;
+  border-color: rgba(154, 52, 18, 0.18);
+}
+
+.reportFieldGroupLabel {
+  margin-top: 8px;
+  padding: 4px 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.reportFieldSubgroupLabel {
+  margin-top: 4px;
+  padding: 2px 2px 2px 8px;
+  font-size: 11px;
+  font-weight: 650;
+  color: #64748b;
+  border-left: 2px solid rgba(100, 116, 139, 0.35);
+}
+
+.reportFieldPlanned {
+  opacity: 0.62;
 }
 
 .reportFieldOrderRow {
@@ -9878,6 +10349,15 @@ textarea.refInput {
   .reportFieldsLayout,
   .reportBuilderCompareRow {
     grid-template-columns: 1fr;
+  }
+
+  .reportFieldsLayout {
+    height: auto;
+    min-height: 0;
+  }
+
+  .reportFieldsPane {
+    height: min(52vh, 520px);
   }
 }
 

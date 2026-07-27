@@ -14,6 +14,7 @@ import { adminRoutes } from "./routes/admin/index.js";
 import { resourcesRoutes } from "./routes/resources/index.js";
 import { analyticsRoutes } from "./routes/analytics.js";
 import { reportRoutes } from "./routes/reports.js";
+import { primaryTableRoutes } from "./routes/primaryTable.js";
 import { notificationsRoutes } from "./routes/notifications.js";
 import { runEventStatusMaintenance } from "./lib/eventMaintenance.js";
 
@@ -38,6 +39,7 @@ export async function buildServer() {
   await app.register(planningRoutes, { prefix: "/api" });
   await app.register(resourcesRoutes, { prefix: "/api/resources" });
   await app.register(analyticsRoutes, { prefix: "/api/analytics" });
+  await app.register(primaryTableRoutes, { prefix: "/api/analytics/primary-table" });
   await app.register(reportRoutes, { prefix: "/api/reports" });
   await app.register(notificationsRoutes, { prefix: "/api/notifications" });
   await app.register(adminRoutes, { prefix: "/api/admin" });

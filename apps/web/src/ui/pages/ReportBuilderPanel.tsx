@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import * as XLSX from "xlsx";
 
-import { apiDelete, apiGet, apiPatch, apiPost } from "../../lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPostBlob } from "../../lib/api";
+import { buildPrimaryHeaderPlan } from "../../lib/primaryTableHeaders";
 
 type ReportDataset =
+  | "primary_events"
   | "tat_events"
   | "util_hangars"
   | "util_timeline"
@@ -13,7 +15,24 @@ type ReportDataset =
   | "compare_hangars"
   | "compare_events";
 
-type ReportFieldDef = { key: string; label: string; type: "string" | "number" | "datetime" };
+type ReportFieldMappingStatus = "mapped" | "unmapped" | "stub";
+
+type ReportFieldDef = {
+  key: string;
+  label: string;
+  type: "string" | "number" | "datetime";
+  group?: string | null;
+  subgroup?: string | null;
+  availability?: "available" | "computed" | "planned";
+  excelColumn?: string;
+  mappingStatus?: ReportFieldMappingStatus;
+};
+
+const MAPPING_STATUS_LABEL: Record<ReportFieldMappingStatus, string> = {
+  mapped: "смэпплено",
+  unmapped: "не смэпплено",
+  stub: "заглушка"
+};
 
 type FilterOp = "contains" | "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "empty" | "notEmpty";
 
@@ -62,9 +81,16 @@ type RunResult = {
   ok: true;
   dataset: ReportDataset;
   period: { from: string; to: string };
-  columns: Array<{ key: string; label: string; type: string }>;
+  columns: Array<{
+    key: string;
+    label: string;
+    type: string;
+    group?: string | null;
+    subgroup?: string | null;
+  }>;
   rows: Array<Record<string, any>>;
   total: number;
+  nextCursor?: string | null;
 };
 
 const OPS_BY_TYPE: Record<ReportFieldDef["type"], Array<{ op: FilterOp; label: string }>> = {
@@ -118,6 +144,38 @@ function moveItem<T>(arr: T[], from: number, to: number): T[] {
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item!);
   return next;
+}
+
+function formatReportCell(value: unknown, type?: ReportFieldDef["type"]): string | number {
+  if (value == null || value === "") return "";
+  if (type === "datetime") {
+    const text = String(value);
+    // Уже отформатировано на API (DD.MM.YYYY…) — не трогаем.
+    if (/^\d{1,2}\.\d{1,2}\.\d{4}/.test(text)) return text;
+    const parsed = dayjs(text);
+    if (parsed.isValid()) {
+      // Дата без времени (YYYY-MM-DD или полночь) → только дата.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(text) || (parsed.hour() === 0 && parsed.minute() === 0 && parsed.second() === 0)) {
+        return parsed.format("DD.MM.YYYY");
+      }
+      return parsed.format("DD.MM.YYYY HH:mm");
+    }
+  }
+  if (typeof value === "number") return value;
+  return String(value);
+}
+
+/** Для клиентского XLSX: Date, чтобы Excel видел тип «дата». */
+function exportReportCell(value: unknown, type?: ReportFieldDef["type"]): string | number | Date {
+  if (value == null || value === "") return "";
+  if (type === "datetime") {
+    const text = String(value);
+    if (/^\d{1,2}\.\d{1,2}\.\d{4}/.test(text)) return text;
+    const parsed = dayjs(text);
+    if (parsed.isValid()) return parsed.toDate();
+  }
+  if (typeof value === "number") return value;
+  return String(value);
 }
 
 function normalizeConfig(
@@ -174,6 +232,7 @@ export function ReportBuilderPanel(props: Props) {
   const [constructorTab, setConstructorTab] = useState<"source" | "fields" | "filters" | "sort" | "access">(
     "source"
   );
+  const [fieldSearch, setFieldSearch] = useState("");
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -184,6 +243,54 @@ export function ReportBuilderPanel(props: Props) {
   const canEdit = !selectedId || Boolean(selected?.canEdit);
   const conditions = config.filters.conditions ?? [];
   const filterableFields = (currentMeta?.fields ?? []).filter((f) => config.fields.includes(f.key));
+
+  const fieldSearchNorm = fieldSearch.trim().toLocaleLowerCase("ru");
+  const visibleFields = useMemo(() => {
+    const all = currentMeta?.fields ?? [];
+    if (!fieldSearchNorm) return all;
+    return all.filter((f) => {
+      const mappingLabel = f.mappingStatus ? MAPPING_STATUS_LABEL[f.mappingStatus] : null;
+      const hay = [
+        f.label,
+        f.group,
+        f.subgroup,
+        f.excelColumn,
+        f.key,
+        f.type,
+        f.availability,
+        mappingLabel,
+        f.mappingStatus
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase("ru");
+      return fieldSearchNorm.split(/\s+/).every((token) => hay.includes(token));
+    });
+  }, [currentMeta?.fields, fieldSearchNorm]);
+
+  const selectableVisibleKeys = useMemo(
+    () =>
+      visibleFields
+        .filter((f) => f.availability !== "planned" && f.mappingStatus !== "unmapped")
+        .map((f) => f.key),
+    [visibleFields]
+  );
+
+  const primaryPreviewHeader = useMemo(() => {
+    if (!runResult || config.dataset !== "primary_events") return null;
+    const fieldByKey = new Map((currentMeta?.fields ?? []).map((f) => [f.key, f]));
+    return buildPrimaryHeaderPlan(
+      runResult.columns.map((c) => {
+        const meta = fieldByKey.get(c.key);
+        return {
+          key: c.key,
+          label: c.label,
+          group: c.group ?? meta?.group ?? null,
+          subgroup: c.subgroup ?? meta?.subgroup ?? null
+        };
+      })
+    );
+  }, [runResult, config.dataset, currentMeta?.fields]);
 
   useEffect(() => {
     if (!metaQ.data || config.fields.length) return;
@@ -197,6 +304,7 @@ export function ReportBuilderPanel(props: Props) {
     setRunResult(null);
     setRunError(null);
     setDirty(false);
+    setFieldSearch("");
     setConstructorTab("source");
   };
 
@@ -207,6 +315,7 @@ export function ReportBuilderPanel(props: Props) {
     setRunResult(null);
     setRunError(null);
     setDirty(true);
+    setFieldSearch("");
     setConstructorTab("source");
   };
 
@@ -301,11 +410,33 @@ export function ReportBuilderPanel(props: Props) {
   const needsCompare = config.dataset === "compare_hangars" || config.dataset === "compare_events";
   const needsGrain = config.dataset.startsWith("util_");
 
-  const exportXlsx = () => {
+  const exportXlsx = async () => {
     if (!runResult) return;
+    if (config.dataset === "primary_events") {
+      const from = config.periodFrom ? dayjs(config.periodFrom).startOf("day").toISOString() : fromIso;
+      const to = config.periodTo ? dayjs(config.periodTo).endOf("day").toISOString() : toIso;
+      const blob = await apiPostBlob("/api/analytics/primary-table/export", {
+        from,
+        to,
+        fields: config.fields,
+        filters: config.filters,
+        sort: config.sort,
+        format: "xlsx",
+        limit: 500
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `primary-table-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
     const flat = runResult.rows.map((row) => {
       const out: Record<string, any> = {};
-      for (const col of runResult.columns) out[col.label] = row[col.key] ?? "";
+      for (const col of runResult.columns) {
+        out[col.label] = exportReportCell(row[col.key], col.type as ReportFieldDef["type"]);
+      }
       return out;
     });
     const wb = XLSX.utils.book_new();
@@ -318,11 +449,11 @@ export function ReportBuilderPanel(props: Props) {
       { Параметр: "Период", Значение: periodText },
       { Параметр: "Источник", Значение: currentMeta?.label ?? config.dataset },
       { Параметр: "Строк", Значение: runResult.total },
-      { Параметр: "Выгружено", Значение: dayjs().format("YYYY-MM-DD HH:mm") }
+      { Параметр: "Выгружено", Значение: dayjs().format("DD.MM.YYYY HH:mm") }
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(meta), "Сводка");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat), "Данные");
-    XLSX.writeFile(wb, `report-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`);
+    XLSX.writeFile(wb, `report-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`, { cellDates: true });
   };
 
   const mine = (listQ.data?.reports ?? []).filter((r) => r.myRole === "OWNER");
@@ -419,7 +550,7 @@ export function ReportBuilderPanel(props: Props) {
                 disabled={!runResult}
                 title="Выгрузить в Excel"
                 aria-label="Excel"
-                onClick={exportXlsx}
+                onClick={() => void exportXlsx()}
               >
                 <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M5 2h7l4 4v12H5z" />
@@ -482,7 +613,8 @@ export function ReportBuilderPanel(props: Props) {
                     type="button"
                     disabled={!canEdit}
                     className={config.dataset === d.id ? "reportDatasetCard active" : "reportDatasetCard"}
-                    onClick={() =>
+                    onClick={() => {
+                      setFieldSearch("");
                       patchConfig({
                         dataset: d.id,
                         fields: d.defaultFields,
@@ -490,8 +622,8 @@ export function ReportBuilderPanel(props: Props) {
                         filters: { conditions: [] },
                         periodFrom: config.periodFrom ?? periodDefaults.from,
                         periodTo: config.periodTo ?? periodDefaults.to
-                      })
-                    }
+                      });
+                    }}
                   >
                     <strong>{d.label}</strong>
                     <span className="muted small">{d.description}</span>
@@ -554,64 +686,192 @@ export function ReportBuilderPanel(props: Props) {
           {constructorTab === "fields" ? (
             <div className="reportBuilderSection">
               <p className="muted small">Отметьте поля и задайте порядок вывода.</p>
-              <div className="reportFieldsLayout">
-                <div className="reportFieldsAvailable">
-                  {(currentMeta?.fields ?? []).map((f) => {
-                    const checked = config.fields.includes(f.key);
-                    return (
-                      <label key={f.key} className="reportFieldCheck">
-                        <input
-                          type="checkbox"
-                          disabled={!canEdit}
-                          checked={checked}
-                          onChange={() => {
-                            if (!canEdit) return;
-                            const nextFields = checked
-                              ? config.fields.filter((x) => x !== f.key)
-                              : [...config.fields, f.key];
-                            const nextConditions = (config.filters.conditions ?? []).filter((c) =>
-                              nextFields.includes(c.field)
-                            );
-                            patchConfig({
-                              fields: nextFields,
-                              filters: { conditions: nextConditions }
-                            });
-                          }}
-                        />
-                        <span>{f.label}</span>
-                        <span className="muted small">{f.type}</span>
-                      </label>
-                    );
-                  })}
+              <div className="reportFieldsToolbar">
+                <input
+                  className="evInput reportFieldsSearch"
+                  type="search"
+                  value={fieldSearch}
+                  placeholder="Поиск: название, группа, Excel-колонка…"
+                  onChange={(e) => setFieldSearch(e.target.value)}
+                />
+                <div className="reportFieldsToolbarActions">
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    disabled={!canEdit || selectableVisibleKeys.length === 0}
+                    onClick={() => {
+                      const next = Array.from(new Set([...config.fields, ...selectableVisibleKeys]));
+                      patchConfig({ fields: next });
+                    }}
+                  >
+                    Выделить все{fieldSearchNorm ? " найденные" : ""}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    disabled={!canEdit || config.fields.length === 0}
+                    onClick={() => {
+                      if (fieldSearchNorm) {
+                        const hide = new Set(selectableVisibleKeys);
+                        const nextFields = config.fields.filter((key) => !hide.has(key));
+                        patchConfig({
+                          fields: nextFields,
+                          filters: {
+                            conditions: (config.filters.conditions ?? []).filter((c) => nextFields.includes(c.field))
+                          }
+                        });
+                      } else {
+                        patchConfig({ fields: [], filters: { conditions: [] } });
+                      }
+                    }}
+                  >
+                    Снять{fieldSearchNorm ? " найденные" : " все"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    disabled={!canEdit || !(currentMeta?.defaultFields?.length)}
+                    onClick={() => {
+                      const defaults = currentMeta?.defaultFields ?? [];
+                      patchConfig({
+                        fields: defaults,
+                        filters: {
+                          conditions: (config.filters.conditions ?? []).filter((c) => defaults.includes(c.field))
+                        }
+                      });
+                      setFieldSearch("");
+                    }}
+                  >
+                    По умолчанию
+                  </button>
                 </div>
-                <div className="reportFieldsOrder">
-                  <div className="muted small">Порядок колонок</div>
-                  {config.fields.map((key, idx) => {
-                    const f = currentMeta?.fields.find((x) => x.key === key);
-                    return (
-                      <div key={key} className="reportFieldOrderRow">
-                        <span>{f?.label ?? key}</span>
-                        <div className="reportFieldOrderBtns">
-                          <button
-                            type="button"
-                            className="btn btnGhost"
-                            disabled={!canEdit || idx === 0}
-                            onClick={() => patchConfig({ fields: moveItem(config.fields, idx, idx - 1) })}
+                <div className="muted small">
+                  Выбрано {config.fields.length}
+                  {fieldSearchNorm ? ` · найдено ${visibleFields.length}` : ` · всего ${(currentMeta?.fields ?? []).length}`}
+                </div>
+              </div>
+              <div className="reportFieldsLayout">
+                <div className="reportFieldsPane">
+                  <div className="reportFieldsPaneHead">
+                    <strong>Каталог полей</strong>
+                    <span className="muted small">
+                      {fieldSearchNorm
+                        ? `${visibleFields.length} из ${(currentMeta?.fields ?? []).length}`
+                        : `${(currentMeta?.fields ?? []).length}`}
+                    </span>
+                  </div>
+                  <div className="reportFieldsPaneBody">
+                    {visibleFields.length === 0 ? (
+                      <div className="muted small">Ничего не найдено по запросу «{fieldSearch}»</div>
+                    ) : null}
+                    {visibleFields.map((f, index, all) => {
+                      const checked = config.fields.includes(f.key);
+                      const mappingMark = f.mappingStatus ? MAPPING_STATUS_LABEL[f.mappingStatus] : null;
+                      return (
+                        <Fragment key={f.key}>
+                          {f.group && f.group !== all[index - 1]?.group ? (
+                            <div className="reportFieldGroupLabel">{f.group}</div>
+                          ) : null}
+                          {f.subgroup &&
+                          (f.subgroup !== all[index - 1]?.subgroup || f.group !== all[index - 1]?.group) ? (
+                            <div className="reportFieldSubgroupLabel">{f.subgroup}</div>
+                          ) : null}
+                          <label
+                            className={`reportFieldCheck${f.availability === "planned" || f.mappingStatus === "unmapped" ? " reportFieldPlanned" : ""}`}
+                            title={
+                              [
+                                f.excelColumn ? `Excel ${f.excelColumn}` : null,
+                                f.group ? `Группа: ${f.group}` : null,
+                                f.subgroup ? `Подгруппа: ${f.subgroup}` : null,
+                                mappingMark,
+                                f.availability === "computed" ? "Вычисляется формулой" : null,
+                                f.mappingStatus === "stub"
+                                  ? "Типизированная заглушка без полноценного источника данных"
+                                  : null,
+                                f.mappingStatus === "unmapped" || f.availability === "planned"
+                                  ? "Пока не смэпплено"
+                                  : null
+                              ]
+                                .filter(Boolean)
+                                .join(" · ") || undefined
+                            }
                           >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btnGhost"
-                            disabled={!canEdit || idx === config.fields.length - 1}
-                            onClick={() => patchConfig({ fields: moveItem(config.fields, idx, idx + 1) })}
-                          >
-                            ↓
-                          </button>
+                            <input
+                              type="checkbox"
+                              disabled={!canEdit || f.availability === "planned" || f.mappingStatus === "unmapped"}
+                              checked={checked}
+                              onChange={() => {
+                                if (!canEdit || f.availability === "planned" || f.mappingStatus === "unmapped") return;
+                                const nextFields = checked
+                                  ? config.fields.filter((x) => x !== f.key)
+                                  : [...config.fields, f.key];
+                                const nextConditions = (config.filters.conditions ?? []).filter((c) =>
+                                  nextFields.includes(c.field)
+                                );
+                                patchConfig({
+                                  fields: nextFields,
+                                  filters: { conditions: nextConditions }
+                                });
+                              }}
+                            />
+                            <span className="reportFieldLabelCol">
+                              <span>{f.label}</span>
+                              {mappingMark && f.mappingStatus ? (
+                                <span className={`reportFieldMapBadge reportFieldMap-${f.mappingStatus}`}>
+                                  {mappingMark}
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="muted small">
+                              {f.excelColumn ? `${f.excelColumn} · ` : ""}
+                              {f.availability === "planned"
+                                ? "планируется"
+                                : f.availability === "computed"
+                                  ? "расчёт"
+                                  : f.type}
+                            </span>
+                          </label>
+                        </Fragment>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="reportFieldsPane">
+                  <div className="reportFieldsPaneHead">
+                    <strong>Порядок колонок</strong>
+                    <span className="muted small">{config.fields.length}</span>
+                  </div>
+                  <div className="reportFieldsPaneBody">
+                    {config.fields.length === 0 ? (
+                      <div className="muted small">Отметьте поля слева — здесь появится их порядок.</div>
+                    ) : null}
+                    {config.fields.map((key, idx) => {
+                      const f = currentMeta?.fields.find((x) => x.key === key);
+                      return (
+                        <div key={key} className="reportFieldOrderRow">
+                          <span>{f?.label ?? key}</span>
+                          <div className="reportFieldOrderBtns">
+                            <button
+                              type="button"
+                              className="btn btnGhost"
+                              disabled={!canEdit || idx === 0}
+                              onClick={() => patchConfig({ fields: moveItem(config.fields, idx, idx - 1) })}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btnGhost"
+                              disabled={!canEdit || idx === config.fields.length - 1}
+                              onClick={() => patchConfig({ fields: moveItem(config.fields, idx, idx + 1) })}
+                            >
+                              ↓
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -874,20 +1134,76 @@ export function ReportBuilderPanel(props: Props) {
           {runError ? <div className="error">{runError}</div> : null}
           {runResult ? (
             <div className="analyticsTableWrap">
-              <table className="analyticsTable">
+              <table className={`analyticsTable${primaryPreviewHeader ? " analyticsTableMultiHeader" : ""}`}>
                 <thead>
-                  <tr>
-                    {runResult.columns.map((c) => (
-                      <th key={c.key}>{c.label}</th>
-                    ))}
-                  </tr>
+                  {primaryPreviewHeader ? (
+                    <>
+                      <tr>
+                        {primaryPreviewHeader.groupRow.map((cell) => (
+                          <th
+                            key={cell.key}
+                            className="analyticsThGroup"
+                            colSpan={cell.colSpan}
+                            rowSpan={cell.rowSpan}
+                          >
+                            {cell.label || "\u00A0"}
+                          </th>
+                        ))}
+                      </tr>
+                      <tr>
+                        {primaryPreviewHeader.midRow.map((cell) => (
+                          <th
+                            key={cell.key}
+                            className={cell.rowSpan > 1 ? "analyticsThLeaf" : "analyticsThSubgroup"}
+                            colSpan={cell.colSpan}
+                            rowSpan={cell.rowSpan}
+                          >
+                            {cell.label}
+                          </th>
+                        ))}
+                      </tr>
+                      {primaryPreviewHeader.labelRow.length > 0 ? (
+                        <tr>
+                          {primaryPreviewHeader.labelRow.map((cell) => (
+                            <th
+                              key={cell.key}
+                              className="analyticsThLeaf"
+                              colSpan={cell.colSpan}
+                              rowSpan={cell.rowSpan}
+                            >
+                              {cell.label}
+                            </th>
+                          ))}
+                        </tr>
+                      ) : null}
+                      <tr>
+                        {primaryPreviewHeader.indexRow.map((cell) => (
+                          <th
+                            key={cell.key}
+                            className="analyticsThIndex"
+                            colSpan={cell.colSpan}
+                            rowSpan={cell.rowSpan}
+                          >
+                            {cell.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </>
+                  ) : (
+                    <tr>
+                      {runResult.columns.map((c) => (
+                        <th key={c.key}>{c.label}</th>
+                      ))}
+                    </tr>
+                  )}
                 </thead>
                 <tbody>
                   {runResult.rows.slice(0, 200).map((row, i) => (
                     <tr key={i}>
-                      {runResult.columns.map((c) => (
-                        <td key={c.key}>{row[c.key] == null || row[c.key] === "" ? "—" : String(row[c.key])}</td>
-                      ))}
+                      {runResult.columns.map((c) => {
+                        const formatted = formatReportCell(row[c.key], c.type as ReportFieldDef["type"]);
+                        return <td key={c.key}>{formatted === "" ? "—" : formatted}</td>;
+                      })}
                     </tr>
                   ))}
                 </tbody>

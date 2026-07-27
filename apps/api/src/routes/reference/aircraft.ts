@@ -1,8 +1,27 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
-import { zUuid } from "../../lib/zod.js";
+import { zDateOnly, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+
+function parseOptionalManufactureDate(raw: unknown): Date | null | undefined {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const parsed = zDateOnly.safeParse(s);
+  if (parsed.success) return parsed.data;
+  // DD.MM.YYYY / DD/MM/YYYY
+  const m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/);
+  if (m) {
+    const day = Number(m[1]);
+    const month = Number(m[2]);
+    const year = Number(m[3]);
+    const iso = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const retry = zDateOnly.safeParse(iso);
+    if (retry.success) return retry.data;
+  }
+  return undefined;
+}
 
 export const aircraftRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
@@ -25,7 +44,9 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
             z.object({
               tailNumber: z.string().optional(),
               operator: z.string().optional(),
-              aircraftType: z.string().optional()
+              aircraftType: z.string().optional(),
+              manufactureDate: z.string().optional(),
+              serialNumber: z.string().optional()
             })
           )
           .min(1)
@@ -63,13 +84,21 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
 
     const existingTails = new Set(existingAircraft.map((a) => tailKey(a.tailNumber)));
     const seenInFile = new Set<string>();
-    const toCreate: Array<{ tailNumber: string; operatorId: string; typeId: string; isActive: boolean }> = [];
+    const toCreate: Array<{
+      tailNumber: string;
+      operatorId: string;
+      typeId: string;
+      isActive: boolean;
+      serialNumber?: string;
+      manufactureDate?: Date | null;
+    }> = [];
     const previewRows: Array<{
       rowIndex: number;
       ok: boolean;
       tailNumber: string;
       operator: string;
       aircraftType: string;
+      manufactureDate?: string;
       error?: string;
     }> = [];
 
@@ -79,6 +108,8 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
       const tailNumber = tailKey(row.tailNumber);
       const operatorRaw = norm(row.operator);
       const aircraftTypeRaw = norm(row.aircraftType);
+      const serialNumberRaw = norm(row.serialNumber);
+      const manufactureDateRaw = norm(row.manufactureDate);
       let error = "";
 
       if (!tailNumber) error = "Не указан tailNumber";
@@ -94,6 +125,13 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
       if (!error && !aircraftTypeRaw) error = "Не указан aircraftType";
       if (!error && !aircraftType) error = `Не найден тип ВС: ${aircraftTypeRaw}`;
 
+      let manufactureDate: Date | null = null;
+      if (!error && manufactureDateRaw) {
+        const parsed = parseOptionalManufactureDate(manufactureDateRaw);
+        if (parsed === undefined) error = `Некорректная дата производства: ${manufactureDateRaw}`;
+        else manufactureDate = parsed;
+      }
+
       seenInFile.add(tailNumber);
       previewRows.push({
         rowIndex,
@@ -101,6 +139,7 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
         tailNumber,
         operator: operatorRaw,
         aircraftType: aircraftTypeRaw,
+        ...(manufactureDateRaw ? { manufactureDate: manufactureDateRaw } : {}),
         ...(error ? { error } : {})
       });
 
@@ -109,7 +148,9 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
           tailNumber,
           operatorId: operator.id,
           typeId: aircraftType.id,
-          isActive: body.isActive ?? true
+          isActive: body.isActive ?? true,
+          ...(serialNumberRaw ? { serialNumber: serialNumberRaw } : {}),
+          ...(manufactureDate ? { manufactureDate } : {})
         });
       }
     }
@@ -118,7 +159,7 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
       dryRun: Boolean(body.dryRun),
       totalRows: body.rows.length,
       okRows: previewRows.filter((r) => r.ok).length,
-      errorRows: previewRows.filter((r) => !r.ok).length
+      errorRows: previewRows.filter((r) => r.ok === false).length
     };
 
     if (body.dryRun) {
@@ -147,6 +188,7 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
       .object({
         tailNumber: z.string().trim().min(2).max(32),
         serialNumber: z.string().trim().min(1).max(64).optional(),
+        manufactureDate: zDateOnly.nullable().optional(),
         operatorId: zUuid,
         typeId: zUuid,
         isActive: z.boolean().optional()
@@ -163,6 +205,7 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
       .object({
         tailNumber: z.string().trim().min(2).max(32).optional(),
         serialNumber: z.string().trim().min(1).max(64).nullable().optional(),
+        manufactureDate: zDateOnly.nullable().optional(),
         operatorId: zUuid.optional(),
         typeId: zUuid.optional(),
         isActive: z.boolean().optional()
@@ -179,4 +222,3 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 };
-

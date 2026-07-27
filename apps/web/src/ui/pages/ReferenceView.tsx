@@ -3,6 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
+import {
+  dateInputToIso,
+  formatAircraftAge,
+  formatManufactureDateRu,
+  toDateInputValue
+} from "../../lib/aircraftAge";
 import { authMe } from "../auth/authApi";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { SwitchToggle } from "../components/SwitchToggle";
@@ -13,6 +19,7 @@ type RefKind =
   | "aircraft"
   | "aircraft-type-palette"
   | "event-types"
+  | "event-statuses"
   | "workshops"
   | "hangars"
   | "layouts"
@@ -48,7 +55,10 @@ const REF_GROUPS: RefGroup[] = [
   },
   {
     label: "События",
-    items: [{ kind: "event-types", title: "Типы событий" }]
+    items: [
+      { kind: "event-types", title: "Типы событий" },
+      { kind: "event-statuses", title: "Статусы", hint: "системный справочник" }
+    ]
   },
   {
     label: "Планирование",
@@ -86,6 +96,7 @@ const REF_SINGULAR: Record<RefKind, string> = {
   aircraft: "Борт",
   "aircraft-type-palette": "Правило палитры",
   "event-types": "Тип события",
+  "event-statuses": "Статус события",
   workshops: "Цех",
   hangars: "Ангар",
   layouts: "Вариант расстановки",
@@ -121,7 +132,7 @@ function bodyTypeLabel(v: unknown): string | null {
 type Operator = { id: string; code: string; name: string; isActive: boolean };
 type AircraftType = { id: string; icaoType?: string | null; name: string; manufacturer?: string | null; isActive: boolean };
 type EventType = { id: string; code: string; name: string; isActive: boolean };
-type Hangar = { id: string; code: string; name: string; isActive: boolean; isPhysical?: boolean };
+type Hangar = { id: string; code: string; name: string; station?: string | null; isActive: boolean; isPhysical?: boolean };
 type Layout = {
   id: string;
   hangarId: string;
@@ -131,6 +142,7 @@ type Layout = {
   widthMeters?: number | null;
   heightMeters?: number | null;
   capacitySummary?: string;
+  standsSummary?: string;
   isActive: boolean;
 };
 type LayoutDetail = Layout & {
@@ -360,6 +372,8 @@ export function ReferenceView() {
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
   const isAdmin = Boolean(me?.roles?.includes("ADMIN"));
   const canWrite = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"));
+  const isReadOnlyCatalog = kind === "event-statuses";
+  const canMutate = canWrite && !isReadOnlyCatalog;
 
   const url = useMemo(() => `/api/ref/${kind}`, [kind]);
 
@@ -525,6 +539,10 @@ export function ReferenceView() {
     const tailIdx = headers.findIndex((h) => ["tailnumber", "aircraft", "boardnumber", "борт", "бортовойномер"].includes(h));
     const operatorIdx = headers.findIndex((h) => ["operator", "operatorcode", "operatorname", "оператор"].includes(h));
     const typeIdx = headers.findIndex((h) => ["aircrafttype", "type", "icaotype", "типвс", "тип"].includes(h));
+    const manufactureIdx = headers.findIndex((h) =>
+      ["manufacturedate", "productiondate", "manufacturedat", "датапроизводства", "датапроизводствавс"].includes(h)
+    );
+    const serialIdx = headers.findIndex((h) => ["serialnumber", "sn", "завномер", "заводскойномер"].includes(h));
 
     if (tailIdx < 0 || operatorIdx < 0 || typeIdx < 0) {
       throw new Error("В CSV нужны колонки: tailNumber, operator, aircraftType.");
@@ -533,13 +551,17 @@ export function ReferenceView() {
     return rows.slice(1).map((row) => ({
       tailNumber: String(row[tailIdx] ?? "").trim(),
       operator: String(row[operatorIdx] ?? "").trim(),
-      aircraftType: String(row[typeIdx] ?? "").trim()
+      aircraftType: String(row[typeIdx] ?? "").trim(),
+      ...(manufactureIdx >= 0 ? { manufactureDate: String(row[manufactureIdx] ?? "").trim() } : {}),
+      ...(serialIdx >= 0 ? { serialNumber: String(row[serialIdx] ?? "").trim() } : {})
     }));
   };
 
   const aircraftImportM = useMutation({
-    mutationFn: async (payload: { dryRun?: boolean; rows: Array<{ tailNumber: string; operator: string; aircraftType: string }> }) =>
-      apiPost("/api/ref/aircraft/import", payload),
+    mutationFn: async (payload: {
+      dryRun?: boolean;
+      rows: Array<{ tailNumber: string; operator: string; aircraftType: string; manufactureDate?: string; serialNumber?: string }>;
+    }) => apiPost("/api/ref/aircraft/import", payload),
     onSuccess: async (res) => {
       setAircraftImportResult(res);
       await qc.invalidateQueries({ queryKey: ["ref", "aircraft"] });
@@ -586,12 +608,14 @@ export function ReferenceView() {
   // формы (минимально достаточные поля + зависимости)
   const [fCode, setFCode] = useState("");
   const [fName, setFName] = useState("");
+  const [fStation, setFStation] = useState("");
   const [fIsActive, setFIsActive] = useState(true);
   const [fIsPhysical, setFIsPhysical] = useState(true);
   const [fIcaoType, setFIcaoType] = useState("");
   const [fManufacturer, setFManufacturer] = useState("");
   const [fTailNumber, setFTailNumber] = useState("");
   const [fSerialNumber, setFSerialNumber] = useState("");
+  const [fManufactureDate, setFManufactureDate] = useState("");
   const [fOperatorId, setFOperatorId] = useState("");
   const [fTypeId, setFTypeId] = useState("");
   const [fColor, setFColor] = useState("#3b82f6");
@@ -640,6 +664,7 @@ export function ReferenceView() {
     setFManufacturer("");
     setFTailNumber("");
     setFSerialNumber("");
+    setFManufactureDate("");
     setFOperatorId(operatorsQ.data?.[0]?.id ?? "");
     setFTypeId(aircraftTypesQ.data?.[0]?.id ?? "");
     setFColor("#3b82f6");
@@ -684,6 +709,7 @@ export function ReferenceView() {
     } else if (k === "aircraft") {
       setFTailNumber("RA-XXXXX");
       setFSerialNumber("");
+      setFManufactureDate("");
     } else if (k === "aircraft-type-palette") {
       setFOperatorId(operatorsQ.data?.[0]?.id ?? "");
       setFTypeId(aircraftTypesQ.data?.[0]?.id ?? "");
@@ -698,6 +724,7 @@ export function ReferenceView() {
     } else if (k === "hangars") {
       setFCode("HNEW");
       setFName("Ангар");
+      setFStation("");
       setFIsPhysical(true);
     } else if (k === "layouts") {
       setFCode("BASE");
@@ -706,8 +733,8 @@ export function ReferenceView() {
       setFCode("S1");
       setFName("Место");
     } else if (k === "skills") {
-      setFCode("MECH");
-      setFName("Квалификация");
+      setFCode("ME");
+      setFName("ME (Mechanic)");
     } else if (k === "persons") {
       setFCode("P001");
       setFName("Сотрудник");
@@ -756,11 +783,13 @@ export function ReferenceView() {
     setFIsPhysical(row.isPhysical !== false);
     setFCode(String(row.code ?? ""));
     setFName(String(row.name ?? ""));
+    setFStation(String(row.station ?? ""));
     setFIcaoType(String(row.icaoType ?? ""));
     setFManufacturer(String(row.manufacturer ?? ""));
     setFBodyType(String(row.bodyType ?? ""));
     setFTailNumber(String(row.tailNumber ?? ""));
     setFSerialNumber(String(row.serialNumber ?? ""));
+    setFManufactureDate(toDateInputValue(row.manufactureDate));
     setFOperatorId(String(row.operatorId ?? ""));
     setFTypeId(String(kind === "placement-priorities" ? row.standId ?? "" : row.typeId ?? row.aircraftTypeId ?? ""));
     setFColor(String(row.color ?? "#3b82f6"));
@@ -822,7 +851,8 @@ export function ReferenceView() {
     if (kind === "aircraft")
       return {
         tailNumber: fTailNumber.trim(),
-        serialNumber: fSerialNumber.trim() ? fSerialNumber.trim() : undefined,
+        serialNumber: fSerialNumber.trim() ? fSerialNumber.trim() : mode === "edit" ? null : undefined,
+        manufactureDate: dateInputToIso(fManufactureDate) ?? (mode === "edit" ? null : undefined),
         operatorId: fOperatorId,
         typeId: fTypeId,
         isActive: fIsActive
@@ -881,7 +911,15 @@ export function ReferenceView() {
     if (kind === "event-types")
       return { code: fCode.trim(), name: fName.trim(), color: fColor.trim() ? fColor.trim() : undefined, isActive: fIsActive };
     if (kind === "workshops") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
-    if (kind === "hangars") return { code: fCode.trim(), name: fName.trim(), isPhysical: fIsPhysical, isActive: fIsActive };
+    if (kind === "hangars") {
+      return {
+        code: fCode.trim(),
+        name: fName.trim(),
+        station: fStation.trim() ? fStation.trim().toUpperCase() : null,
+        isPhysical: fIsPhysical,
+        isActive: fIsActive
+      };
+    }
     if (kind === "layouts")
       return {
         hangarId: fHangarId,
@@ -911,7 +949,15 @@ export function ReferenceView() {
 
   // Фильтрация списка по строке поиска
   const filteredRows = useMemo(() => {
-    const rows = listQ.data ?? [];
+    const raw = listQ.data ?? [];
+    const rows =
+      kind === "event-statuses"
+        ? raw.map((row: any) => ({
+            ...row,
+            id: row.code,
+            isActive: row.selectable !== false
+          }))
+        : raw;
     const q = search.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((row: any) => {
@@ -941,7 +987,7 @@ export function ReferenceView() {
       ];
       return fields.some((f) => f != null && String(f).toLowerCase().includes(q));
     });
-  }, [listQ.data, search]);
+  }, [listQ.data, search, kind]);
 
   const totalCount = listQ.data?.length ?? 0;
   const effectivePreviewLayoutId = useMemo(() => {
@@ -1074,7 +1120,7 @@ export function ReferenceView() {
                 </label>
               </>
             ) : null}
-            {canWrite ? (
+            {canMutate ? (
               <button className="btn btnPrimary" onClick={openCreate}>
                 + Добавить
               </button>
@@ -1106,12 +1152,13 @@ export function ReferenceView() {
                     <span>Подойдёт CSV/TXT в UTF-8 или Windows-1251.</span>
                     <span>Разделитель может быть запятая, точка с запятой или табуляция.</span>
                     <span>Обязательные колонки: tailNumber, operator, aircraftType.</span>
+                    <span>Опционально: manufactureDate (дата производства), serialNumber.</span>
                     <span>operator ищется по коду или названию оператора.</span>
                     <span>aircraftType ищется по ICAO-коду или названию типа ВС.</span>
                   </span>
                 </span>
               </div>
-              <div className="muted refSectionHint">Формат: tailNumber;operator;aircraftType. Разделитель: запятая/точка с запятой/таб.</div>
+              <div className="muted refSectionHint">Формат: tailNumber;operator;aircraftType[;manufactureDate]. Разделитель: запятая/точка с запятой/таб.</div>
             </div>
           </div>
           <div className="row" style={{ alignItems: "flex-end" }}>
@@ -1521,10 +1568,27 @@ export function ReferenceView() {
                   </select>
                 </label>
                 {kind === "aircraft" ? (
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span className="muted">Зав. №</span>
-                    <TextInput value={fSerialNumber} onChange={setFSerialNumber} style={{ width: 220 }} />
-                  </label>
+                  <>
+                    <label style={{ display: "grid", gap: 6 }}>
+                      <span className="muted">Зав. №</span>
+                      <TextInput value={fSerialNumber} onChange={setFSerialNumber} style={{ width: 220 }} />
+                    </label>
+                    <label style={{ display: "grid", gap: 6 }}>
+                      <span className="muted">Дата производства ВС</span>
+                      <input
+                        type="date"
+                        value={fManufactureDate}
+                        onChange={(e) => setFManufactureDate(e.target.value)}
+                        style={{ width: 220 }}
+                      />
+                    </label>
+                    <label style={{ display: "grid", gap: 6 }}>
+                      <span className="muted">Возраст ВС</span>
+                      <div style={{ width: 220, padding: "8px 0" }}>
+                        {formatAircraftAge(fManufactureDate) ?? <span className="muted">— укажите дату производства</span>}
+                      </div>
+                    </label>
+                  </>
                 ) : null}
               </>
             ) : null}
@@ -1615,9 +1679,9 @@ export function ReferenceView() {
                   <span className="muted">Вариант</span>
                   <select value={fLayoutId} onChange={(e) => setFLayoutId(e.target.value)} style={{ width: 280 }}>
                     {(layoutsForStandsQ.data ?? []).map((l) => (
-                      <option key={l.id} value={l.id}>
+                      <option key={l.id} value={l.id} title={l.standsSummary || undefined}>
                         {l.name}
-                        {(l as any).capacitySummary ? ` (${(l as any).capacitySummary})` : ""}
+                        {l.standsSummary ? ` (${l.standsSummary})` : l.capacitySummary ? ` (${l.capacitySummary})` : ""}
                       </option>
                     ))}
                   </select>
@@ -1829,12 +1893,23 @@ export function ReferenceView() {
             ) : null}
 
             {kind === "hangars" ? (
-              <SwitchToggle
-                checked={fIsPhysical}
-                onChange={setFIsPhysical}
-                label="Физический ангар площадки"
-                hint="Выключите для внешнего MRO / стороннего контура (удобно для потребности на Гантте)."
-              />
+              <>
+                <label className="tgField">
+                  <span className="tgFieldLabel">Станция</span>
+                  <TextInput
+                    value={fStation}
+                    onChange={setFStation}
+                    placeholder="SVO / REN"
+                    style={{ width: 220 }}
+                  />
+                </label>
+                <SwitchToggle
+                  checked={fIsPhysical}
+                  onChange={setFIsPhysical}
+                  label="Физический ангар площадки"
+                  hint="Выключите для внешнего MRO / стороннего контура (удобно для потребности на Гантте)."
+                />
+              </>
             ) : null}
 
             <BoolToggle value={fIsActive} onChange={setFIsActive} />
@@ -1904,8 +1979,10 @@ export function ReferenceView() {
             <div className="muted">
               {search
                 ? "Попробуйте изменить запрос или очистить поиск."
-                : canWrite
+                : canMutate
                   ? "Нажмите «Добавить», чтобы создать первую запись."
+                  : isReadOnlyCatalog
+                    ? "Системный справочник — записи только для просмотра."
                   : "Обратитесь к администратору для наполнения справочника."}
             </div>
           </div>
@@ -1980,6 +2057,21 @@ export function ReferenceView() {
                             Тип ВС: <strong>{row.type.icaoType ? `${row.type.icaoType} • ` : ""}{row.type.name}</strong>
                           </span>
                         ) : null}
+                        {kind === "aircraft" && row.manufactureDate ? (
+                          <>
+                            <span className="refLink">
+                              Дата производства: <strong>{formatManufactureDateRu(row.manufactureDate) ?? "—"}</strong>
+                            </span>
+                            <span className="refLink">
+                              Возраст ВС: <strong>{formatAircraftAge(row.manufactureDate) ?? "—"}</strong>
+                            </span>
+                          </>
+                        ) : null}
+                        {kind === "hangars" && row.station ? (
+                          <span className="refLink">
+                            Станция: <strong>{row.station}</strong>
+                          </span>
+                        ) : null}
                         {row.aircraftType?.name ? (
                           <span className="refLink">
                             Тип ВС: <strong>{row.aircraftType.icaoType ? `${row.aircraftType.icaoType} • ` : ""}{row.aircraftType.name}</strong>
@@ -2016,7 +2108,20 @@ export function ReferenceView() {
                             <span className="refLink">Значение: <strong>{row.value} · {row.unit}</strong></span>
                           </>
                         ) : null}
-                        {(row as any).capacitySummary ? (
+                        {kind === "event-statuses" ? (
+                          <>
+                            <span className="refLink">
+                              В форме: <strong>{row.selectable ? "да" : "нет"}</strong>
+                            </span>
+                            <span className="refLink">
+                              Авто «В работе»: <strong>{row.allowsAutoInProgress ? "да" : "нет"}</strong>
+                            </span>
+                            {row.isSystem ? <span className="refLink">Системный</span> : null}
+                          </>
+                        ) : null}
+                        {(row as any).standsSummary ? (
+                          <span className="refLink">Места: <strong>{(row as any).standsSummary}</strong></span>
+                        ) : (row as any).capacitySummary ? (
                           <span className="refLink">Вместимость: <strong>{(row as any).capacitySummary}</strong></span>
                         ) : null}
                         {kind === "stands" ? (
@@ -2085,7 +2190,7 @@ export function ReferenceView() {
                     ) : null}
                     <td className="refActionsColumn">
                       <div className="refRowActions">
-                        {canWrite ? (
+                        {canMutate ? (
                           <>
                             <button className="btn btnGhost refIconButton" onClick={() => openEdit(row)} title="Редактировать" aria-label="Редактировать">
                               <svg viewBox="0 0 24 24" aria-hidden="true">

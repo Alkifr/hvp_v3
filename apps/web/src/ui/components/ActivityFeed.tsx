@@ -3,40 +3,18 @@ import { useQuery } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
 import { apiGet } from "../../lib/api";
+import {
+  ACTIVITY_ACTION_LABEL,
+  extractDiffEntries,
+  formatActionLabel,
+  resolveHistoryValue,
+  type HistoryRefMaps
+} from "../../lib/eventHistoryFormat";
 import { adminActivity, authMyActivity, MyActivityItem, MyActivityResponse } from "../auth/authApi";
 
-type RefMaps = {
-  hangars: Map<string, string>;
-  layouts: Map<string, string>;
-  stands: Map<string, string>;
-  aircraft: Map<string, string>;
-  aircraftTypes: Map<string, string>;
-  eventTypes: Map<string, string>;
-};
+export { ACTIVITY_ACTION_LABEL };
 
-const STATUS_LABEL: Record<string, string> = {
-  DRAFT: "Черновик",
-  PLANNED: "Запланировано",
-  IN_PROGRESS: "В работе",
-  DONE: "Завершено",
-  CANCELLED: "Отменено",
-  DELETED: "Удалено"
-};
-
-const LEVEL_LABEL: Record<string, string> = {
-  STRATEGIC: "Стратегический",
-  OPERATIONAL: "Оперативный"
-};
-
-export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
-  CREATE: "Создание",
-  UPDATE: "Изменение",
-  RESERVE: "Резервирование",
-  UNRESERVE: "Снятие резерва",
-  SANDBOX_CREATE: "Песочница+",
-  SANDBOX_DELETE: "Песочница−",
-  CLEANUP: "Очистка"
-};
+type RefMaps = HistoryRefMaps;
 
 type ActionFilter = "" | MyActivityItem["action"];
 
@@ -51,196 +29,6 @@ const ACTION_FILTERS: ActionFilter[] = [
   "CLEANUP"
 ];
 
-const FIELD_LABEL: Record<string, string> = {
-  title: "Название",
-  level: "Уровень",
-  status: "Статус",
-  aircraftId: "Борт",
-  eventTypeId: "Тип события",
-  startAt: "Начало",
-  endAt: "Окончание",
-  budgetStartAt: "Бюджетное начало",
-  budgetEndAt: "Бюджетное окончание",
-  actualStartAt: "Фактическое начало",
-  actualEndAt: "Фактическое окончание",
-  notes: "Примечание",
-  hangarId: "Ангар",
-  layoutId: "Вариант размещения",
-  standId: "Место"
-};
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-
-function looksLikeIsoDate(v: unknown): boolean {
-  return typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v);
-}
-
-function isUuidLike(v: unknown): boolean {
-  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-}
-
-function formatValue(v: unknown): string {
-  if (v == null || v === "") return "—";
-  if (looksLikeIsoDate(v)) {
-    const d = dayjs(v as string);
-    if (d.isValid()) return d.format("DD.MM.YYYY HH:mm");
-  }
-  if (typeof v === "string") {
-    if (isUuidLike(v)) return v.slice(0, 8) + "…";
-    return v.length > 80 ? v.slice(0, 77) + "…" : v;
-  }
-  if (typeof v === "number" || typeof v === "boolean") return String(v);
-  if (Array.isArray(v)) {
-    if (v.length === 0) return "—";
-    return `[${v.length}]`;
-  }
-  if (isPlainObject(v)) return "{…}";
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
-  }
-}
-
-type DiffEntry = {
-  field: string;
-  rawKey?: string;
-  from?: unknown;
-  to?: unknown;
-  note?: string;
-};
-
-function labelFor(key: string): string {
-  return FIELD_LABEL[key] ?? key;
-}
-
-function diffSnapshots(from: Record<string, unknown>, to: Record<string, unknown>, prefix = ""): DiffEntry[] {
-  const out: DiffEntry[] = [];
-  const keys = new Set<string>([...Object.keys(from ?? {}), ...Object.keys(to ?? {})]);
-  for (const k of keys) {
-    const fv = from?.[k];
-    const tv = to?.[k];
-    if (isPlainObject(fv) || isPlainObject(tv)) {
-      const nestedFrom = isPlainObject(fv) ? fv : {};
-      const nestedTo = isPlainObject(tv) ? tv : {};
-      out.push(...diffSnapshots(nestedFrom, nestedTo, prefix ? `${prefix} › ${labelFor(k)}` : labelFor(k)));
-      continue;
-    }
-    const a = looksLikeIsoDate(fv) ? new Date(fv as string).getTime() : fv;
-    const b = looksLikeIsoDate(tv) ? new Date(tv as string).getTime() : tv;
-    if (a === b) continue;
-    out.push({
-      field: prefix ? `${prefix} › ${labelFor(k)}` : labelFor(k),
-      rawKey: k,
-      from: fv,
-      to: tv
-    });
-  }
-  return out;
-}
-
-function extractDiffEntries(changes: any): DiffEntry[] {
-  if (!changes || typeof changes !== "object") return [];
-  const out: DiffEntry[] = [];
-  const topFrom = isPlainObject(changes.from) ? (changes.from as Record<string, unknown>) : null;
-  const topTo = isPlainObject(changes.to) ? (changes.to as Record<string, unknown>) : null;
-
-  if (topFrom && topTo) {
-    out.push(...diffSnapshots(topFrom, topTo));
-  }
-
-  for (const [k, v] of Object.entries(changes as Record<string, unknown>)) {
-    if (k === "from" || k === "to") continue;
-    if (isPlainObject(v) && "from" in v && "to" in v) {
-      const vv = v as { from?: unknown; to?: unknown };
-      if (isPlainObject(vv.from) || isPlainObject(vv.to)) {
-        out.push(
-          ...diffSnapshots(
-            (isPlainObject(vv.from) ? vv.from : {}) as Record<string, unknown>,
-            (isPlainObject(vv.to) ? vv.to : {}) as Record<string, unknown>,
-            labelFor(k)
-          )
-        );
-      } else {
-        out.push({ field: labelFor(k), rawKey: k, from: vv.from, to: vv.to });
-      }
-      continue;
-    }
-    if (k === "created" && isPlainObject(v)) {
-      for (const [ck, cv] of Object.entries(v)) {
-        if (cv == null || cv === "") continue;
-        out.push({ field: `Создано › ${labelFor(ck)}`, rawKey: ck, to: cv });
-      }
-      continue;
-    }
-    if (k === "tow" && isPlainObject(v)) {
-      if ((v as any).add) out.push({ field: "Буксировка", note: "добавлена" });
-      if ((v as any).delete) out.push({ field: "Буксировка", note: "удалена" });
-      continue;
-    }
-    if (k === "imported" && isPlainObject(v)) {
-      for (const [ik, iv] of Object.entries(v)) {
-        if (iv == null || iv === "") continue;
-        out.push({ field: `Импорт › ${ik}`, note: formatValue(iv) });
-      }
-      continue;
-    }
-    if (k === "dnd" && isPlainObject(v)) {
-      const parts: string[] = [];
-      if ("bumpOnConflict" in v && (v as any).bumpOnConflict) parts.push("вытеснение при конфликте");
-      const bumped = (v as any).bumpedEventIds;
-      if (Array.isArray(bumped) && bumped.length > 0) parts.push(`вытеснено: ${bumped.length}`);
-      if ((v as any).bumpedByEventId) parts.push("событие вытеснено другим");
-      if (parts.length > 0) out.push({ field: "Перенос", note: parts.join(", ") });
-      continue;
-    }
-    if (k === "massPlan" && isPlainObject(v)) {
-      const placed = (v as any).placed;
-      out.push({ field: "Массовое планирование", note: placed ? "размещено" : "черновик" });
-      continue;
-    }
-    if (!isPlainObject(v) && !Array.isArray(v)) {
-      out.push({ field: labelFor(k), rawKey: k, note: formatValue(v) });
-    } else if (isPlainObject(v)) {
-      for (const [nk, nv] of Object.entries(v)) {
-        out.push({ field: `${labelFor(k)} › ${labelFor(nk)}`, rawKey: nk, note: formatValue(nv) });
-      }
-    }
-  }
-
-  return out;
-}
-
-function resolveValue(rawKey: string | undefined, v: unknown, maps: RefMaps): string {
-  if (v == null || v === "") return "—";
-  if (typeof v === "string") {
-    switch (rawKey) {
-      case "aircraftId":
-        return maps.aircraft.get(v) ?? formatValue(v);
-      case "eventTypeId":
-        return maps.eventTypes.get(v) ?? formatValue(v);
-      case "hangarId":
-        return maps.hangars.get(v) ?? formatValue(v);
-      case "layoutId":
-        return maps.layouts.get(v) ?? formatValue(v);
-      case "standId":
-        return maps.stands.get(v) ?? formatValue(v);
-      case "typeId":
-      case "aircraftTypeId":
-        return maps.aircraftTypes.get(v) ?? formatValue(v);
-      case "status":
-        return STATUS_LABEL[v] ?? v;
-      case "level":
-        return LEVEL_LABEL[v] ?? v;
-      default:
-        return formatValue(v);
-    }
-  }
-  return formatValue(v);
-}
-
 function useRefMaps(): RefMaps {
   const hangarsQ = useQuery({
     queryKey: ["ref", "hangars"],
@@ -249,7 +37,7 @@ function useRefMaps(): RefMaps {
   });
   const layoutsQ = useQuery({
     queryKey: ["ref", "layouts"],
-    queryFn: () => apiGet<Array<{ id: string; name: string }>>("/api/ref/layouts"),
+    queryFn: () => apiGet<Array<{ id: string; name: string; hangarId: string }>>("/api/ref/layouts"),
     staleTime: 60_000
   });
   const standsQ = useQuery({
@@ -272,6 +60,11 @@ function useRefMaps(): RefMaps {
     queryFn: () => apiGet<Array<{ id: string; name: string }>>("/api/ref/event-types"),
     staleTime: 60_000
   });
+  const operatorsQ = useQuery({
+    queryKey: ["ref", "operators"],
+    queryFn: () => apiGet<Array<{ id: string; name: string }>>("/api/ref/operators"),
+    staleTime: 60_000
+  });
 
   return useMemo<RefMaps>(() => {
     const m: RefMaps = {
@@ -283,10 +76,14 @@ function useRefMaps(): RefMaps {
       eventTypes: new Map()
     };
     for (const h of hangarsQ.data ?? []) m.hangars.set(h.id, h.name);
-    for (const l of layoutsQ.data ?? []) m.layouts.set(l.id, l.name);
+    for (const l of layoutsQ.data ?? []) {
+      const hangarName = m.hangars.get(l.hangarId);
+      m.layouts.set(l.id, hangarName ? `${hangarName} / ${l.name}` : l.name);
+    }
     for (const s of standsQ.data ?? []) m.stands.set(s.id, s.name ? `${s.code} — ${s.name}` : s.code);
     for (const a of aircraftQ.data ?? []) m.aircraft.set(a.id, a.tailNumber);
     for (const t of aircraftTypesQ.data ?? []) m.aircraftTypes.set(t.id, t.name);
+    m.operators = new Map((operatorsQ.data ?? []).map((operator) => [operator.id, operator.name] as const));
     for (const e of eventTypesQ.data ?? []) m.eventTypes.set(e.id, e.name);
     return m;
   }, [
@@ -295,6 +92,7 @@ function useRefMaps(): RefMaps {
     standsQ.data,
     aircraftQ.data,
     aircraftTypesQ.data,
+    operatorsQ.data,
     eventTypesQ.data
   ]);
 }
@@ -341,7 +139,7 @@ function ActivityItem({
       <div className="profileTimelineBody">
         <div className="profileTimelineHead">
           <span className={`profileActionBadge profileActionBadge_${item.action}`}>
-            {ACTIVITY_ACTION_LABEL[item.action] ?? item.action}
+            {formatActionLabel(item.action, item.changes)}
           </span>
           <span className="profileTimelineTitle">{eventLabel}</span>
           <span className="muted profileTimelineTime" title={when.format("DD.MM.YYYY HH:mm:ss")}>
@@ -363,7 +161,7 @@ function ActivityItem({
           </div>
           {item.reason ? (
             <div className="profileTimelineReason">
-              <span className="muted">Причина: </span>
+              <span className="muted">Комментарий: </span>
               {item.reason}
             </div>
           ) : null}
@@ -379,14 +177,14 @@ function ActivityItem({
                   {hasFrom || hasTo ? (
                     <span className="profileDiffValues">
                       {hasFrom ? (
-                        <span className="profileDiffFrom">{resolveValue(d.rawKey, d.from, maps)}</span>
+                        <span className="profileDiffFrom">{resolveHistoryValue(d.rawKey, d.from, maps)}</span>
                       ) : null}
                       {hasFrom && hasTo ? (
                         <span className="profileDiffArrow" aria-hidden="true">
                           →
                         </span>
                       ) : null}
-                      {hasTo ? <span className="profileDiffTo">{resolveValue(d.rawKey, d.to, maps)}</span> : null}
+                      {hasTo ? <span className="profileDiffTo">{resolveHistoryValue(d.rawKey, d.to, maps)}</span> : null}
                     </span>
                   ) : (
                     <span className="muted">{d.note}</span>

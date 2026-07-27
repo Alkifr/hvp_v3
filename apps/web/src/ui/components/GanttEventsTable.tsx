@@ -3,7 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
 import { apiDelete, apiGet, apiPatch, apiPut } from "../../lib/api";
+import { FIELD_LABEL, resolveHistoryValue, type HistoryRefMaps } from "../../lib/eventHistoryFormat";
+import {
+  DEFAULT_EVENT_STATUS,
+  SELECTABLE_EVENT_STATUSES,
+  STATUS_LABEL,
+  type EventStatusCode
+} from "../../lib/eventStatusCatalog";
 import { SingleSelectDropdown } from "./SingleSelectDropdown";
+import { useActiveSandbox } from "./SandboxSwitcher";
 
 const TABLE_COLS_LS_KEY = "hangarPlanning:ganttTableColumns:v4";
 
@@ -204,6 +212,7 @@ type Layout = {
   hangarId: string;
   code?: string;
   capacitySummary?: string;
+  standsSummary?: string;
   isCompatible?: boolean;
 };
 type Stand = {
@@ -259,7 +268,7 @@ type RowDraft = {
   id: string;
   title: string;
   level: "STRATEGIC" | "OPERATIONAL";
-  status: "DRAFT" | "PLANNED" | "CONFIRMED" | "IN_PROGRESS" | "DONE" | "CANCELLED";
+  status: EventStatusCode;
   planningKind: "PLANNED" | "UNPLANNED";
   aircraftId: string;
   eventTypeId: string;
@@ -279,44 +288,7 @@ type RowDraft = {
   hasVirtualAircraft: boolean;
 };
 
-const FIELD_LABEL: Record<string, string> = {
-  title: "Название",
-  level: "Уровень",
-  status: "Статус",
-  planningKind: "Тип планирования",
-  aircraftId: "Борт",
-  eventTypeId: "Тип события",
-  startAtLocal: "Начало",
-  endAtLocal: "Окончание",
-  budgetStartAtLocal: "Бюджетное начало",
-  budgetEndAtLocal: "Бюджетное окончание",
-  actualStartAtLocal: "Фактическое начало",
-  actualEndAtLocal: "Фактическое окончание",
-  notes: "Примечание",
-  hangarId: "Ангар",
-  workshopId: "Цех",
-  layoutId: "Вариант размещения",
-  standId: "Место",
-  allowOverlap: "Разрешить нахлёст"
-};
-
-const STATUS_OPTIONS: Array<RowDraft["status"]> = [
-  "DRAFT",
-  "PLANNED",
-  "CONFIRMED",
-  "IN_PROGRESS",
-  "DONE",
-  "CANCELLED"
-];
-
-const STATUS_LABEL: Record<string, string> = {
-  DRAFT: "Черновик",
-  PLANNED: "Запланировано",
-  CONFIRMED: "Подтверждено",
-  IN_PROGRESS: "В работе",
-  DONE: "Завершено",
-  CANCELLED: "Отменено"
-};
+const STATUS_OPTIONS: Array<RowDraft["status"]> = [...SELECTABLE_EVENT_STATUSES];
 
 function toInputLocal(v: string | Date | null | undefined): string {
   if (!v) return "";
@@ -350,7 +322,7 @@ function draftFromEvent(ev: GanttTableEvent): RowDraft {
     id: ev.id,
     title: ev.title,
     level: ev.level,
-    status: ((STATUS_OPTIONS as string[]).includes(ev.status) ? ev.status : "PLANNED") as RowDraft["status"],
+    status: ((STATUS_OPTIONS as string[]).includes(ev.status) ? ev.status : DEFAULT_EVENT_STATUS) as RowDraft["status"],
     planningKind: eventPlanningKind(ev),
     aircraftId: ev.aircraft?.id ?? "",
     eventTypeId: ev.eventType?.id ?? "",
@@ -402,6 +374,7 @@ function ConfirmDrawer(props: {
   changeReason: string;
   onChangeReason: (v: string) => void;
   diffs: Array<{ field: string; from: unknown; to: unknown }>;
+  refMaps: HistoryRefMaps;
   error?: string | null;
   pending: boolean;
   onClose: () => void;
@@ -451,11 +424,11 @@ function ConfirmDrawer(props: {
                     <div key={d.field} className="evDiffItem">
                       <span className="evDiffField">{FIELD_LABEL[d.field] ?? d.field}</span>
                       <span className="evDiffValues">
-                        <span className="evDiffFrom">{String(d.from || "—")}</span>
+                        <span className="evDiffFrom">{resolveHistoryValue(d.field, d.from, props.refMaps)}</span>
                         <span className="evDiffArrow" aria-hidden="true">
                           →
                         </span>
-                        <span className="evDiffTo">{String(d.to || "—")}</span>
+                        <span className="evDiffTo">{resolveHistoryValue(d.field, d.to, props.refMaps)}</span>
                       </span>
                     </div>
                   ))}
@@ -507,6 +480,7 @@ export function GanttEventsTable(props: {
   onOpenEvent: (eventId: string) => void;
 }) {
   const qc = useQueryClient();
+  const { active: activeSandbox } = useActiveSandbox();
   const savedCols = useMemo(() => safeReadTableCols(), []);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<RowDraft | null>(null);
@@ -682,6 +656,38 @@ export function GanttEventsTable(props: {
     queryFn: () => apiGet<Stand[]>("/api/ref/stands?activeOnly=1")
   });
 
+  const historyRefMaps = useMemo<HistoryRefMaps>(() => {
+    const hangars = new Map(props.hangars.map((h) => [h.id, h.name] as const));
+    const layouts = new Map<string, string>();
+    for (const l of layoutsQ.data ?? []) {
+      const hangarName = hangars.get(l.hangarId);
+      layouts.set(l.id, hangarName ? `${hangarName} / ${l.name}` : l.name);
+    }
+    const stands = new Map<string, string>();
+    for (const s of standsQ.data ?? []) {
+      stands.set(s.id, s.code?.trim() ? s.code : s.name);
+    }
+    return {
+      hangars,
+      layouts,
+      stands,
+      aircraft: new Map(props.aircraft.map((a) => [a.id, a.tailNumber] as const)),
+      aircraftTypes: new Map(
+        props.aircraftTypes.map((t) => [t.id, t.icaoType ? `${t.icaoType} · ${t.name}` : t.name] as const)
+      ),
+      eventTypes: new Map(props.eventTypes.map((t) => [t.id, t.name] as const)),
+      workshops: new Map(props.workshops.map((w) => [w.id, w.name] as const))
+    };
+  }, [
+    props.hangars,
+    props.aircraft,
+    props.aircraftTypes,
+    props.eventTypes,
+    props.workshops,
+    layoutsQ.data,
+    standsQ.data
+  ]);
+
   const layoutsByHangar = useMemo(() => {
     const m = new Map<string, Layout[]>();
     for (const l of layoutsQ.data ?? []) {
@@ -790,6 +796,10 @@ export function GanttEventsTable(props: {
     try {
       validateDraft(draft);
       setLocalError(null);
+      if (activeSandbox) {
+        saveM.mutate();
+        return;
+      }
       setConfirmOpen(true);
     } catch (e: any) {
       setLocalError(String(e?.message ?? e));
@@ -801,7 +811,7 @@ export function GanttEventsTable(props: {
       if (!draft || !original) throw new Error("Нет черновика");
       validateDraft(draft);
       const reason = changeReason.trim();
-      if (!reason) throw new Error("Укажите причину изменения");
+      if (!activeSandbox && !reason) throw new Error("Укажите причину изменения");
 
       const startAt = dayjs(draft.startAtLocal).second(0).millisecond(0).toISOString();
       const endAt = dayjs(draft.endAtLocal).second(0).millisecond(0).toISOString();
@@ -844,7 +854,7 @@ export function GanttEventsTable(props: {
         actualEndAt,
         notes: draft.notes.trim() ? draft.notes : null,
         allowOverlap: draft.allowOverlap,
-        changeReason: reason
+        ...(reason ? { changeReason: reason } : {})
       };
 
       if (draft.aircraftId) payload.aircraftId = draft.aircraftId;
@@ -868,7 +878,7 @@ export function GanttEventsTable(props: {
             layoutId: draft.layoutId,
             standId: draft.standId,
             allowOverlap: draft.allowOverlap,
-            changeReason: reason
+            ...(reason ? { changeReason: reason } : {})
           });
         } else if (original.standId) {
           await apiDelete(`/api/reservations/by-event/${draft.id}`);
@@ -1274,9 +1284,9 @@ export function GanttEventsTable(props: {
           >
             <option value="">— не задан —</option>
             {ctx.layoutOptions.map((l) => (
-              <option key={l.id} value={l.id}>
+              <option key={l.id} value={l.id} title={l.standsSummary || undefined}>
                 {l.name}
-                {l.capacitySummary ? ` — ${l.capacitySummary}` : ""}
+                {l.standsSummary ? ` — ${l.standsSummary}` : l.capacitySummary ? ` — ${l.capacitySummary}` : ""}
               </option>
             ))}
           </select>
@@ -1526,6 +1536,7 @@ export function GanttEventsTable(props: {
         changeReason={changeReason}
         onChangeReason={setChangeReason}
         diffs={diffs}
+        refMaps={historyRefMaps}
         error={localError}
         pending={saveM.isPending}
         onClose={() => {

@@ -3,9 +3,13 @@ import { ReportShareRole } from "@prisma/client";
 import { z } from "zod";
 
 import { assertPermission } from "../lib/rbac.js";
+import { PRIMARY_TABLE_COLUMNS } from "../lib/primaryTable/columnCatalog.generated.js";
+import { queryPrimaryTable } from "../lib/primaryTable/queryService.js";
 import { zDateTime, zUuid } from "../lib/zod.js";
+import { sandboxIdFor } from "../plugins/sandbox.js";
 
 export type ReportDataset =
+  | "primary_events"
   | "tat_events"
   | "util_hangars"
   | "util_timeline"
@@ -13,11 +17,33 @@ export type ReportDataset =
   | "compare_hangars"
   | "compare_events";
 
+/** Тестовый статус мэппинга колонки XLSX → HVP. */
+export type ReportFieldMappingStatus = "mapped" | "unmapped" | "stub";
+
 export type ReportFieldDef = {
   key: string;
   label: string;
   type: "string" | "number" | "datetime";
+  group?: string | null;
+  subgroup?: string | null;
+  availability?: "available" | "computed" | "planned";
+  excelColumn?: string;
+  /** Тестовая пометка мэппинга: смэпплено / не смэпплено / заглушка. */
+  mappingStatus?: ReportFieldMappingStatus;
 };
+
+function primaryMappingStatus(column: (typeof PRIMARY_TABLE_COLUMNS)[number]): ReportFieldMappingStatus {
+  if (!column.source || column.availability === "planned") return "unmapped";
+  if (
+    column.source.includes("EventReportMetric") ||
+    column.source.includes("EventReportScalar") ||
+    column.source.startsWith("EventPtoRollingEntry") ||
+    column.source.startsWith("EventACheckAnalysis")
+  ) {
+    return "stub";
+  }
+  return "mapped";
+}
 
 export type ReportConfig = {
   dataset: ReportDataset;
@@ -45,6 +71,11 @@ export type ReportConfig = {
 };
 
 const DATASETS: Array<{ id: ReportDataset; label: string; description: string }> = [
+  {
+    id: "primary_events",
+    label: "Первичная таблица",
+    description: "190 реквизитов планирования, факта, трудоёмкости, стоимости и аналитических срезов"
+  },
   {
     id: "tat_events",
     label: "TAT · события",
@@ -78,6 +109,21 @@ const DATASETS: Array<{ id: ReportDataset; label: string; description: string }>
 ];
 
 const FIELDS: Record<ReportDataset, ReportFieldDef[]> = {
+  primary_events: PRIMARY_TABLE_COLUMNS.map((column) => ({
+    key: column.key,
+    label: column.label,
+    type:
+      column.type === "date" || column.type === "datetime"
+        ? "datetime"
+        : ["number", "integer", "percent", "currency"].includes(column.type)
+          ? "number"
+          : "string",
+    group: column.group,
+    subgroup: column.subgroup,
+    availability: column.availability,
+    excelColumn: column.excelColumn,
+    mappingStatus: primaryMappingStatus(column)
+  })),
   tat_events: [
     { key: "aircraft", label: "Борт", type: "string" },
     { key: "title", label: "Событие", type: "string" },
@@ -156,6 +202,7 @@ const FIELDS: Record<ReportDataset, ReportFieldDef[]> = {
 };
 
 const DEFAULT_FIELDS: Record<ReportDataset, string[]> = {
+  primary_events: ["primary.g", "primary.h", "primary.k", "primary.y", "primary.z", "primary.af", "primary.ai"],
   tat_events: ["aircraft", "title", "eventType", "hangar", "planTatH", "actualTatH", "tatVarianceH", "deviationLabels"],
   util_hangars: ["hangarName", "utilizationPct", "capacityUtilizationPct", "occupiedH", "idleH", "aircraftHours"],
   util_timeline: ["label", "aircraftHours", "standUtilizationPct", "capacityUtilizationPct", "idleH"],
@@ -166,6 +213,7 @@ const DEFAULT_FIELDS: Record<ReportDataset, string[]> = {
 
 const zReportConfig = z.object({
   dataset: z.enum([
+    "primary_events",
     "tat_events",
     "util_hangars",
     "util_timeline",
@@ -602,7 +650,36 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
     const fieldDefs = FIELDS[config.dataset];
     let rawRows: Array<Record<string, any>> = [];
 
-    if (config.dataset === "tat_events") {
+    if (config.dataset === "primary_events") {
+      const result = await queryPrimaryTable(app, sandboxIdFor(req), {
+        from: period.from,
+        to: period.to,
+        fields: config.fields,
+        conditions: config.filters.conditions ?? [],
+        sort: config.sort,
+        limit: 200
+      });
+      return {
+        ok: true as const,
+        dataset: config.dataset,
+        period: { from: period.from.toISOString(), to: period.to.toISOString() },
+        columns: result.columns.map((column) => ({
+          key: column.key,
+          label: column.label,
+          group: column.group,
+          subgroup: column.subgroup,
+          type:
+            column.type === "date" || column.type === "datetime"
+              ? "datetime"
+              : ["number", "integer", "percent", "currency"].includes(column.type)
+                ? "number"
+                : "string"
+        })),
+        rows: result.rows,
+        total: result.totalEstimate,
+        nextCursor: result.nextCursor
+      };
+    } else if (config.dataset === "tat_events") {
       const data = await fetchJson(app, req, `/api/analytics/tat-variance?from=${fromQ}&to=${toQ}`);
       rawRows = (data.rows ?? []).map((r: any) => ({
         ...r,

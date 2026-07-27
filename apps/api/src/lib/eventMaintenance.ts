@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { EventStatus } from "@prisma/client";
+import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
 
 import { isEventOverdueNoFact, reconcileEventStatus } from "./eventStatus.js";
+import { emitStatusChangeNotifications } from "./eventStatusNotifications.js";
 
 const KIND_OVERDUE = "EVENT_OVERDUE_NO_FACT";
 
@@ -15,6 +16,10 @@ function aircraftLabel(ev: {
   const virt = ev.virtualAircraft as { label?: string } | null;
   if (virt?.label) return String(virt.label);
   return ev.title;
+}
+
+function isoOrNull(v: Date | null | undefined): string | null {
+  return v ? v.toISOString() : null;
 }
 
 /**
@@ -54,6 +59,7 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
 
   let statusUpdated = 0;
   let notificationsCreated = 0;
+  const auditRows: Prisma.MaintenanceEventAuditCreateManyInput[] = [];
 
   for (const ev of events) {
     const reconciled = reconcileEventStatus({
@@ -65,12 +71,13 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
       now
     });
 
-    if (
-      reconciled.statusChanged ||
-      reconciled.actualFilledFromOper ||
-      (reconciled.actualStartAt?.valueOf() ?? null) !== (ev.actualStartAt?.valueOf() ?? null) ||
-      (reconciled.actualEndAt?.valueOf() ?? null) !== (ev.actualEndAt?.valueOf() ?? null)
-    ) {
+    const statusChanged = reconciled.status !== ev.status;
+    const actualStartChanged =
+      (reconciled.actualStartAt?.valueOf() ?? null) !== (ev.actualStartAt?.valueOf() ?? null);
+    const actualEndChanged =
+      (reconciled.actualEndAt?.valueOf() ?? null) !== (ev.actualEndAt?.valueOf() ?? null);
+
+    if (reconciled.statusChanged || reconciled.actualFilledFromOper || actualStartChanged || actualEndChanged) {
       await app.prisma.maintenanceEvent.update({
         where: { id: ev.id },
         data: {
@@ -80,7 +87,49 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
         }
       });
       statusUpdated += 1;
+
+      const changes: Record<string, { from: string | null; to: string | null }> = {};
+      if (statusChanged) {
+        changes.status = { from: ev.status, to: reconciled.status };
+      }
+      if (actualStartChanged) {
+        changes.actualStartAt = {
+          from: isoOrNull(ev.actualStartAt),
+          to: isoOrNull(reconciled.actualStartAt)
+        };
+      }
+      if (actualEndChanged) {
+        changes.actualEndAt = {
+          from: isoOrNull(ev.actualEndAt),
+          to: isoOrNull(reconciled.actualEndAt)
+        };
+      }
+      if (Object.keys(changes).length > 0) {
+        auditRows.push({
+          eventId: ev.id,
+          sandboxId: ev.sandboxId,
+          action: EventAuditAction.UPDATE,
+          actor: "system",
+          reason: "Автостатус",
+          changes
+        });
+      }
+
+      if (statusChanged) {
+        notificationsCreated += await emitStatusChangeNotifications(app.prisma, {
+          eventId: ev.id,
+          sandboxId: ev.sandboxId,
+          title: ev.title,
+          fromStatus: ev.status,
+          toStatus: reconciled.status,
+          aircraft: ev.aircraft,
+          virtualAircraft: ev.virtualAircraft
+        });
+      }
     }
+
+    // Уведомления в колокольчик — только для рабочего контура (не для песочниц).
+    if (ev.sandboxId != null) continue;
 
     const statusForOverdue = reconciled.status;
     if (
@@ -102,7 +151,7 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
             title: "Событие без факта после опер. окончания",
             body: `${label}: «${ev.title}» — оперативный период закончился, факт не заполнен.`,
             eventId: ev.id,
-            sandboxId: ev.sandboxId,
+            sandboxId: null,
             dedupeKey
           }
         ],
@@ -110,6 +159,10 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
       });
       if (created.count > 0) notificationsCreated += 1;
     }
+  }
+
+  if (auditRows.length > 0) {
+    await app.prisma.maintenanceEventAudit.createMany({ data: auditRows });
   }
 
   return { statusUpdated, notificationsCreated };

@@ -194,892 +194,981 @@
     {
       "id": "3711db8a-a69a-4b6d-96ce-15ebbe3b8817",
       "tailNumber": "RA-73095",
-      "serialNumber": null,
+      "serialNumber": "41217",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:10.605Z",
-      "updatedAt": "2026-02-03T18:06:10.605Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-03-18T00:00:00.000Z"
     },
     {
       "id": "0b2f3dbc-3dba-4f70-8339-3ddb0cd0300c",
       "tailNumber": "RA-73100",
-      "serialNumber": null,
+      "serialNumber": "44440",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:10.605Z",
-      "updatedAt": "2026-02-03T18:06:10.605Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-10-05T00:00:00.000Z"
     },
     {
       "id": "ad436250-374b-4e29-985a-82c3e06babfb",
       "tailNumber": "RA-73102",
-      "serialNumber": null,
+      "serialNumber": "41243",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:10.605Z",
-      "updatedAt": "2026-02-03T18:06:10.605Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-11-13T00:00:00.000Z"
     },
     {
       "id": "3d317c94-3038-451d-864a-247407584c2a",
       "tailNumber": "RA-73107",
-      "serialNumber": null,
+      "serialNumber": "44439",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:10.605Z",
-      "updatedAt": "2026-02-03T18:06:10.605Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-04-05T00:00:00.000Z"
     },
     {
       "id": "262ae2e2-e212-467d-b73e-363425f51e57",
       "tailNumber": "RA-73108",
-      "serialNumber": null,
+      "serialNumber": "41233",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:10.605Z",
-      "updatedAt": "2026-02-03T18:06:10.605Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-07-06T00:00:00.000Z"
     },
     {
       "id": "04350001-6f40-4f74-8f6d-c91625fbbc9b",
       "tailNumber": "RA-73111",
-      "serialNumber": null,
+      "serialNumber": "44432",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:10.605Z",
-      "updatedAt": "2026-02-03T18:06:10.605Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-05-30T00:00:00.000Z"
     },
     {
       "id": "f023bc38-87b9-427c-8b9a-b637d98d78b9",
       "tailNumber": "RA-73112",
-      "serialNumber": null,
+      "serialNumber": "41200",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:10.605Z",
-      "updatedAt": "2026-02-03T18:06:10.605Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-08-21T00:00:00.000Z"
     },
     {
       "id": "f96a7abd-d924-4521-b36b-ab39c5b7155a",
       "tailNumber": "RA-73124",
-      "serialNumber": null,
+      "serialNumber": "41209",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:10.605Z",
-      "updatedAt": "2026-02-03T18:06:10.605Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-06-16T00:00:00.000Z"
     },
     {
       "id": "c231bd66-b44e-42c4-b6f2-73c268e6b435",
       "tailNumber": "RA-73130",
-      "serialNumber": null,
+      "serialNumber": "41688",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-01-23T00:00:00.000Z"
     },
     {
       "id": "a82b3f45-1db7-4b69-a609-d9ece88759d2",
       "tailNumber": "RA-73131",
-      "serialNumber": null,
+      "serialNumber": "41682",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-02-28T00:00:00.000Z"
     },
     {
       "id": "09c18665-7898-49ba-adb0-e469cddd2c70",
       "tailNumber": "RA-73132",
-      "serialNumber": null,
+      "serialNumber": "41683",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-03-17T00:00:00.000Z"
     },
     {
       "id": "790c8a9a-3ff4-4ca8-bf8a-20bb95df2483",
       "tailNumber": "RA-73133",
-      "serialNumber": null,
+      "serialNumber": "41684",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-04-17T00:00:00.000Z"
     },
     {
       "id": "78b14b92-f7a7-4d75-bf0c-fba7e6ab1f81",
       "tailNumber": "RA-73134",
-      "serialNumber": null,
+      "serialNumber": "41689",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-05-07T00:00:00.000Z"
     },
     {
       "id": "f0afd84c-e6f9-44f1-acc2-c8863d77e4fc",
       "tailNumber": "RA-73135",
-      "serialNumber": null,
+      "serialNumber": "41685",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-02-16T00:00:00.000Z"
     },
     {
       "id": "2de757f9-29ca-4be1-aae8-6039e8bd7416",
       "tailNumber": "RA-73136",
-      "serialNumber": null,
+      "serialNumber": "41687",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-12-18T00:00:00.000Z"
     },
     {
       "id": "b076eb86-56ee-4283-8736-fee35adfde68",
       "tailNumber": "RA-73140",
-      "serialNumber": null,
+      "serialNumber": "41679",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-12-13T00:00:00.000Z"
     },
     {
       "id": "3ed48e9e-6f72-4649-b385-c5667cc43c2d",
       "tailNumber": "RA-73144",
-      "serialNumber": null,
+      "serialNumber": "41690",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-04-02T00:00:00.000Z"
     },
     {
       "id": "6ee194e0-a06d-4e48-88e5-ceb4a590779e",
       "tailNumber": "RA-73148",
-      "serialNumber": null,
+      "serialNumber": "41691",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:06:48.322Z",
-      "updatedAt": "2026-02-03T18:06:48.322Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-04-21T00:00:00.000Z"
     },
     {
       "id": "7f676981-d924-470e-8697-54b2eb1cf6b0",
       "tailNumber": "RA-73151",
-      "serialNumber": null,
+      "serialNumber": "441",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "9ae9b84f-5d2a-4197-9527-9249a5ffdac6",
       "isActive": true,
       "createdAt": "2026-02-03T18:13:21.396Z",
-      "updatedAt": "2026-02-03T18:13:21.396Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2021-05-27T00:00:00.000Z"
     },
     {
       "id": "fd89ea5b-c648-44e9-8894-1fa7f516f126",
       "tailNumber": "RA-73152",
-      "serialNumber": null,
+      "serialNumber": "437",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "9ae9b84f-5d2a-4197-9527-9249a5ffdac6",
       "isActive": true,
       "createdAt": "2026-02-03T18:13:21.396Z",
-      "updatedAt": "2026-02-03T18:13:21.396Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2021-03-05T00:00:00.000Z"
     },
     {
       "id": "d1098994-2feb-4d8e-8b37-5db36de9ae60",
       "tailNumber": "RA-73153",
-      "serialNumber": null,
+      "serialNumber": "429",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "9ae9b84f-5d2a-4197-9527-9249a5ffdac6",
       "isActive": true,
       "createdAt": "2026-02-03T18:13:21.396Z",
-      "updatedAt": "2026-02-03T18:13:21.396Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2020-12-18T00:00:00.000Z"
     },
     {
       "id": "893178fe-0781-4ec8-87c1-836d17ac4272",
       "tailNumber": "RA-73155",
-      "serialNumber": null,
+      "serialNumber": "414",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "9ae9b84f-5d2a-4197-9527-9249a5ffdac6",
       "isActive": true,
       "createdAt": "2026-02-03T18:13:21.396Z",
-      "updatedAt": "2026-02-03T18:13:21.396Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2020-05-04T00:00:00.000Z"
     },
     {
       "id": "456761f9-ab41-478d-beb1-4632d58d50c3",
       "tailNumber": "RA-73156",
-      "serialNumber": null,
+      "serialNumber": "466",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "9ae9b84f-5d2a-4197-9527-9249a5ffdac6",
       "isActive": true,
       "createdAt": "2026-02-03T18:13:21.396Z",
-      "updatedAt": "2026-02-03T18:13:21.396Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2022-01-21T00:00:00.000Z"
     },
     {
       "id": "225ae0f2-71ff-459d-b78b-3448169b22ad",
       "tailNumber": "RA-73159",
-      "serialNumber": null,
+      "serialNumber": "1299",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-03-06T00:00:00.000Z"
     },
     {
       "id": "6311115b-7fe9-4ee3-9877-3869c8d38ef8",
       "tailNumber": "RA-73160",
-      "serialNumber": null,
+      "serialNumber": "5881",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-11-18T00:00:00.000Z"
     },
     {
       "id": "7286f059-1497-4637-b0fe-3cac40e13618",
       "tailNumber": "RA-73161",
-      "serialNumber": null,
+      "serialNumber": "8205",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-03-15T00:00:00.000Z"
     },
     {
       "id": "75d98ff0-1035-45f2-b531-7ad624a22659",
       "tailNumber": "RA-73163",
-      "serialNumber": null,
+      "serialNumber": "5790",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-10-18T00:00:00.000Z"
     },
     {
       "id": "470cd024-27bf-4509-82f4-6728c9478515",
       "tailNumber": "RA-73164",
-      "serialNumber": null,
+      "serialNumber": "5913",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-12-11T00:00:00.000Z"
     },
     {
       "id": "c8100371-735a-4a8e-b3b5-f83b393af358",
       "tailNumber": "RA-73165",
-      "serialNumber": null,
+      "serialNumber": "5720",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-07-24T00:00:00.000Z"
     },
     {
       "id": "d3a0098c-44a1-4ca4-86fc-7ad9e66312df",
       "tailNumber": "RA-73167",
-      "serialNumber": null,
+      "serialNumber": "8418",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-11-07T00:00:00.000Z"
     },
     {
       "id": "8d311f6a-f64b-4cd0-ad39-3bb4dcfa0b79",
       "tailNumber": "RA-73169",
-      "serialNumber": null,
+      "serialNumber": "8452",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-09-18T00:00:00.000Z"
     },
     {
       "id": "bdc57d7e-75be-455f-abca-e44c5b1bd939",
       "tailNumber": "RA-73170",
-      "serialNumber": null,
+      "serialNumber": "7279",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-08-24T00:00:00.000Z"
     },
     {
       "id": "198343a6-70cf-4957-86f3-13b52f8bf52d",
       "tailNumber": "RA-73171",
-      "serialNumber": null,
+      "serialNumber": "7038",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-03-07T00:00:00.000Z"
     },
     {
       "id": "2a717d77-0c55-4b02-9910-f71f078460a2",
       "tailNumber": "RA-73175",
-      "serialNumber": null,
+      "serialNumber": "6963",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-01-19T00:00:00.000Z"
     },
     {
       "id": "aedd2188-d804-44a4-843c-2bd430621a1d",
       "tailNumber": "RA-73176",
-      "serialNumber": null,
+      "serialNumber": "4712",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2011-05-09T00:00:00.000Z"
     },
     {
       "id": "2d9d5b6a-41ad-4afc-a87a-1cdfc8a632c5",
       "tailNumber": "RA-73177",
-      "serialNumber": null,
+      "serialNumber": "8378",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-07-11T00:00:00.000Z"
     },
     {
       "id": "bda39ce2-8e9c-4fb1-ba79-a680a79edd43",
       "tailNumber": "RA-73178",
-      "serialNumber": null,
+      "serialNumber": "8147",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-02-16T00:00:00.000Z"
     },
     {
       "id": "ea3860e2-6256-4d0c-aa54-293ed2c17462",
       "tailNumber": "RA-73179",
-      "serialNumber": null,
+      "serialNumber": "6954",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-01-22T00:00:00.000Z"
     },
     {
       "id": "ad48c239-16b8-4c8a-9d08-c9e63f5cbad6",
       "tailNumber": "RA-73180",
-      "serialNumber": null,
+      "serialNumber": "7240",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-07-15T00:00:00.000Z"
     },
     {
       "id": "a41f6184-bfc0-4c6c-983b-04bb9e6b1560",
       "tailNumber": "RA-73188",
-      "serialNumber": null,
+      "serialNumber": "34900",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:14:04.868Z",
-      "updatedAt": "2026-02-03T18:14:04.868Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2007-01-19T00:00:00.000Z"
     },
     {
       "id": "a9c4c0fe-559a-4acf-9b57-c2ffef38f8c9",
       "tailNumber": "RA-73192",
-      "serialNumber": null,
+      "serialNumber": "34897",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:14:04.868Z",
-      "updatedAt": "2026-02-03T18:14:04.868Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2006-09-24T00:00:00.000Z"
     },
     {
       "id": "5ac551a7-1207-45a4-a447-80435e97837f",
       "tailNumber": "RA-73193",
-      "serialNumber": null,
+      "serialNumber": "33602",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "eb828ec6-ad64-4b5f-9e2e-3d1e2557c2a4",
       "isActive": true,
       "createdAt": "2026-02-03T18:14:04.868Z",
-      "updatedAt": "2026-02-03T18:14:04.868Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2006-11-03T00:00:00.000Z"
     },
     {
       "id": "de41bd46-c5bd-4fd8-ae6c-8f0259ad8f64",
       "tailNumber": "RA-73276",
-      "serialNumber": null,
+      "serialNumber": "32710",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:06.018Z",
-      "updatedAt": "2026-02-03T18:15:06.018Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2006-05-31T00:00:00.000Z"
     },
     {
       "id": "06431c18-f442-4a83-a0ce-204d16e49187",
       "tailNumber": "RA-73277",
-      "serialNumber": null,
+      "serialNumber": "32715",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "0b0c471b-63ff-4264-907f-146605c9a985",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:06.018Z",
-      "updatedAt": "2026-02-03T18:15:06.018Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2006-08-14T00:00:00.000Z"
     },
     {
       "id": "8848ce5c-d378-4162-92dc-b3835fb1040c",
       "tailNumber": "RA-73289",
-      "serialNumber": null,
+      "serialNumber": "27648",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "8f45ae44-a3aa-4ad1-923f-ecf29c3df02a",
       "isActive": true,
       "createdAt": "2026-02-03T18:14:47.059Z",
-      "updatedAt": "2026-02-03T18:14:47.059Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2000-08-05T00:00:00.000Z"
     },
     {
       "id": "e5e8ef86-bdd0-4fa1-bafc-06c5e690ab3b",
       "tailNumber": "RA-73700",
-      "serialNumber": null,
+      "serialNumber": "1264",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2011-09-28T00:00:00.000Z"
     },
     {
       "id": "d9671ebf-ca94-4074-a742-7578bc6069df",
       "tailNumber": "RA-73701",
-      "serialNumber": null,
+      "serialNumber": "1284",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-01-11T00:00:00.000Z"
     },
     {
       "id": "d5ba7a7c-3924-4dbc-b1af-47fbecdb8820",
       "tailNumber": "RA-73702",
-      "serialNumber": null,
+      "serialNumber": "1301",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-03-22T00:00:00.000Z"
     },
     {
       "id": "0caa9b71-d762-4f47-adbe-8a05792bba85",
       "tailNumber": "RA-73706",
-      "serialNumber": null,
+      "serialNumber": "4058",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2009-10-05T00:00:00.000Z"
     },
     {
       "id": "48026e3f-6603-4210-840a-986506c47200",
       "tailNumber": "RA-73707",
-      "serialNumber": null,
+      "serialNumber": "4074",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2009-10-20T00:00:00.000Z"
     },
     {
       "id": "199907db-2c1c-4fa4-b802-c6b864580207",
       "tailNumber": "RA-73708",
-      "serialNumber": null,
+      "serialNumber": "4116",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2009-11-25T00:00:00.000Z"
     },
     {
       "id": "94b69bd7-f8b0-4a2e-9abc-5851314eae0c",
       "tailNumber": "RA-73715",
-      "serialNumber": null,
+      "serialNumber": "7072",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-04-07T00:00:00.000Z"
     },
     {
       "id": "b8cd836e-62f2-441c-a137-43e60bed3319",
       "tailNumber": "RA-73716",
-      "serialNumber": null,
+      "serialNumber": "7084",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-04-18T00:00:00.000Z"
     },
     {
       "id": "bd70a383-8bae-45f8-aa1c-9a9a19196ba7",
       "tailNumber": "RA-73717",
-      "serialNumber": null,
+      "serialNumber": "7137",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-05-31T00:00:00.000Z"
     },
     {
       "id": "1e866cef-d944-4482-8fbe-908a0e1b55a7",
       "tailNumber": "RA-73718",
-      "serialNumber": null,
+      "serialNumber": "7193",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-07-05T00:00:00.000Z"
     },
     {
       "id": "9673d9ab-805d-4aff-a509-6539650cca0d",
       "tailNumber": "RA-73719",
-      "serialNumber": null,
+      "serialNumber": "7202",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-07-21T00:00:00.000Z"
     },
     {
       "id": "ad2619af-2792-4a10-8e11-d24cb0a78e70",
       "tailNumber": "RA-73720",
-      "serialNumber": null,
+      "serialNumber": "7255",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-08-17T00:00:00.000Z"
     },
     {
       "id": "9e38d57c-7077-49b4-84e5-0aa42d365d00",
       "tailNumber": "RA-73721",
-      "serialNumber": null,
+      "serialNumber": "7300",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-06-19T00:00:00.000Z"
     },
     {
       "id": "2130413c-fbdd-429e-aa2e-ff9d7fa6e1fd",
       "tailNumber": "RA-73722",
-      "serialNumber": null,
+      "serialNumber": "7645",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-04-11T00:00:00.000Z"
     },
     {
       "id": "a57f6b35-97d9-42f6-9805-a49572f551c2",
       "tailNumber": "RA-73724",
-      "serialNumber": null,
+      "serialNumber": "7678",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-05-11T00:00:00.000Z"
     },
     {
       "id": "48dd6570-ff2c-479d-bd48-85d8f286e95e",
       "tailNumber": "RA-73729",
-      "serialNumber": null,
+      "serialNumber": "7934",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "508208d9-6c65-4f4e-a6b1-1fc22ca58f2d",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:57.063Z",
-      "updatedAt": "2026-02-03T18:10:57.063Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-01-29T00:00:00.000Z"
     },
     {
       "id": "b6386b98-6c66-4ce7-80ec-9a65fdf0deff",
       "tailNumber": "RA-73732",
-      "serialNumber": null,
+      "serialNumber": "10180",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "f9604d55-ea32-4ff0-93eb-1960e710d8ac",
       "isActive": true,
       "createdAt": "2026-02-03T18:10:07.476Z",
-      "updatedAt": "2026-02-03T18:10:07.476Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2021-01-19T00:00:00.000Z"
     },
     {
       "id": "5d4743dd-b5a7-4aec-813d-6c1ad56dcd6e",
       "tailNumber": "RA-73738",
-      "serialNumber": null,
+      "serialNumber": "4453",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2010-10-01T00:00:00.000Z"
     },
     {
       "id": "68fd95b4-cbbb-492a-a1e8-4789e30439b0",
       "tailNumber": "RA-73740",
-      "serialNumber": null,
+      "serialNumber": "4579",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2011-01-25T00:00:00.000Z"
     },
     {
       "id": "901c989f-9b3e-4819-ad0e-1d95e2f8015a",
       "tailNumber": "RA-73743",
-      "serialNumber": null,
+      "serialNumber": "4684",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2011-04-19T00:00:00.000Z"
     },
     {
       "id": "ee44d5b9-659d-48c5-87ff-b9bc40d062e2",
       "tailNumber": "RA-73744",
-      "serialNumber": null,
+      "serialNumber": "4835",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2011-09-05T00:00:00.000Z"
     },
     {
       "id": "2d1d3c18-23bb-421e-9e68-d5554db5534a",
       "tailNumber": "RA-73745",
-      "serialNumber": null,
+      "serialNumber": "5421",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-12-19T00:00:00.000Z"
     },
     {
       "id": "a861de6a-220b-44f3-9f69-a88eb4149b49",
       "tailNumber": "RA-73746",
-      "serialNumber": null,
+      "serialNumber": "5536",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-02-27T00:00:00.000Z"
     },
     {
       "id": "e0f13dbd-18b1-40f4-986d-f880a7872c66",
       "tailNumber": "RA-73748",
-      "serialNumber": null,
+      "serialNumber": "5572",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-03-20T00:00:00.000Z"
     },
     {
       "id": "5f0215f2-9957-4e40-9c8a-49ffd802a79f",
       "tailNumber": "RA-73750",
-      "serialNumber": null,
+      "serialNumber": "5580",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-04-24T00:00:00.000Z"
     },
     {
       "id": "07cdbf36-672d-402a-ad93-3a82490b18e6",
       "tailNumber": "RA-73752",
-      "serialNumber": null,
+      "serialNumber": "5585",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-04-02T00:00:00.000Z"
     },
     {
       "id": "0e836ed0-2b59-42f7-a4bb-c346747ed7f9",
       "tailNumber": "RA-73753",
-      "serialNumber": null,
+      "serialNumber": "5614",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-04-18T00:00:00.000Z"
     },
     {
       "id": "97d39fd5-b8a8-4a29-896a-08d7a695a97c",
       "tailNumber": "RA-73754",
-      "serialNumber": null,
+      "serialNumber": "5873",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-11-15T00:00:00.000Z"
     },
     {
       "id": "0b163af8-c987-492f-bbdd-8bb2820e11f7",
       "tailNumber": "RA-73759",
-      "serialNumber": null,
+      "serialNumber": "6043",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-03-14T00:00:00.000Z"
     },
     {
       "id": "9406056d-c656-42f9-b5e1-8016a6aabb03",
       "tailNumber": "RA-73762",
-      "serialNumber": null,
+      "serialNumber": "6071",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-05-05T00:00:00.000Z"
     },
     {
       "id": "7436cc89-f8de-499b-bc17-41196213fe9e",
       "tailNumber": "RA-73764",
-      "serialNumber": null,
+      "serialNumber": "7275",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-09-02T00:00:00.000Z"
     },
     {
       "id": "ab348f55-d68f-40f6-b5bc-166b29b2acfe",
       "tailNumber": "RA-73765",
-      "serialNumber": null,
+      "serialNumber": "7295",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-09-06T00:00:00.000Z"
     },
     {
       "id": "1c499314-7040-4436-ac9b-61cd2d2f8b39",
       "tailNumber": "RA-73776",
-      "serialNumber": null,
+      "serialNumber": "7932",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-11-02T00:00:00.000Z"
     },
     {
       "id": "b659d65c-22fa-4bb3-a3a6-1844aa1d615c",
       "tailNumber": "RA-73778",
-      "serialNumber": null,
+      "serialNumber": "8073",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-01-26T00:00:00.000Z"
     },
     {
       "id": "75d237ef-603f-4b5c-addb-61bcf417a345",
       "tailNumber": "RA-73779",
-      "serialNumber": null,
+      "serialNumber": "8133",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-02-21T00:00:00.000Z"
     },
     {
       "id": "a267db8e-2fb2-428d-9690-5523f89a2a94",
       "tailNumber": "RA-73780",
-      "serialNumber": null,
+      "serialNumber": "8188",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-03-15T00:00:00.000Z"
     },
     {
       "id": "0fc3cd3a-b97d-4658-b745-394f707a2e03",
       "tailNumber": "RA-73781",
-      "serialNumber": null,
+      "serialNumber": "8201",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "2eca06db-eb30-4d2d-9612-f898af46a7f7",
       "isActive": true,
       "createdAt": "2026-02-03T18:07:37.530Z",
-      "updatedAt": "2026-02-03T18:07:37.530Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-03-23T00:00:00.000Z"
     },
     {
       "id": "86a50e25-f1e3-437e-b578-0ac300c7023c",
       "tailNumber": "RA-73782",
-      "serialNumber": null,
+      "serialNumber": "1232",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2011-05-26T00:00:00.000Z"
     },
     {
       "id": "5ca1d7ee-5551-4a4c-82a8-2752e8ec6883",
       "tailNumber": "RA-73783",
-      "serialNumber": null,
+      "serialNumber": "1247",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2011-07-22T00:00:00.000Z"
     },
     {
       "id": "3bea8b31-3744-423d-a4be-27fe8e1210cd",
       "tailNumber": "RA-73784",
-      "serialNumber": null,
+      "serialNumber": "1270",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2011-11-17T00:00:00.000Z"
     },
     {
       "id": "f30e008c-9ecf-4365-b75a-7da5c36bfeaa",
       "tailNumber": "RA-73785",
-      "serialNumber": null,
+      "serialNumber": "1323",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-06-12T00:00:00.000Z"
     },
     {
       "id": "17ce65ad-0543-46ca-bb20-07c188fd2632",
       "tailNumber": "RA-73786",
-      "serialNumber": null,
+      "serialNumber": "1328",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-06-22T00:00:00.000Z"
     },
     {
       "id": "69e022a4-3e91-485f-9c00-aad168c94b79",
       "tailNumber": "RA-73788",
-      "serialNumber": null,
+      "serialNumber": "1356",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-10-08T00:00:00.000Z"
     },
     {
       "id": "9309826a-9cc3-48a5-a4da-442c076ddc87",
       "tailNumber": "RA-73789",
-      "serialNumber": null,
+      "serialNumber": "1371",
       "operatorId": "53266038-128f-454d-bcfb-126e67bb68bc",
       "typeId": "246489fd-a570-48fd-af96-ec76c1941423",
       "isActive": true,
       "createdAt": "2026-02-03T18:12:45.248Z",
-      "updatedAt": "2026-02-03T18:12:45.248Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2012-11-29T00:00:00.000Z"
     },
     {
       "id": "72e045aa-1f5f-418e-9c46-8f1b6e2e3ad1",
@@ -1104,352 +1193,387 @@
     {
       "id": "7dd049ae-9bec-45d6-8ec6-37e13969de69",
       "tailNumber": "RA-89015",
-      "serialNumber": null,
+      "serialNumber": "95029",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-07-02T00:00:00.000Z"
     },
     {
       "id": "3e941398-a2e6-4888-8d91-fd352b7a31fe",
       "tailNumber": "RA-89017",
-      "serialNumber": null,
+      "serialNumber": "95035",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2013-09-15T00:00:00.000Z"
     },
     {
       "id": "1f7dddf4-b6ff-481d-bc70-886d1c6e2035",
       "tailNumber": "RA-89025",
-      "serialNumber": null,
+      "serialNumber": "95047",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-02-19T00:00:00.000Z"
     },
     {
       "id": "841169e8-ec35-4373-ad54-9350c6336176",
       "tailNumber": "RA-89026",
-      "serialNumber": null,
+      "serialNumber": "95051",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-03-05T00:00:00.000Z"
     },
     {
       "id": "41f35119-7e13-4ebd-ad3c-e77c8152d2c8",
       "tailNumber": "RA-89028",
-      "serialNumber": null,
+      "serialNumber": "95059",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-04-17T00:00:00.000Z"
     },
     {
       "id": "bfb99176-c564-4496-8727-41909660da9c",
       "tailNumber": "RA-89041",
-      "serialNumber": null,
+      "serialNumber": "95063",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-06-15T00:00:00.000Z"
     },
     {
       "id": "3228153a-1e27-415c-858d-0b8e088783f6",
       "tailNumber": "RA-89043",
-      "serialNumber": null,
+      "serialNumber": "95074",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-11-10T00:00:00.000Z"
     },
     {
       "id": "28a72c95-d08d-49bc-8ab0-fd63022b486d",
       "tailNumber": "RA-89044",
-      "serialNumber": null,
+      "serialNumber": "95076",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2014-10-10T00:00:00.000Z"
     },
     {
       "id": "168beca9-374b-4375-bf4c-9867028e96ee",
       "tailNumber": "RA-89051",
-      "serialNumber": null,
+      "serialNumber": "95089",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-02-18T00:00:00.000Z"
     },
     {
       "id": "a79858c4-6992-44d7-989a-b57dccba10e2",
       "tailNumber": "RA-89057",
-      "serialNumber": null,
+      "serialNumber": "95097",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-10-07T00:00:00.000Z"
     },
     {
       "id": "e78292ff-9c82-4243-b604-1f892a54d7f0",
       "tailNumber": "RA-89060",
-      "serialNumber": null,
+      "serialNumber": "95103",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-12-01T00:00:00.000Z"
     },
     {
       "id": "727fff8d-774e-45ee-ad26-ed24646719c4",
       "tailNumber": "RA-89061",
-      "serialNumber": null,
+      "serialNumber": "95090",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-07-24T00:00:00.000Z"
     },
     {
       "id": "b3512a64-5084-4a43-9a18-a14221173b4f",
       "tailNumber": "RA-89062",
-      "serialNumber": null,
+      "serialNumber": "95091",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-04-10T00:00:00.000Z"
     },
     {
       "id": "b3b3c3fe-fa73-423c-afc4-9657571ef5c1",
       "tailNumber": "RA-89064",
-      "serialNumber": null,
+      "serialNumber": "95101",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2015-11-10T00:00:00.000Z"
     },
     {
       "id": "958617e8-eb50-4f07-a139-c8e0ddc9b707",
       "tailNumber": "RA-89065",
-      "serialNumber": null,
+      "serialNumber": "95107",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2016-03-24T00:00:00.000Z"
     },
     {
       "id": "bcc0cab4-de8e-4a57-a5f9-f7efbc2825b9",
       "tailNumber": "RA-89099",
-      "serialNumber": null,
+      "serialNumber": "95137",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-07-13T00:00:00.000Z"
     },
     {
       "id": "1302f190-5c7d-40a4-93e4-cb363f4f84f7",
       "tailNumber": "RA-89101",
-      "serialNumber": null,
+      "serialNumber": "95139",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-07-25T00:00:00.000Z"
     },
     {
       "id": "e08e8af5-2448-40db-9e72-aaf74faab90f",
       "tailNumber": "RA-89103",
-      "serialNumber": null,
+      "serialNumber": "95142",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-09-15T00:00:00.000Z"
     },
     {
       "id": "b3c108c5-10e9-46d5-ac5e-0f20908ce414",
       "tailNumber": "RA-89109",
-      "serialNumber": null,
+      "serialNumber": "95151",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2017-11-28T00:00:00.000Z"
     },
     {
       "id": "230c1d42-d2f1-40d6-9efc-f3be3a834439",
       "tailNumber": "RA-89110",
-      "serialNumber": null,
+      "serialNumber": "95161",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-04-13T00:00:00.000Z"
     },
     {
       "id": "04b4928e-1a26-40e3-98ce-699fb3685433",
       "tailNumber": "RA-89112",
-      "serialNumber": null,
+      "serialNumber": "95158",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-03-15T00:00:00.000Z"
     },
     {
       "id": "283cc416-3f46-4524-b67d-f59f5b719f99",
       "tailNumber": "RA-89113",
-      "serialNumber": null,
+      "serialNumber": "95160",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-04-04T00:00:00.000Z"
     },
     {
       "id": "8f7238d2-80a0-48df-b90b-53918e84dc4c",
       "tailNumber": "RA-89114",
-      "serialNumber": null,
+      "serialNumber": "95162",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-04-25T00:00:00.000Z"
     },
     {
       "id": "d60129ec-b7b5-46e3-8718-f1e9196a3367",
       "tailNumber": "RA-89115",
-      "serialNumber": null,
+      "serialNumber": "95166",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-06-27T00:00:00.000Z"
     },
     {
       "id": "3dfb76d3-c135-4412-a632-81bb30176997",
       "tailNumber": "RA-89116",
-      "serialNumber": null,
+      "serialNumber": "95165",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2018-06-19T00:00:00.000Z"
     },
     {
       "id": "21fe3724-81a7-46ea-b1bd-02962940eee7",
       "tailNumber": "RA-89129",
-      "serialNumber": null,
+      "serialNumber": "95192",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2019-07-18T00:00:00.000Z"
     },
     {
       "id": "77930f29-a457-4ad2-ba26-59c032f975e1",
       "tailNumber": "RA-89130",
-      "serialNumber": null,
+      "serialNumber": "95193",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2019-09-12T00:00:00.000Z"
     },
     {
       "id": "e19abf95-609a-4bd5-b3af-546bfefe271d",
       "tailNumber": "RA-89131",
-      "serialNumber": null,
+      "serialNumber": "95194",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2019-09-24T00:00:00.000Z"
     },
     {
       "id": "ec05fbc2-4b0b-44cd-87ac-ca9ba083af37",
       "tailNumber": "RA-89132",
-      "serialNumber": null,
+      "serialNumber": "95195",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2019-10-04T00:00:00.000Z"
     },
     {
       "id": "cc2cd2f5-f0b4-44af-ad93-5b8e5d88e36e",
       "tailNumber": "RA-89133",
-      "serialNumber": null,
+      "serialNumber": "95197",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2019-11-01T00:00:00.000Z"
     },
     {
       "id": "f8cb012d-d4be-4999-9d44-ee53c81f7947",
       "tailNumber": "RA-89134",
-      "serialNumber": null,
+      "serialNumber": "95198",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2020-02-21T00:00:00.000Z"
     },
     {
       "id": "84acba1b-372f-40ac-836a-0741bca4f61b",
       "tailNumber": "RA-89173",
-      "serialNumber": null,
+      "serialNumber": "95214",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2021-06-30T00:00:00.000Z"
     },
     {
       "id": "104e057d-c7ec-465c-8714-0f8e46733293",
       "tailNumber": "RA-89178",
-      "serialNumber": null,
+      "serialNumber": "95219",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2021-10-27T00:00:00.000Z"
     },
     {
       "id": "fc9910ce-72b0-4dea-a293-dbfbb431862c",
       "tailNumber": "RA-89185",
-      "serialNumber": null,
+      "serialNumber": "95221",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2022-01-14T00:00:00.000Z"
     },
     {
       "id": "951c8d03-27fb-4f93-9e0b-da23c97be993",
       "tailNumber": "RA-89188",
-      "serialNumber": null,
+      "serialNumber": "95224",
       "operatorId": "42588762-52f6-4bb7-b81c-febbf2c2516e",
       "typeId": "79e468bb-2966-48d1-9e5d-9770b1b35ca1",
       "isActive": true,
       "createdAt": "2026-02-03T18:15:32.588Z",
-      "updatedAt": "2026-02-03T18:15:32.588Z"
+      "updatedAt": "2026-07-27T16:51:19.406Z",
+      "manufactureDate": "2022-03-17T00:00:00.000Z"
     }
   ],
   "eventTypes": [
@@ -1515,7 +1639,8 @@
       "name": "Ангар 1",
       "isActive": true,
       "createdAt": "2026-02-01T13:53:32.966Z",
-      "updatedAt": "2026-02-01T13:53:32.966Z"
+      "updatedAt": "2026-07-27T16:55:05.332Z",
+      "station": "SVO"
     },
     {
       "id": "a1fbc9ea-f6aa-4d09-b310-6d9b07729f0d",
@@ -1523,7 +1648,8 @@
       "name": "Ангар 2",
       "isActive": true,
       "createdAt": "2026-02-01T13:53:32.966Z",
-      "updatedAt": "2026-02-01T13:53:32.966Z"
+      "updatedAt": "2026-07-27T16:55:05.332Z",
+      "station": "SVO"
     },
     {
       "id": "d6ba3141-822e-4882-bfd8-f54bdd3894bf",
@@ -1531,7 +1657,8 @@
       "name": "Ангар 3",
       "isActive": true,
       "createdAt": "2026-02-01T13:53:32.966Z",
-      "updatedAt": "2026-02-01T13:53:32.966Z"
+      "updatedAt": "2026-07-27T16:55:05.332Z",
+      "station": "SVO"
     },
     {
       "id": "2ffb14e9-a9d3-48a5-8dd6-ef06613da294",
@@ -1539,7 +1666,8 @@
       "name": "Ангар 4",
       "isActive": true,
       "createdAt": "2026-02-01T13:53:32.966Z",
-      "updatedAt": "2026-02-01T13:53:32.966Z"
+      "updatedAt": "2026-07-27T16:55:05.332Z",
+      "station": "SVO"
     },
     {
       "id": "6da18342-2890-46ac-b077-772b66b27ec9",
@@ -1547,7 +1675,18 @@
       "name": "Ангар 5",
       "isActive": true,
       "createdAt": "2026-02-01T13:53:32.966Z",
-      "updatedAt": "2026-02-01T13:53:32.966Z"
+      "updatedAt": "2026-07-27T16:55:05.332Z",
+      "station": "SVO"
+    },
+    {
+      "id": "9f372456-292d-431b-926f-2df6c1ada7d1",
+      "code": "H6",
+      "name": "Оренбург",
+      "station": "REN",
+      "isPhysical": true,
+      "isActive": true,
+      "createdAt": "2026-07-27T16:55:05.332Z",
+      "updatedAt": "2026-07-27T16:55:05.332Z"
     }
   ],
   "layouts": [
@@ -1956,7 +2095,7 @@
     {
       "id": "4ef863a3-af1a-4d46-b4fa-54b1dea12e84",
       "level": "OPERATIONAL",
-      "status": "DRAFT",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+6YE+12YE",
       "aircraftId": "f023bc38-87b9-427c-8b9a-b637d98d78b9",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -1971,7 +2110,7 @@
     {
       "id": "c48d8ace-804e-4317-91c1-fe24927eb3aa",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y+1A-2A-4A",
       "aircraftId": "84acba1b-372f-40ac-836a-0741bca4f61b",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -1986,7 +2125,7 @@
     {
       "id": "8ce4d325-f2d6-4cfd-83b3-74d71ca07d13",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y+взвешивание+1A+2A+4A",
       "aircraftId": "104e057d-c7ec-465c-8714-0f8e46733293",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2001,7 +2140,7 @@
     {
       "id": "1ea6b817-df3d-4e27-b16f-185a1fbf1f8a",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "FSLC MOD + ADD",
       "aircraftId": "de41bd46-c5bd-4fd8-ae6c-8f0259ad8f64",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -2031,7 +2170,7 @@
     {
       "id": "8cb3d7a1-ba4d-4381-98cb-79bb062dab15",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "ea3860e2-6256-4d0c-aa54-293ed2c17462",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2046,7 +2185,7 @@
     {
       "id": "e226ea32-36f6-4534-b06f-2b3d27adeaa3",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "48dd6570-ff2c-479d-bd48-85d8f286e95e",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2061,7 +2200,7 @@
     {
       "id": "5e3b1397-9ba1-4e08-9ca3-4c537e38a6ab",
       "level": "OPERATIONAL",
-      "status": "DRAFT",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "SBA330‐27‐3237+3234",
       "aircraftId": "9309826a-9cc3-48a5-a4da-442c076ddc87",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -2091,7 +2230,7 @@
     {
       "id": "c50ac759-dc5f-42fa-86c8-094567202375",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y Check+Шасси",
       "aircraftId": "1f7dddf4-b6ff-481d-bc70-886d1c6e2035",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2106,7 +2245,7 @@
     {
       "id": "d2279011-4276-4a45-a0c1-d0a8b7282c48",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "2d1d3c18-23bb-421e-9e68-d5554db5534a",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2121,7 +2260,7 @@
     {
       "id": "7d2affcc-e44a-462d-a832-dedd6d9791f6",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "LG Change",
       "aircraftId": "6ee194e0-a06d-4e48-88e5-ceb4a590779e",
       "eventTypeId": "998bea48-bff3-40f0-9957-f600eea24fcc",
@@ -2136,7 +2275,7 @@
     {
       "id": "4fb1f9a8-9d7f-436b-ab1f-1fc362502bfb",
       "level": "OPERATIONAL",
-      "status": "DRAFT",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "SBA330‐27‐3237+3234",
       "aircraftId": "225ae0f2-71ff-459d-b78b-3448169b22ad",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -2151,7 +2290,7 @@
     {
       "id": "24752af3-9a72-4242-a2d0-bbe7e3307803",
       "level": "OPERATIONAL",
-      "status": "DRAFT",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "SBA330‐27‐3237+3234",
       "aircraftId": "f30e008c-9ecf-4365-b75a-7da5c36bfeaa",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -2166,7 +2305,7 @@
     {
       "id": "d921272b-aba8-4789-9948-cd342e76a499",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "0fc3cd3a-b97d-4658-b745-394f707a2e03",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2181,7 +2320,7 @@
     {
       "id": "e694426c-3b72-4443-a66f-58e74db72bf4",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "B+2B",
       "aircraftId": "456761f9-ab41-478d-beb1-4632d58d50c3",
       "eventTypeId": "e990d82c-d029-4e75-a45a-44f773e78f9b",
@@ -2196,7 +2335,7 @@
     {
       "id": "7bc2a997-19cf-4247-9796-072e188c63a7",
       "level": "OPERATIONAL",
-      "status": "DRAFT",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "SBA330‐27‐3237+3234",
       "aircraftId": "17ce65ad-0543-46ca-bb20-07c188fd2632",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -2211,7 +2350,7 @@
     {
       "id": "7ea744d4-ed16-47cf-a7ad-0c09439f1f8c",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+4C+SB570122-01/02 рем\r\nдвиг.",
       "aircraftId": "2de757f9-29ca-4be1-aae8-6039e8bd7416",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2226,7 +2365,7 @@
     {
       "id": "450a8622-bccb-450a-b660-9184530945bf",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "ee44d5b9-659d-48c5-87ff-b9bc40d062e2",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2241,7 +2380,7 @@
     {
       "id": "f1f4770c-9816-4e3a-b608-ed9ae60529c6",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C Check + Шасси+1A+4A+5A+7500FH",
       "aircraftId": "958617e8-eb50-4f07-a139-c8e0ddc9b707",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2256,7 +2395,7 @@
     {
       "id": "ce8f18cd-79f7-4ed3-ba0b-5d469fb3ee16",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "SBA330‐27‐3237+3234",
       "aircraftId": "69e022a4-3e91-485f-9c00-aad168c94b79",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -2271,7 +2410,7 @@
     {
       "id": "e0674212-0678-40a1-b027-f363c5cd0b1f",
       "level": "OPERATIONAL",
-      "status": "DRAFT",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "LG CNG",
       "aircraftId": "a9c4c0fe-559a-4acf-9b57-c2ffef38f8c9",
       "eventTypeId": "998bea48-bff3-40f0-9957-f600eea24fcc",
@@ -2286,7 +2425,7 @@
     {
       "id": "4b2b311f-a3c1-4adf-b484-54112771ec28",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "bda39ce2-8e9c-4fb1-ba79-a680a79edd43",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2301,7 +2440,7 @@
     {
       "id": "f10de9f9-f64c-4006-801e-5dd53a53220d",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "SBA330‐27‐3237+3234",
       "aircraftId": "d9671ebf-ca94-4074-a742-7578bc6069df",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -2316,7 +2455,7 @@
     {
       "id": "090f539a-5091-46d8-ac1a-b7a9f75c9f18",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "SB27‐3237+3234+53‐3215",
       "aircraftId": "3bea8b31-3744-423d-a4be-27fe8e1210cd",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -2331,7 +2470,7 @@
     {
       "id": "e257ea7a-25bb-4c3d-b81c-7eefe09ec24f",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "94b69bd7-f8b0-4a2e-9abc-5851314eae0c",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2346,7 +2485,7 @@
     {
       "id": "133cf016-27ed-4ba1-ac49-1daf2100ffc3",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "LG CNG",
       "aircraftId": "3711db8a-a69a-4b6d-96ce-15ebbe3b8817",
       "eventTypeId": "998bea48-bff3-40f0-9957-f600eea24fcc",
@@ -2361,7 +2500,7 @@
     {
       "id": "bf9374d8-8658-4ba8-a578-f7d86b7da9a9",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "1c499314-7040-4436-ac9b-61cd2d2f8b39",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2376,7 +2515,7 @@
     {
       "id": "0b332f01-dc26-4554-8178-c47f2f02cce7",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "75d237ef-603f-4b5c-addb-61bcf417a345",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2391,7 +2530,7 @@
     {
       "id": "f652bd50-7c1c-4953-a392-18dcab7a690c",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "ad48c239-16b8-4c8a-9d08-c9e63f5cbad6",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2406,7 +2545,7 @@
     {
       "id": "cf02632e-e5cc-44c0-9a7b-4e40f26d7591",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+4C+SB570122-01/02 рем",
       "aircraftId": "c231bd66-b44e-42c4-b6f2-73c268e6b435",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2421,7 +2560,7 @@
     {
       "id": "f2134522-65ac-4135-a5ca-87bf2851fcf8",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "a267db8e-2fb2-428d-9690-5523f89a2a94",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2436,7 +2575,7 @@
     {
       "id": "e995eadc-4287-4031-8cd9-2c717b1547e1",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+9YE+A-CH",
       "aircraftId": "04350001-6f40-4f74-8f6d-c91625fbbc9b",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2451,7 +2590,7 @@
     {
       "id": "24389287-590f-42f4-971b-9a1943abe858",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "7286f059-1497-4637-b0fe-3cac40e13618",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2466,7 +2605,7 @@
     {
       "id": "d273552c-61fe-4337-890d-fbd88a06f90d",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "e0f13dbd-18b1-40f4-986d-f880a7872c66",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2481,7 +2620,7 @@
     {
       "id": "e85f0502-9a8b-437b-89f2-17f25572ba86",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 645544",
       "aircraftId": "0e836ed0-2b59-42f7-a4bb-c346747ed7f9",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2496,7 +2635,7 @@
     {
       "id": "d538e7e8-46d3-4cbd-a9a1-e5da9d62b765",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1С+4Y+8Y Check +7500FH+1A+2A",
       "aircraftId": "283cc416-3f46-4524-b67d-f59f5b719f99",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2511,7 +2650,7 @@
     {
       "id": "2e2130bf-8220-4975-b8e3-2a82cc6578de",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "a861de6a-220b-44f3-9f69-a88eb4149b49",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2526,7 +2665,7 @@
     {
       "id": "b947b49f-5f41-46a4-8c92-ed5f646fe963",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "b659d65c-22fa-4bb3-a3a6-1844aa1d615c",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2541,7 +2680,7 @@
     {
       "id": "ad8b11ef-34d8-4be2-930b-4c406e740cc9",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя s/n u/n",
       "aircraftId": "72e045aa-1f5f-418e-9c46-8f1b6e2e3ad1",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2556,7 +2695,7 @@
     {
       "id": "e8389442-e509-4518-bc40-a44adfd46b32",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+4C+SB570122-01/02 рем+A-CH",
       "aircraftId": "a82b3f45-1db7-4b69-a609-d9ece88759d2",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2571,7 +2710,7 @@
     {
       "id": "1a251713-d7fe-4766-884d-1d4de596278f",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN u/n",
       "aircraftId": "a97996b4-3209-4774-991a-a58735be04c6",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2586,7 +2725,7 @@
     {
       "id": "4f3e8cd6-8fb9-444d-92de-95d8358a9f2c",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 645606",
       "aircraftId": "5f0215f2-9957-4e40-9c8a-49ffd802a79f",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2601,7 +2740,7 @@
     {
       "id": "3241b62c-bb0d-4608-a265-561d367b528d",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "07cdbf36-672d-402a-ad93-3a82490b18e6",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2616,7 +2755,7 @@
     {
       "id": "f3000a49-e06e-4d96-a34c-7f01700870c6",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "1e866cef-d944-4482-8fbe-908a0e1b55a7",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2631,7 +2770,7 @@
     {
       "id": "642c45ef-e747-4ce3-8535-94c27ba7c34d",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y Check + Шасси",
       "aircraftId": "41f35119-7e13-4ebd-ad3c-e77c8152d2c8",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2646,7 +2785,7 @@
     {
       "id": "047043f5-4f6f-4826-8ae8-bbdb3ae9ddc8",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 645608",
       "aircraftId": "8d311f6a-f64b-4cd0-ad39-3bb4dcfa0b79",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2661,7 +2800,7 @@
     {
       "id": "3a913ce4-0d4d-4fd4-8f2d-1828ccb55756",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN u/n",
       "aircraftId": "a97996b4-3209-4774-991a-a58735be04c6",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2676,7 +2815,7 @@
     {
       "id": "4f66d21c-aabe-4739-81af-2859fba7284b",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+4C+SB570122-01/02 рем+A-CH",
       "aircraftId": "09c18665-7898-49ba-adb0-e469cddd2c70",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2691,7 +2830,7 @@
     {
       "id": "8fb5fb4c-4b8d-4d0a-b1d2-603adea1cdf6",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя s/n 42481",
       "aircraftId": "e5e8ef86-bdd0-4fa1-bafc-06c5e690ab3b",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2706,7 +2845,7 @@
     {
       "id": "91793755-943f-4b8f-91bd-9ad92997111e",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "LG CNG",
       "aircraftId": "5ac551a7-1207-45a4-a447-80435e97837f",
       "eventTypeId": "998bea48-bff3-40f0-9957-f600eea24fcc",
@@ -2721,7 +2860,7 @@
     {
       "id": "291a6a5c-24e4-41e4-8bf8-d6fea9e5b99f",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя s/n 42391",
       "aircraftId": "3bea8b31-3744-423d-a4be-27fe8e1210cd",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2736,7 +2875,7 @@
     {
       "id": "a60d11f7-b9a7-4de8-a127-a36a9f584b36",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 645607",
       "aircraftId": "0b163af8-c987-492f-bbdd-8bb2820e11f7",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2751,7 +2890,7 @@
     {
       "id": "537bad86-df46-4d97-9bae-6924fd35aebb",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 645397",
       "aircraftId": "2d1d3c18-23bb-421e-9e68-d5554db5534a",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2766,7 +2905,7 @@
     {
       "id": "73d9fed2-1ca0-43b9-b8c4-8c8944029808",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена 2ух двигателей SN 645514 и SN",
       "aircraftId": "a861de6a-220b-44f3-9f69-a88eb4149b49",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2781,7 +2920,7 @@
     {
       "id": "f9969ee2-6725-4b7b-9f37-a3dfff14777f",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 645577",
       "aircraftId": "2a717d77-0c55-4b02-9910-f71f078460a2",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2796,7 +2935,7 @@
     {
       "id": "8f6572c5-704a-47ed-b4a2-b37c5498f843",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "f0afd84c-e6f9-44f1-acc2-c8863d77e4fc",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2811,7 +2950,7 @@
     {
       "id": "1be17f33-0485-4030-87fc-9cb392da66b6",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN u/n",
       "aircraftId": "a97996b4-3209-4774-991a-a58735be04c6",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2826,7 +2965,7 @@
     {
       "id": "c9293600-8767-425a-bac3-9f911b396ee7",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+4C+SB570122-01/02 рем+A-CH",
       "aircraftId": "78b14b92-f7a7-4d75-bf0c-fba7e6ab1f81",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2841,7 +2980,7 @@
     {
       "id": "9ed6ef45-a541-4f58-ac26-59f0cf10fd38",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 645556",
       "aircraftId": "2d1d3c18-23bb-421e-9e68-d5554db5534a",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2856,7 +2995,7 @@
     {
       "id": "4dd3257c-0cf4-4d3d-b841-c8215e2353e6",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "2d9d5b6a-41ad-4afc-a87a-1cdfc8a632c5",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2871,7 +3010,7 @@
     {
       "id": "8257456c-ef02-49bf-8ed5-3dd6fae0072b",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+A-CH",
       "aircraftId": "bdc57d7e-75be-455f-abca-e44c5b1bd939",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2886,7 +3025,7 @@
     {
       "id": "9d8e9ecd-89a5-4e59-a036-a0e623004060",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "ab348f55-d68f-40f6-b5bc-166b29b2acfe",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2901,7 +3040,7 @@
     {
       "id": "47309665-2273-4605-8757-1cd9832278a1",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 643183",
       "aircraftId": "68fd95b4-cbbb-492a-a1e8-4789e30439b0",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -2916,7 +3055,7 @@
     {
       "id": "02430036-1443-457b-9b03-277d62321812",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+SBA330‐53‐3215",
       "aircraftId": "225ae0f2-71ff-459d-b78b-3448169b22ad",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2931,7 +3070,7 @@
     {
       "id": "8597664f-a376-4fdc-99af-e479fdc451d9",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C Check+1A+5A",
       "aircraftId": "77930f29-a457-4ad2-ba26-59c032f975e1",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2946,7 +3085,7 @@
     {
       "id": "24b1d011-c4fd-4206-ba2f-f8ee9f01e689",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "3ed48e9e-6f72-4649-b385-c5667cc43c2d",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2961,7 +3100,7 @@
     {
       "id": "c5ebf270-1592-4051-b027-910c3cec6829",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C Check+1A+2A",
       "aircraftId": "cc2cd2f5-f0b4-44af-ad93-5b8e5d88e36e",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2976,7 +3115,7 @@
     {
       "id": "64e54af4-9c7e-4170-8b4b-fd0f85d5085e",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+A-CH",
       "aircraftId": "5f0215f2-9957-4e40-9c8a-49ffd802a79f",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -2991,7 +3130,7 @@
     {
       "id": "c6f7f0ba-2809-444f-a01c-084b12038f40",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "С+2С+9Y",
       "aircraftId": "262ae2e2-e212-467d-b73e-363425f51e57",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3006,7 +3145,7 @@
     {
       "id": "03f874c3-0c3c-42c0-a453-44ccb449e773",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "bd70a383-8bae-45f8-aa1c-9a9a19196ba7",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3021,7 +3160,7 @@
     {
       "id": "c163b764-ba5e-4429-a780-e1821378152f",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя s/n u/n",
       "aircraftId": "72e045aa-1f5f-418e-9c46-8f1b6e2e3ad1",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -3036,7 +3175,7 @@
     {
       "id": "ab8cac53-f975-451e-9dc6-3bf3a0cbfa41",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN u/n",
       "aircraftId": "a97996b4-3209-4774-991a-a58735be04c6",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -3051,7 +3190,7 @@
     {
       "id": "e778a436-486c-4bfe-bbdd-ad33ad4bce54",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y Check+Шасси",
       "aircraftId": "28a72c95-d08d-49bc-8ab0-fd63022b486d",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3066,7 +3205,7 @@
     {
       "id": "b0594aeb-1d73-444b-9ff7-4d7666d6f347",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+SBA330‐53‐3215",
       "aircraftId": "d9671ebf-ca94-4074-a742-7578bc6069df",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3081,7 +3220,7 @@
     {
       "id": "fcf46fe0-154e-43fd-accf-b3a7b4852522",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "0e836ed0-2b59-42f7-a4bb-c346747ed7f9",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3096,7 +3235,7 @@
     {
       "id": "c4a8c9c5-937e-4334-a496-140f13dd4b43",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "9673d9ab-805d-4aff-a509-6539650cca0d",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3111,7 +3250,7 @@
     {
       "id": "0ecc5677-2924-45a9-9775-0bc9faf586d0",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "6ee194e0-a06d-4e48-88e5-ceb4a590779e",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3126,7 +3265,7 @@
     {
       "id": "483882b5-b29a-4e0d-8baf-8545bd0d2a90",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "198343a6-70cf-4957-86f3-13b52f8bf52d",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3141,7 +3280,7 @@
     {
       "id": "da39cc2a-eff7-4c6e-84f8-92d4c05e8227",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "8d311f6a-f64b-4cd0-ad39-3bb4dcfa0b79",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3156,7 +3295,7 @@
     {
       "id": "a983d29e-a750-4678-af95-f004469da870",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "ad2619af-2792-4a10-8e11-d24cb0a78e70",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3171,7 +3310,7 @@
     {
       "id": "bb9ae331-d726-46c4-b32e-b2f903b16650",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 643620",
       "aircraftId": "aedd2188-d804-44a4-843c-2bd430621a1d",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -3186,7 +3325,7 @@
     {
       "id": "b3cbc265-06ce-420e-838d-8b7a4f32ec2f",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "c8100371-735a-4a8e-b3b5-f83b393af358",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3201,7 +3340,7 @@
     {
       "id": "55ebb2a0-d7d1-4bf8-a269-170584ba86db",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "TC",
       "aircraftId": "5ca1d7ee-5551-4a4c-82a8-2752e8ec6883",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -3216,7 +3355,7 @@
     {
       "id": "d62b8046-9597-4646-b479-02bb6285444b",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "a57f6b35-97d9-42f6-9805-a49572f551c2",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3231,7 +3370,7 @@
     {
       "id": "e5ddd386-62ea-4709-a841-58fdc2a059e0",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "SB57A0122 рем",
       "aircraftId": "b076eb86-56ee-4283-8736-fee35adfde68",
       "eventTypeId": "a4fe0ee8-c8e2-4db6-b5c3-697d2bfd9cbd",
@@ -3246,7 +3385,7 @@
     {
       "id": "9edbea6d-0d5b-4c5c-b475-8472c7ee360e",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C Check+1A+2A",
       "aircraftId": "f8cb012d-d4be-4999-9d44-ee53c81f7947",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3261,7 +3400,7 @@
     {
       "id": "23cfb9f5-50fa-40df-bf6f-88f441328124",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "7436cc89-f8de-499b-bc17-41196213fe9e",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3276,7 +3415,7 @@
     {
       "id": "8f5359b0-c617-43d3-a102-4ea2033deb72",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+9YE",
       "aircraftId": "0b2f3dbc-3dba-4f70-8339-3ddb0cd0300c",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3291,7 +3430,7 @@
     {
       "id": "86b185ce-76bb-4196-85e1-f620dcc80af0",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "С+SBA330‐53‐3215",
       "aircraftId": "f30e008c-9ecf-4365-b75a-7da5c36bfeaa",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3306,7 +3445,7 @@
     {
       "id": "f926e238-0d58-46a6-bf64-bb698464fd6f",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя SN 59A061",
       "aircraftId": "b6386b98-6c66-4ce7-80ec-9a65fdf0deff",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -3321,7 +3460,7 @@
     {
       "id": "7ec2172c-993d-4cd8-b2a8-8038b3e044a3",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "901c989f-9b3e-4819-ad0e-1d95e2f8015a",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3336,7 +3475,7 @@
     {
       "id": "eef4fedf-8247-481d-b20d-8121f103c090",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y Check+1A+7500",
       "aircraftId": "fc9910ce-72b0-4dea-a293-dbfbb431862c",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3351,7 +3490,7 @@
     {
       "id": "bb5eee6c-bc3b-4585-8549-2395804739bf",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "LG CNG",
       "aircraftId": "a41f6184-bfc0-4c6c-983b-04bb9e6b1560",
       "eventTypeId": "998bea48-bff3-40f0-9957-f600eea24fcc",
@@ -3366,7 +3505,7 @@
     {
       "id": "e982cb89-9205-463d-a458-199c4e51e076",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "B+C+2C",
       "aircraftId": "893178fe-0781-4ec8-87c1-836d17ac4272",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3381,7 +3520,7 @@
     {
       "id": "c22d36cb-8323-4708-b759-6ddfd3445087",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "0caa9b71-d762-4f47-adbe-8a05792bba85",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3396,7 +3535,7 @@
     {
       "id": "4cca459e-8a84-4770-b2d6-7ec176cea1bb",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "9e38d57c-7077-49b4-84e5-0aa42d365d00",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3411,7 +3550,7 @@
     {
       "id": "a2113005-9492-4280-90df-d0c832aac5c8",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "Замена двигателя s/n u/n",
       "aircraftId": "3bea8b31-3744-423d-a4be-27fe8e1210cd",
       "eventTypeId": "2db12c40-669e-431b-9866-a2ee022b65de",
@@ -3426,7 +3565,7 @@
     {
       "id": "8bd4c40a-1a44-4c86-9c9f-fb57d4d78d47",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "С+SBA330‐53‐3215",
       "aircraftId": "17ce65ad-0543-46ca-bb20-07c188fd2632",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3441,7 +3580,7 @@
     {
       "id": "30e1c78d-edb3-4e63-b0c7-ddf2120e2883",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "97d39fd5-b8a8-4a29-896a-08d7a695a97c",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3456,7 +3595,7 @@
     {
       "id": "3329668c-9fd8-4c53-b9ca-7aa0af30b5ca",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "b8cd836e-62f2-441c-a137-43e60bed3319",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3471,7 +3610,7 @@
     {
       "id": "15976d38-1365-465d-aa4d-277e0287622d",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "2130413c-fbdd-429e-aa2e-ff9d7fa6e1fd",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3486,7 +3625,7 @@
     {
       "id": "77b1b2b1-98cb-4619-b41b-589191a1a966",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y+Шасси+7500FH+1A+2A+6A",
       "aircraftId": "b3512a64-5084-4a43-9a18-a14221173b4f",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3501,7 +3640,7 @@
     {
       "id": "11bac002-757f-49b2-b86f-69b838543881",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C",
       "aircraftId": "d3a0098c-44a1-4ca4-86fc-7ad9e66312df",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3516,7 +3655,7 @@
     {
       "id": "732fda31-4725-489e-bf22-9c3927e63922",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y+Шасси+1A+2A",
       "aircraftId": "727fff8d-774e-45ee-ad26-ed24646719c4",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3531,7 +3670,7 @@
     {
       "id": "ab5d7b98-30e6-46b5-8486-35f95fa9a222",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "B+C+2C",
       "aircraftId": "893178fe-0781-4ec8-87c1-836d17ac4272",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3546,7 +3685,7 @@
     {
       "id": "d6909ffe-abfb-48f7-a3d5-52caf2a603d3",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+9YE",
       "aircraftId": "ad436250-374b-4e29-985a-82c3e06babfb",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3561,7 +3700,7 @@
     {
       "id": "f038444f-b2c4-4de3-b391-edf10d985bca",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "75d98ff0-1035-45f2-b531-7ad624a22659",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3576,7 +3715,7 @@
     {
       "id": "afa4d6a5-b126-48f1-9cba-c31b15fdf096",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "48026e3f-6603-4210-840a-986506c47200",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3591,7 +3730,7 @@
     {
       "id": "ae16195c-90a9-450e-9bb4-9818d6627819",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "470cd024-27bf-4509-82f4-6728c9478515",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3606,7 +3745,7 @@
     {
       "id": "2caf55be-a5f4-4541-9aa2-a0b5ca19cc82",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "B+C+2C",
       "aircraftId": "fd89ea5b-c648-44e9-8894-1fa7f516f126",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3621,7 +3760,7 @@
     {
       "id": "6e9ea7c3-ee06-4065-a0db-71c6393fb6de",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "5d4743dd-b5a7-4aec-813d-6c1ad56dcd6e",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3636,7 +3775,7 @@
     {
       "id": "1ea474d5-32e1-49f0-9877-49da33d401de",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "6311115b-7fe9-4ee3-9877-3869c8d38ef8",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3651,7 +3790,7 @@
     {
       "id": "cf57eef3-0fc2-4f40-9e1c-fd7fa8529aa4",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C",
       "aircraftId": "199907db-2c1c-4fa4-b802-c6b864580207",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3666,7 +3805,7 @@
     {
       "id": "51284502-bcdd-434d-a079-39c08997c2fb",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "B+C+2C",
       "aircraftId": "d1098994-2feb-4d8e-8b37-5db36de9ae60",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3681,7 +3820,7 @@
     {
       "id": "92735985-23c2-41b5-8696-35cd973575c5",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+SBA330‐53‐3215",
       "aircraftId": "69e022a4-3e91-485f-9c00-aad168c94b79",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3696,7 +3835,7 @@
     {
       "id": "c93cac7c-ef69-40a6-8d3e-a7e3b20a3dc4",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+2C+9YE+12YE",
       "aircraftId": "f96a7abd-d924-4521-b36b-ab39c5b7155a",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3711,7 +3850,7 @@
     {
       "id": "6c1ff76d-1c97-4bbb-92c3-ad727404c8a7",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "1C+4Y Check+Шасси+1A",
       "aircraftId": "168beca9-374b-4375-bf4c-9867028e96ee",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3726,7 +3865,7 @@
     {
       "id": "4afca78d-bdb3-469a-962c-f8b420d6560f",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "2C+4C",
       "aircraftId": "f0afd84c-e6f9-44f1-acc2-c8863d77e4fc",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3741,7 +3880,7 @@
     {
       "id": "3d859e06-d76c-4df7-9150-1ba7a79dec5d",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "С",
       "aircraftId": "d5ba7a7c-3924-4dbc-b1af-47fbecdb8820",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3756,7 +3895,7 @@
     {
       "id": "94809b9d-79b8-4ae9-8471-dc8b6b7a780b",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "C+SBA330‐53‐3215",
       "aircraftId": "9309826a-9cc3-48a5-a4da-442c076ddc87",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3771,7 +3910,7 @@
     {
       "id": "660fab45-e936-44a4-942c-752a3089140c",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "С+2С+SBA330‐53‐3215",
       "aircraftId": "86a50e25-f1e3-437e-b578-0ac300c7023c",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -3786,7 +3925,7 @@
     {
       "id": "98fdc021-9bfc-4d0b-bd88-2ce2cac9303d",
       "level": "OPERATIONAL",
-      "status": "PLANNED",
+      "status": "PENDING_EXECUTOR_APPROVAL",
       "title": "2C+4C",
       "aircraftId": "6ee194e0-a06d-4e48-88e5-ceb4a590779e",
       "eventTypeId": "504add26-f4de-4c5b-9a60-2fb1512645f0",
@@ -5759,8 +5898,8 @@
       "reason": "0",
       "changes": {
         "status": {
-          "to": "DRAFT",
-          "from": "PLANNED"
+          "to": "PENDING_EXECUTOR_APPROVAL",
+          "from": "PENDING_EXECUTOR_APPROVAL"
         }
       },
       "createdAt": "2026-02-04T19:28:18.786Z"
@@ -6154,8 +6293,8 @@
           "from": "2026-01-28T20:59:43.000Z"
         },
         "status": {
-          "to": "CONFIRMED",
-          "from": "PLANNED"
+          "to": "APPROVED_BY_EXECUTOR",
+          "from": "PENDING_EXECUTOR_APPROVAL"
         },
         "startAt": {
           "to": "2026-01-17T20:59:00.000Z",
@@ -6173,7 +6312,7 @@
       "changes": {
         "status": {
           "to": "DONE",
-          "from": "CONFIRMED"
+          "from": "APPROVED_BY_EXECUTOR"
         }
       },
       "createdAt": "2026-02-03T18:49:24.975Z"
@@ -6708,7 +6847,7 @@
       "changes": {
         "status": {
           "to": "DONE",
-          "from": "DRAFT"
+          "from": "PENDING_EXECUTOR_APPROVAL"
         }
       },
       "createdAt": "2026-02-01T15:30:32.178Z"
@@ -8258,20 +8397,52 @@
   ],
   "skills": [
     {
-      "id": "cfbea948-a83a-4796-85b8-edfbbbff7fce",
-      "code": "AVIO",
-      "name": "Авионика",
-      "isActive": true,
-      "createdAt": "2026-02-03T19:22:01.652Z",
-      "updatedAt": "2026-02-03T19:34:29.811Z"
-    },
-    {
-      "id": "c9d7809f-c5a0-4a0a-b4ca-895141b4026c",
-      "code": "MECH",
-      "name": "Механик",
+      "id": "a1000001-0001-4000-8000-000000000001",
+      "code": "ME",
+      "name": "ME (Mechanic)",
       "isActive": true,
       "createdAt": "2026-02-03T19:22:01.649Z",
-      "updatedAt": "2026-02-03T19:34:29.810Z"
+      "updatedAt": "2026-07-27T20:00:00.000Z"
+    },
+    {
+      "id": "a1000001-0001-4000-8000-000000000002",
+      "code": "AV",
+      "name": "AV (Avionics)",
+      "isActive": true,
+      "createdAt": "2026-02-03T19:22:01.652Z",
+      "updatedAt": "2026-07-27T20:00:00.000Z"
+    },
+    {
+      "id": "a1000001-0001-4000-8000-000000000003",
+      "code": "INT",
+      "name": "INT (Interior)",
+      "isActive": true,
+      "createdAt": "2026-07-27T20:00:00.000Z",
+      "updatedAt": "2026-07-27T20:00:00.000Z"
+    },
+    {
+      "id": "a1000001-0001-4000-8000-000000000004",
+      "code": "NDT",
+      "name": "NDT / BORO",
+      "isActive": true,
+      "createdAt": "2026-07-27T20:00:00.000Z",
+      "updatedAt": "2026-07-27T20:00:00.000Z"
+    },
+    {
+      "id": "a1000001-0001-4000-8000-000000000005",
+      "code": "SHOP",
+      "name": "SHOP",
+      "isActive": true,
+      "createdAt": "2026-07-27T20:00:00.000Z",
+      "updatedAt": "2026-07-27T20:00:00.000Z"
+    },
+    {
+      "id": "a1000001-0001-4000-8000-000000000006",
+      "code": "CAB_REP",
+      "name": "CabRep",
+      "isActive": true,
+      "createdAt": "2026-07-27T20:00:00.000Z",
+      "updatedAt": "2026-07-27T20:00:00.000Z"
     }
   ],
   "persons": [
@@ -8295,14 +8466,14 @@
   "personSkills": [
     {
       "personId": "2c50dce4-bfcf-4aec-905d-67a0fb36a258",
-      "skillId": "c9d7809f-c5a0-4a0a-b4ca-895141b4026c",
+      "skillId": "a1000001-0001-4000-8000-000000000001",
       "level": 5,
       "validFrom": null,
       "validTo": null
     },
     {
       "personId": "def9f102-1f95-42db-943b-8a97a2cef07f",
-      "skillId": "cfbea948-a83a-4796-85b8-edfbbbff7fce",
+      "skillId": "a1000001-0001-4000-8000-000000000002",
       "level": 4,
       "validFrom": null,
       "validTo": null
@@ -8315,7 +8486,7 @@
       "eventId": "bf9374d8-8658-4ba8-a578-f7d86b7da9a9",
       "date": "2026-02-02T00:00:00.000Z",
       "shiftId": "ffeb943a-48a7-4957-a8b1-2517340964f3",
-      "skillId": "cfbea948-a83a-4796-85b8-edfbbbff7fce",
+      "skillId": "a1000001-0001-4000-8000-000000000002",
       "plannedHeadcount": null,
       "plannedMinutes": 480,
       "notes": null,
@@ -8327,7 +8498,7 @@
       "eventId": "bf9374d8-8658-4ba8-a578-f7d86b7da9a9",
       "date": "2026-02-02T00:00:00.000Z",
       "shiftId": "ffeb943a-48a7-4957-a8b1-2517340964f3",
-      "skillId": "c9d7809f-c5a0-4a0a-b4ca-895141b4026c",
+      "skillId": "a1000001-0001-4000-8000-000000000001",
       "plannedHeadcount": null,
       "plannedMinutes": 480,
       "notes": null,
@@ -8339,7 +8510,7 @@
       "eventId": "bf9374d8-8658-4ba8-a578-f7d86b7da9a9",
       "date": "2026-02-03T00:00:00.000Z",
       "shiftId": "ffeb943a-48a7-4957-a8b1-2517340964f3",
-      "skillId": "cfbea948-a83a-4796-85b8-edfbbbff7fce",
+      "skillId": "a1000001-0001-4000-8000-000000000002",
       "plannedHeadcount": null,
       "plannedMinutes": 480,
       "notes": null,
@@ -8351,7 +8522,7 @@
       "eventId": "d921272b-aba8-4789-9948-cd342e76a499",
       "date": "2026-02-02T00:00:00.000Z",
       "shiftId": "ffeb943a-48a7-4957-a8b1-2517340964f3",
-      "skillId": "cfbea948-a83a-4796-85b8-edfbbbff7fce",
+      "skillId": "a1000001-0001-4000-8000-000000000002",
       "plannedHeadcount": 15,
       "plannedMinutes": 0,
       "notes": null,
@@ -8365,7 +8536,7 @@
       "eventId": "d921272b-aba8-4789-9948-cd342e76a499",
       "date": "2026-02-02T00:00:00.000Z",
       "shiftId": "ffeb943a-48a7-4957-a8b1-2517340964f3",
-      "skillId": "cfbea948-a83a-4796-85b8-edfbbbff7fce",
+      "skillId": "a1000001-0001-4000-8000-000000000002",
       "actualHeadcount": 14,
       "notes": null,
       "createdAt": "2026-02-03T19:36:34.976Z",
@@ -8377,7 +8548,7 @@
       "id": "dc15a98e-5059-4794-a700-84c34223111b",
       "eventId": "bf9374d8-8658-4ba8-a578-f7d86b7da9a9",
       "personId": "2c50dce4-bfcf-4aec-905d-67a0fb36a258",
-      "skillId": "cfbea948-a83a-4796-85b8-edfbbbff7fce",
+      "skillId": "a1000001-0001-4000-8000-000000000002",
       "shiftId": "ffeb943a-48a7-4957-a8b1-2517340964f3",
       "startAt": "2026-02-03T19:24:00.000Z",
       "endAt": "2026-02-03T21:24:00.000Z",
@@ -8390,7 +8561,7 @@
       "id": "901ab9ac-ca9f-4b2d-8134-5e58fc4760bb",
       "eventId": "d2279011-4276-4a45-a0c1-d0a8b7282c48",
       "personId": "2c50dce4-bfcf-4aec-905d-67a0fb36a258",
-      "skillId": "c9d7809f-c5a0-4a0a-b4ca-895141b4026c",
+      "skillId": "a1000001-0001-4000-8000-000000000001",
       "shiftId": "ffeb943a-48a7-4957-a8b1-2517340964f3",
       "startAt": "2026-02-03T19:22:00.000Z",
       "endAt": "2026-02-03T21:22:00.000Z",
