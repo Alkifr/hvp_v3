@@ -15,6 +15,7 @@ import { AnalyticsView } from "./pages/AnalyticsView";
 import { HelpView } from "./pages/HelpView";
 import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { NotificationBell } from "./components/NotificationBell";
+import { useIsMobile } from "./hooks/useIsMobile";
 import { authMe } from "./auth/authApi";
 import { getActiveSandboxId, setActiveSandboxId } from "../lib/api";
 import { installFourDigitDateYearLimit } from "../lib/dateInput";
@@ -23,6 +24,8 @@ import {
   eventDeepLinkFromHashQuery,
   parseHashPage
 } from "../lib/eventDeepLink";
+
+const MOBILE_HIDDEN_PAGES = new Set<Page>(["import", "mass", "ref", "admin", "itp"]);
 
 type Page =
   | "gantt"
@@ -251,6 +254,7 @@ function AppShell(props: {
   canAdmin: boolean;
 }) {
   const { me, permissions, page, setPage, canEvents, canWrite, canRef, canAdmin } = props;
+  const isMobile = useIsMobile();
   const { active: activeSandbox } = useActiveSandbox();
   const inSandbox = Boolean(activeSandbox);
   const canWriteInActiveContext =
@@ -258,8 +262,21 @@ function AppShell(props: {
 
   useEffect(() => installFourDigitDateYearLimit(), []);
 
+  useEffect(() => {
+    if (!isMobile) return;
+    if (MOBILE_HIDDEN_PAGES.has(page)) setPage("gantt");
+  }, [isMobile, page, setPage]);
+
+  const shellClass = [
+    "appShell",
+    inSandbox ? "appShellSandbox" : "appShellProd",
+    isMobile ? "appShellMobile" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className={inSandbox ? "appShell appShellSandbox" : "appShell appShellProd"}>
+    <div className={shellClass}>
       <aside className="nav" aria-label="Навигация HVP">
         <div className="navBrand" title="HVP — Hangar Visual Planning" aria-label="HVP">
           <span className="navBrandIcon" aria-hidden="true">
@@ -272,59 +289,61 @@ function AppShell(props: {
           <span className="navBrandText">HVP</span>
         </div>
 
-        <div className="navGroup">
-          {canEvents ? (
-            <>
-              <NavIcon active={page === "gantt"} onClick={() => setPage("gantt")} label="План (Гантт)" icon={ICONS.gantt} />
-              <NavIcon active={page === "hangar"} onClick={() => setPage("hangar")} label="Ангар (схема)" icon={ICONS.hangar} />
-              <NavIcon active={page === "analytics"} onClick={() => setPage("analytics")} label="Аналитика" icon={ICONS.analytics} />
-            </>
-          ) : null}
+        <div className="navScroll">
+          <div className="navGroup">
+            {canEvents ? (
+              <>
+                <NavIcon active={page === "gantt"} onClick={() => setPage("gantt")} label="План (Гантт)" icon={ICONS.gantt} />
+                <NavIcon active={page === "hangar"} onClick={() => setPage("hangar")} label="Ангар (схема)" icon={ICONS.hangar} />
+                <NavIcon active={page === "analytics"} onClick={() => setPage("analytics")} label="Аналитика" icon={ICONS.analytics} />
+              </>
+            ) : null}
 
-          {canWriteInActiveContext ? (
-            <>
-              <NavIcon active={page === "import"} onClick={() => setPage("import")} label="Импорт событий" icon={ICONS.import} />
-              <NavIcon active={page === "mass"} onClick={() => setPage("mass")} label="Массовое планирование" icon={ICONS.mass} />
-            </>
-          ) : null}
+            {!isMobile && canWriteInActiveContext ? (
+              <>
+                <NavIcon active={page === "import"} onClick={() => setPage("import")} label="Импорт событий" icon={ICONS.import} />
+                <NavIcon active={page === "mass"} onClick={() => setPage("mass")} label="Массовое планирование" icon={ICONS.mass} />
+              </>
+            ) : null}
 
-          {canRef ? (
-            <NavIcon active={page === "ref"} onClick={() => setPage("ref")} label="Справочники" icon={ICONS.ref} />
-          ) : null}
+            {!isMobile && canRef ? (
+              <NavIcon active={page === "ref"} onClick={() => setPage("ref")} label="Справочники" icon={ICONS.ref} />
+            ) : null}
 
-          <NavSandboxMenu active={page === "sandboxes"} icon={ICONS.sandboxes} onManage={() => setPage("sandboxes")} />
-        </div>
+            <NavSandboxMenu active={page === "sandboxes"} icon={ICONS.sandboxes} onManage={() => setPage("sandboxes")} />
+          </div>
 
-        <div className="navGroup navGroupBottom">
-          {canEvents ? (
-            <NotificationBell
-              enabled
-              onOpenEvent={(detail) => {
-                const targetSandbox = detail.sandboxId ?? null;
-                const current = getActiveSandboxId();
-                if ((targetSandbox || null) !== (current || null)) {
-                  setActiveSandboxId(targetSandbox);
-                }
-                setPage("gantt");
-              }}
-            />
-          ) : null}
-          <NavIcon active={page === "help"} onClick={() => setPage("help")} label="Инструкция" icon={ICONS.help} />
-          <NavIcon active={page === "profile"} onClick={() => setPage("profile")} label="Профиль" icon={ICONS.profile} />
-          {canAdmin ? (
-            <NavIcon active={page === "admin"} onClick={() => setPage("admin")} label="Админка" icon={ICONS.admin} />
-          ) : null}
+          <div className="navGroup navGroupBottom">
+            {canEvents ? (
+              <NotificationBell
+                enabled
+                onOpenEvent={(detail) => {
+                  const targetSandbox = detail.sandboxId ?? null;
+                  const current = getActiveSandboxId();
+                  if ((targetSandbox || null) !== (current || null)) {
+                    setActiveSandboxId(targetSandbox);
+                  }
+                  setPage("gantt");
+                }}
+              />
+            ) : null}
+            <NavIcon active={page === "help"} onClick={() => setPage("help")} label="Инструкция" icon={ICONS.help} />
+            <NavIcon active={page === "profile"} onClick={() => setPage("profile")} label="Профиль" icon={ICONS.profile} />
+            {!isMobile && canAdmin ? (
+              <NavIcon active={page === "admin"} onClick={() => setPage("admin")} label="Админка" icon={ICONS.admin} />
+            ) : null}
+          </div>
         </div>
       </aside>
 
       <main className="content">
         {page === "gantt" && <GanttView />}
         {page === "hangar" && <HangarView />}
-        {page === "import" && <EventImportView />}
-        {page === "mass" && <MassPlanView />}
-        {page === "ref" && <ReferenceView />}
+        {!isMobile && page === "import" && <EventImportView />}
+        {!isMobile && page === "mass" && <MassPlanView />}
+        {!isMobile && page === "ref" && <ReferenceView />}
         {page === "profile" && <ProfileView me={me} />}
-        {page === "admin" && <AdminView permissions={permissions} me={me} />}
+        {!isMobile && page === "admin" && <AdminView permissions={permissions} me={me} />}
         {page === "sandboxes" && <SandboxesView />}
         {page === "analytics" && <AnalyticsView />}
         {page === "help" && <HelpView permissions={permissions} onNavigate={(p) => setPage(p as Page)} />}

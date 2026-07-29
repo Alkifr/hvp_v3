@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiGet, getActiveSandboxId, setActiveSandboxId } from "../../lib/api";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 export type SandboxStatus = "ACTIVE" | "ARCHIVED";
 
@@ -14,6 +16,8 @@ export type SandboxSummary = {
   owner: { id: string; email: string; displayName: string | null };
   isOwner: boolean;
   myRole: "OWNER" | "EDITOR" | "VIEWER" | null;
+  /** Доступ только как системный ADMIN/SUPER_ADMIN, без членства и share-all */
+  viaAdmin?: boolean;
   sharedWithAllRole: "EDITOR" | "VIEWER" | null;
   eventCount: number;
   updatedAt: string;
@@ -71,15 +75,20 @@ export function NavSandboxMenu(props: {
   onManage: () => void;
 }) {
   const qc = useQueryClient();
+  const isMobile = useIsMobile();
   const { activeId, list, loading } = useActiveSandbox();
   const [open, setOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t)) return;
+      if (menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -101,6 +110,98 @@ export function NavSandboxMenu(props: {
     void qc.invalidateQueries();
   };
 
+  const menu = open ? (
+    <div
+      className={isMobile ? "navSandboxMenu mobileBottomSheet" : "navSandboxMenu"}
+      role="menu"
+      ref={menuRef}
+    >
+      <div className="navSandboxMenuTitle">Контекст плана</div>
+
+      <button
+        type="button"
+        className={`navSandboxItem${activeId ? "" : " active"}`}
+        onClick={() => pick(null)}
+        role="menuitem"
+      >
+        <span className="navSandboxItemMark" aria-hidden="true">
+          {activeId ? "○" : "●"}
+        </span>
+        <span className="navSandboxItemBody">
+          <span className="navSandboxItemTitle">Рабочий контур</span>
+          <span className="navSandboxItemMeta">продакшен</span>
+        </span>
+      </button>
+
+      <div className="navSandboxGroup">
+        <div className="navSandboxGroupTitle">Песочницы</div>
+        {loading ? <div className="navSandboxEmpty">Загрузка…</div> : null}
+        {!loading && activeList.length === 0 ? <div className="navSandboxEmpty">Нет активных песочниц</div> : null}
+        {activeList.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={`navSandboxItem navSandboxItemChild${activeId === s.id ? " active" : ""}`}
+            onClick={() => pick(s.id)}
+            role="menuitem"
+          >
+            <span className="navSandboxItemMark" aria-hidden="true">
+              {activeId === s.id ? "●" : "○"}
+            </span>
+            <span className="navSandboxItemBody">
+              <span className="navSandboxItemTitle">{s.name}</span>
+              <span className="navSandboxItemMeta">
+                {s.eventCount} соб. · {s.isOwner ? "Владелец" : s.myRole ?? "—"}
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {archivedList.length > 0 ? (
+        <div className="navSandboxGroup">
+          <button
+            type="button"
+            className="navSandboxGroupToggle"
+            onClick={() => setArchiveOpen((v) => !v)}
+            aria-expanded={archiveOpen}
+          >
+            <span aria-hidden="true">{archiveOpen ? "▾" : "▸"}</span>
+            Архив <span className="navSandboxCount">{archivedList.length}</span>
+          </button>
+          {archiveOpen
+            ? archivedList.map((s) => (
+                <div key={s.id} className="navSandboxItem navSandboxItemChild navSandboxItemArchived" role="presentation">
+                  <span className="navSandboxItemMark" aria-hidden="true">
+                    ◌
+                  </span>
+                  <span className="navSandboxItemBody">
+                    <span className="navSandboxItemTitle">{s.name}</span>
+                    <span className="navSandboxItemMeta">в архиве — откройте в управлении</span>
+                  </span>
+                </div>
+              ))
+            : null}
+        </div>
+      ) : null}
+
+      <div className="navSandboxDivider" />
+      <button
+        type="button"
+        className="navSandboxItem navSandboxItemAction"
+        onClick={() => {
+          setOpen(false);
+          props.onManage();
+        }}
+        role="menuitem"
+      >
+        <span className="navSandboxItemBody">
+          <span className="navSandboxItemTitle">Управление песочницами</span>
+        </span>
+      </button>
+    </div>
+  ) : null;
+
   return (
     <div className="navSandboxRoot" ref={rootRef}>
       <button
@@ -118,93 +219,20 @@ export function NavSandboxMenu(props: {
         <span className="navTooltip">Контекст плана</span>
       </button>
 
-      {open ? (
-        <div className="navSandboxMenu" role="menu">
-          <div className="navSandboxMenuTitle">Контекст плана</div>
-
-          <button
-            type="button"
-            className={`navSandboxItem${activeId ? "" : " active"}`}
-            onClick={() => pick(null)}
-            role="menuitem"
-          >
-            <span className="navSandboxItemMark" aria-hidden="true">
-              {activeId ? "○" : "●"}
-            </span>
-            <span className="navSandboxItemBody">
-              <span className="navSandboxItemTitle">Рабочий контур</span>
-              <span className="navSandboxItemMeta">продакшен</span>
-            </span>
-          </button>
-
-          <div className="navSandboxGroup">
-            <div className="navSandboxGroupTitle">Песочницы</div>
-            {loading ? <div className="navSandboxEmpty">Загрузка…</div> : null}
-            {!loading && activeList.length === 0 ? <div className="navSandboxEmpty">Нет активных песочниц</div> : null}
-            {activeList.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={`navSandboxItem navSandboxItemChild${activeId === s.id ? " active" : ""}`}
-                onClick={() => pick(s.id)}
-                role="menuitem"
-              >
-                <span className="navSandboxItemMark" aria-hidden="true">
-                  {activeId === s.id ? "●" : "○"}
-                </span>
-                <span className="navSandboxItemBody">
-                  <span className="navSandboxItemTitle">{s.name}</span>
-                  <span className="navSandboxItemMeta">
-                    {s.eventCount} соб. · {s.isOwner ? "Владелец" : s.myRole ?? "—"}
-                  </span>
-                </span>
-              </button>
-            ))}
-          </div>
-
-          {archivedList.length > 0 ? (
-            <div className="navSandboxGroup">
+      {open && isMobile
+        ? createPortal(
+            <>
               <button
                 type="button"
-                className="navSandboxGroupToggle"
-                onClick={() => setArchiveOpen((v) => !v)}
-                aria-expanded={archiveOpen}
-              >
-                <span aria-hidden="true">{archiveOpen ? "▾" : "▸"}</span>
-                Архив <span className="navSandboxCount">{archivedList.length}</span>
-              </button>
-              {archiveOpen
-                ? archivedList.map((s) => (
-                    <div key={s.id} className="navSandboxItem navSandboxItemChild navSandboxItemArchived" role="presentation">
-                      <span className="navSandboxItemMark" aria-hidden="true">
-                        ◌
-                      </span>
-                      <span className="navSandboxItemBody">
-                        <span className="navSandboxItemTitle">{s.name}</span>
-                        <span className="navSandboxItemMeta">в архиве — откройте в управлении</span>
-                      </span>
-                    </div>
-                  ))
-                : null}
-            </div>
-          ) : null}
-
-          <div className="navSandboxDivider" />
-          <button
-            type="button"
-            className="navSandboxItem navSandboxItemAction"
-            onClick={() => {
-              setOpen(false);
-              props.onManage();
-            }}
-            role="menuitem"
-          >
-            <span className="navSandboxItemBody">
-              <span className="navSandboxItemTitle">Управление песочницами</span>
-            </span>
-          </button>
-        </div>
-      ) : null}
+                className="mobileBottomSheetBackdrop"
+                aria-label="Закрыть"
+                onClick={() => setOpen(false)}
+              />
+              {menu}
+            </>,
+            document.body
+          )
+        : menu}
     </div>
   );
 }

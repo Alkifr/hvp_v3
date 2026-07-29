@@ -113,7 +113,7 @@ export function SandboxesView() {
           className={tab === "shared" ? "sandboxesTab active" : "sandboxesTab"}
           onClick={() => setTab("shared")}
         >
-          Расшарены со мной <span className="sandboxesTabCount">{shared.length}</span>
+          Расшарены / все <span className="sandboxesTabCount">{shared.length}</span>
         </button>
         <button
           type="button"
@@ -131,7 +131,7 @@ export function SandboxesView() {
           {tab === "mine"
             ? "У вас пока нет песочниц. Создайте первую — скопируйте текущий план и спокойно поэкспериментируйте."
             : tab === "shared"
-              ? "Пока никто не поделился с вами песочницей."
+              ? "Нет других доступных песочниц."
               : "Архив пуст."}
         </div>
       ) : (
@@ -190,6 +190,7 @@ function SandboxCard(props: {
         <div className="sandboxCardTitle">{s.name}</div>
         {active ? <span className="sandboxCardActiveBadge">Активна</span> : null}
         {s.sharedWithAllRole ? <span className="sandboxCardSharedBadge">Для всех</span> : null}
+        {s.viaAdmin ? <span className="sandboxCardSharedBadge">Админ-просмотр</span> : null}
         {archived ? <span className="sandboxCardArchivedBadge">Архив</span> : null}
       </div>
       {s.description ? <div className="sandboxCardDesc">{s.description}</div> : null}
@@ -197,7 +198,20 @@ function SandboxCard(props: {
         <span>События: <b>{s.eventCount}</b></span>
         <span>Обновлено: {formatDate(s.updatedAt)}</span>
         <span>Владелец: {s.owner.displayName ?? s.owner.email}</span>
-        <span>Роль: <b>{s.isOwner ? "Владелец" : s.myRole ?? "—"}</b></span>
+        <span>
+          Роль:{" "}
+          <b>
+            {s.isOwner
+              ? "Владелец"
+              : s.viaAdmin
+                ? "Наблюдатель (админ)"
+                : s.myRole === "EDITOR"
+                  ? "Редактор"
+                  : s.myRole === "VIEWER"
+                    ? "Наблюдатель"
+                    : s.myRole ?? "—"}
+          </b>
+        </span>
         <span>Участников: {s.members.length + 1}</span>
       </div>
       <div className="sandboxCardActions">

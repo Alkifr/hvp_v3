@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 
 import { apiGet, apiPost, apiPut } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
+import { authMe } from "../auth/authApi";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 import { ToolbarPopover } from "../components/ToolbarPopover";
@@ -255,7 +256,11 @@ function readStringArray(v: unknown): string[] {
 
 export function HangarView() {
   const qc = useQueryClient();
+  const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0 });
   const { active: activeSandbox } = useActiveSandbox();
+  const me = meQ.data && "ok" in meQ.data && meQ.data.ok ? meQ.data.user : null;
+  const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
+  const canEditEvents = Boolean(me?.permissions?.includes("events:write") || canWriteSandbox);
   const savedUi = useMemo(() => safeReadHangarUi(), []);
   const initialFrom = useMemo(
     () => (isValidDateInput(String(savedUi?.fromDate ?? "")) ? String(savedUi.fromDate) : dayjs().format("YYYY-MM-DD")),
@@ -777,6 +782,7 @@ export function HangarView() {
   });
 
   const applyCandidateToDraft = (eventId: string, candidate: PlacementCandidate) => {
+    if (!canEditEvents) return;
     setDraft((prev) => {
       const next = new Map(prev);
       next.set(eventId, { layoutId: candidate.layoutId, standId: candidate.standId });
@@ -808,6 +814,7 @@ export function HangarView() {
   });
 
   const applyDraft = async () => {
+    if (!canEditEvents) return;
     const entries = Array.from(draft.entries());
     for (const [eventId, placement] of entries) {
       await reserveM.mutateAsync({ eventId, ...placement });
@@ -820,6 +827,10 @@ export function HangarView() {
   };
 
   const placeInHangar = (hangar: SummaryHangar, eventId = selectedEventId) => {
+    if (!canEditEvents) {
+      setNotice("Недостаточно прав для размещения событий.");
+      return;
+    }
     if (!eventId) {
       setNotice("Сначала выберите или перетащите событие.");
       return;
@@ -830,6 +841,7 @@ export function HangarView() {
   };
 
   const placeOnStand = (hangar: SummaryHangar, stand: SummaryStand) => {
+    if (!canEditEvents) return;
     if (!selectedEvent) return;
     setNotice(null);
     if (!standAccepts(stand, selectedEvent)) {
@@ -904,7 +916,7 @@ export function HangarView() {
             ? `${stand.code}: ${stand.occupiedAt.aircraftLabel} • ${stand.occupiedAt.title}`
             : `${stand.code}: ${viewMode === "moment" ? "свободно" : `${stand.utilizationPct.toFixed(0)}%`}`;
           return (
-            <g key={stand.id} transform={`rotate(${stand.rotate ?? 0} ${stand.x + stand.w / 2} ${stand.y + stand.h / 2})`} onClick={() => placeOnStand(hangar, stand)} style={{ cursor: selectedEvent ? "pointer" : "default" }}>
+            <g key={stand.id} transform={`rotate(${stand.rotate ?? 0} ${stand.x + stand.w / 2} ${stand.y + stand.h / 2})`} onClick={() => placeOnStand(hangar, stand)} style={{ cursor: canEditEvents && selectedEvent ? "pointer" : "default" }}>
               <title>{title}</title>
               <rect
                 x={stand.x + 0.08}
@@ -953,10 +965,11 @@ export function HangarView() {
         key={hangar.hangar.id}
         className={expanded ? "hangarPlanCard hangarPlanCardExpanded" : "hangarPlanCard"}
         onDragOver={(e) => {
+          if (!canEditEvents) return;
           if (hasLayout && e.dataTransfer.types.includes("text/plain")) e.preventDefault();
         }}
         onDrop={(e) => {
-          if (!hasLayout) return;
+          if (!canEditEvents || !hasLayout) return;
           const eventId = e.dataTransfer.getData("text/plain");
           if (!eventId) return;
           e.preventDefault();
@@ -1005,9 +1018,13 @@ export function HangarView() {
             <button
               className="btn btnPrimary"
               type="button"
-              disabled={!selectedEventId || suggestM.isPending}
+              disabled={!canEditEvents || !selectedEventId || suggestM.isPending}
               onClick={() => placeInHangar(hangar)}
-              title="Подобрать подходящую схему и место внутри ангара"
+              title={
+                !canEditEvents
+                  ? "Недостаточно прав для размещения событий"
+                  : "Подобрать подходящую схему и место внутри ангара"
+              }
             >
               {suggestM.isPending ? "Подбор…" : "Разместить в ангар"}
             </button>
@@ -1303,8 +1320,14 @@ export function HangarView() {
             type="button"
             className="btn ganttIconBtn"
             onClick={() => autoFitM.mutate()}
-            disabled={!summary || autoFitM.isPending}
-            title={autoFitM.isPending ? "Подбор схем…" : "Подобрать схемы для неразмещённых событий"}
+            disabled={!canEditEvents || !summary || autoFitM.isPending}
+            title={
+              !canEditEvents
+                ? "Недостаточно прав для подбора схем"
+                : autoFitM.isPending
+                  ? "Подбор схем…"
+                  : "Подобрать схемы для неразмещённых событий"
+            }
             aria-label="Подобрать схемы"
           >
             <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1318,8 +1341,8 @@ export function HangarView() {
             type="button"
             className="btn ganttIconBtn"
             onClick={clearDraft}
-            disabled={draftCount === 0}
-            title="Очистить draft размещений"
+            disabled={!canEditEvents || draftCount === 0}
+            title={!canEditEvents ? "Недостаточно прав для изменения размещений" : "Очистить draft размещений"}
             aria-label="Очистить draft"
           >
             <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1332,8 +1355,14 @@ export function HangarView() {
             type="button"
             className={`btn ganttIconBtn${draftCount > 0 ? " btnPrimary" : ""}`}
             onClick={applyDraft}
-            disabled={draftCount === 0 || reserveM.isPending}
-            title={reserveM.isPending ? "Применение…" : `Применить draft (${draftCount})`}
+            disabled={!canEditEvents || draftCount === 0 || reserveM.isPending}
+            title={
+              !canEditEvents
+                ? "Недостаточно прав для применения размещений"
+                : reserveM.isPending
+                  ? "Применение…"
+                  : `Применить draft (${draftCount})`
+            }
             aria-label={`Применить draft${draftCount ? `, ${draftCount}` : ""}`}
           >
             <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1362,6 +1391,11 @@ export function HangarView() {
       ) : null}
 
       {notice ? <div className="contextNotice">{notice}</div> : null}
+      {!canEditEvents ? (
+        <div className="contextNotice" role="status">
+          <strong>Режим просмотра.</strong> У вашей роли нет прав на размещение событий и подбор схем.
+        </div>
+      ) : null}
       {summaryQ.error ? <div className="errorMsg">{String((summaryQ.error as any)?.message ?? summaryQ.error)}</div> : null}
       {autoFitM.error ? <div className="errorMsg">{String((autoFitM.error as any)?.message ?? autoFitM.error)}</div> : null}
       {suggestM.error ? <div className="errorMsg">{String((suggestM.error as any)?.message ?? suggestM.error)}</div> : null}
@@ -1369,7 +1403,11 @@ export function HangarView() {
       <div className="hangarWorkspace">
         <aside className="hangarSidePanel">
           <h3>События для размещения</h3>
-          <div className="muted small">Перетащите событие на ангар или выберите его и нажмите «Разместить в ангар».</div>
+          <div className="muted small">
+            {canEditEvents
+              ? "Перетащите событие на ангар или выберите его и нажмите «Разместить в ангар»."
+              : "Просмотр неразмещённых событий. Размещение недоступно для вашей роли."}
+          </div>
           <div className="hangarEventList">
             {(summary?.unplaced ?? []).length === 0 ? <div className="muted">Нет неразмещённых событий.</div> : null}
             {(summary?.unplaced ?? []).map((event) => (
@@ -1377,8 +1415,12 @@ export function HangarView() {
                 key={event.id}
                 className={selectedEventId === event.id ? "hangarEventItem active" : "hangarEventItem"}
                 type="button"
-                draggable
+                draggable={canEditEvents}
                 onDragStart={(e) => {
+                  if (!canEditEvents) {
+                    e.preventDefault();
+                    return;
+                  }
                   e.dataTransfer.setData("text/plain", event.id);
                   e.dataTransfer.effectAllowed = "copy";
                   setSelectedEventId(event.id);
@@ -1412,8 +1454,9 @@ export function HangarView() {
                       key={`${candidate.layoutId}-${candidate.standId}`}
                       className="hangarFitItem"
                       type="button"
+                      disabled={!canEditEvents}
                       onClick={() => {
-                        if (!suggestResult.event) return;
+                        if (!canEditEvents || !suggestResult.event) return;
                         applyCandidateToDraft(suggestResult.event.id, candidate);
                       }}
                     >

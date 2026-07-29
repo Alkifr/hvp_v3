@@ -165,6 +165,15 @@ a {
   z-index: 20;
 }
 
+.navScroll {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 6px;
+}
+
 .appShellProd .nav {
   background:
     linear-gradient(180deg, rgba(16, 185, 129, 0.22) 0%, rgba(6, 95, 70, 0.08) 42%, rgba(11, 18, 32, 0.96) 100%),
@@ -2640,6 +2649,18 @@ a {
   color: white;
 }
 
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.btnPrimary:disabled {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+  color: #94a3b8;
+  opacity: 1;
+}
+
 .btnGhost {
   background: transparent;
   border-color: rgba(148, 163, 184, 0.5);
@@ -2726,6 +2747,67 @@ main.content:has(.ganttPage) {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.ganttToolbarCollapseBtn {
+  position: relative;
+}
+
+.ganttToolbarCollapseBtn svg {
+  transition: transform 0.15s ease;
+}
+
+.ganttToolbarCollapseBtnClosed svg {
+  transform: rotate(-90deg);
+}
+
+.ganttToolbarCollapseBadge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+}
+
+.tgFiltersToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 8px !important;
+  font-size: 12px;
+  color: #475569;
+}
+
+.tgFiltersToggleCollapsed {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.tgFiltersToggleActive {
+  color: #1d4ed8;
+}
+
+.tgFiltersToggleBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tgFiltersCollapsedHint {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ganttPanelDot {
@@ -3273,13 +3355,24 @@ main.content:has(.ganttPage) {
 
 .ganttToolbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px 10px;
-  align-items: center;
+  flex-direction: column;
+  gap: 8px;
   padding: 8px 10px;
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.25);
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+}
+
+.ganttToolbarRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.ganttToolbarRow + .ganttToolbarRow {
+  padding-top: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
 }
 
 .ganttToolbarGroup {
@@ -4395,6 +4488,64 @@ textarea {
   inset: 0 auto auto 0;
   pointer-events: none;
   z-index: 1;
+  overflow: visible;
+}
+
+.placementLinkLayerActive {
+  z-index: 4;
+}
+
+.placementLinkHalo {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 4 3.5;
+}
+
+.placementLinkStroke {
+  fill: none;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 4 3.5;
+  opacity: 0.9;
+}
+
+.placementLinkDot {
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 1;
+}
+
+.placementBridgeMark {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 3;
+  transform: translate(-50%, -50%);
+}
+
+.placementBridgeMarkOut {
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid rgba(15, 23, 42, 0.78);
+}
+
+.placementBridgeMarkIn {
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-right: 7px solid rgba(15, 23, 42, 0.55);
+}
+
+.placementBridgeMarkDimmed {
+  opacity: 0.28;
+}
+
+.barDimmed {
+  opacity: 0.38;
+  filter: saturate(0.65);
 }
 
 .ganttLabel {
@@ -8806,11 +8957,52 @@ textarea {
   padding: 12px 10px;
 }
 
+/* ====== Mobile bottom sheets (portal) ====== */
+
+.mobileBottomSheetBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(15, 23, 42, 0.45);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.mobileBottomSheet {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: calc(58px + env(safe-area-inset-bottom, 0px) + 8px);
+  z-index: 95;
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
+}
+
+.mobileBottomSheet.navNotifyPanel {
+  left: 10px;
+  right: 10px;
+  bottom: calc(58px + env(safe-area-inset-bottom, 0px) + 8px);
+  width: auto;
+  max-height: min(70vh, 480px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
 /* ====== Mobile layout ====== */
 
 @media (max-width: 760px) {
   :root {
-    --topbar-sticky-height: 48px;
+    --topbar-sticky-height: 0px;
+    --mobile-nav-height: calc(58px + env(safe-area-inset-bottom, 0px));
   }
 
   body {
@@ -8820,22 +9012,33 @@ textarea {
   .appShell {
     display: block;
     min-height: 100vh;
-    padding-bottom: 62px;
+    padding-bottom: var(--mobile-nav-height);
   }
 
   .nav {
     position: fixed;
     inset: auto 0 0 0;
-    height: 58px;
-    padding: 6px 8px;
+    height: var(--mobile-nav-height);
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
     border-right: 0;
     border-top: 1px solid rgba(148, 163, 184, 0.18);
     flex-direction: row;
     align-items: center;
     gap: 8px;
+    overflow: visible;
+    z-index: 70;
+  }
+
+  .navScroll {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 4px;
     overflow-x: auto;
     overflow-y: hidden;
-    z-index: 70;
+    -webkit-overflow-scrolling: touch;
   }
 
   .navBrand {
@@ -8851,6 +9054,7 @@ textarea {
     flex-direction: row;
     align-items: center;
     gap: 4px;
+    flex: 0 0 auto;
   }
 
   .navGroupBottom {
@@ -8872,6 +9076,10 @@ textarea {
     box-shadow: inset 0 -2px 0 #60a5fa;
   }
 
+  .appShellMobile .navIcon.navIconSandboxActive {
+    box-shadow: inset 0 -2px 0 #f59e0b;
+  }
+
   .navTooltip {
     display: none;
   }
@@ -8883,7 +9091,7 @@ textarea {
 
   .topbar {
     top: 0;
-    min-height: var(--topbar-sticky-height);
+    min-height: 0;
     padding: 6px 8px;
     gap: 8px;
     overflow-x: auto;
@@ -8919,8 +9127,31 @@ textarea {
   }
 
   main.content:has(.ganttPage) {
-    height: calc(100dvh - var(--topbar-sticky-height) - 62px);
-    max-height: calc(100dvh - var(--topbar-sticky-height) - 62px);
+    height: calc(100dvh - var(--mobile-nav-height));
+    max-height: calc(100dvh - var(--mobile-nav-height));
+  }
+
+  .appShellMobile .ganttStickyFooter {
+    display: none;
+  }
+
+  .appShellMobile .ganttEventsTable tbody tr {
+    min-height: 44px;
+  }
+
+  .appShellMobile .ganttEventsTable td,
+  .appShellMobile .ganttEventsTable th {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .ganttViewToggleCompact {
+    flex: 0 0 auto;
+  }
+
+  .ganttViewToggleCompact .ganttViewToggleBtn {
+    padding: 4px 8px;
+    font-size: 12px;
   }
 
   .ganttPanelActions {
@@ -8931,9 +9162,15 @@ textarea {
 
   .ganttToolbar {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
     padding: 8px;
+  }
+
+  .ganttToolbarRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .ganttToolbarGroup,
@@ -8982,7 +9219,7 @@ textarea {
     left: 10px;
     right: 10px;
     top: auto;
-    bottom: 68px;
+    bottom: calc(var(--mobile-nav-height) + 8px);
     min-width: 0;
     max-height: min(420px, 62vh) !important;
     z-index: 90;
@@ -9033,7 +9270,7 @@ textarea {
   .floatingEditorCollapsed {
     left: auto;
     right: 8px;
-    bottom: 70px;
+    bottom: calc(var(--mobile-nav-height) + 8px);
     width: min(280px, calc(50vw - 16px));
     min-height: 96px;
   }

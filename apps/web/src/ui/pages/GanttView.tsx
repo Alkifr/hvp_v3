@@ -33,6 +33,7 @@ import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 import { ToolbarPopover } from "../components/ToolbarPopover";
 import { SwitchToggle } from "../components/SwitchToggle";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 dayjs.extend(utc);
 
@@ -449,11 +450,11 @@ type Aircraft = {
 type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
 type EventType = { id: string; code: string; name: string; color?: string | null };
 type OperatorRef = { id: string; code?: string | null; name: string; isActive?: boolean };
-type Hangar = { id: string; name: string; isPhysical?: boolean };
+type Hangar = { id: string; name: string; code?: string; isPhysical?: boolean };
 type Layout = { id: string; name: string; hangarId: string; code?: string; capacitySummary?: string; standsSummary?: string; isCompatible?: boolean };
 type Stand = { id: string; layoutId: string; code: string; name: string; isActive?: boolean; isCompatible?: boolean };
 type AircraftTypePaletteRow = { id: string; operatorId: string; aircraftTypeId: string; color: string; isActive: boolean };
-type DndStand = Stand & { hangarId: string; hangarName: string; layoutName: string };
+type DndStand = Stand & { hangarId: string; hangarName: string; hangarCode?: string; layoutName: string; layoutCode?: string };
 
 type GroupMode = "AIRCRAFT" | "HANGAR_STAND";
 type GanttDisplayMode = "CURRENT" | "PLAN_FACT";
@@ -697,13 +698,12 @@ function eventPlanningKind(ev: EventRow): "PLANNED" | "UNPLANNED" {
 
 function eventMatchesGanttFilters(ev: EventRow, filters: GanttFilters, skip?: GanttFilterKey): boolean {
   if (skip !== "hangarIds") {
-    const hangarIds = eventHangarIds(ev);
-    const isUnassigned = hangarIds.length === 0;
-    const okHangar =
-      filters.hangarIds.length === 0 ||
-      hangarIds.some((id) => filters.hangarIds.includes(id)) ||
-      isUnassigned;
-    if (!okHangar) return false;
+    if (filters.hangarIds.length > 0) {
+      const hangarIds = eventHangarIds(ev);
+      // События без ангара/места не проходят фильтр по ангару — иначе в каскаде
+      // типов ВС/бортов появляются значения из неразмещённых событий.
+      if (!hangarIds.some((id) => filters.hangarIds.includes(id))) return false;
+    }
   }
   if (skip !== "aircraftTypeIds") {
     if (filters.aircraftTypeIds.length > 0 && !filters.aircraftTypeIds.includes(eventAircraftTypeId(ev))) return false;
@@ -798,6 +798,8 @@ const ENTRY_TIME_LABEL_WIDTH = 42;
 const ENTRY_TIME_LABEL_GAP = 4;
 const MIN_GANTT_LABEL_WIDTH = 160;
 const MAX_GANTT_LABEL_WIDTH = 720;
+/** Ниже порога левая ось показывает коды вместо наименований. */
+const AXIS_CODES_BELOW_WIDTH = 210;
 const MIN_FIT_DAY_WIDTH = 0.25;
 
 function canShowBarEdgeTimeLabel(zoom: ZoomLevel) {
@@ -862,13 +864,52 @@ function compactHangarLabel(name: string | null | undefined) {
   return n.replace(/^ангар\s*/i, "H-").replace(/\s+/g, "");
 }
 
-function hangarAxisLabel(name: string | null | undefined) {
-  return String(name ?? "").trim() || "Ангар";
+function hangarAxisLabel(
+  hangar: { name?: string | null; code?: string | null } | string | null | undefined,
+  preferCode = false
+) {
+  if (hangar == null) return "Ангар";
+  if (typeof hangar === "string") {
+    const name = hangar.trim();
+    return preferCode ? compactHangarLabel(name) || name || "Ангар" : name || "Ангар";
+  }
+  const name = String(hangar.name ?? "").trim();
+  const code = String(hangar.code ?? "").trim();
+  if (preferCode) return code || compactHangarLabel(name) || name || "Ангар";
+  return name || code || "Ангар";
+}
+
+function layoutAxisLabel(
+  layout: { name?: string | null; code?: string | null } | string | null | undefined,
+  preferCode = false
+) {
+  if (layout == null) return "";
+  if (typeof layout === "string") return layout.trim();
+  const name = String(layout.name ?? "").trim();
+  const code = String(layout.code ?? "").trim();
+  if (preferCode) return code || name;
+  return name || code;
 }
 
 function compactStandLabel(code: string | null | undefined) {
   if (!code) return "";
   return String(code).trim().replace(/\s*-\s*/g, "-").replace(/\s+/g, "");
+}
+
+function formatHangarStandAxisLabel(hangarLabel: string, standCode: string) {
+  const stand = compactStandLabel(standCode);
+  return stand ? `${hangarLabel} / ${stand}` : hangarLabel;
+}
+
+/** Доп. полоса нахлёста на оси: «· 2»; в title — «· Нахлёст 2». */
+function overlapLaneAxisLabel(base: string, laneIndex: number): string {
+  if (laneIndex <= 0) return base;
+  return `${base} · ${laneIndex + 1}`;
+}
+
+function overlapLaneAxisTitle(base: string, laneIndex: number): string {
+  if (laneIndex <= 0) return base;
+  return `${base} · Нахлёст ${laneIndex + 1}`;
 }
 
 function compactBarLabel(ev: EventRow) {
@@ -879,11 +920,27 @@ function compactBarLabel(ev: EventRow) {
   return place ? `${type}/${place}` : type;
 }
 
-function hangarSummaryLabel(ev: EventRow) {
+function hangarSummaryLabel(
+  ev: EventRow,
+  preferCode = false,
+  hangarById?: Map<string, { name: string; code: string }>
+) {
   const placements = ev.placements ?? [];
+  const resolve = (hangarId: string | null | undefined, fallbackName: string | null | undefined) => {
+    const meta = hangarId ? hangarById?.get(hangarId) : undefined;
+    return hangarAxisLabel(
+      { name: meta?.name ?? fallbackName, code: meta?.code },
+      preferCode
+    );
+  };
   const names = placements.length
-    ? placements.map((p) => compactHangarLabel(p.hangar?.name ?? "") || compactHangarLabel((p.layout as any)?.hangar?.name ?? ""))
-    : [compactHangarLabel(ev.hangar?.name)];
+    ? placements.map((p) =>
+        resolve(
+          p.hangar?.id ?? (p.layout as any)?.hangar?.id,
+          p.hangar?.name ?? (p.layout as any)?.hangar?.name ?? ""
+        )
+      )
+    : [resolve(ev.hangar?.id, ev.hangar?.name ?? null)];
   return Array.from(new Set(names.filter(Boolean))).join(" → ");
 }
 
@@ -895,8 +952,14 @@ function standSummaryLabel(ev: EventRow) {
   return Array.from(new Set(names.filter(Boolean))).join(" → ");
 }
 
-function aircraftAxisSubLabel(ev: EventRow) {
-  return [ev.eventType?.name, hangarSummaryLabel(ev), standSummaryLabel(ev)].filter(Boolean).join(" • ");
+function aircraftAxisSubLabel(
+  ev: EventRow,
+  preferCode = false,
+  hangarById?: Map<string, { name: string; code: string }>
+) {
+  return [ev.eventType?.name, hangarSummaryLabel(ev, preferCode, hangarById), standSummaryLabel(ev)]
+    .filter(Boolean)
+    .join(" • ");
 }
 
 function shortEventName(ev: EventRow) {
@@ -937,10 +1000,11 @@ function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "LOCAL") {
 
 function eventSegmentsForHangarRows(ev: EventRow): EventRow[] {
   if (!ev.placements?.length) return [ev];
-  return ev.placements.map((p, idx) => ({
+  const sorted = sortEventPlacements(ev.placements);
+  return sorted.map((p, idx) => ({
     ...ev,
-    segmentKey: `${ev.id}:placement:${p.id ?? idx}`,
-    placementCount: ev.placements?.length ?? 1,
+    segmentKey: placementSegmentKey(ev.id, p, idx),
+    placementCount: sorted.length,
     placementOrigin: p.origin ?? "MANUAL",
     startAt: p.startAt,
     endAt: p.endAt,
@@ -1009,6 +1073,64 @@ function pickTextColorForBg(color: string) {
   // чем выше значение, тем светлее фон. Порог ~155 даёт хорошее разделение.
   const yiq = (r * 299 + g * 587 + b * 114) / 1000;
   return yiq >= 155 ? "rgba(15, 23, 42, 0.92)" : "white";
+}
+
+/** Цвет соединителя между placements: затемняем светлые оттенки, чтобы линия не терялась. */
+function placementLinkColor(baseColor: string): string {
+  const m = String(baseColor ?? "").trim().match(/^#([0-9a-fA-F]{6})$/);
+  if (!m) return "#475569";
+  const hex = m[1]!;
+  let r = parseInt(hex.slice(0, 2), 16);
+  let g = parseInt(hex.slice(2, 4), 16);
+  let b = parseInt(hex.slice(4, 6), 16);
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  // Слишком светлый — тянем к slate; иначе слегка затемняем.
+  if (yiq >= 150) {
+    const t = 0.55;
+    r = Math.round(r * (1 - t) + 51 * t); // #334155
+    g = Math.round(g * (1 - t) + 65 * t);
+    b = Math.round(b * (1 - t) + 85 * t);
+  } else {
+    r = Math.round(r * 0.72);
+    g = Math.round(g * 0.72);
+    b = Math.round(b * 0.72);
+  }
+  const toHex = (n: number) => n.toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/** Плавная S-кривая между краями соседних сегментов (горизонтальные касательные). */
+function placementLinkPath(x1: number, y1: number, x2: number, y2: number): string {
+  const dx = x2 - x1;
+  // Меньший tension → более спрямлённая кривая.
+  const tension = Math.max(12, Math.abs(dx) * 0.28);
+  const c1x = x1 + tension;
+  const c2x = x2 - tension;
+  return `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${c1x.toFixed(1)} ${y1.toFixed(1)}, ${c2x.toFixed(1)} ${y2.toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+}
+
+function sortEventPlacements(placements: EventPlacementRow[]): EventPlacementRow[] {
+  return [...placements].sort(
+    (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || Date.parse(a.startAt) - Date.parse(b.startAt)
+  );
+}
+
+function placementSegmentKey(eventId: string, placement: EventPlacementRow, sortedIndex: number): string {
+  return `${eventId}:placement:${placement.id ?? sortedIndex}`;
+}
+
+function formatPlacementBridgeLabel(
+  p: EventPlacementRow,
+  hangarById: Map<string, { name: string; code: string }>
+): string {
+  const hid = String(p.hangarId ?? p.hangar?.id ?? "").trim();
+  const stand = compactStandLabel(p.stand?.code);
+  const hasHangar = Boolean(hid || String(p.hangar?.name ?? "").trim());
+  if (p.origin === "AUTO_GAP" || (!hasHangar && !stand)) return "Без ангара/места";
+  const meta = hid ? hangarById.get(hid) : undefined;
+  const hangar = hangarAxisLabel({ name: meta?.name ?? p.hangar?.name, code: meta?.code }, true);
+  if (!stand) return `${hangar} / Без места`;
+  return `${hangar} / ${stand}`;
 }
 
 const AIRCRAFT_MARK_PALETTE = [
@@ -1309,6 +1431,8 @@ function FloatingEditorPanel(props: {
   headerActions?: React.ReactNode;
   /** Когда поверх открыт модальный диалог (причина изменения и т.п.) */
   beneathModal?: boolean;
+  /** На мобиле отключаем перетаскивание панели */
+  disableDrag?: boolean;
   children: React.ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -1341,7 +1465,7 @@ function FloatingEditorPanel(props: {
   }, []);
 
   const onHeaderPointerDown = (e: ReactPointerEvent<HTMLElement>) => {
-    if (props.collapsed) return;
+    if (props.disableDrag || props.collapsed) return;
     if (e.button !== 0) return;
     const t = e.target as HTMLElement | null;
     if (t?.closest?.("button, a, input, select, textarea, label")) return;
@@ -1647,12 +1771,19 @@ function EvCardTitle(props: { children: React.ReactNode; helpLabel: string; help
 
 export function GanttView() {
   const qc = useQueryClient();
+  const isMobile = useIsMobile();
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0 });
   const { active: activeSandbox, activeId: activeSandboxId } = useActiveSandbox();
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
   const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
   const canEditEvents = Boolean(me?.permissions?.includes("events:write") || canWriteSandbox);
-  const canDnd = Boolean(canWriteSandbox || (me?.permissions?.includes("events:write") && (me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"))));
+  const canEditEventsEffective = canEditEvents && !isMobile;
+  const canDnd = Boolean(
+    !isMobile &&
+      (canWriteSandbox ||
+        (me?.permissions?.includes("events:write") && (me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"))))
+  );
+  const mobileUiAppliedRef = useRef(false);
 
   const headerViewportRef = useRef<HTMLDivElement | null>(null);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
@@ -1736,6 +1867,12 @@ export function GanttView() {
     return (ZOOM_ORDER as string[]).includes(String(z)) ? (z as ZoomLevel) : "day";
   });
   const [fitWidth, setFitWidth] = useState<boolean>(() => Boolean(savedUi?.fitWidth ?? false));
+  const [showAllPlacementLinks, setShowAllPlacementLinks] = useState<boolean>(() =>
+    Boolean(savedUi?.showAllPlacementLinks ?? false)
+  );
+  const [ganttToolbarOpen, setGanttToolbarOpen] = useState<boolean>(
+    () => savedUi?.ganttToolbarOpen !== false && savedUi?.ganttFiltersOpen !== false
+  );
   const [timelineViewportWidth, setTimelineViewportWidth] = useState<number>(0);
   const [timelineScaleMenu, setTimelineScaleMenu] = useState<null | { x: number; y: number }>(null);
   const timelineScaleMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1983,11 +2120,14 @@ export function GanttView() {
       const standsPerLayout = await Promise.all(
         layouts.map((l) => apiGet<Stand[]>(`/api/ref/stands?layoutId=${encodeURIComponent(l.id)}&activeOnly=1`))
       );
-      const hangarById = new Map((hangarsQ.data ?? []).map((h) => [h.id, h.name] as const));
+      const hangarById = new Map(
+        (hangarsQ.data ?? []).map((h) => [h.id, { name: h.name, code: h.code ?? "" }] as const)
+      );
       const out: DndStand[] = [];
       for (let i = 0; i < layouts.length; i++) {
         const l = layouts[i]!;
-        const hname = hangarById.get(l.hangarId) ?? "Ангар";
+        const hangar = hangarById.get(l.hangarId);
+        const hname = hangar?.name ?? "Ангар";
         for (const s of standsPerLayout[i] ?? []) {
           if ((s as any).isActive === false) continue;
           out.push({
@@ -1995,7 +2135,9 @@ export function GanttView() {
             layoutId: (s as any).layoutId ?? l.id,
             hangarId: l.hangarId,
             hangarName: hname,
-            layoutName: l.name
+            hangarCode: hangar?.code ?? "",
+            layoutName: l.name,
+            layoutCode: l.code ?? ""
           });
         }
       }
@@ -2011,13 +2153,14 @@ export function GanttView() {
   }, [dndStandsQ.data]);
 
   useEffect(() => {
+    const prev = isMobile ? safeReadGanttUi() ?? {} : null;
     safeWriteGanttUi({
       rangeFromApplied,
       rangeToApplied,
       rangeFromInput,
       rangeToInput,
       groupMode,
-      panelView,
+      panelView: isMobile && prev ? (prev.panelView ?? panelView) : panelView,
       ganttDisplayMode,
       majorScale,
       minorScale,
@@ -2033,7 +2176,9 @@ export function GanttView() {
       filterPlanningKind,
       ganttLabelWidth,
       fitWidth,
-      dndEnabled,
+      showAllPlacementLinks,
+      ganttToolbarOpen: isMobile && prev ? (prev.ganttToolbarOpen ?? ganttToolbarOpen) : ganttToolbarOpen,
+      dndEnabled: isMobile && prev ? (prev.dndEnabled ?? dndEnabled) : dndEnabled,
       dndHangarIds,
       dndLayoutIds,
       dndZoneOnly,
@@ -2061,11 +2206,14 @@ export function GanttView() {
     filterPlanningKind,
     ganttLabelWidth,
     fitWidth,
+    showAllPlacementLinks,
+    ganttToolbarOpen,
     dndEnabled,
     dndHangarIds,
     dndLayoutIds,
     dndZoneOnly,
     showExternalMroOnGantt,
+    isMobile,
   ]);
 
   const events = q.data ?? [];
@@ -2254,6 +2402,25 @@ export function GanttView() {
   const ticks = useMemo(() => buildGanttTicks(from, to, majorScale, minorScale), [from, to, majorScale, minorScale]);
   const showSlotHistogram = groupMode === "HANGAR_STAND";
   const ganttLabelColStyle = useMemo(() => ({ width: ganttLabelWidth, flexBasis: ganttLabelWidth }), [ganttLabelWidth]);
+  const ganttLeftColRef = useRef<HTMLDivElement | null>(null);
+  const [axisLabelWidth, setAxisLabelWidth] = useState(ganttLabelWidth);
+  useLayoutEffect(() => {
+    setAxisLabelWidth(ganttLabelWidth);
+    const el = ganttLeftColRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (typeof w === "number" && Number.isFinite(w) && w > 0) setAxisLabelWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ganttLabelWidth, panelView]);
+  const preferAxisCodes = axisLabelWidth < AXIS_CODES_BELOW_WIDTH;
+  const hangarMetaById = useMemo(() => {
+    const m = new Map<string, { name: string; code: string }>();
+    for (const h of hangarsQ.data ?? []) m.set(h.id, { name: h.name, code: h.code ?? "" });
+    return m;
+  }, [hangarsQ.data]);
   const majorSegments = useMemo(() => {
     const out: Array<{ key: string; label: string; left: number; width: number; alt: boolean }> = [];
     for (let i = 0; i < ticks.length; i++) {
@@ -2672,6 +2839,22 @@ export function GanttView() {
   // режим копирования: когда включён, клик по событию открывает редактор с предзаполненной
   // копией, а сохранение создаёт НОВОЕ событие (draft.id остаётся пустым)
   const [copySelectMode, setCopySelectMode] = useState(false);
+
+  useEffect(() => {
+    if (isMobile) {
+      if (!mobileUiAppliedRef.current) {
+        mobileUiAppliedRef.current = true;
+        setPanelView("TABLE");
+        setGanttToolbarOpen(false);
+        setDndEnabled(false);
+        setCopySelectMode(false);
+        setSelectedDndEventIds([]);
+      }
+      return;
+    }
+    mobileUiAppliedRef.current = false;
+  }, [isMobile]);
+
   const [copyFromTitle, setCopyFromTitle] = useState<string | null>(null);
   const [shareHint, setShareHint] = useState<string | null>(null);
 
@@ -2759,6 +2942,7 @@ export function GanttView() {
   const bumpEditorFeedbackReset = () => setEditorFeedbackEpoch((n) => n + 1);
 
   const openEditorForNew = () => {
+    if (!canEditEventsEffective) return;
     if (editorOpen && editorCollapsed) return;
     bumpEditorFeedbackReset();
     const defaultAircraft = aircraftQ.data?.[0]?.id ?? "";
@@ -3818,6 +4002,7 @@ export function GanttView() {
   // - "Без ангара/места" (если есть такие события)
   // - "<Ангар> / Без места" (если есть события с ангаром, но без резерва)
   // - "<Ангар> / <код места>" (если есть резервы на этом месте)
+  // При узкой левой оси ангар/схема показываются кодами вместо наименований.
   const hangarStandRows = useMemo(() => {
     if (groupMode !== "HANGAR_STAND") return [];
 
@@ -3825,6 +4010,14 @@ export function GanttView() {
     const getHangarName = (e: EventRow) => (e.hangar as any)?.name ?? "Ангар";
     const getStandId = (e: EventRow) => (e.reservation?.stand as any)?.id ?? "";
     const getStandCode = (e: EventRow) => (e.reservation?.stand as any)?.code ?? "";
+    const hangarLabelFor = (hangarId: string | undefined, fallbackName: string) => {
+      const meta = hangarId ? hangarMetaById.get(hangarId) : undefined;
+      return hangarAxisLabel({ name: meta?.name ?? fallbackName, code: meta?.code }, preferAxisCodes);
+    };
+    const hangarTitleFor = (hangarId: string | undefined, fallbackName: string) => {
+      const meta = hangarId ? hangarMetaById.get(hangarId) : undefined;
+      return hangarAxisLabel({ name: meta?.name ?? fallbackName, code: meta?.code }, false);
+    };
 
     const visible = eventsForGantt
       .filter((e) => eventMatchesGanttFilters(e, ganttFilters))
@@ -3835,7 +4028,20 @@ export function GanttView() {
     const unassigned = activeVisible.filter((e) => !getHangarId(e) && !e.reservation?.stand);
 
     const noStandByHangar = new Map<string, { hangarId: string; hangarName: string; events: EventRow[] }>();
-    const byStandId = new Map<string, { standId: string; layoutId: string; hangarId: string; label: string; subLabel?: string; events: EventRow[] }>();
+    const byStandId = new Map<
+      string,
+      {
+        standId: string;
+        layoutId: string;
+        hangarId: string;
+        hangarName: string;
+        standCode: string;
+        label: string;
+        title: string;
+        subLabel?: string;
+        events: EventRow[];
+      }
+    >();
 
     for (const e of activeVisible) {
       const hid = getHangarId(e);
@@ -3855,11 +4061,28 @@ export function GanttView() {
         const meta = dndStandById.get(sid);
         const layoutId = meta?.layoutId ?? String((e.layout as any)?.id ?? "");
         const hangarId = meta?.hangarId ?? hid;
-        const label = meta
-          ? `${hangarAxisLabel(meta.hangarName)} / ${compactStandLabel(meta.code)}`
-          : `${hangarAxisLabel(hname)} / ${compactStandLabel(scode)}`;
-        const subLabel = meta?.layoutName ?? String((e.layout as any)?.name ?? "");
-        const rec = byStandId.get(sid) ?? { standId: sid, layoutId, hangarId, label, subLabel, events: [] as EventRow[] };
+        const hangarName = meta?.hangarName ?? hname;
+        const standCode = meta?.code ?? scode;
+        const label = formatHangarStandAxisLabel(hangarLabelFor(hangarId, hangarName), standCode);
+        const title = formatHangarStandAxisLabel(hangarTitleFor(hangarId, hangarName), standCode);
+        const subLabel = layoutAxisLabel(
+          {
+            name: meta?.layoutName ?? String((e.layout as any)?.name ?? ""),
+            code: meta?.layoutCode ?? String((e.layout as any)?.code ?? "")
+          },
+          preferAxisCodes
+        );
+        const rec = byStandId.get(sid) ?? {
+          standId: sid,
+          layoutId,
+          hangarId,
+          hangarName,
+          standCode,
+          label,
+          title,
+          subLabel,
+          events: [] as EventRow[]
+        };
         rec.events.push(e);
         byStandId.set(sid, rec);
       }
@@ -3868,6 +4091,7 @@ export function GanttView() {
     type Row = {
       key: string;
       label: string;
+      title?: string;
       subLabel?: string;
       kind: "unassigned" | "hangarNoStand" | "hangar" | "stand" | "cancelled";
       hangarId?: string;
@@ -3879,7 +4103,13 @@ export function GanttView() {
     const rows: Row[] = [];
 
     if (unassigned.length > 0) {
-      rows.push({ key: "unassigned", label: "Без ангара/места", kind: "unassigned", events: unassigned });
+      rows.push({
+        key: "unassigned",
+        label: "Без ангара/места",
+        title: "Без ангара/места",
+        kind: "unassigned",
+        events: unassigned
+      });
     }
 
     // Стабильная сортировка: по имени ангара, затем по коду места
@@ -3888,7 +4118,16 @@ export function GanttView() {
       .sort((a, b) => a.hangarName.localeCompare(b.hangarName, "ru"));
 
     for (const h of hangarList) {
-      rows.push({ key: `hangar:${h.hid}:no-stand`, label: `${hangarAxisLabel(h.hangarName)} / Без места`, kind: "hangarNoStand", hangarId: h.hid, events: h.events });
+      const label = `${hangarLabelFor(h.hid, h.hangarName)} / Без места`;
+      const title = `${hangarTitleFor(h.hid, h.hangarName)} / Без места`;
+      rows.push({
+        key: `hangar:${h.hid}:no-stand`,
+        label,
+        title,
+        kind: "hangarNoStand",
+        hangarId: h.hid,
+        events: h.events
+      });
     }
 
     // Добавим пустые стоянки как drop-зоны только в режиме DnD
@@ -3901,8 +4140,11 @@ export function GanttView() {
             standId: s.id,
             layoutId: s.layoutId,
             hangarId: s.hangarId,
-            label: `${hangarAxisLabel(s.hangarName)} / ${compactStandLabel(s.code)}`,
-            subLabel: s.layoutName,
+            hangarName: s.hangarName,
+            standCode: s.code,
+            label: formatHangarStandAxisLabel(hangarLabelFor(s.hangarId, s.hangarName), s.code),
+            title: formatHangarStandAxisLabel(hangarTitleFor(s.hangarId, s.hangarName), s.code),
+            subLabel: layoutAxisLabel({ name: s.layoutName, code: s.layoutCode }, preferAxisCodes),
             events: []
           });
         }
@@ -3922,11 +4164,16 @@ export function GanttView() {
       }
     }
 
-    const standList = Array.from(byStandId.values()).sort((a, b) => a.label.localeCompare(b.label, "ru"));
+    const standList = Array.from(byStandId.values()).sort((a, b) => {
+      const byHangar = a.hangarName.localeCompare(b.hangarName, "ru");
+      if (byHangar) return byHangar;
+      return compactStandLabel(a.standCode).localeCompare(compactStandLabel(b.standCode), "ru");
+    });
     for (const s of standList) {
       rows.push({
         key: `stand:${s.hangarId}|${s.standId}`,
         label: s.label,
+        title: s.title,
         subLabel: s.subLabel,
         kind: "stand",
         hangarId: s.hangarId,
@@ -3943,45 +4190,41 @@ export function GanttView() {
         ? { startMs: Date.parse(ev.startAt), endMs: Date.parse(ev.endAt) }
         : eventPackRangeMs(ev, ganttDisplayMode);
 
-    // В режиме зоны DnD не показываем unassigned / no-stand / cancelled — только рабочие drop-строки
-    if (dndActive && dndZoneOnly) {
-      const onlyStands = rows.filter((r) => r.kind === "stand");
-      const laneRows: Array<{ key: string; label: string; subLabel?: string; kind: Row["kind"]; hangarId?: string; layoutId?: string; standId?: string; events: PlacedEvent[] }> = [];
-      for (const r of onlyStands) {
-        if (r.events.length === 0) {
-          laneRows.push({ key: `${r.key}:lane:0`, label: r.label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: [] });
-        } else {
-          const lanes = packOverlapsIntoLanes(r.events, packRange);
-          for (let i = 0; i < lanes.length; i++) {
-            const label = i === 0 ? r.label : `${r.label} (нахлёст)`;
-            laneRows.push({
-              key: `${r.key}:lane:${i}`,
-              label,
-              subLabel: r.subLabel,
-              kind: r.kind,
-              hangarId: r.hangarId,
-              layoutId: r.layoutId,
-              standId: r.standId,
-              events: lanes[i]!
-            });
-          }
-        }
-      }
-      return laneRows;
-    }
+    type LaneRow = {
+      key: string;
+      label: string;
+      title?: string;
+      subLabel?: string;
+      kind: Row["kind"];
+      hangarId?: string;
+      layoutId?: string;
+      standId?: string;
+      events: PlacedEvent[];
+    };
 
-    const laneRows: Array<{ key: string; label: string; subLabel?: string; kind: Row["kind"]; hangarId?: string; layoutId?: string; standId?: string; events: PlacedEvent[] }> = [];
-    for (const r of rows) {
-      if (r.events.length === 0) {
-        // пустая строка — drop-зона
-        laneRows.push({ key: `${r.key}:lane:0`, label: r.label, subLabel: r.subLabel, kind: r.kind, hangarId: r.hangarId, layoutId: r.layoutId, standId: r.standId, events: [] });
-      } else {
+    const pushLanes = (source: Row[], target: LaneRow[]) => {
+      for (const r of source) {
+        if (r.events.length === 0) {
+          target.push({
+            key: `${r.key}:lane:0`,
+            label: r.label,
+            title: r.title,
+            subLabel: r.subLabel,
+            kind: r.kind,
+            hangarId: r.hangarId,
+            layoutId: r.layoutId,
+            standId: r.standId,
+            events: []
+          });
+          continue;
+        }
         const lanes = packOverlapsIntoLanes(r.events, packRange);
         for (let i = 0; i < lanes.length; i++) {
-          const label = i === 0 ? r.label : `${r.label} (нахлёст)`;
-          laneRows.push({
+          const baseTitle = r.title ?? r.label;
+          target.push({
             key: `${r.key}:lane:${i}`,
-            label,
+            label: overlapLaneAxisLabel(r.label, i),
+            title: overlapLaneAxisTitle(baseTitle, i),
             subLabel: r.subLabel,
             kind: r.kind,
             hangarId: r.hangarId,
@@ -3991,14 +4234,28 @@ export function GanttView() {
           });
         }
       }
+    };
+
+    // В режиме зоны DnD не показываем unassigned / no-stand / cancelled — только рабочие drop-строки
+    if (dndActive && dndZoneOnly) {
+      const laneRows: LaneRow[] = [];
+      pushLanes(
+        rows.filter((r) => r.kind === "stand"),
+        laneRows
+      );
+      return laneRows;
     }
+
+    const laneRows: LaneRow[] = [];
+    pushLanes(rows, laneRows);
 
     if (cancelledVisible.length > 0) {
       const cancelledLanes = packOverlapsIntoLanes(cancelledVisible, packRange);
       for (let i = 0; i < cancelledLanes.length; i++) {
         laneRows.push({
           key: `cancelled:lane:${i}`,
-          label: i === 0 ? "Отменено" : "Отменено (нахлёст)",
+          label: overlapLaneAxisLabel("Отменено", i),
+          title: overlapLaneAxisTitle("Отменено", i),
           kind: "cancelled",
           events: cancelledLanes[i]!
         });
@@ -4006,7 +4263,20 @@ export function GanttView() {
     }
 
     return laneRows;
-  }, [groupMode, ganttFilters, eventsForGantt, dndActive, dndStandsQ.data, dndStandById, dndHangarScopeIds, dndLayoutIds, dndZoneOnly, hangarsQ.data, ganttDisplayMode]);
+  }, [
+    groupMode,
+    ganttFilters,
+    eventsForGantt,
+    dndActive,
+    dndStandsQ.data,
+    dndStandById,
+    dndHangarScopeIds,
+    dndLayoutIds,
+    dndZoneOnly,
+    hangarMetaById,
+    preferAxisCodes,
+    ganttDisplayMode
+  ]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
   useEffect(() => {
@@ -4033,35 +4303,81 @@ export function GanttView() {
         if (p.ev.segmentKey) bySegmentKey.set(p.ev.segmentKey, { rowIdx, ev: p.ev });
       });
     });
-    const links: Array<{ key: string; x1: number; y1: number; x2: number; y2: number; color: string }> = [];
+    const links: Array<{
+      key: string;
+      eventId: string;
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      color: string;
+      d: string;
+    }> = [];
     const rowH = ganttRowHeight;
     for (const ev of events) {
       const placements = ev.placements ?? [];
       if (placements.length < 2) continue;
-      const sorted = [...placements].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || Date.parse(a.startAt) - Date.parse(b.startAt));
+      const sorted = sortEventPlacements(placements);
       for (let i = 0; i < sorted.length - 1; i++) {
         const a = sorted[i]!;
         const b = sorted[i + 1]!;
-        const ak = `${ev.id}:placement:${a.id ?? i}`;
-        const bk = `${ev.id}:placement:${b.id ?? i + 1}`;
+        const ak = placementSegmentKey(ev.id, a, i);
+        const bk = placementSegmentKey(ev.id, b, i + 1);
         const ar = bySegmentKey.get(ak);
         const br = bySegmentKey.get(bk);
         if (!ar || !br) continue;
         const ag = calcBarXW({ startAt: a.startAt, endAt: a.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
         const bg = calcBarXW({ startAt: b.startAt, endAt: b.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
         if (!ag || !bg) continue;
+        const x1 = ag.x + ag.w;
+        const y1 = ar.rowIdx * rowH + rowH / 2;
+        const x2 = bg.x;
+        const y2 = br.rowIdx * rowH + rowH / 2;
         links.push({
           key: `${ak}->${bk}`,
-          x1: ag.x + ag.w,
-          y1: ar.rowIdx * rowH + rowH / 2,
-          x2: bg.x,
-          y2: br.rowIdx * rowH + rowH / 2,
-          color: aircraftTypeMarkColor(ev, aircraftPaletteMap)
+          eventId: ev.id,
+          x1,
+          y1,
+          x2,
+          y2,
+          d: placementLinkPath(x1, y1, x2, y2),
+          color: placementLinkColor(aircraftTypeMarkColor(ev, aircraftPaletteMap))
         });
       }
     }
     return links;
   }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap, ganttRowHeight, timelineTimeMode]);
+
+  /** Выбранное событие для связок: открытая карточка с id. */
+  const selectedPlacementEventId = editorOpen && draft?.id ? draft.id : null;
+
+  const visiblePlacementLinks = useMemo(() => {
+    if (showAllPlacementLinks) return placementLinks;
+    if (!selectedPlacementEventId) return [];
+    return placementLinks.filter((l) => l.eventId === selectedPlacementEventId);
+  }, [placementLinks, selectedPlacementEventId, showAllPlacementLinks]);
+
+  /** Idle-маркеры разрыва: next/prev label по segmentKey. */
+  const placementBridgeBySegmentKey = useMemo(() => {
+    const m = new Map<string, { nextLabel?: string; prevLabel?: string }>();
+    if (groupMode !== "HANGAR_STAND") return m;
+    for (const ev of events) {
+      const placements = ev.placements ?? [];
+      if (placements.length < 2) continue;
+      const sorted = sortEventPlacements(placements);
+      for (let i = 0; i < sorted.length; i++) {
+        const cur = sorted[i]!;
+        const key = placementSegmentKey(ev.id, cur, i);
+        const prev = i > 0 ? sorted[i - 1] : null;
+        const next = i < sorted.length - 1 ? sorted[i + 1] : null;
+        m.set(key, {
+          prevLabel: prev ? formatPlacementBridgeLabel(prev, hangarMetaById) : undefined,
+          nextLabel: next ? formatPlacementBridgeLabel(next, hangarMetaById) : undefined
+        });
+      }
+    }
+    return m;
+  }, [groupMode, events, hangarMetaById]);
 
   const exportEvents = useMemo(() => {
     return eventsForGantt.filter((e) => eventMatchesGanttFilters(e, ganttFilters));
@@ -4196,7 +4512,8 @@ export function GanttView() {
     const cancelled = exportEvents.filter((e) => e.status === "CANCELLED");
     return packOverlapsIntoLanes(cancelled, (ev) => eventPackRangeMs(ev, ganttDisplayMode)).map((events, i) => ({
       key: `cancelled-aircraft:lane:${i}`,
-      label: i === 0 ? "Отменено" : "Отменено (нахлёст)",
+      label: overlapLaneAxisLabel("Отменено", i),
+      title: overlapLaneAxisTitle("Отменено", i),
       subLabel: "Не участвует в рабочем размещении",
       events
     }));
@@ -4206,16 +4523,19 @@ export function GanttView() {
     () => [
       ...visibleEvents.map((ev) => {
         const segments = eventSegmentsForHangarRows(ev);
+        const fullSub = aircraftAxisSubLabel(ev, false, hangarMetaById) || formatRowLabel(ev) || ev.title;
+        const axisSub = aircraftAxisSubLabel(ev, preferAxisCodes, hangarMetaById) || formatRowLabel(ev) || ev.title;
         return {
           key: ev.id,
           label: eventAircraftLabel(ev),
-          subLabel: aircraftAxisSubLabel(ev) || formatRowLabel(ev) || ev.title,
+          subLabel: axisSub,
+          title: preferAxisCodes ? `${eventAircraftLabel(ev)} • ${fullSub}` : undefined,
           events: segments.map((segment) => ({ ev: segment } as PlacedEvent))
         };
       }),
       ...cancelledAircraftRows
     ],
-    [visibleEvents, cancelledAircraftRows]
+    [visibleEvents, cancelledAircraftRows, hangarMetaById, preferAxisCodes]
   );
 
   const aircraftTypeById = useMemo(() => {
@@ -4497,6 +4817,84 @@ export function GanttView() {
 
   const periodChipLabel = `${dayjs.utc(rangeFromApplied).format("DD.MM.YY")} – ${dayjs.utc(rangeToApplied).format("DD.MM.YY")}`;
 
+  const activeFilterSummaryParts = useMemo(() => {
+    const pick = (title: string, ids: string[], options: Array<{ id: string; label: string }>, maxNames = 2) => {
+      if (!ids.length) return null;
+      const byId = new Map(options.map((o) => [o.id, o.label] as const));
+      const names = ids.map((id) => byId.get(id) ?? id);
+      const text =
+        names.length <= maxNames ? names.join(", ") : `${names.slice(0, maxNames).join(", ")} +${names.length - maxNames}`;
+      return `${title}: ${text}`;
+    };
+    return [
+      pick("Ангар", selectedHangarIds, smartFilterOptions.hangars),
+      pick("Оператор", filterOperatorIds, smartFilterOptions.operators),
+      pick("Тип ВС", filterAircraftTypeIds, smartFilterOptions.aircraftTypes),
+      pick("Борт", filterAircraftIds, smartFilterOptions.aircraft),
+      pick("Тип события", filterEventTypeIds, smartFilterOptions.eventTypes),
+      pick("Цех", filterWorkshopIds, smartFilterOptions.workshops),
+      pick("Статус", filterStatusIds, smartFilterOptions.statuses),
+      filterPlanningKind === "ALL"
+        ? null
+        : `Планирование: ${filterPlanningKind === "PLANNED" ? "плановые" : "внеплановые"}`,
+      showExternalMroOnGantt ? null : "без внешних MRO"
+    ].filter((x): x is string => Boolean(x));
+  }, [
+    selectedHangarIds,
+    filterOperatorIds,
+    filterAircraftTypeIds,
+    filterAircraftIds,
+    filterEventTypeIds,
+    filterWorkshopIds,
+    filterStatusIds,
+    filterPlanningKind,
+    smartFilterOptions,
+    showExternalMroOnGantt
+  ]);
+
+  const activeFilterCount = useMemo(() => {
+    let n = 0;
+    if (selectedHangarIds.length) n += 1;
+    if (filterOperatorIds.length) n += 1;
+    if (filterAircraftTypeIds.length) n += 1;
+    if (filterAircraftIds.length) n += 1;
+    if (filterEventTypeIds.length) n += 1;
+    if (filterWorkshopIds.length) n += 1;
+    if (filterStatusIds.length) n += 1;
+    if (filterPlanningKind !== "ALL") n += 1;
+    return n;
+  }, [
+    selectedHangarIds,
+    filterOperatorIds,
+    filterAircraftTypeIds,
+    filterAircraftIds,
+    filterEventTypeIds,
+    filterWorkshopIds,
+    filterStatusIds,
+    filterPlanningKind
+  ]);
+
+  const ganttHeaderMetaParts = useMemo(() => {
+    const parts = [
+      `${dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – ${dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}`,
+      `${ZOOM_LABEL[majorScale]} / ${ZOOM_LABEL[minorScale]}${fitWidth ? " · по ширине" : ""}`,
+      ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт",
+      panelView === "TABLE" ? "Таблица" : groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место",
+      ...activeFilterSummaryParts
+    ];
+    return parts;
+  }, [
+    rangeFromApplied,
+    rangeToApplied,
+    majorScale,
+    minorScale,
+    fitWidth,
+    ganttDisplayMode,
+    panelView,
+    groupMode,
+    activeFilterSummaryParts
+  ]);
+
   const layoutsByHangar = useMemo(() => {
     const m = new Map<string, Layout[]>();
     for (const l of allLayoutsQ.data ?? []) {
@@ -4650,17 +5048,54 @@ export function GanttView() {
           <div className="ganttPanelTitle">
             <strong>План</strong>
             <span className="muted ganttPanelPeriod">
-              {dayjs.utc(rangeFromApplied).format("DD.MM.YYYY")} – {dayjs.utc(rangeToApplied).format("DD.MM.YYYY")}
-              <span className="ganttPanelDot" aria-hidden="true">·</span>
-              {ZOOM_LABEL[majorScale]} / {ZOOM_LABEL[minorScale]}
-              {fitWidth ? " · по ширине" : ""}
-              <span className="ganttPanelDot" aria-hidden="true">·</span>
-              {ganttDisplayMode === "CURRENT" ? "Текущий график" : "План-факт"}
-              <span className="ganttPanelDot" aria-hidden="true">·</span>
-              {panelView === "TABLE" ? "Таблица" : groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}
+              {ganttHeaderMetaParts.map((part, idx) => (
+                <Fragment key={`${idx}-${part}`}>
+                  {idx > 0 ? <span className="ganttPanelDot" aria-hidden="true">·</span> : null}
+                  <span>{part}</span>
+                </Fragment>
+              ))}
             </span>
           </div>
           <div className="ganttPanelActions">
+            <button
+              type="button"
+              className={`btn ganttIconBtn ganttToolbarCollapseBtn${ganttToolbarOpen ? "" : " ganttToolbarCollapseBtnClosed"}`}
+              aria-pressed={!ganttToolbarOpen}
+              aria-expanded={ganttToolbarOpen}
+              title={ganttToolbarOpen ? "Скрыть панель настроек" : "Показать панель настроек"}
+              aria-label={ganttToolbarOpen ? "Скрыть панель настроек" : "Показать панель настроек"}
+              onClick={() => setGanttToolbarOpen((v) => !v)}
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M5 8l5 5 5-5" />
+              </svg>
+              {!ganttToolbarOpen && activeFilterCount > 0 ? (
+                <span className="tgFiltersToggleBadge ganttToolbarCollapseBadge">{activeFilterCount}</span>
+              ) : null}
+            </button>
+            {isMobile ? (
+              <div className="ganttViewToggle ganttViewToggleCompact" role="group" aria-label="Режим отображения плана">
+                <button
+                  type="button"
+                  className={`ganttViewToggleBtn${panelView === "TABLE" ? " ganttViewToggleBtnActive" : ""}`}
+                  aria-pressed={panelView === "TABLE"}
+                  onClick={() => {
+                    setCopySelectMode(false);
+                    setPanelView("TABLE");
+                  }}
+                >
+                  Список
+                </button>
+                <button
+                  type="button"
+                  className={`ganttViewToggleBtn${panelView === "DIAGRAM" ? " ganttViewToggleBtnActive" : ""}`}
+                  aria-pressed={panelView === "DIAGRAM"}
+                  onClick={() => setPanelView("DIAGRAM")}
+                >
+                  Диаграмма
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
               className="btn ganttIconBtn"
@@ -4727,327 +5162,357 @@ export function GanttView() {
           </div>
         </div>
 
+        {ganttToolbarOpen ? (
         <div className="ganttToolbar">
-          <div className="ganttToolbarGroup ganttToolbarActionsGroup">
-            <button
-              className="btn ganttIconBtn"
-              onClick={resetFilters}
-              title="Очистить фильтры и сбросить период"
-              aria-label="Сбросить фильтры и период"
-            >
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M4 10a6 6 0 0 1 10.2-4.3" />
-                <path d="M14 2v4h-4" />
-                <path d="M16 10a6 6 0 0 1-10.2 4.3" />
-                <path d="M6 18v-4h4" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`btn ganttIconBtn${copySelectMode ? " btnCopyActive" : ""}`}
-              onClick={() => setCopySelectMode((v) => !v)}
-              disabled={!canEditEvents || panelView !== "DIAGRAM"}
-              title={
-                !canEditEvents
-                  ? "Просмотрщик может смотреть события, но не создавать копии"
-                  : panelView !== "DIAGRAM"
-                  ? "Копирование доступно в режиме диаграммы"
-                  : copySelectMode
-                  ? "Нажмите на событие в диаграмме. Esc — отмена."
-                  : "Выбрать существующее событие и создать его копию"
-              }
-              aria-pressed={copySelectMode}
-              aria-label={copySelectMode ? "Отменить копирование события" : "Скопировать событие"}
-            >
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="3" width="10" height="12" rx="2" />
-                <path d="M7 17h8a2 2 0 0 0 2-2V7" />
-              </svg>
-            </button>
-            <button
-              className="btn btnPrimary ganttIconBtn"
-              onClick={openEditorForNew}
-              disabled={!canEditEvents}
-              title={!canEditEvents ? "Недостаточно прав для создания события" : undefined}
-              aria-label="Создать событие"
-            >
-              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M10 4v12" />
-                <path d="M4 10h12" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="ganttToolbarGroup">
-            <span className="tgLabel">Вид</span>
-            <div className="ganttViewToggle" role="group" aria-label="Режим отображения плана">
+          <div className="ganttToolbarRow">
+            <div className="ganttToolbarGroup ganttToolbarActionsGroup">
               <button
-                type="button"
-                className={`ganttViewToggleBtn${panelView === "DIAGRAM" ? " ganttViewToggleBtnActive" : ""}`}
-                aria-pressed={panelView === "DIAGRAM"}
-                onClick={() => setPanelView("DIAGRAM")}
+                className="btn ganttIconBtn"
+                onClick={resetFilters}
+                title="Очистить фильтры и сбросить период"
+                aria-label="Сбросить фильтры и период"
               >
-                Диаграмма
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M4 10a6 6 0 0 1 10.2-4.3" />
+                  <path d="M14 2v4h-4" />
+                  <path d="M16 10a6 6 0 0 1-10.2 4.3" />
+                  <path d="M6 18v-4h4" />
+                </svg>
               </button>
-              <button
-                type="button"
-                className={`ganttViewToggleBtn${panelView === "TABLE" ? " ganttViewToggleBtnActive" : ""}`}
-                aria-pressed={panelView === "TABLE"}
-                onClick={() => {
-                  setCopySelectMode(false);
-                  setPanelView("TABLE");
-                }}
-              >
-                Таблица
-              </button>
-            </div>
-            {panelView === "DIAGRAM" ? (
-              <>
-                <label className="tgField" title="Как группировать строки">
-                  <span className="tgFieldLabel">Группировка</span>
-                  <select value={groupMode} onChange={(e) => setGroupMode(e.target.value as GroupMode)}>
-                    <option value="AIRCRAFT">Борт / событие</option>
-                    <option value="HANGAR_STAND">Ангар / место</option>
-                  </select>
-                </label>
-                <label className="tgField" title="Текущий график показывает факт вместо плана, когда факт заполнен; План-факт показывает два бара">
-                  <span className="tgFieldLabel">Отображение</span>
-                  <select value={ganttDisplayMode} onChange={(e) => setGanttDisplayMode(e.target.value as GanttDisplayMode)}>
-                    <option value="CURRENT">Текущий график</option>
-                    <option value="PLAN_FACT">План-факт</option>
-                  </select>
-                </label>
-                <label
-                  className="tgField"
-                  title="Внешние MRO (ангары с isPhysical=false) — сторонние контуры для оценки потребности"
-                >
-                  <span className="tgFieldLabel">Внешние MRO</span>
-                  <select
-                    value={showExternalMroOnGantt ? "SHOW" : "HIDE"}
-                    onChange={(e) => setShowExternalMroOnGantt(e.target.value === "SHOW")}
+              {!isMobile ? (
+                <>
+                  <button
+                    type="button"
+                    className={`btn ganttIconBtn${copySelectMode ? " btnCopyActive" : ""}`}
+                    onClick={() => setCopySelectMode((v) => !v)}
+                    disabled={!canEditEventsEffective || panelView !== "DIAGRAM"}
+                    title={
+                      !canEditEventsEffective
+                        ? "Просмотрщик может смотреть события, но не создавать копии"
+                        : panelView !== "DIAGRAM"
+                        ? "Копирование доступно в режиме диаграммы"
+                        : copySelectMode
+                        ? "Нажмите на событие в диаграмме. Esc — отмена."
+                        : "Выбрать существующее событие и создать его копию"
+                    }
+                    aria-pressed={copySelectMode}
+                    aria-label={copySelectMode ? "Отменить копирование события" : "Скопировать событие"}
                   >
-                    <option value="SHOW">Показывать</option>
-                    <option value="HIDE">Скрыть</option>
-                  </select>
-                </label>
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="3" y="3" width="10" height="12" rx="2" />
+                      <path d="M7 17h8a2 2 0 0 0 2-2V7" />
+                    </svg>
+                  </button>
+                  <button
+                    className="btn btnPrimary ganttIconBtn"
+                    onClick={openEditorForNew}
+                    disabled={!canEditEventsEffective}
+                    title={!canEditEventsEffective ? "Недостаточно прав для создания события" : undefined}
+                    aria-label="Создать событие"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M10 4v12" />
+                      <path d="M4 10h12" />
+                    </svg>
+                  </button>
+                </>
+              ) : null}
+            </div>
+
+            <div className="ganttToolbarGroup">
+              {!isMobile ? (
+                <>
+              <span className="tgLabel">Вид</span>
+              <div className="ganttViewToggle" role="group" aria-label="Режим отображения плана">
                 <button
                   type="button"
-                  className={`tgLockBtn${dndEnabled ? " tgLockBtnActive" : ""}${!canDnd ? " tgLockBtnDisabled" : ""}`}
-                  aria-pressed={dndEnabled}
-                  aria-label={dndEnabled ? "Drag&Drop включён" : "Drag&Drop выключен"}
-                  title={
-                    !canDnd
-                      ? activeSandbox
-                        ? "Drag&Drop доступен владельцу или редактору песочницы"
-                        : "Drag&Drop доступен только ADMIN / PLANNER"
-                      : dndEnabled
-                      ? "Drag&Drop включён — нажмите, чтобы заблокировать перетаскивание"
-                      : "Перетаскивание заблокировано — нажмите, чтобы включить Drag&Drop"
-                  }
-                  disabled={!canDnd}
+                  className={`ganttViewToggleBtn${panelView === "DIAGRAM" ? " ganttViewToggleBtnActive" : ""}`}
+                  aria-pressed={panelView === "DIAGRAM"}
+                  onClick={() => setPanelView("DIAGRAM")}
+                >
+                  Диаграмма
+                </button>
+                <button
+                  type="button"
+                  className={`ganttViewToggleBtn${panelView === "TABLE" ? " ganttViewToggleBtnActive" : ""}`}
+                  aria-pressed={panelView === "TABLE"}
                   onClick={() => {
-                    if (!canDnd) return;
-                    const v = !dndEnabled;
-                    setDndEnabled(v);
-                    if (v && groupMode !== "HANGAR_STAND") setGroupMode("HANGAR_STAND");
-                    if (!v) {
-                      setSelectedDndEventIds([]);
-                      setPtrDrag(null);
-                    }
+                    setCopySelectMode(false);
+                    setPanelView("TABLE");
                   }}
                 >
-                  {dndEnabled ? (
-                    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <rect x="4" y="10" width="12" height="8" rx="2" />
-                      <path d="M7 10V7a3 3 0 0 1 6 0" />
-                    </svg>
-                  ) : (
-                    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <rect x="4" y="10" width="12" height="8" rx="2" />
-                      <path d="M7 10V7a3 3 0 0 1 6 0v3" />
-                    </svg>
-                  )}
+                  Таблица
                 </button>
-              </>
-            ) : null}
-          </div>
-
-          <div className="ganttToolbarGroup">
-            <span className="tgLabel">Фильтры</span>
-            <label className={`tgField${selectedHangarIds.length ? " tgFieldActive" : ""}`}>
-              <span className="tgFieldLabel">Ангар</span>
-              <MultiSelectDropdown
-                options={smartFilterOptions.hangars}
-                value={selectedHangarIds}
-                onChange={setSelectedHangarIds}
-                placeholder="все"
-                width={150}
-                maxHeight={320}
-                searchable
-                searchPlaceholder="Найти ангар"
-                compact
-              />
-            </label>
-            <label className={`tgField${filterOperatorIds.length ? " tgFieldActive" : ""}`}>
-              <span className="tgFieldLabel">Оператор</span>
-              <MultiSelectDropdown
-                options={smartFilterOptions.operators}
-                value={filterOperatorIds}
-                onChange={setFilterOperatorIds}
-                placeholder="все"
-                width={160}
-                maxHeight={360}
-                searchable
-                searchPlaceholder="Найти оператора"
-                compact
-              />
-            </label>
-            <label className={`tgField${filterAircraftTypeIds.length ? " tgFieldActive" : ""}`}>
-              <span className="tgFieldLabel">Тип ВС</span>
-              <MultiSelectDropdown
-                options={smartFilterOptions.aircraftTypes}
-                value={filterAircraftTypeIds}
-                onChange={setFilterAircraftTypeIds}
-                placeholder="все"
-                width={150}
-                maxHeight={360}
-                searchable
-                searchPlaceholder="Найти тип ВС"
-                compact
-              />
-            </label>
-            <label className={`tgField${filterAircraftIds.length ? " tgFieldActive" : ""}`}>
-              <span className="tgFieldLabel">Борт</span>
-              <MultiSelectDropdown
-                options={smartFilterOptions.aircraft}
-                value={filterAircraftIds}
-                onChange={setFilterAircraftIds}
-                placeholder="все"
-                width={140}
-                maxHeight={360}
-                searchable
-                searchPlaceholder="Найти борт"
-                compact
-              />
-            </label>
-            <label className={`tgField${filterEventTypeIds.length ? " tgFieldActive" : ""}`}>
-              <span className="tgFieldLabel">Тип события</span>
-              <MultiSelectDropdown
-                options={smartFilterOptions.eventTypes}
-                value={filterEventTypeIds}
-                onChange={setFilterEventTypeIds}
-                placeholder="все"
-                width={160}
-                maxHeight={320}
-                searchable
-                searchPlaceholder="Найти тип события"
-                compact
-              />
-            </label>
-            <label className={`tgField${filterWorkshopIds.length ? " tgFieldActive" : ""}`}>
-              <span className="tgFieldLabel">Цех</span>
-              <MultiSelectDropdown
-                options={smartFilterOptions.workshops}
-                value={filterWorkshopIds}
-                onChange={setFilterWorkshopIds}
-                placeholder="все"
-                width={160}
-                maxHeight={320}
-                searchable
-                searchPlaceholder="Найти цех"
-                compact
-              />
-            </label>
-            <label className={`tgField${filterStatusIds.length ? " tgFieldActive" : ""}`}>
-              <span className="tgFieldLabel">Статус</span>
-              <MultiSelectDropdown
-                options={smartFilterOptions.statuses}
-                value={filterStatusIds}
-                onChange={setFilterStatusIds}
-                placeholder="все"
-                width={200}
-                maxHeight={360}
-                searchable
-                searchPlaceholder="Найти статус"
-                compact
-              />
-            </label>
-            <label className={`tgField${filterPlanningKind !== "ALL" ? " tgFieldActive" : ""}`}>
-              <span className="tgFieldLabel">Планирование</span>
-              <select value={filterPlanningKind} onChange={(e) => setFilterPlanningKind(e.target.value as PlanningKindFilter)}>
-                <option value="ALL">все</option>
-                <option value="PLANNED" disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("PLANNED")}>
-                  плановые
-                </option>
-                <option value="UNPLANNED" disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("UNPLANNED")}>
-                  внеплановые
-                </option>
-              </select>
-            </label>
-          </div>
-
-          <div className="ganttToolbarGroup">
-            <span className="tgLabel">Период</span>
-            <ToolbarPopover label={periodChipLabel} title="Период диаграммы" panelClassName="tbPopoverPeriod">
-              <div className="tbPopoverPeriodBody">
-                <div className="tgPresets" role="group" aria-label="Быстрый выбор прошедшего периода">
-                  {pastRangePresets.map((p) => (
-                    <button
-                      key={p.label}
-                      className="btn btnGhost"
-                      type="button"
-                      onClick={() => applyRangePreset("past", p.days)}
-                      title={`${p.label} до сегодняшнего дня`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="tbPopoverPeriodDates">
-                  <label className="tgField">
-                    <span className="tgFieldLabel">c</span>
-                    <input
-                      type="date"
-                      value={rangeFromInput}
-                      onChange={(e) => setRangeFromInput(e.target.value)}
-                      onBlur={applyManualRange}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") applyManualRange();
-                      }}
-                      style={{ width: 150 }}
-                    />
-                  </label>
-                  <label className="tgField">
-                    <span className="tgFieldLabel">по</span>
-                    <input
-                      type="date"
-                      value={rangeToInput}
-                      onChange={(e) => setRangeToInput(e.target.value)}
-                      onBlur={applyManualRange}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") applyManualRange();
-                      }}
-                      style={{ width: 150 }}
-                    />
-                  </label>
-                </div>
-                <div className="tgPresets tgPresetsFuture" role="group" aria-label="Быстрый выбор будущего периода">
-                  {futureRangePresets.map((p) => (
-                    <button
-                      key={p.label}
-                      className="btn btnGhost"
-                      type="button"
-                      onClick={() => applyRangePreset("future", p.days)}
-                      title={`${p.label} от сегодняшнего дня`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
               </div>
-            </ToolbarPopover>
+                </>
+              ) : (
+                <span className="tgLabel">Настройки диаграммы</span>
+              )}
+              {panelView === "DIAGRAM" ? (
+                <>
+                  <div className="tgField" title="Как группировать строки диаграммы">
+                    <span className="tgFieldLabel">Группировка</span>
+                    <SwitchToggle
+                      compact
+                      checked={groupMode === "HANGAR_STAND"}
+                      onChange={(v) => {
+                        setGroupMode(v ? "HANGAR_STAND" : "AIRCRAFT");
+                        if (!v) {
+                          setSelectedDndEventIds([]);
+                          setPtrDrag(null);
+                        }
+                      }}
+                      label={groupMode === "HANGAR_STAND" ? "Ангар / место" : "Борт / событие"}
+                    />
+                  </div>
+                  <div
+                    className="tgField"
+                    title="Текущий график показывает факт вместо плана, когда факт заполнен; План-факт показывает два бара"
+                  >
+                    <span className="tgFieldLabel">Отображение</span>
+                    <SwitchToggle
+                      compact
+                      checked={ganttDisplayMode === "PLAN_FACT"}
+                      onChange={(v) => setGanttDisplayMode(v ? "PLAN_FACT" : "CURRENT")}
+                      label={ganttDisplayMode === "PLAN_FACT" ? "План-факт" : "Текущий график"}
+                    />
+                  </div>
+                  <div
+                    className="tgField"
+                    title="Внешние MRO (ангары с isPhysical=false) — сторонние контуры для оценки потребности"
+                  >
+                    <span className="tgFieldLabel">Внешние MRO</span>
+                    <SwitchToggle
+                      compact
+                      checked={showExternalMroOnGantt}
+                      onChange={setShowExternalMroOnGantt}
+                      label={showExternalMroOnGantt ? "Показывать" : "Скрыты"}
+                    />
+                  </div>
+                  {!isMobile ? (
+                  <button
+                    type="button"
+                    className={`tgLockBtn${dndEnabled ? " tgLockBtnActive" : ""}${!canDnd ? " tgLockBtnDisabled" : ""}`}
+                    aria-pressed={dndEnabled}
+                    aria-label={dndEnabled ? "Drag&Drop включён" : "Drag&Drop выключен"}
+                    title={
+                      !canDnd
+                        ? activeSandbox
+                          ? "Drag&Drop доступен владельцу или редактору песочницы"
+                          : "Drag&Drop доступен только ADMIN / PLANNER"
+                        : dndEnabled
+                        ? "Drag&Drop включён — нажмите, чтобы заблокировать перетаскивание"
+                        : "Перетаскивание заблокировано — нажмите, чтобы включить Drag&Drop"
+                    }
+                    disabled={!canDnd}
+                    onClick={() => {
+                      if (!canDnd) return;
+                      const v = !dndEnabled;
+                      setDndEnabled(v);
+                      if (v && groupMode !== "HANGAR_STAND") setGroupMode("HANGAR_STAND");
+                      if (!v) {
+                        setSelectedDndEventIds([]);
+                        setPtrDrag(null);
+                      }
+                    }}
+                  >
+                    {dndEnabled ? (
+                      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <rect x="4" y="10" width="12" height="8" rx="2" />
+                        <path d="M7 10V7a3 3 0 0 1 6 0" />
+                      </svg>
+                    ) : (
+                      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <rect x="4" y="10" width="12" height="8" rx="2" />
+                        <path d="M7 10V7a3 3 0 0 1 6 0v3" />
+                      </svg>
+                    )}
+                  </button>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="ganttToolbarRow">
+            <div className="ganttToolbarGroup">
+              <span className="tgLabel">Период</span>
+              <ToolbarPopover label={periodChipLabel} title="Период диаграммы" panelClassName="tbPopoverPeriod">
+                <div className="tbPopoverPeriodBody">
+                  <div className="tgPresets" role="group" aria-label="Быстрый выбор прошедшего периода">
+                    {pastRangePresets.map((p) => (
+                      <button
+                        key={p.label}
+                        className="btn btnGhost"
+                        type="button"
+                        onClick={() => applyRangePreset("past", p.days)}
+                        title={`${p.label} до сегодняшнего дня`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="tbPopoverPeriodDates">
+                    <label className="tgField">
+                      <span className="tgFieldLabel">c</span>
+                      <input
+                        type="date"
+                        value={rangeFromInput}
+                        onChange={(e) => setRangeFromInput(e.target.value)}
+                        onBlur={applyManualRange}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") applyManualRange();
+                        }}
+                        style={{ width: 150 }}
+                      />
+                    </label>
+                    <label className="tgField">
+                      <span className="tgFieldLabel">по</span>
+                      <input
+                        type="date"
+                        value={rangeToInput}
+                        onChange={(e) => setRangeToInput(e.target.value)}
+                        onBlur={applyManualRange}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") applyManualRange();
+                        }}
+                        style={{ width: 150 }}
+                      />
+                    </label>
+                  </div>
+                  <div className="tgPresets tgPresetsFuture" role="group" aria-label="Быстрый выбор будущего периода">
+                    {futureRangePresets.map((p) => (
+                      <button
+                        key={p.label}
+                        className="btn btnGhost"
+                        type="button"
+                        onClick={() => applyRangePreset("future", p.days)}
+                        title={`${p.label} от сегодняшнего дня`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </ToolbarPopover>
+            </div>
+
+            <div className="ganttToolbarGroup">
+              <span className="tgLabel">Фильтры</span>
+              <label className={`tgField${selectedHangarIds.length ? " tgFieldActive" : ""}`}>
+                <span className="tgFieldLabel">Ангар</span>
+                <MultiSelectDropdown
+                  options={smartFilterOptions.hangars}
+                  value={selectedHangarIds}
+                  onChange={setSelectedHangarIds}
+                  placeholder="все"
+                  width={150}
+                  maxHeight={320}
+                  searchable
+                  searchPlaceholder="Найти ангар"
+                  compact
+                />
+              </label>
+              <label className={`tgField${filterOperatorIds.length ? " tgFieldActive" : ""}`}>
+                <span className="tgFieldLabel">Оператор</span>
+                <MultiSelectDropdown
+                  options={smartFilterOptions.operators}
+                  value={filterOperatorIds}
+                  onChange={setFilterOperatorIds}
+                  placeholder="все"
+                  width={160}
+                  maxHeight={360}
+                  searchable
+                  searchPlaceholder="Найти оператора"
+                  compact
+                />
+              </label>
+              <label className={`tgField${filterAircraftTypeIds.length ? " tgFieldActive" : ""}`}>
+                <span className="tgFieldLabel">Тип ВС</span>
+                <MultiSelectDropdown
+                  options={smartFilterOptions.aircraftTypes}
+                  value={filterAircraftTypeIds}
+                  onChange={setFilterAircraftTypeIds}
+                  placeholder="все"
+                  width={150}
+                  maxHeight={360}
+                  searchable
+                  searchPlaceholder="Найти тип ВС"
+                  compact
+                />
+              </label>
+              <label className={`tgField${filterAircraftIds.length ? " tgFieldActive" : ""}`}>
+                <span className="tgFieldLabel">Борт</span>
+                <MultiSelectDropdown
+                  options={smartFilterOptions.aircraft}
+                  value={filterAircraftIds}
+                  onChange={setFilterAircraftIds}
+                  placeholder="все"
+                  width={140}
+                  maxHeight={360}
+                  searchable
+                  searchPlaceholder="Найти борт"
+                  compact
+                />
+              </label>
+              <label className={`tgField${filterEventTypeIds.length ? " tgFieldActive" : ""}`}>
+                <span className="tgFieldLabel">Тип события</span>
+                <MultiSelectDropdown
+                  options={smartFilterOptions.eventTypes}
+                  value={filterEventTypeIds}
+                  onChange={setFilterEventTypeIds}
+                  placeholder="все"
+                  width={160}
+                  maxHeight={320}
+                  searchable
+                  searchPlaceholder="Найти тип события"
+                  compact
+                />
+              </label>
+              <label className={`tgField${filterWorkshopIds.length ? " tgFieldActive" : ""}`}>
+                <span className="tgFieldLabel">Цех</span>
+                <MultiSelectDropdown
+                  options={smartFilterOptions.workshops}
+                  value={filterWorkshopIds}
+                  onChange={setFilterWorkshopIds}
+                  placeholder="все"
+                  width={160}
+                  maxHeight={320}
+                  searchable
+                  searchPlaceholder="Найти цех"
+                  compact
+                />
+              </label>
+              <label className={`tgField${filterStatusIds.length ? " tgFieldActive" : ""}`}>
+                <span className="tgFieldLabel">Статус</span>
+                <MultiSelectDropdown
+                  options={smartFilterOptions.statuses}
+                  value={filterStatusIds}
+                  onChange={setFilterStatusIds}
+                  placeholder="все"
+                  width={200}
+                  maxHeight={360}
+                  searchable
+                  searchPlaceholder="Найти статус"
+                  compact
+                />
+              </label>
+              <label className={`tgField${filterPlanningKind !== "ALL" ? " tgFieldActive" : ""}`}>
+                <span className="tgFieldLabel">Планирование</span>
+                <select value={filterPlanningKind} onChange={(e) => setFilterPlanningKind(e.target.value as PlanningKindFilter)}>
+                  <option value="ALL">все</option>
+                  <option value="PLANNED" disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("PLANNED")}>
+                    плановые
+                  </option>
+                  <option value="UNPLANNED" disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("UNPLANNED")}>
+                    внеплановые
+                  </option>
+                </select>
+              </label>
+            </div>
           </div>
         </div>
+        ) : null}
 
         {panelView === "DIAGRAM" && dndActive ? (
           <div className="ganttDndBar">
@@ -5150,7 +5615,8 @@ export function GanttView() {
         <div className="card ganttTableCard">
           <GanttEventsTable
             events={exportEvents}
-            canEdit={canEditEvents}
+            canEdit={canEditEventsEffective}
+            allowColumnReorder={!isMobile}
             eventsQueryFromISO={from.toISOString()}
             eventsQueryToISO={to.toISOString()}
             aircraft={aircraftQ.data ?? []}
@@ -5168,8 +5634,16 @@ export function GanttView() {
       ) : (
       <div className={`ganttGrid${copySelectMode ? " ganttPickMode" : ""}`}>
         <div className="ganttHeaderRow">
-          <div className="ganttLabel ganttAxisLabel" style={ganttLabelColStyle}>
-            <strong>{groupMode === "AIRCRAFT" ? "Борт / событие" : "Ангар / место"}</strong>
+          <div
+            className="ganttLabel ganttAxisLabel"
+            style={ganttLabelColStyle}
+            title={
+              preferAxisCodes
+                ? "Компактный режим: коды. Расширьте ось, чтобы видеть наименования."
+                : "Наименования. Сузьте ось, чтобы переключить на коды."
+            }
+          >
+            <strong>{groupMode === "AIRCRAFT" ? "Борт / событие" : preferAxisCodes ? "Код / место" : "Ангар / место"}</strong>
             <button
               type="button"
               className="ganttAxisResizeHandle"
@@ -5298,6 +5772,20 @@ export function GanttView() {
                       <option value="UTC">UTC</option>
                     </select>
                   </label>
+                  <div
+                    className="tgField"
+                    style={{ gridColumn: "1 / -1" }}
+                    title="Показывать S-кривые между этапами всех разорванных событий"
+                  >
+                    <span className="tgFieldLabel">Связи этапов</span>
+                    <SwitchToggle
+                      compact
+                      checked={showAllPlacementLinks}
+                      onChange={setShowAllPlacementLinks}
+                      label="Показать все связи"
+                      hint="Иначе — только у выбранного события"
+                    />
+                  </div>
                   <div className="tbPopoverActions">
                     <button
                       type="button"
@@ -5316,10 +5804,15 @@ export function GanttView() {
           : null}
 
         <div className="ganttBody">
-          <div className="ganttLeftCol" style={ganttLabelColStyle}>
+          <div className="ganttLeftCol" style={ganttLabelColStyle} ref={ganttLeftColRef}>
             {groupMode === "AIRCRAFT"
               ? aircraftRows.map((r, rowIdx) => (
-                  <div className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ height: ganttRowHeight }}>
+                  <div
+                    className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}`}
+                    key={r.key}
+                    style={{ height: ganttRowHeight }}
+                    title={(r as any).title || undefined}
+                  >
                     <div>
                       <strong>{r.label}</strong>
                     </div>
@@ -5333,6 +5826,7 @@ export function GanttView() {
                     className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}${isHangarBoundaryRow(rowIdx) ? " ganttHangarBoundary" : ""}`}
                     key={r.key}
                     style={{ height: ganttRowHeight }}
+                    title={(r as any).title && (r as any).title !== r.label ? (r as any).title : undefined}
                   >
                     <div>
                       <strong>{r.label}</strong>
@@ -5356,25 +5850,20 @@ export function GanttView() {
                   if (e.button === 1) e.preventDefault();
                 }}
               >
-                {groupMode === "HANGAR_STAND" && placementLinks.length > 0 ? (
+                {groupMode === "HANGAR_STAND" && visiblePlacementLinks.length > 0 ? (
                   <svg
-                    className="placementLinkLayer"
+                    className="placementLinkLayer placementLinkLayerActive"
                     width={canvasWidth}
                     height={Math.max(ganttRowHeight, hangarStandRows.length * ganttRowHeight)}
                     aria-hidden="true"
                   >
-                    {placementLinks.map((l) => (
-                      <line
-                        key={l.key}
-                        x1={l.x1}
-                        y1={l.y1}
-                        x2={l.x2}
-                        y2={l.y2}
-                        stroke={l.color}
-                        strokeWidth={2}
-                        strokeDasharray="5 5"
-                        opacity={0.75}
-                      />
+                    {visiblePlacementLinks.map((l) => (
+                      <g key={l.key} className="placementLink">
+                        <path d={l.d} className="placementLinkHalo" />
+                        <path d={l.d} className="placementLinkStroke" stroke={l.color} />
+                        <circle cx={l.x1} cy={l.y1} r={1.75} className="placementLinkDot" fill={l.color} />
+                        <circle cx={l.x2} cy={l.y2} r={1.75} className="placementLinkDot" fill={l.color} />
+                      </g>
                     ))}
                   </svg>
                 ) : null}
@@ -5414,7 +5903,13 @@ export function GanttView() {
                                   ...barPaddingStyle(w)
                                 }}
                                 onClick={() => pickEvent(ev)}
-                                title={`${eventTooltip(ev, timelineTimeMode)}\n${copySelectMode ? "Нажмите, чтобы создать копию" : "Нажмите, чтобы редактировать"}`}
+                                title={`${eventTooltip(ev, timelineTimeMode)}\n${
+                                  copySelectMode
+                                    ? "Нажмите, чтобы создать копию"
+                                    : canEditEventsEffective
+                                    ? "Нажмите, чтобы редактировать"
+                                    : "Нажмите, чтобы открыть"
+                                }`}
                               >
                                 {displayPeriod.source === "Опер." ? renderTowBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
                                 {displayPeriod.source === "Опер." ? renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
@@ -5509,14 +6004,23 @@ export function GanttView() {
                           const exitTargetStartAt = exitTargetIsFact && ev.actualStartAt ? ev.actualStartAt : displayPeriod.startAt;
                           const exitTargetEndAt = exitTargetIsFact && ev.actualEndAt ? ev.actualEndAt : displayPeriod.endAt;
                           const isEditorFocused = editorOpen && Boolean(draft?.id) && draft!.id === ev.id;
+                          const isPlacementDimmed = Boolean(selectedPlacementEventId) && ev.id !== selectedPlacementEventId;
                           const isDndSelected = dndActive && selectedDndEventIds.includes(ev.id);
                           const isDndBumpHover = dndActive && dndHoverBarIds.includes(ev.id) && dndHoverIntent === "bump";
                           const isMultiPlacementDndBlocked = (ev.placementCount ?? 1) > 1;
+                          const bridge = ev.segmentKey ? placementBridgeBySegmentKey.get(ev.segmentKey) : undefined;
+                          const bridgeMarkTop = ganttDisplayMode === "PLAN_FACT" ? 16 : 22;
+                          const bridgeTitleBits = [
+                            bridge?.prevLabel ? `Ранее: ${bridge.prevLabel}` : "",
+                            bridge?.nextLabel ? `Далее: ${bridge.nextLabel}` : ""
+                          ]
+                            .filter(Boolean)
+                            .join("\n");
 
                           return (
                             <Fragment key={ev.segmentKey ?? ev.id}>
                               <div
-                              className={`bar${ganttDisplayMode === "PLAN_FACT" ? " barPlanFactPlan" : ""}${displayPeriod.source === "Факт" ? " barCurrentFact" : ""}${ev.placementOrigin === "AUTO_GAP" ? " barAutoGap" : ""}${isEditorFocused ? " barEditing" : ""}`}
+                              className={`bar${ganttDisplayMode === "PLAN_FACT" ? " barPlanFactPlan" : ""}${displayPeriod.source === "Факт" ? " barCurrentFact" : ""}${ev.placementOrigin === "AUTO_GAP" ? " barAutoGap" : ""}${isEditorFocused ? " barEditing" : ""}${isPlacementDimmed ? " barDimmed" : ""}`}
                               style={{
                                 left: x,
                                 width: w,
@@ -5599,7 +6103,7 @@ export function GanttView() {
                                 if (dndActive) return;
                                 pickEvent(ev);
                               }}
-                              title={`${eventTooltip(ev, timelineTimeMode)}\n${
+                              title={`${eventTooltip(ev, timelineTimeMode)}${bridgeTitleBits ? `\n${bridgeTitleBits}` : ""}\n${
                                 dndActive && isMultiPlacementDndBlocked
                                   ? "Многоэтапное событие изменяется только в карточке"
                                   : dndActive
@@ -5616,9 +6120,23 @@ export function GanttView() {
                                 </span>
                               ) : null}
                               </div>
+                            {bridge?.prevLabel ? (
+                              <div
+                                className={`placementBridgeMark placementBridgeMarkIn${isPlacementDimmed ? " placementBridgeMarkDimmed" : ""}`}
+                                style={{ left: x, top: bridgeMarkTop }}
+                                aria-hidden="true"
+                              />
+                            ) : null}
+                            {bridge?.nextLabel ? (
+                              <div
+                                className={`placementBridgeMark placementBridgeMarkOut${isPlacementDimmed ? " placementBridgeMarkDimmed" : ""}`}
+                                style={{ left: x + w, top: bridgeMarkTop }}
+                                aria-hidden="true"
+                              />
+                            ) : null}
                             {actualSeg ? (
                               <div
-                                className={`factBar factBar${actualTone[0].toUpperCase()}${actualTone.slice(1)}${isEditorFocused ? " factBarEditing" : ""}`}
+                                className={`factBar factBar${actualTone[0].toUpperCase()}${actualTone.slice(1)}${isEditorFocused ? " factBarEditing" : ""}${isPlacementDimmed ? " barDimmed" : ""}`}
                                 style={{ left: actualSeg.x, width: actualSeg.w }}
                                 title={`${factToneLabel(actualTone)}: ${formatTimelineDate(ev.actualStartAt, timelineTimeMode)} – ${formatTimelineDate(ev.actualEndAt, timelineTimeMode)}${
                                   overrunLabel ? `\n${overrunLabel}` : ""
@@ -5651,6 +6169,7 @@ export function GanttView() {
             Нет событий в выбранном диапазоне.
           </div>
         ) : null}
+      {!isMobile ? (
         <div className="ganttStickyFooter" aria-label="Нижняя панель диаграммы">
           <div className="ganttBottomScrollRow" aria-hidden="true">
             <div className="ganttBottomScrollSpacer" style={ganttLabelColStyle} />
@@ -5697,6 +6216,7 @@ export function GanttView() {
             </div>
           ) : null}
         </div>
+      ) : null}
       </div>
       )}
       </div>
@@ -5705,9 +6225,18 @@ export function GanttView() {
         open={editorOpen}
         collapsed={editorCollapsed}
         onCollapsedChange={setEditorCollapsed}
-        title={draft?.id ? "Редактирование события" : copyFromTitle ? "Копия события" : "Новое событие"}
+        title={
+          !canEditEventsEffective
+            ? "Просмотр события"
+            : draft?.id
+            ? "Редактирование события"
+            : copyFromTitle
+            ? "Копия события"
+            : "Новое событие"
+        }
         summary={editorSummary || "Карточка события"}
         beneathModal={confirmOpen || legendOpen}
+        disableDrag={isMobile}
         onClose={() => {
           bumpEditorFeedbackReset();
           setEditorOpen(false);
@@ -5761,14 +6290,16 @@ export function GanttView() {
               </div>
             ) : null}
 
-            {!canEditEvents ? (
+            {!canEditEventsEffective ? (
               <div className="contextNotice" role="status">
-                <strong>Режим просмотра.</strong> У вашей роли нет прав на редактирование событий. Карточка доступна
-                только для просмотра.
+                <strong>Режим просмотра.</strong>{" "}
+                {isMobile
+                  ? "На мобильном устройстве доступен только просмотр. Карточка открыта без редактирования."
+                  : "У вашей роли нет прав на редактирование событий. Карточка доступна только для просмотра."}
               </div>
             ) : null}
 
-            <fieldset className="evReadonlyFieldset" disabled={!canEditEvents}>
+            <fieldset className="evReadonlyFieldset" disabled={!canEditEventsEffective}>
             <section className="evCard">
               <header className="evCardHeader">
                 <EvCardTitle
@@ -6601,21 +7132,22 @@ export function GanttView() {
                   }}
                   type="button"
                 >
-                  Отмена
+                  {canEditEventsEffective ? "Отмена" : "Закрыть"}
                 </button>
-                {draft.id && activeSandbox ? (
+                {canEditEventsEffective && draft.id && activeSandbox ? (
                   <button
                     className="btn btnDanger"
                     onClick={() => {
                       if (!confirm(`Удалить событие «${draft.title}» из песочницы «${activeSandbox.name}»?`)) return;
                       deleteEventM.mutate();
                     }}
-                    disabled={!canEditEvents || deleteEventM.isPending}
+                    disabled={deleteEventM.isPending}
                     type="button"
                   >
                     {deleteEventM.isPending ? "Удаляем…" : "Удалить из песочницы"}
                   </button>
                 ) : null}
+                {canEditEventsEffective ? (
                 <button
                   className="btn btnPrimary"
                   onClick={() => {
@@ -6627,7 +7159,6 @@ export function GanttView() {
                     }
                   }}
                   disabled={
-                    !canEditEvents ||
                     saveEventM.isPending ||
                     (!!draft.id && computeDraftDiff(original, draft).length === 0)
                   }
@@ -6635,6 +7166,7 @@ export function GanttView() {
                 >
                   {draft.id ? "Сохранить изменения" : copyFromTitle ? "Создать копию" : "Создать событие"}
                 </button>
+                ) : null}
               </div>
             </footer>
           </div>

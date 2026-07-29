@@ -4,6 +4,7 @@ import { EventAuditAction, EventStatus, Prisma, SandboxMemberRole, UserActivityA
 import { randomUUID } from "node:crypto";
 
 import { zDateTime, zUuid } from "../lib/zod.js";
+import { isSystemAdmin } from "../lib/rbac.js";
 import { copyPlanToSandbox, eventFingerprint, resolveOriginEventId } from "../lib/sandboxCopy.js";
 import { logUserActivity } from "../lib/userActivity.js";
 
@@ -38,7 +39,12 @@ async function assertOwner(app: any, sandboxId: string, userId: string) {
   return sb;
 }
 
-async function assertMember(app: any, sandboxId: string, userId: string): Promise<"OWNER" | "EDITOR" | "VIEWER"> {
+async function assertMember(
+  app: any,
+  sandboxId: string,
+  userId: string,
+  roles: string[] = []
+): Promise<"OWNER" | "EDITOR" | "VIEWER"> {
   const sb = await app.prisma.sandbox.findUnique({
     where: { id: sandboxId },
     select: {
@@ -55,12 +61,11 @@ async function assertMember(app: any, sandboxId: string, userId: string): Promis
   if (sb.ownerId === userId) return "OWNER";
   const m = sb.members[0];
   if (m) return m.role as "OWNER" | "EDITOR" | "VIEWER";
-  if (!sb.sharedWithAllRole) {
-    const err: any = new Error("FORBIDDEN");
-    err.statusCode = 403;
-    throw err;
-  }
-  return sb.sharedWithAllRole as "EDITOR" | "VIEWER";
+  if (sb.sharedWithAllRole) return sb.sharedWithAllRole as "EDITOR" | "VIEWER";
+  if (isSystemAdmin(roles)) return "VIEWER";
+  const err: any = new Error("FORBIDDEN");
+  err.statusCode = 403;
+  throw err;
 }
 
 function canWriteRole(role: "OWNER" | "EDITOR" | "VIEWER"): boolean {
@@ -68,17 +73,20 @@ function canWriteRole(role: "OWNER" | "EDITOR" | "VIEWER"): boolean {
 }
 
 export const sandboxRoutes: FastifyPluginAsync = async (app) => {
-  // GET /api/sandboxes — список своих + расшаренных
+  // GET /api/sandboxes — список своих + расшаренных (+ все для ADMIN/SUPER_ADMIN)
   app.get("/", async (req) => {
     const me = assertAuthed(req);
+    const admin = isSystemAdmin(me.roles);
     const sandboxes = await app.prisma.sandbox.findMany({
-      where: {
-        OR: [
-          { ownerId: me.id },
-          { members: { some: { userId: me.id } } },
-          { sharedWithAllRole: { not: null } }
-        ]
-      },
+      where: admin
+        ? undefined
+        : {
+            OR: [
+              { ownerId: me.id },
+              { members: { some: { userId: me.id } } },
+              { sharedWithAllRole: { not: null } }
+            ]
+          },
       include: {
         owner: { select: { id: true, email: true, displayName: true } },
         members: {
@@ -89,29 +97,35 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       orderBy: [{ updatedAt: "desc" }]
     });
 
-    return sandboxes.map((s: any) => ({
-      id: s.id,
-      name: s.name,
-      description: s.description,
-      status: s.status === "ARCHIVED" ? "ARCHIVED" : "ACTIVE",
-      ownerId: s.ownerId,
-      owner: s.owner,
-      createdAt: s.createdAt,
-      updatedAt: s.updatedAt,
-      isOwner: s.ownerId === me.id,
-      myRole:
-        s.ownerId === me.id
-          ? "OWNER"
-          : s.members.find((m: any) => m.userId === me.id)?.role ?? s.sharedWithAllRole ?? null,
-      sharedWithAllRole: s.sharedWithAllRole,
-      eventCount: s._count.events,
-      members: s.members.map((m: any) => ({
-        userId: m.userId,
-        role: m.role,
-        email: m.user.email,
-        displayName: m.user.displayName
-      }))
-    }));
+    return sandboxes.map((s: any) => {
+      const memberRole = s.members.find((m: any) => m.userId === me.id)?.role ?? null;
+      const isOwner = s.ownerId === me.id;
+      const viaAdmin = admin && !isOwner && !memberRole && !s.sharedWithAllRole;
+      const myRole = isOwner
+        ? "OWNER"
+        : memberRole ?? s.sharedWithAllRole ?? (admin ? "VIEWER" : null);
+      return {
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        status: s.status === "ARCHIVED" ? "ARCHIVED" : "ACTIVE",
+        ownerId: s.ownerId,
+        owner: s.owner,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        isOwner,
+        myRole,
+        viaAdmin,
+        sharedWithAllRole: s.sharedWithAllRole,
+        eventCount: s._count.events,
+        members: s.members.map((m: any) => ({
+          userId: m.userId,
+          role: m.role,
+          email: m.user.email,
+          displayName: m.user.displayName
+        }))
+      };
+    });
   });
 
   // POST /api/sandboxes — создать песочницу, опционально с копированием плана
@@ -152,7 +166,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
     let sourceSandboxId: string | null = null;
     if (typeof copyFrom === "object" && copyFrom.source === "sandbox") {
       sourceSandboxId = copyFrom.sandboxId!;
-      await assertMember(app, sourceSandboxId, me.id);
+      await assertMember(app, sourceSandboxId, me.id, me.roles);
     }
 
     const result = await app.prisma.$transaction(
@@ -228,7 +242,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
 
     const sourcesMeta: Array<{ id: string; name: string; role: "OWNER" | "EDITOR" | "VIEWER"; eventCount: number }> = [];
     for (const id of uniqueIds) {
-      const role = await assertMember(app, id, me.id);
+      const role = await assertMember(app, id, me.id, me.roles);
       if (!canWriteRole(role)) {
         const err: any = new Error(`Нет прав на редактирование песочницы ${id}`);
         err.statusCode = 403;
@@ -407,7 +421,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
     }
 
     for (const id of uniqueIds) {
-      const role = await assertMember(app, id, me.id);
+      const role = await assertMember(app, id, me.id, me.roles);
       if (!canWriteRole(role)) {
         const err: any = new Error(`Нет прав на редактирование песочницы ${id}`);
         err.statusCode = 403;
@@ -589,7 +603,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
   app.get("/:id/diff", async (req) => {
     const me = assertAuthed(req);
     const sandboxId = zUuid.parse((req.params as any).id);
-    await assertMember(app, sandboxId, me.id);
+    await assertMember(app, sandboxId, me.id, me.roles);
     const query = z
       .object({
         from: zDateTime.optional(),
@@ -712,7 +726,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
   app.post("/:id/promote", async (req) => {
     const me = assertAuthed(req);
     const sandboxId = zUuid.parse((req.params as any).id);
-    const role = await assertMember(app, sandboxId, me.id);
+    const role = await assertMember(app, sandboxId, me.id, me.roles);
     if (!canWriteRole(role)) {
       const err: any = new Error("FORBIDDEN");
       err.statusCode = 403;

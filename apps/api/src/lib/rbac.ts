@@ -14,3 +14,9 @@ export function assertPermission(req: FastifyRequest, permission: string) {
   }
 }
 
+/** Системный администратор: видит все песочницы (как наблюдатель), без прав владельца. */
+export function isSystemAdmin(roles: string[] | null | undefined): boolean {
+  const list = roles ?? [];
+  return list.includes("ADMIN") || list.includes("SUPER_ADMIN");
+}
+

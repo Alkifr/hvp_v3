@@ -469,6 +469,8 @@ function ConfirmDrawer(props: {
 export function GanttEventsTable(props: {
   events: GanttTableEvent[];
   canEdit: boolean;
+  /** На мобиле отключаем DnD порядка столбцов */
+  allowColumnReorder?: boolean;
   eventsQueryFromISO: string;
   eventsQueryToISO: string;
   aircraft: Aircraft[];
@@ -479,6 +481,7 @@ export function GanttEventsTable(props: {
   operators: Array<{ id: string; code?: string | null; name: string }>;
   onOpenEvent: (eventId: string) => void;
 }) {
+  const allowColumnReorder = props.allowColumnReorder !== false;
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
   const savedCols = useMemo(() => safeReadTableCols(), []);
@@ -1476,12 +1479,14 @@ export function GanttEventsTable(props: {
           role="menu"
         >
           <div className="ganttTableColMenuTitle">Столбцы</div>
-          <div className="ganttTableColMenuHint muted">Перетащите, чтобы изменить порядок</div>
+          {allowColumnReorder ? (
+            <div className="ganttTableColMenuHint muted">Перетащите, чтобы изменить порядок</div>
+          ) : null}
           <div className="ganttTableColMenuList">
             {orderedColumns.map((col) => {
               const locked = col.hideable === false;
               const checked = !hiddenCols.has(col.id);
-              const reorderLocked = PINNED_LEFT_IDS.includes(col.id);
+              const reorderLocked = !allowColumnReorder || PINNED_LEFT_IDS.includes(col.id);
               return (
                 <label
                   key={col.id}
@@ -1505,6 +1510,7 @@ export function GanttEventsTable(props: {
                   }}
                   onDrop={(e) => {
                     e.preventDefault();
+                    if (!allowColumnReorder) return;
                     const from = (e.dataTransfer.getData("text/plain") as TableColId) || dragColId;
                     if (from) moveColumn(from, col.id);
                     setDragColId(null);

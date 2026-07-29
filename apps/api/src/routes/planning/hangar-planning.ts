@@ -4,7 +4,19 @@ import { z } from "zod";
 
 import { assertPermission } from "../../lib/rbac.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
-import { sandboxFilter } from "../../plugins/sandbox.js";
+import { canWriteInContext, sandboxFilter } from "../../plugins/sandbox.js";
+
+function assertCanWriteEvent(req: any) {
+  if (req.sandbox) {
+    if (!canWriteInContext(req)) {
+      const err: any = new Error("SANDBOX_READ_ONLY");
+      err.statusCode = 403;
+      throw err;
+    }
+    return;
+  }
+  assertPermission(req, "events:write");
+}
 
 type BodyType = "NARROW_BODY" | "WIDE_BODY" | null;
 
@@ -465,7 +477,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/suggest-placement", async (req) => {
-    assertPermission(req as any, "events:read");
+    assertCanWriteEvent(req);
     const body = z
       .object({
         eventId: zUuid,
@@ -599,7 +611,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/auto-fit", async (req) => {
-    assertPermission(req as any, "events:read");
+    assertCanWriteEvent(req);
     const body = z
       .object({
         from: zDateTime,

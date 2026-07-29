@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { EventStatus } from "@prisma/client";
 import { z } from "zod";
 
-import { assertPermission } from "../lib/rbac.js";
+import { assertPermission, isSystemAdmin } from "../lib/rbac.js";
 import { zDateTime, zUuid } from "../lib/zod.js";
 import { sandboxFilter } from "../plugins/sandbox.js";
 
@@ -405,7 +405,7 @@ function classifyDeviations(params: {
   return kinds;
 }
 
-async function assertSandboxAccess(app: any, sandboxId: string | null, userId: string) {
+async function assertSandboxAccess(app: any, sandboxId: string | null, userId: string, roles: string[] = []) {
   if (!sandboxId) return true;
   const sb = await app.prisma.sandbox.findUnique({
     where: { id: sandboxId },
@@ -421,7 +421,7 @@ async function assertSandboxAccess(app: any, sandboxId: string | null, userId: s
     err.statusCode = 404;
     throw err;
   }
-  if (sb.ownerId !== userId && sb.members.length === 0 && !sb.sharedWithAllRole) {
+  if (sb.ownerId !== userId && sb.members.length === 0 && !sb.sharedWithAllRole && !isSystemAdmin(roles)) {
     const err: any = new Error("SANDBOX_ACCESS_DENIED");
     err.statusCode = 403;
     throw err;
@@ -881,7 +881,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   // a/b: "prod" или uuid песочницы
   app.get("/sandbox-compare", async (req) => {
     assertPermission(req as any, "events:read");
-    const auth = (req as any).auth as { id?: string } | undefined;
+    const auth = (req as any).auth as { id?: string; roles?: string[] } | undefined;
     const userId = auth?.id;
     if (!userId) {
       const err: any = new Error("UNAUTHORIZED");
@@ -906,8 +906,8 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
 
     const aId = parseSandboxScope(query.a);
     const bId = parseSandboxScope(query.b);
-    await assertSandboxAccess(app, aId, userId);
-    await assertSandboxAccess(app, bId, userId);
+    await assertSandboxAccess(app, aId, userId, auth?.roles ?? []);
+    await assertSandboxAccess(app, bId, userId, auth?.roles ?? []);
 
     const periodH = hoursBetween(query.from, query.to);
 

@@ -2,6 +2,8 @@ import fp from "fastify-plugin";
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
+import { isSystemAdmin } from "../lib/rbac.js";
+
 type SandboxContext = {
   id: string;
   name: string;
@@ -26,7 +28,8 @@ function readSandboxHeader(req: FastifyRequest): string {
 async function resolveSandboxFor(
   app: FastifyInstance,
   sandboxId: string,
-  userId: string
+  userId: string,
+  roles: string[] = []
 ): Promise<SandboxContext | null | "denied"> {
   const sandbox = await app.prisma.sandbox.findUnique({
     where: { id: sandboxId },
@@ -47,6 +50,8 @@ async function resolveSandboxFor(
     role = sandbox.members[0].role as SandboxContext["role"];
   } else if (sandbox.sharedWithAllRole) {
     role = sandbox.sharedWithAllRole as SandboxContext["role"];
+  } else if (isSystemAdmin(roles)) {
+    role = "VIEWER";
   }
   if (!role) return "denied";
 
@@ -75,7 +80,7 @@ export const sandboxPlugin = fp(async (app) => {
     const sandboxId = readSandboxHeader(req);
     if (!sandboxId) return;
 
-    const ctx = await resolveSandboxFor(app, sandboxId, req.auth.id);
+    const ctx = await resolveSandboxFor(app, sandboxId, req.auth.id, req.auth.roles ?? []);
     if (ctx === null) {
       return reply.code(404).send({ ok: false, error: "SANDBOX_NOT_FOUND" });
     }
@@ -98,7 +103,7 @@ export async function loadSandboxForRequest(
 ): Promise<boolean> {
   const sandboxId = readSandboxHeader(req);
   if (!sandboxId) return true;
-  const ctx = await resolveSandboxFor(app, sandboxId, userId);
+  const ctx = await resolveSandboxFor(app, sandboxId, userId, req.auth?.roles ?? []);
   if (ctx === null) {
     reply.code(404).send({ ok: false, error: "SANDBOX_NOT_FOUND" });
     return false;

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
 import { apiGet, apiPost } from "../../lib/api";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 export type OpenEventFromNotification = {
   eventId: string;
@@ -68,8 +70,10 @@ export function NotificationBell(props: {
   onOpenEvent?: (detail: OpenEventFromNotification) => void;
 }) {
   const qc = useQueryClient();
+  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   const q = useQuery({
     queryKey: ["notifications"],
@@ -102,7 +106,10 @@ export function NotificationBell(props: {
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -120,6 +127,71 @@ export function NotificationBell(props: {
   const badge = useMemo(() => (unread > 99 ? "99+" : unread > 0 ? String(unread) : null), [unread]);
 
   if (!props.enabled) return null;
+
+  const panel = open ? (
+    <div
+      className={isMobile ? "navNotifyPanel mobileBottomSheet" : "navNotifyPanel"}
+      role="dialog"
+      aria-label="Уведомления"
+      ref={panelRef}
+    >
+      <div className="navNotifyHead">
+        <strong>Уведомления</strong>
+        <button
+          type="button"
+          className="btn btnGhost"
+          disabled={unread === 0 || readAllM.isPending}
+          onClick={() => readAllM.mutate()}
+        >
+          Прочитать все
+        </button>
+      </div>
+      <div className="navNotifyList">
+        {q.isLoading ? <div className="muted navNotifyEmpty">Загрузка…</div> : null}
+        {!q.isLoading && items.length === 0 ? (
+          <div className="muted navNotifyEmpty">Нет новых уведомлений</div>
+        ) : null}
+        {items.map((n) => {
+          const canOpen = Boolean(n.eventId);
+          return (
+            <button
+              key={n.id}
+              type="button"
+              className="navNotifyItem unread"
+              title={canOpen ? "Открыть карточку события" : "Отметить прочитанным"}
+              onClick={() => {
+                // Сразу убираем из списка (оптимистично), затем помечаем прочитанным на сервере
+                qc.setQueryData<NotificationsResponse>(["notifications"], (prev) => {
+                  if (!prev) return prev;
+                  const nextItems = prev.items.filter((x) => x.id !== n.id);
+                  return { ...prev, items: nextItems, unreadCount: nextItems.length };
+                });
+                readOneM.mutate(n.id);
+                if (!n.eventId) return;
+                const detail: OpenEventFromNotification = {
+                  eventId: n.eventId,
+                  sandboxId: n.sandboxId ?? n.event?.sandboxId ?? null,
+                  startAt: n.event?.startAt ?? null,
+                  endAt: n.event?.endAt ?? null
+                };
+                requestOpenEventFromNotification(detail);
+                props.onOpenEvent?.(detail);
+                setOpen(false);
+              }}
+            >
+              <div className="navNotifyItemMeta">
+                <span className="navNotifyKind">{KIND_LABEL[n.kind] ?? n.kind}</span>
+                <span className="muted">{dayjs(n.createdAt).format("DD.MM HH:mm")}</span>
+              </div>
+              <div className="navNotifyTitle">{n.title}</div>
+              {n.body ? <div className="navNotifyBody">{n.body}</div> : null}
+              {canOpen ? <div className="navNotifyHint">Открыть карточку →</div> : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  ) : null;
 
   return (
     <div className={`navNotify${open ? " open" : ""}`} ref={rootRef}>
@@ -141,65 +213,20 @@ export function NotificationBell(props: {
         <span className="navTooltip">Уведомления</span>
       </button>
 
-      {open ? (
-        <div className="navNotifyPanel" role="dialog" aria-label="Уведомления">
-          <div className="navNotifyHead">
-            <strong>Уведомления</strong>
-            <button
-              type="button"
-              className="btn btnGhost"
-              disabled={unread === 0 || readAllM.isPending}
-              onClick={() => readAllM.mutate()}
-            >
-              Прочитать все
-            </button>
-          </div>
-          <div className="navNotifyList">
-            {q.isLoading ? <div className="muted navNotifyEmpty">Загрузка…</div> : null}
-            {!q.isLoading && items.length === 0 ? (
-              <div className="muted navNotifyEmpty">Нет новых уведомлений</div>
-            ) : null}
-            {items.map((n) => {
-              const canOpen = Boolean(n.eventId);
-              return (
-                <button
-                  key={n.id}
-                  type="button"
-                  className="navNotifyItem unread"
-                  title={canOpen ? "Открыть карточку события" : "Отметить прочитанным"}
-                  onClick={() => {
-                    // Сразу убираем из списка (оптимистично), затем помечаем прочитанным на сервере
-                    qc.setQueryData<NotificationsResponse>(["notifications"], (prev) => {
-                      if (!prev) return prev;
-                      const nextItems = prev.items.filter((x) => x.id !== n.id);
-                      return { ...prev, items: nextItems, unreadCount: nextItems.length };
-                    });
-                    readOneM.mutate(n.id);
-                    if (!n.eventId) return;
-                    const detail: OpenEventFromNotification = {
-                      eventId: n.eventId,
-                      sandboxId: n.sandboxId ?? n.event?.sandboxId ?? null,
-                      startAt: n.event?.startAt ?? null,
-                      endAt: n.event?.endAt ?? null
-                    };
-                    requestOpenEventFromNotification(detail);
-                    props.onOpenEvent?.(detail);
-                    setOpen(false);
-                  }}
-                >
-                  <div className="navNotifyItemMeta">
-                    <span className="navNotifyKind">{KIND_LABEL[n.kind] ?? n.kind}</span>
-                    <span className="muted">{dayjs(n.createdAt).format("DD.MM HH:mm")}</span>
-                  </div>
-                  <div className="navNotifyTitle">{n.title}</div>
-                  {n.body ? <div className="navNotifyBody">{n.body}</div> : null}
-                  {canOpen ? <div className="navNotifyHint">Открыть карточку →</div> : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+      {open && isMobile
+        ? createPortal(
+            <>
+              <button
+                type="button"
+                className="mobileBottomSheetBackdrop"
+                aria-label="Закрыть"
+                onClick={() => setOpen(false)}
+              />
+              {panel}
+            </>,
+            document.body
+          )
+        : panel}
     </div>
   );
 }
