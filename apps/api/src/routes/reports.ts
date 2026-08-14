@@ -3,6 +3,14 @@ import { ReportShareRole } from "@prisma/client";
 import { z } from "zod";
 
 import { assertPermission } from "../lib/rbac.js";
+import {
+  EVENT_COUNT_FIELD,
+  applyGroupAggregates,
+  isSummaryConfig,
+  sortReportRows,
+  type ReportAggregateSpec
+} from "../lib/reportAggregates.js";
+import { primaryMappingStatus, type ReportFieldMappingStatus } from "../lib/reportFieldMapping.js";
 import { PRIMARY_TABLE_COLUMNS } from "../lib/primaryTable/columnCatalog.generated.js";
 import { queryPrimaryTable } from "../lib/primaryTable/queryService.js";
 import { zDateTime, zUuid } from "../lib/zod.js";
@@ -17,8 +25,7 @@ export type ReportDataset =
   | "compare_hangars"
   | "compare_events";
 
-/** Тестовый статус мэппинга колонки XLSX → HVP. */
-export type ReportFieldMappingStatus = "mapped" | "unmapped" | "stub";
+export type { ReportFieldMappingStatus };
 
 export type ReportFieldDef = {
   key: string;
@@ -28,22 +35,9 @@ export type ReportFieldDef = {
   subgroup?: string | null;
   availability?: "available" | "computed" | "planned";
   excelColumn?: string;
-  /** Тестовая пометка мэппинга: смэпплено / не смэпплено / заглушка. */
+  /** Пометка мэппинга: смэпплено / не смэпплено / заглушка. */
   mappingStatus?: ReportFieldMappingStatus;
 };
-
-function primaryMappingStatus(column: (typeof PRIMARY_TABLE_COLUMNS)[number]): ReportFieldMappingStatus {
-  if (!column.source || column.availability === "planned") return "unmapped";
-  if (
-    column.source.includes("EventReportMetric") ||
-    column.source.includes("EventReportScalar") ||
-    column.source.startsWith("EventPtoRollingEntry") ||
-    column.source.startsWith("EventACheckAnalysis")
-  ) {
-    return "stub";
-  }
-  return "mapped";
-}
 
 export type ReportConfig = {
   dataset: ReportDataset;
@@ -68,6 +62,10 @@ export type ReportConfig = {
   /** Произвольный период отчёта (YYYY-MM-DD). Если не задан — берётся from/to из запроса. */
   periodFrom?: string | null;
   periodTo?: string | null;
+  /** Измерения сводки (группировка). */
+  groupBy?: string[];
+  /** Показатели: сумма / среднее / количество / мин / макс. Поле `__count` — число строк. */
+  aggregates?: ReportAggregateSpec[];
 };
 
 const DATASETS: Array<{ id: ReportDataset; label: string; description: string }> = [
@@ -221,7 +219,7 @@ const zReportConfig = z.object({
     "compare_hangars",
     "compare_events"
   ]),
-  fields: z.array(z.string()).min(1),
+  fields: z.array(z.string()).default([]),
   filters: z
     .object({
       conditions: z
@@ -248,8 +246,24 @@ const zReportConfig = z.object({
   compareA: z.string().optional(),
   compareB: z.string().optional(),
   periodFrom: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
-  periodTo: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable()
-});
+  periodTo: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  groupBy: z.array(z.string()).max(20).optional().default([]),
+  aggregates: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        fn: z.enum(["sum", "avg", "count", "min", "max"])
+      })
+    )
+    .max(20)
+    .optional()
+    .default([])
+})
+  .superRefine((value, ctx) => {
+    if (!value.fields.length && !value.groupBy.length && !value.aggregates.length) {
+      ctx.addIssue({ code: "custom", message: "FIELDS_OR_SUMMARY_REQUIRED", path: ["fields"] });
+    }
+  });
 
 function assertAuthed(req: any): { id: string } {
   const auth = req.auth as { id?: string } | undefined;
@@ -371,26 +385,9 @@ function projectAndSort(
     return { key: def.key, label: def.label, type: def.type };
   });
 
-  let filtered = rows.filter((r) => matchRowFilters(r, config.filters));
-  if (config.sort.length) {
-    filtered = [...filtered].sort((a, b) => {
-      for (const s of config.sort) {
-        if (!fields.includes(s.field) && !allowed.has(s.field)) continue;
-        const av = a[s.field];
-        const bv = b[s.field];
-        if (av == null && bv == null) continue;
-        if (av == null) return 1;
-        if (bv == null) return -1;
-        let cmp = 0;
-        if (typeof av === "number" && typeof bv === "number") cmp = av - bv;
-        else cmp = String(av).localeCompare(String(bv), "ru");
-        if (cmp !== 0) return s.dir === "asc" ? cmp : -cmp;
-      }
-      return 0;
-    });
-  }
-
-  const projected = filtered.map((r) => {
+  const filtered = rows.filter((r) => matchRowFilters(r, config.filters));
+  const sorted = sortReportRows(filtered, config.sort, allowed);
+  const projected = sorted.map((r) => {
     const out: Record<string, any> = {};
     for (const f of fields) {
       const v = r[f];
@@ -400,6 +397,34 @@ function projectAndSort(
   });
 
   return { columns, rows: projected, total: projected.length };
+}
+
+const PRIMARY_RUN_LIMIT = 10_000;
+
+function resolveQueryFields(config: ReportConfig, fieldDefs: ReportFieldDef[]): string[] {
+  const allowed = new Set(fieldDefs.map((f) => f.key));
+  const keys = isSummaryConfig(config)
+    ? [...(config.groupBy ?? []), ...(config.aggregates ?? []).map((item) => item.field)]
+    : config.fields;
+  const unique = Array.from(
+    new Set(keys.filter((key) => key && key !== EVENT_COUNT_FIELD && key !== "*" && allowed.has(key)))
+  );
+  if (unique.length) return unique;
+  return (DEFAULT_FIELDS[config.dataset] ?? []).filter((key) => allowed.has(key));
+}
+
+function summarizeRows(
+  rows: Array<Record<string, any>>,
+  config: ReportConfig,
+  fieldDefs: ReportFieldDef[]
+) {
+  const aggregated = applyGroupAggregates(rows, config.groupBy ?? [], config.aggregates ?? [], fieldDefs);
+  const allowed = new Set(aggregated.columns.map((column) => column.key));
+  return {
+    columns: aggregated.columns,
+    rows: sortReportRows(aggregated.rows, config.sort, allowed),
+    total: aggregated.total
+  };
 }
 
 function resolvePeriod(
@@ -648,20 +673,35 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
     const fromQ = encodeURIComponent(period.from.toISOString());
     const toQ = encodeURIComponent(period.to.toISOString());
     const fieldDefs = FIELDS[config.dataset];
+    const summary = isSummaryConfig(config);
     let rawRows: Array<Record<string, any>> = [];
 
     if (config.dataset === "primary_events") {
+      const queryFields = resolveQueryFields(config, fieldDefs);
       const result = await queryPrimaryTable(app, sandboxIdFor(req), {
         from: period.from,
         to: period.to,
-        fields: config.fields,
+        fields: queryFields,
         conditions: config.filters.conditions ?? [],
-        sort: config.sort,
-        limit: 200
+        sort: summary ? [] : config.sort,
+        limit: PRIMARY_RUN_LIMIT
       });
+      if (summary) {
+        const aggregated = summarizeRows(result.rows, config, fieldDefs);
+        return {
+          ok: true as const,
+          dataset: config.dataset,
+          mode: "summary" as const,
+          period: { from: period.from.toISOString(), to: period.to.toISOString() },
+          ...aggregated,
+          sourceTotal: result.rows.length,
+          truncated: Boolean(result.nextCursor)
+        };
+      }
       return {
         ok: true as const,
         dataset: config.dataset,
+        mode: "detail" as const,
         period: { from: period.from.toISOString(), to: period.to.toISOString() },
         columns: result.columns.map((column) => ({
           key: column.key,
@@ -676,8 +716,9 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
                 : "string"
         })),
         rows: result.rows,
-        total: result.totalEstimate,
-        nextCursor: result.nextCursor
+        total: result.rows.length,
+        nextCursor: result.nextCursor,
+        truncated: Boolean(result.nextCursor)
       };
     } else if (config.dataset === "tat_events") {
       const data = await fetchJson(app, req, `/api/analytics/tat-variance?from=${fromQ}&to=${toQ}`);
@@ -781,10 +822,24 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    if (summary) {
+      const filtered = rawRows.filter((row) => matchRowFilters(row, config.filters));
+      const aggregated = summarizeRows(filtered, config, fieldDefs);
+      return {
+        ok: true as const,
+        dataset: config.dataset,
+        mode: "summary" as const,
+        period: { from: period.from.toISOString(), to: period.to.toISOString() },
+        ...aggregated,
+        sourceTotal: filtered.length
+      };
+    }
+
     const result = projectAndSort(rawRows, config, fieldDefs);
     return {
       ok: true as const,
       dataset: config.dataset,
+      mode: "detail" as const,
       period: { from: period.from.toISOString(), to: period.to.toISOString() },
       ...result
     };

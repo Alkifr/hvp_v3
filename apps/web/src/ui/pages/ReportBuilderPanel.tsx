@@ -1,10 +1,11 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPostBlob } from "../../lib/api";
 import { buildPrimaryHeaderPlan } from "../../lib/primaryTableHeaders";
+import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
 
 type ReportDataset =
   | "primary_events"
@@ -34,6 +35,23 @@ const MAPPING_STATUS_LABEL: Record<ReportFieldMappingStatus, string> = {
   stub: "заглушка"
 };
 
+const EVENT_COUNT_FIELD = "__count";
+
+type AggregateFn = "sum" | "avg" | "count" | "min" | "max";
+
+type ReportAggregate = {
+  field: string;
+  fn: AggregateFn;
+};
+
+const AGGREGATE_FN_OPTIONS: Array<{ fn: AggregateFn; label: string }> = [
+  { fn: "sum", label: "Сумма" },
+  { fn: "avg", label: "Среднее" },
+  { fn: "count", label: "Количество" },
+  { fn: "min", label: "Минимум" },
+  { fn: "max", label: "Максимум" }
+];
+
 type FilterOp = "contains" | "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "empty" | "notEmpty";
 
 type FieldCondition = {
@@ -54,6 +72,8 @@ type ReportConfig = {
   compareB?: string;
   periodFrom?: string | null;
   periodTo?: string | null;
+  groupBy?: string[];
+  aggregates?: ReportAggregate[];
 };
 
 type DatasetMeta = {
@@ -91,7 +111,13 @@ type RunResult = {
   rows: Array<Record<string, any>>;
   total: number;
   nextCursor?: string | null;
+  mode?: "detail" | "summary";
+  sourceTotal?: number;
+  truncated?: boolean;
 };
+
+const PAGE_SIZE_OPTIONS = [50, 100, 200, 500, "all"] as const;
+type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
 
 const OPS_BY_TYPE: Record<ReportFieldDef["type"], Array<{ op: FilterOp; label: string }>> = {
   string: [
@@ -123,6 +149,8 @@ const OPS_BY_TYPE: Record<ReportFieldDef["type"], Array<{ op: FilterOp; label: s
   ]
 };
 
+const DEFAULT_DATASET: ReportDataset = "primary_events";
+
 function emptyConfig(dataset: ReportDataset, meta?: DatasetMeta[], periodDefaults?: { from: string; to: string }): ReportConfig {
   const ds = meta?.find((m) => m.id === dataset);
   return {
@@ -134,7 +162,9 @@ function emptyConfig(dataset: ReportDataset, meta?: DatasetMeta[], periodDefault
     compareA: "prod",
     compareB: "",
     periodFrom: periodDefaults?.from ?? null,
-    periodTo: periodDefaults?.to ?? null
+    periodTo: periodDefaults?.to ?? null,
+    groupBy: [],
+    aggregates: []
   };
 }
 
@@ -146,7 +176,20 @@ function moveItem<T>(arr: T[], from: number, to: number): T[] {
   return next;
 }
 
-function formatReportCell(value: unknown, type?: ReportFieldDef["type"]): string | number {
+function isDurationField(key?: string, label?: string | null): boolean {
+  if (label && /продолжительность/i.test(label)) return true;
+  return Boolean(key && /^(primary\.(t|w|ab|ac|ao|ap|aq|as|at))$/.test(key));
+}
+
+function formatDurationNumber(value: number): string {
+  return value.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatReportCell(
+  value: unknown,
+  type?: ReportFieldDef["type"],
+  field?: { key?: string; label?: string | null }
+): string | number {
   if (value == null || value === "") return "";
   if (type === "datetime") {
     const text = String(value);
@@ -154,19 +197,25 @@ function formatReportCell(value: unknown, type?: ReportFieldDef["type"]): string
     if (/^\d{1,2}\.\d{1,2}\.\d{4}/.test(text)) return text;
     const parsed = dayjs(text);
     if (parsed.isValid()) {
-      // Дата без времени (YYYY-MM-DD или полночь) → только дата.
-      if (/^\d{4}-\d{2}-\d{2}$/.test(text) || (parsed.hour() === 0 && parsed.minute() === 0 && parsed.second() === 0)) {
-        return parsed.format("DD.MM.YYYY");
-      }
+      // Дата без времени (YYYY-MM-DD) → только дата; иначе всегда с часами.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return parsed.format("DD.MM.YYYY");
       return parsed.format("DD.MM.YYYY HH:mm");
     }
   }
-  if (typeof value === "number") return value;
+  if (typeof value === "number") {
+    if (isDurationField(field?.key, field?.label)) return formatDurationNumber(value);
+    if (Number.isInteger(value)) return value;
+    return Math.round(value * 1e6) / 1e6;
+  }
   return String(value);
 }
 
 /** Для клиентского XLSX: Date, чтобы Excel видел тип «дата». */
-function exportReportCell(value: unknown, type?: ReportFieldDef["type"]): string | number | Date {
+function exportReportCell(
+  value: unknown,
+  type?: ReportFieldDef["type"],
+  field?: { key?: string; label?: string | null }
+): string | number | Date {
   if (value == null || value === "") return "";
   if (type === "datetime") {
     const text = String(value);
@@ -174,7 +223,10 @@ function exportReportCell(value: unknown, type?: ReportFieldDef["type"]): string
     const parsed = dayjs(text);
     if (parsed.isValid()) return parsed.toDate();
   }
-  if (typeof value === "number") return value;
+  if (typeof value === "number") {
+    if (isDurationField(field?.key, field?.label)) return Math.round(value * 100) / 100;
+    return value;
+  }
   return String(value);
 }
 
@@ -191,7 +243,9 @@ function normalizeConfig(
     sort: raw.sort ?? [],
     fields: raw.fields?.length ? raw.fields : base.fields,
     periodFrom: raw.periodFrom ?? periodDefaults?.from ?? null,
-    periodTo: raw.periodTo ?? periodDefaults?.to ?? null
+    periodTo: raw.periodTo ?? periodDefaults?.to ?? null,
+    groupBy: raw.groupBy ?? [],
+    aggregates: raw.aggregates ?? []
   };
 }
 
@@ -222,20 +276,22 @@ export function ReportBuilderPanel(props: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [name, setName] = useState("Новый отчёт");
   const [config, setConfig] = useState<ReportConfig>(() =>
-    emptyConfig("tat_events", undefined, {
+    emptyConfig(DEFAULT_DATASET, undefined, {
       from: dayjs().subtract(30, "day").format("YYYY-MM-DD"),
       to: dayjs().format("YYYY-MM-DD")
     })
   );
   const [shareEmail, setShareEmail] = useState("");
   const [shareRole, setShareRole] = useState<"VIEWER" | "EDITOR">("VIEWER");
-  const [constructorTab, setConstructorTab] = useState<"source" | "fields" | "filters" | "sort" | "access">(
-    "source"
-  );
+  const [constructorTab, setConstructorTab] = useState<
+    "source" | "fields" | "filters" | "summary" | "sort" | "access"
+  >("source");
   const [fieldSearch, setFieldSearch] = useState("");
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [pageSize, setPageSize] = useState<PageSizeOption>(50);
+  const [page, setPage] = useState(1);
 
   const datasets = metaQ.data?.datasets ?? [];
   const currentMeta = datasets.find((d) => d.id === config.dataset);
@@ -277,7 +333,7 @@ export function ReportBuilderPanel(props: Props) {
   );
 
   const primaryPreviewHeader = useMemo(() => {
-    if (!runResult || config.dataset !== "primary_events") return null;
+    if (!runResult || config.dataset !== "primary_events" || runResult.mode === "summary") return null;
     const fieldByKey = new Map((currentMeta?.fields ?? []).map((f) => [f.key, f]));
     return buildPrimaryHeaderPlan(
       runResult.columns.map((c) => {
@@ -292,10 +348,17 @@ export function ReportBuilderPanel(props: Props) {
     );
   }, [runResult, config.dataset, currentMeta?.fields]);
 
+  const didHydrateMeta = useRef(false);
   useEffect(() => {
-    if (!metaQ.data || config.fields.length) return;
-    setConfig(emptyConfig("tat_events", metaQ.data.datasets, periodDefaults));
-  }, [metaQ.data, config.fields.length, periodDefaults.from, periodDefaults.to]);
+    if (!metaQ.data || didHydrateMeta.current) return;
+    didHydrateMeta.current = true;
+    setConfig((prev) =>
+      emptyConfig(prev.dataset, metaQ.data.datasets, {
+        from: prev.periodFrom ?? periodDefaults.from,
+        to: prev.periodTo ?? periodDefaults.to
+      })
+    );
+  }, [metaQ.data, periodDefaults.from, periodDefaults.to]);
 
   const loadReport = (r: SavedReport) => {
     setSelectedId(r.id);
@@ -306,22 +369,40 @@ export function ReportBuilderPanel(props: Props) {
     setDirty(false);
     setFieldSearch("");
     setConstructorTab("source");
+    setPage(1);
   };
 
   const startNew = () => {
     setSelectedId(null);
     setName("Новый отчёт");
-    setConfig(emptyConfig("tat_events", datasets, periodDefaults));
+    setConfig(emptyConfig(DEFAULT_DATASET, datasets, periodDefaults));
     setRunResult(null);
     setRunError(null);
     setDirty(true);
     setFieldSearch("");
     setConstructorTab("source");
+    setPage(1);
   };
 
   const patchConfig = (patch: Partial<ReportConfig>) => {
     setConfig((prev) => ({ ...prev, ...patch }));
     setDirty(true);
+  };
+
+  const applyDataset = (id: string) => {
+    const d = datasets.find((item) => item.id === id);
+    if (!d) return;
+    setFieldSearch("");
+    patchConfig({
+      dataset: d.id,
+      fields: d.defaultFields,
+      sort: [],
+      filters: { conditions: [] },
+      groupBy: [],
+      aggregates: [],
+      periodFrom: config.periodFrom ?? periodDefaults.from,
+      periodTo: config.periodTo ?? periodDefaults.to
+    });
   };
 
   const setConditions = (next: FieldCondition[]) => {
@@ -403,16 +484,54 @@ export function ReportBuilderPanel(props: Props) {
         tzOffset
       });
     },
-    onSuccess: (res) => setRunResult(res),
+    onSuccess: (res) => {
+      setRunResult(res);
+      setPage(1);
+    },
     onError: (e: any) => setRunError(String(e?.message ?? e))
   });
 
   const needsCompare = config.dataset === "compare_hangars" || config.dataset === "compare_events";
   const needsGrain = config.dataset.startsWith("util_");
+  const groupBy = config.groupBy ?? [];
+  const aggregates = config.aggregates ?? [];
+  const summaryOn = groupBy.length > 0 || aggregates.length > 0;
+  const numericFields = (currentMeta?.fields ?? []).filter((f) => f.type === "number");
+  const sortFields = summaryOn
+    ? [
+        ...groupBy
+          .map((key) => currentMeta?.fields.find((f) => f.key === key))
+          .filter((f): f is ReportFieldDef => Boolean(f)),
+        ...aggregates.map((spec) => ({
+          key: spec.field === EVENT_COUNT_FIELD ? EVENT_COUNT_FIELD : `${spec.field}__${spec.fn}`,
+          label:
+            spec.field === EVENT_COUNT_FIELD
+              ? "Количество событий"
+              : `${AGGREGATE_FN_OPTIONS.find((o) => o.fn === spec.fn)?.label ?? spec.fn} · ${
+                  currentMeta?.fields.find((f) => f.key === spec.field)?.label ?? spec.field
+                }`,
+          type: "number" as const
+        }))
+      ]
+    : (currentMeta?.fields ?? []).filter((f) => config.fields.includes(f.key));
+  const hasEventCount = aggregates.some((spec) => spec.field === EVENT_COUNT_FIELD);
+
+  const totalRows = runResult?.rows.length ?? 0;
+  const pageLimit = pageSize === "all" ? Math.max(totalRows, 1) : pageSize;
+  const pageCount = Math.max(1, Math.ceil(totalRows / pageLimit));
+  const safePage = Math.min(page, pageCount);
+  const pageStart = (safePage - 1) * pageLimit;
+  const visibleRows = useMemo(() => {
+    if (!runResult) return [];
+    if (pageSize === "all") return runResult.rows;
+    return runResult.rows.slice(pageStart, pageStart + pageLimit);
+  }, [runResult, pageSize, pageStart, pageLimit]);
+  const rangeFrom = totalRows === 0 ? 0 : pageStart + 1;
+  const rangeTo = Math.min(pageStart + visibleRows.length, totalRows);
 
   const exportXlsx = async () => {
     if (!runResult) return;
-    if (config.dataset === "primary_events") {
+    if (config.dataset === "primary_events" && !summaryOn) {
       const from = config.periodFrom ? dayjs(config.periodFrom).startOf("day").toISOString() : fromIso;
       const to = config.periodTo ? dayjs(config.periodTo).endOf("day").toISOString() : toIso;
       const blob = await apiPostBlob("/api/analytics/primary-table/export", {
@@ -435,7 +554,7 @@ export function ReportBuilderPanel(props: Props) {
     const flat = runResult.rows.map((row) => {
       const out: Record<string, any> = {};
       for (const col of runResult.columns) {
-        out[col.label] = exportReportCell(row[col.key], col.type as ReportFieldDef["type"]);
+        out[col.label] = exportReportCell(row[col.key], col.type as ReportFieldDef["type"], col);
       }
       return out;
     });
@@ -458,7 +577,7 @@ export function ReportBuilderPanel(props: Props) {
 
   const mine = (listQ.data?.reports ?? []).filter((r) => r.myRole === "OWNER");
   const shared = (listQ.data?.reports ?? []).filter((r) => r.myRole !== "OWNER");
-  const saveEnabled = canEdit && dirty && Boolean(name.trim()) && !saveMut.isPending;
+  const saveEnabled = canEdit && dirty && Boolean(name.trim()) && !saveMut.isPending && (config.fields.length > 0 || summaryOn);
 
   return (
     <div className="reportBuilder">
@@ -535,7 +654,7 @@ export function ReportBuilderPanel(props: Props) {
               <button
                 type="button"
                 className="btn ganttIconBtn"
-                disabled={runMut.isPending}
+                disabled={runMut.isPending || (!config.fields.length && !summaryOn)}
                 title="Сформировать отчёт"
                 aria-label="Сформировать"
                 onClick={() => runMut.mutate()}
@@ -588,6 +707,7 @@ export function ReportBuilderPanel(props: Props) {
                 ["source", "Источник"],
                 ["fields", "Поля"],
                 ["filters", "Отбор"],
+                ["summary", "Сводка"],
                 ["sort", "Сортировка"],
                 ["access", "Доступ"]
               ] as const
@@ -606,30 +726,32 @@ export function ReportBuilderPanel(props: Props) {
           {constructorTab === "source" ? (
             <div className="reportBuilderSection">
               <p className="muted small">Выберите набор данных — от него зависят поля, отборы и смысл отчёта.</p>
-              <div className="reportDatasetGrid">
-                {datasets.map((d) => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    disabled={!canEdit}
-                    className={config.dataset === d.id ? "reportDatasetCard active" : "reportDatasetCard"}
-                    onClick={() => {
-                      setFieldSearch("");
-                      patchConfig({
-                        dataset: d.id,
-                        fields: d.defaultFields,
-                        sort: [],
-                        filters: { conditions: [] },
-                        periodFrom: config.periodFrom ?? periodDefaults.from,
-                        periodTo: config.periodTo ?? periodDefaults.to
-                      });
-                    }}
-                  >
-                    <strong>{d.label}</strong>
-                    <span className="muted small">{d.description}</span>
-                  </button>
-                ))}
-              </div>
+              <label className="tgField reportSourceField">
+                <span className="tgFieldLabel">Набор данных</span>
+                <SingleSelectDropdown
+                  searchable
+                  allowEmpty={false}
+                  showReset={canEdit}
+                  searchPlaceholder="Найти набор данных"
+                  placeholder="Выберите набор данных"
+                  options={datasets.map((d) => ({
+                    id: d.id,
+                    label: d.label,
+                    description: d.description
+                  }))}
+                  value={config.dataset}
+                  disabled={!canEdit}
+                  width="100%"
+                  maxHeight={360}
+                  onChange={applyDataset}
+                  onReset={() => {
+                    setFieldSearch("");
+                    setConfig(emptyConfig(DEFAULT_DATASET, datasets, periodDefaults));
+                    setDirty(true);
+                  }}
+                />
+              </label>
+              {currentMeta?.description ? <p className="muted small">{currentMeta.description}</p> : null}
               {needsGrain ? (
                 <label className="tgField" style={{ marginTop: 12, maxWidth: 220 }}>
                   <span className="tgFieldLabel">Детализация</span>
@@ -816,7 +938,7 @@ export function ReportBuilderPanel(props: Props) {
                             />
                             <span className="reportFieldLabelCol">
                               <span>{f.label}</span>
-                              {mappingMark && f.mappingStatus ? (
+                              {mappingMark && f.mappingStatus && f.mappingStatus !== "mapped" ? (
                                 <span className={`reportFieldMapBadge reportFieldMap-${f.mappingStatus}`}>
                                   {mappingMark}
                                 </span>
@@ -1005,6 +1127,159 @@ export function ReportBuilderPanel(props: Props) {
             </div>
           ) : null}
 
+          {constructorTab === "summary" ? (
+            <div className="reportBuilderSection">
+              <p className="muted small">
+                Сгруппируйте строки (месяц, тип ВС, заказчик, ангар…) и посчитайте количество событий, суммы и средние
+                по числовым полям. Без группировки получится одна итоговая строка за период.
+              </p>
+              <div>
+                <strong className="reportSummaryLabel">Группировка</strong>
+                {groupBy.map((key, idx) => (
+                  <div key={`${key}-${idx}`} className="reportSortRow">
+                    <select
+                      disabled={!canEdit}
+                      value={key}
+                      onChange={(e) => {
+                        const next = [...groupBy];
+                        next[idx] = e.target.value;
+                        patchConfig({ groupBy: next.filter(Boolean) });
+                      }}
+                    >
+                      <option value="">— измерение —</option>
+                      {(currentMeta?.fields ?? []).map((f) => (
+                        <option key={f.key} value={f.key}>
+                          {f.group ? `${f.group} / ${f.label}` : f.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btnGhost"
+                      disabled={!canEdit}
+                      onClick={() => patchConfig({ groupBy: groupBy.filter((_, i) => i !== idx) })}
+                    >
+                      Убрать
+                    </button>
+                  </div>
+                ))}
+                {canEdit && groupBy.length < 20 ? (
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    onClick={() => {
+                      const nextField =
+                        (currentMeta?.fields ?? []).find((f) => !groupBy.includes(f.key))?.key ?? "";
+                      const next = [...groupBy, nextField].filter(Boolean);
+                      patchConfig({
+                        groupBy: next,
+                        aggregates:
+                          aggregates.length || !next.length
+                            ? aggregates
+                            : [{ field: EVENT_COUNT_FIELD, fn: "count" }]
+                      });
+                    }}
+                  >
+                    + Измерение
+                  </button>
+                ) : null}
+              </div>
+              <div>
+                <strong className="reportSummaryLabel">Показатели</strong>
+                <label className="reportFieldCheck">
+                  <input
+                    type="checkbox"
+                    disabled={!canEdit}
+                    checked={hasEventCount}
+                    onChange={() => {
+                      if (hasEventCount) {
+                        patchConfig({ aggregates: aggregates.filter((spec) => spec.field !== EVENT_COUNT_FIELD) });
+                      } else {
+                        patchConfig({
+                          aggregates: [{ field: EVENT_COUNT_FIELD, fn: "count" }, ...aggregates]
+                        });
+                      }
+                    }}
+                  />
+                  <span>Количество событий</span>
+                </label>
+                {aggregates.map((spec, idx) => {
+                  if (spec.field === EVENT_COUNT_FIELD) return null;
+                  return (
+                    <div key={`${spec.field}-${spec.fn}-${idx}`} className="reportSortRow">
+                      <select
+                        disabled={!canEdit}
+                        value={spec.field}
+                        onChange={(e) => {
+                          const next = [...aggregates];
+                          next[idx] = { ...spec, field: e.target.value };
+                          patchConfig({ aggregates: next });
+                        }}
+                      >
+                        {numericFields.map((f) => (
+                          <option key={f.key} value={f.key}>
+                            {f.group ? `${f.group} / ${f.label}` : f.label}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        disabled={!canEdit}
+                        value={spec.fn}
+                        onChange={(e) => {
+                          const next = [...aggregates];
+                          next[idx] = { ...spec, fn: e.target.value as AggregateFn };
+                          patchConfig({ aggregates: next });
+                        }}
+                      >
+                        {AGGREGATE_FN_OPTIONS.map((o) => (
+                          <option key={o.fn} value={o.fn}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btnGhost"
+                        disabled={!canEdit}
+                        onClick={() => patchConfig({ aggregates: aggregates.filter((_, i) => i !== idx) })}
+                      >
+                        Убрать
+                      </button>
+                    </div>
+                  );
+                })}
+                {canEdit && numericFields.length > 0 && aggregates.length < 20 ? (
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    onClick={() => {
+                      const used = new Set(aggregates.map((spec) => `${spec.field}:${spec.fn}`));
+                      const nextField =
+                        numericFields.find((f) => !used.has(`${f.key}:sum`))?.key ?? numericFields[0]!.key;
+                      patchConfig({
+                        aggregates: [...aggregates, { field: nextField, fn: "sum" }]
+                      });
+                    }}
+                  >
+                    + Показатель
+                  </button>
+                ) : null}
+                {numericFields.length === 0 ? (
+                  <div className="muted small">В этом источнике нет числовых полей для суммы и среднего.</div>
+                ) : null}
+              </div>
+              {summaryOn ? (
+                <div className="muted small">
+                  Сводка включена
+                  {groupBy.length ? ` · группировка: ${groupBy.length}` : " · итог по всем строкам"}
+                  {aggregates.length ? ` · показателей: ${aggregates.length}` : " · количество событий"}.
+                </div>
+              ) : (
+                <div className="muted small">Добавьте измерение или показатель — отчёт станет сводным.</div>
+              )}
+            </div>
+          ) : null}
+
           {constructorTab === "sort" ? (
             <div className="reportBuilderSection">
               <p className="muted small">До 3 уровней сортировки.</p>
@@ -1021,13 +1296,11 @@ export function ReportBuilderPanel(props: Props) {
                     }}
                   >
                     <option value="">— поле —</option>
-                    {(currentMeta?.fields ?? [])
-                      .filter((f) => config.fields.includes(f.key))
-                      .map((f) => (
-                        <option key={f.key} value={f.key}>
-                          {f.label}
-                        </option>
-                      ))}
+                    {sortFields.map((f) => (
+                      <option key={f.key} value={f.key}>
+                        {f.label}
+                      </option>
+                    ))}
                   </select>
                   <select
                     disabled={!canEdit || !s.field}
@@ -1058,7 +1331,7 @@ export function ReportBuilderPanel(props: Props) {
                   className="btn btnGhost"
                   onClick={() =>
                     patchConfig({
-                      sort: [...config.sort, { field: config.fields[0] ?? "", dir: "asc" }]
+                      sort: [...config.sort, { field: sortFields[0]?.key ?? config.fields[0] ?? "", dir: "asc" }]
                     })
                   }
                 >
@@ -1125,10 +1398,31 @@ export function ReportBuilderPanel(props: Props) {
               <h3>Результат</h3>
               <p className="muted small">
                 {runResult
-                  ? `${runResult.total} строк · ${dayjs(runResult.period.from).format("DD.MM.YYYY")} – ${dayjs(runResult.period.to).format("DD.MM.YYYY")}`
+                  ? runResult.mode === "summary"
+                    ? `Сводка: ${runResult.total} групп · ${runResult.sourceTotal ?? "—"} исходных строк · ${dayjs(runResult.period.from).format("DD.MM.YYYY")} – ${dayjs(runResult.period.to).format("DD.MM.YYYY")}`
+                    : `${runResult.total} строк · ${dayjs(runResult.period.from).format("DD.MM.YYYY")} – ${dayjs(runResult.period.to).format("DD.MM.YYYY")}`
                   : "Нажмите «Сформировать», чтобы получить таблицу по схеме отчёта"}
               </p>
             </div>
+            {runResult ? (
+              <label className="reportPagerSize">
+                <span className="muted small">Строк на странице</span>
+                <select
+                  value={String(pageSize)}
+                  onChange={(e) => {
+                    const next = e.target.value === "all" ? "all" : (Number(e.target.value) as PageSizeOption);
+                    setPageSize(next);
+                    setPage(1);
+                  }}
+                >
+                  {PAGE_SIZE_OPTIONS.map((option) => (
+                    <option key={String(option)} value={String(option)}>
+                      {option === "all" ? "Все" : option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
           </div>
           {runMut.isPending ? <div className="muted">Формирование…</div> : null}
           {runError ? <div className="error">{runError}</div> : null}
@@ -1198,17 +1492,47 @@ export function ReportBuilderPanel(props: Props) {
                   )}
                 </thead>
                 <tbody>
-                  {runResult.rows.slice(0, 200).map((row, i) => (
-                    <tr key={i}>
+                  {visibleRows.map((row, i) => (
+                    <tr key={pageStart + i}>
                       {runResult.columns.map((c) => {
-                        const formatted = formatReportCell(row[c.key], c.type as ReportFieldDef["type"]);
+                        const formatted = formatReportCell(row[c.key], c.type as ReportFieldDef["type"], c);
                         return <td key={c.key}>{formatted === "" ? "—" : formatted}</td>;
                       })}
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {runResult.rows.length > 200 ? <div className="muted">Показаны первые 200 строк</div> : null}
+              {runResult.truncated ? (
+                <div className="muted">Показаны первые 10 000 исходных строк</div>
+              ) : null}
+            </div>
+          ) : null}
+          {runResult ? (
+            <div className="reportResultPager">
+              <div className="muted small">
+                {totalRows === 0 ? "Нет строк" : `${rangeFrom}–${rangeTo} из ${totalRows}`}
+              </div>
+              <div className="reportResultPagerBtns">
+                <button
+                  type="button"
+                  className="btn btnGhost"
+                  disabled={safePage <= 1 || pageSize === "all"}
+                  onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                >
+                  Назад
+                </button>
+                <span className="muted small">
+                  {pageSize === "all" ? "Все строки" : `Стр. ${safePage} из ${pageCount}`}
+                </span>
+                <button
+                  type="button"
+                  className="btn btnGhost"
+                  disabled={safePage >= pageCount || pageSize === "all"}
+                  onClick={() => setPage((prev) => Math.min(pageCount, prev + 1))}
+                >
+                  Вперёд
+                </button>
+              </div>
             </div>
           ) : null}
         </section>

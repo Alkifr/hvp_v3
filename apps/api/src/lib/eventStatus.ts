@@ -21,6 +21,8 @@ export type StatusReconcileInput = {
   now?: Date;
   /** User explicitly requested DONE (manual). */
   forceDone?: boolean;
+  autoInProgressStatuses?: Set<EventStatus>;
+  manualOnlyStatuses?: Set<EventStatus>;
 };
 
 export type StatusReconcileResult = {
@@ -46,6 +48,8 @@ export function reconcileEventStatus(input: StatusReconcileInput): StatusReconci
   const now = floorToMinute(input.now ?? new Date());
   const startAt = floorToMinute(input.startAt);
   const endAt = input.endAt;
+
+  const autoInProgress = input.autoInProgressStatuses ?? AUTO_IN_PROGRESS_STATUSES;
 
   let status = input.status;
   let actualStartAt = input.actualStartAt ?? null;
@@ -79,7 +83,7 @@ export function reconcileEventStatus(input: StatusReconcileInput): StatusReconci
     status = now.valueOf() >= startAt.valueOf() ? EventStatus.IN_PROGRESS : EventStatus.APPROVED_BY_EXECUTOR;
   } else if (
     !hasFact &&
-    AUTO_IN_PROGRESS_STATUSES.has(status) &&
+    autoInProgress.has(status) &&
     now.valueOf() >= startAt.valueOf()
   ) {
     status = EventStatus.IN_PROGRESS;
@@ -100,9 +104,11 @@ export function isEventOverdueNoFact(params: {
   actualStartAt: Date | null | undefined;
   actualEndAt: Date | null | undefined;
   now?: Date;
+  manualOnlyStatuses?: Set<EventStatus>;
 }): boolean {
+  const manualOnly = params.manualOnlyStatuses ?? MANUAL_ONLY_STATUSES;
   // Pending approval / cancelled / deleted / done — no overdue nag
-  if (MANUAL_ONLY_STATUSES.has(params.status) || params.status === EventStatus.DONE) return false;
+  if (manualOnly.has(params.status) || params.status === EventStatus.DONE) return false;
   if (params.actualStartAt && params.actualEndAt) return false;
   const now = floorToMinute(params.now ?? new Date());
   return now.valueOf() > floorToMinute(params.endAt).valueOf();

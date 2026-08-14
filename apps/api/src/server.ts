@@ -15,12 +15,15 @@ import { resourcesRoutes } from "./routes/resources/index.js";
 import { analyticsRoutes } from "./routes/analytics.js";
 import { reportRoutes } from "./routes/reports.js";
 import { primaryTableRoutes } from "./routes/primaryTable.js";
+import { tableViewRoutes } from "./routes/tableViews.js";
 import { notificationsRoutes } from "./routes/notifications.js";
 import { runEventStatusMaintenance } from "./lib/eventMaintenance.js";
 
 export async function buildServer() {
   const app = Fastify({
-    logger: true
+    logger: true,
+    // Импорт событий/справочников шлёт JSON на сотни–тысячи строк; дефолт Fastify — 1 MiB.
+    bodyLimit: 10 * 1024 * 1024
   });
 
   await app.register(cors, {
@@ -41,6 +44,7 @@ export async function buildServer() {
   await app.register(analyticsRoutes, { prefix: "/api/analytics" });
   await app.register(primaryTableRoutes, { prefix: "/api/analytics/primary-table" });
   await app.register(reportRoutes, { prefix: "/api/reports" });
+  await app.register(tableViewRoutes, { prefix: "/api/table-views" });
   await app.register(notificationsRoutes, { prefix: "/api/notifications" });
   await app.register(adminRoutes, { prefix: "/api/admin" });
   await app.register(sandboxRoutes, { prefix: "/api/sandboxes" });

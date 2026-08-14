@@ -46,34 +46,103 @@ function withSandboxHeader(headers: Record<string, string> = {}): Record<string,
   return headers;
 }
 
-async function readError(res: Response): Promise<string> {
-  const text = await res.text();
-  try {
-    const j = JSON.parse(text);
-    if (j?.error === "DB_NOT_CONNECTED") {
-      return `Нет соединения с БД (проверьте DATABASE_CLOUD_URL). ${j?.detail ?? ""}`.trim();
-    }
-    if (j?.error === "SANDBOX_NOT_FOUND") return "Песочница не найдена";
-    if (j?.error === "SANDBOX_ACCESS_DENIED") return "Нет доступа к песочнице";
-    if (j?.error === "SANDBOX_READ_ONLY") return "Нет прав на запись в песочнице";
-    if (j?.error === "FORBIDDEN") return "Недостаточно прав для выполнения операции";
-    if (j?.message) {
-      const msg = String(j.message);
-      // Иногда Fastify/Zod отдаёт message как JSON-массив issues
-      if (msg.trim().startsWith("[")) {
-        try {
-          const issues = JSON.parse(msg);
-          if (Array.isArray(issues)) return formatZodIssuesMessage(issues);
-        } catch {
-          /* keep original */
-        }
+const MAX_RAW_ERROR = 280;
+
+function looksLikeHtml(text: string): boolean {
+  const t = text.trimStart();
+  return /^<!doctype html/i.test(t) || /^<html[\s>]/i.test(t);
+}
+
+function isTimeoutStatus(status?: number): boolean {
+  return status === 408 || status === 504 || status === 524;
+}
+
+function isTimeoutText(text: string): boolean {
+  return /etimedout|econnreset|timed?\s*out|gateway timeout|504 gateway/i.test(text);
+}
+
+function proxyOrTimeoutMessage(status?: number): string {
+  return [
+    "Превышено время ожидания ответа сети или прокси (часто UserGate/nginx: ETIMEDOUT).",
+    "Операция на сервере могла уже выполниться.",
+    "Проверьте план и не запускайте тот же файл повторно без проверки.",
+    status ? `(HTTP ${status})` : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function humanizeFetchFailure(err: unknown): string {
+  const msg = String((err as { message?: unknown })?.message ?? err);
+  if (/failed to fetch|networkerror|load failed|network request failed|aborted/i.test(msg)) {
+    return "Нет связи с сервером или запрос оборвался. Если импорт уже был запущен, часть данных могла сохраниться — проверьте план.";
+  }
+  return msg;
+}
+
+function formatApiErrorBody(text: string, status?: number): string {
+  const trimmed = String(text ?? "").trim();
+  if (trimmed) {
+    try {
+      const j = JSON.parse(trimmed);
+      if (j?.error === "DB_NOT_CONNECTED") {
+        return `Нет соединения с БД (проверьте DATABASE_CLOUD_URL). ${j?.detail ?? ""}`.trim();
       }
-      return msg;
+      if (j?.error === "SANDBOX_NOT_FOUND") return "Песочница не найдена";
+      if (j?.error === "SANDBOX_ACCESS_DENIED") return "Нет доступа к песочнице";
+      if (j?.error === "SANDBOX_READ_ONLY") return "Нет прав на запись в песочнице";
+      if (j?.error === "FORBIDDEN") return "Недостаточно прав для выполнения операции";
+      if (j?.message) {
+        const msg = String(j.message);
+        // Иногда Fastify/Zod отдаёт message как JSON-массив issues
+        if (msg.trim().startsWith("[")) {
+          try {
+            const issues = JSON.parse(msg);
+            if (Array.isArray(issues)) return formatZodIssuesMessage(issues);
+          } catch {
+            /* keep original */
+          }
+        }
+        return msg;
+      }
+      if (Array.isArray(j)) return formatZodIssuesMessage(j);
+    } catch {
+      /* not JSON — HTML/plain from proxy */
     }
-    if (Array.isArray(j)) return formatZodIssuesMessage(j);
-    return text;
+  }
+
+  if (
+    isTimeoutStatus(status) ||
+    isTimeoutText(trimmed) ||
+    (looksLikeHtml(trimmed) && (isTimeoutStatus(status) || status === 502 || status === 503))
+  ) {
+    return proxyOrTimeoutMessage(status);
+  }
+  if (looksLikeHtml(trimmed)) {
+    return `Прокси или шлюз вернул страницу ошибки${status ? ` (HTTP ${status})` : ""}. Повторите попытку; если сообщение повторяется, проверьте сеть.`;
+  }
+  if (trimmed) {
+    return trimmed.length > MAX_RAW_ERROR ? `${trimmed.slice(0, MAX_RAW_ERROR)}…` : trimmed;
+  }
+  return status ? `Ошибка запроса (HTTP ${status})` : "Ошибка запроса";
+}
+
+async function apiFetch(path: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(path, init);
+  } catch (err: unknown) {
+    throw new Error(humanizeFetchFailure(err));
+  }
+}
+
+async function readJson<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  if (!res.ok) throw new Error(formatApiErrorBody(text, res.status));
+  if (!text) return { ok: true } as T;
+  try {
+    return JSON.parse(text) as T;
   } catch {
-    return text;
+    throw new Error(formatApiErrorBody(text, res.status));
   }
 }
 
@@ -101,16 +170,15 @@ function formatZodIssuesMessage(issues: unknown[]): string {
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     headers: withSandboxHeader({ Accept: "application/json" }),
     credentials: "include"
   });
-  if (!res.ok) throw new Error(await readError(res));
-  return (await res.json()) as T;
+  return readJson<T>(res);
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: withSandboxHeader({
       "Content-Type": "application/json",
@@ -120,12 +188,11 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
     credentials: "include",
     body: JSON.stringify(body)
   });
-  if (!res.ok) throw new Error(await readError(res));
-  return (await res.json()) as T;
+  return readJson<T>(res);
 }
 
 export async function apiPostBlob(path: string, body: unknown): Promise<Blob> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: withSandboxHeader({
       "Content-Type": "application/json",
@@ -135,12 +202,12 @@ export async function apiPostBlob(path: string, body: unknown): Promise<Blob> {
     credentials: "include",
     body: JSON.stringify(body)
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw new Error(formatApiErrorBody(await res.text(), res.status));
   return await res.blob();
 }
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "PATCH",
     headers: withSandboxHeader({
       "Content-Type": "application/json",
@@ -150,12 +217,11 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
     credentials: "include",
     body: JSON.stringify(body)
   });
-  if (!res.ok) throw new Error(await readError(res));
-  return (await res.json()) as T;
+  return readJson<T>(res);
 }
 
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "PUT",
     headers: withSandboxHeader({
       "Content-Type": "application/json",
@@ -165,18 +231,14 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
     credentials: "include",
     body: JSON.stringify(body)
   });
-  if (!res.ok) throw new Error(await readError(res));
-  return (await res.json()) as T;
+  return readJson<T>(res);
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "DELETE",
     headers: withSandboxHeader({ Accept: "application/json" }),
     credentials: "include"
   });
-  if (!res.ok) throw new Error(await readError(res));
-  const text = await res.text();
-  if (!text) return { ok: true } as T;
-  return JSON.parse(text) as T;
+  return readJson<T>(res);
 }

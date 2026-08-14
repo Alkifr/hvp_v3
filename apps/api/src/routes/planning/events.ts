@@ -10,7 +10,7 @@ import {
   patchTouchesDoneScheduleLock,
   reconcileEventStatus
 } from "../../lib/eventStatus.js";
-import { DEFAULT_EVENT_STATUS } from "../../lib/eventStatusCatalog.js";
+import { DEFAULT_EVENT_STATUS, EVENT_STATUS_CATALOG, loadStatusAutomation } from "../../lib/eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
@@ -694,6 +694,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
   // Импорт событий из Excel/CSV (UI парсит файл и отправляет строки в JSON).
   // Поддерживает dryRun=true для "предпросмотра" без создания.
+  // Крупные файлы клиент шлёт пакетами (rowOffset / ignoreEventIds), чтобы уложиться в таймаут прокси.
   app.post("/import", async (req) => {
     assertCanWriteEvent(req);
 
@@ -705,6 +706,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const parsed = z
       .object({
         dryRun: z.boolean().optional(),
+        // Смещение номера строки Excel (0 = первая строка данных = лист.строка 2), для пакетной отправки.
+        rowOffset: z.number().int().min(0).max(4999).optional(),
+        // События предыдущих пакетов того же импорта — чтобы нахлёст внутри файла оставался предупреждением, а не ошибкой.
+        ignoreEventIds: z.array(zUuid).max(5000).optional(),
         rows: z
           .array(
             z
@@ -770,6 +775,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     const rows = body.rows;
     const dryRun = Boolean(body.dryRun);
+    const rowOffset = body.rowOffset ?? 0;
 
     // --- Prefetch справочников/связей для быстрого импорта ---
     const tailSet = new Set<string>();
@@ -1039,7 +1045,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i]!;
-      const rowIndex = i + 2; // предположим 1-я строка — заголовок
+      const rowIndex = rowOffset + i + 2; // 1-я строка листа — заголовок
       const warnings: string[] = [];
       try {
         const aircraftTail = upper(r.Aircraft);
@@ -1172,9 +1178,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       createdEvents: 0,
       createdReservations: 0,
       createdTows: 0,
+      createdEventIds: [] as string[],
       errors: [] as Array<{ rowIndex: number; message: string }>
     };
     const importedEventIds = new Set<string>();
+    if (body.ignoreEventIds?.length) {
+      const owned = await app.prisma.maintenanceEvent.findMany({
+        where: { id: { in: body.ignoreEventIds }, ...sandboxFilter(req) },
+        select: { id: true }
+      });
+      for (const e of owned) importedEventIds.add(e.id);
+    }
 
     for (let i = 0; i < previewRows.length; i++) {
       if (!previewRows[i]!.ok) continue;
@@ -1201,6 +1215,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
         const sbId = sandboxIdFor(req);
         let createdEventId = "";
+        let createdReservation = false;
+        let createdTow = false;
         await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
           const created = await tx.maintenanceEvent.create({
             data: {
@@ -1298,10 +1314,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               );
             }
 
-            const layoutConflict = await tx.standReservation.findFirst({
+            const layoutConflictRows = await tx.standReservation.findMany({
               where: {
                 sandboxId: sbId,
-                eventId: { notIn: Array.from(importedEventIds) },
                 layoutId: { not: layoutId },
                 startAt: { lt: endAt },
                 endAt: { gt: startAt },
@@ -1310,6 +1325,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               },
               include: { layout: { select: { name: true } }, event: { include: { aircraft: true } } }
             });
+            const layoutConflict = layoutConflictRows.find((r) => !importedEventIds.has(r.eventId));
             if (layoutConflict) {
               throw new Error(
                 `В этот период в ангаре уже используется другая схема расстановки: ${layoutConflict.layout?.name ?? "другая схема"} (${layoutConflict.event.title}, ${eventAircraftLabel(layoutConflict.event)})`
@@ -1350,13 +1366,13 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               data: { layoutId, hangarId }
             });
 
-            result.createdReservations += 1;
+            createdReservation = true;
           }
           if (towStartAt && towEndAt) {
             await tx.eventTow.create({
               data: { eventId: created.id, sandboxId: sbId, startAt: towStartAt, endAt: towEndAt }
             });
-            result.createdTows += 1;
+            createdTow = true;
           }
 
           const laborMetrics = collectLaborMetricsFromImportRow(r as Record<string, unknown>);
@@ -1372,10 +1388,14 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               }))
             });
           }
-
+        }, { timeout: 30_000, maxWait: 10_000 });
+        if (createdEventId) {
+          importedEventIds.add(createdEventId);
+          result.createdEventIds.push(createdEventId);
           result.createdEvents += 1;
-        });
-        if (createdEventId) importedEventIds.add(createdEventId);
+          if (createdReservation) result.createdReservations += 1;
+          if (createdTow) result.createdTows += 1;
+        }
       } catch (err: any) {
         result.errors.push({ rowIndex, message: String(err?.message ?? err) });
       }
@@ -1437,13 +1457,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       budgetStartAt: data.budgetStartAt,
       budgetEndAt: data.budgetEndAt
     });
+    const automation = await loadStatusAutomation(app.prisma);
     const statusReconciled = reconcileEventStatus({
       status: data.status ?? DEFAULT_EVENT_STATUS,
       startAt: data.startAt,
       endAt: data.endAt,
       actualStartAt: data.actualStartAt ?? null,
       actualEndAt: data.actualEndAt ?? null,
-      forceDone: data.status === EventStatus.DONE
+      forceDone: data.status === EventStatus.DONE,
+      autoInProgressStatuses: automation.autoInProgressStatuses
     });
     const created = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const event = await tx.maintenanceEvent.create({
@@ -1543,6 +1565,164 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return serializeEvent(created);
+  });
+
+  const BULK_STATUS_MAX = 1000;
+  const BULK_STATUS_TERMINAL = new Set<EventStatus>([
+    EventStatus.DONE,
+    EventStatus.CANCELLED,
+    EventStatus.DELETED
+  ]);
+
+  // Массовая смена MaintenanceEvent.status (таблица Ганта). Этапы не трогаем.
+  app.post("/status/batch", async (req) => {
+    assertCanWriteEvent(req);
+    const body = z
+      .object({
+        eventIds: z.array(zUuid).min(1).max(BULK_STATUS_MAX),
+        status: z.nativeEnum(EventStatus),
+        changeReason: z.string().trim().min(1).max(1000).optional()
+      })
+      .parse(req.body);
+
+    if (body.status === EventStatus.DELETED) {
+      throw app.httpErrors.badRequest("Массовый перевод в «Удалено» недоступен");
+    }
+
+    const storedCatalog = await app.prisma.eventStatusCatalog.findMany({
+      select: { code: true, selectable: true }
+    });
+    const storedByCode = new Map(storedCatalog.map((row) => [row.code, row]));
+    const selectable = new Set(
+      EVENT_STATUS_CATALOG.filter((item) => {
+        if (item.code === EventStatus.DELETED) return false;
+        const stored = storedByCode.get(item.code);
+        return stored ? stored.selectable : item.selectable;
+      }).map((item) => item.code)
+    );
+    if (!selectable.has(body.status)) {
+      throw app.httpErrors.badRequest("Этот статус нельзя выбрать");
+    }
+
+    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required when updating an event");
+
+    const uniqueIds = Array.from(new Set(body.eventIds));
+    const sbId = sandboxIdFor(req);
+    const automation = await loadStatusAutomation(app.prisma);
+    const actor = getActor(req);
+    const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
+
+    const events = await app.prisma.maintenanceEvent.findMany({
+      where: { id: { in: uniqueIds }, ...sandboxFilter(req) },
+      include: { aircraft: { select: { tailNumber: true } } }
+    });
+    const byId = new Map(events.map((event) => [event.id, event]));
+
+    const updated: Array<{ eventId: string; from: EventStatus; to: EventStatus }> = [];
+    const skipped: Array<{ eventId: string; reason: "not_found" | "unchanged" | "terminal" | "deleted" }> = [];
+    const failed: Array<{ eventId: string; message: string }> = [];
+
+    for (const id of uniqueIds) {
+      const existing = byId.get(id);
+      if (!existing) {
+        skipped.push({ eventId: id, reason: "not_found" });
+        continue;
+      }
+      if (existing.status === EventStatus.DELETED) {
+        skipped.push({ eventId: id, reason: "deleted" });
+        continue;
+      }
+      if (BULK_STATUS_TERMINAL.has(existing.status)) {
+        skipped.push({ eventId: id, reason: "terminal" });
+        continue;
+      }
+
+      const reconciled = reconcileEventStatus({
+        status: body.status,
+        startAt: existing.startAt,
+        endAt: existing.endAt,
+        actualStartAt: existing.actualStartAt,
+        actualEndAt: existing.actualEndAt,
+        forceDone: body.status === EventStatus.DONE,
+        autoInProgressStatuses: automation.autoInProgressStatuses
+      });
+
+      if (
+        reconciled.status === existing.status &&
+        iso(reconciled.actualStartAt) === iso(existing.actualStartAt) &&
+        iso(reconciled.actualEndAt) === iso(existing.actualEndAt)
+      ) {
+        skipped.push({ eventId: id, reason: "unchanged" });
+        continue;
+      }
+
+      try {
+        let patchData: Record<string, unknown> = {
+          status: reconciled.status,
+          actualStartAt: reconciled.actualStartAt,
+          actualEndAt: reconciled.actualEndAt
+        };
+
+        const virtualAircraft = existing.virtualAircraft as {
+          operatorId: string;
+          aircraftTypeId: string;
+          label: string;
+        } | null;
+        if (
+          virtualAircraft &&
+          (reconciled.status === EventStatus.DONE ||
+            reconciled.status === EventStatus.APPROVED_BY_EXECUTOR ||
+            reconciled.status === EventStatus.APPROVED_BY_CUSTOMER) &&
+          !existing.aircraftId
+        ) {
+          const aircraft = await app.prisma.aircraft.create({
+            data: {
+              tailNumber: virtualAircraft.label,
+              operatorId: virtualAircraft.operatorId,
+              typeId: virtualAircraft.aircraftTypeId
+            }
+          });
+          patchData = { ...patchData, aircraftId: aircraft.id, virtualAircraft: Prisma.JsonNull };
+        }
+
+        const after = await app.prisma.maintenanceEvent.update({
+          where: { id },
+          data: patchData
+        });
+
+        const changes = diffEvent(existing, after);
+        if (Object.keys(changes).length > 0) {
+          await app.prisma.maintenanceEventAudit.create({
+            data: {
+              eventId: id,
+              sandboxId: sbId,
+              action: EventAuditAction.UPDATE,
+              actor,
+              reason: body.changeReason ?? null,
+              changes
+            }
+          });
+        }
+
+        if (reconciled.status !== existing.status) {
+          await emitStatusChangeNotifications(app.prisma, {
+            eventId: id,
+            sandboxId: sbId,
+            title: after.title,
+            fromStatus: existing.status,
+            toStatus: reconciled.status,
+            aircraft: existing.aircraft,
+            virtualAircraft: existing.virtualAircraft
+          });
+        }
+
+        updated.push({ eventId: id, from: existing.status, to: reconciled.status });
+      } catch (error: any) {
+        failed.push({ eventId: id, message: String(error?.message ?? error) });
+      }
+    }
+
+    return { ok: true as const, requested: body.status, updated, skipped, failed };
   });
 
   app.patch("/:id", async (req) => {
@@ -1689,13 +1869,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("actualEndAt must be after actualStartAt");
     }
 
+    const automation = await loadStatusAutomation(app.prisma);
     const statusReconciled = reconcileEventStatus({
       status: nextStatus,
       startAt: nextStart,
       endAt: nextEnd,
       actualStartAt: nextActualStart,
       actualEndAt: nextActualEnd,
-      forceDone: body.status === EventStatus.DONE
+      forceDone: body.status === EventStatus.DONE,
+      autoInProgressStatuses: automation.autoInProgressStatuses
     });
 
     // При закрытии/согласовании события с виртуальным бортом — создаём Aircraft и привязываем

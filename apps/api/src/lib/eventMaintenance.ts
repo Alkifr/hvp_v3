@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
 
 import { isEventOverdueNoFact, reconcileEventStatus } from "./eventStatus.js";
+import { loadStatusAutomation } from "./eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "./eventStatusNotifications.js";
 
 const KIND_OVERDUE = "EVENT_OVERDUE_NO_FACT";
@@ -31,6 +32,7 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
   notificationsCreated: number;
 }> {
   const now = new Date();
+  const automation = await loadStatusAutomation(app.prisma);
   const horizonFrom = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
   const horizonTo = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
 
@@ -68,7 +70,8 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
       endAt: ev.endAt,
       actualStartAt: ev.actualStartAt,
       actualEndAt: ev.actualEndAt,
-      now
+      now,
+      autoInProgressStatuses: automation.autoInProgressStatuses
     });
 
     const statusChanged = reconciled.status !== ev.status;
@@ -138,7 +141,8 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
         endAt: ev.endAt,
         actualStartAt: reconciled.actualStartAt,
         actualEndAt: reconciled.actualEndAt,
-        now
+        now,
+        manualOnlyStatuses: automation.manualOnlyStatuses
       })
     ) {
       const label = aircraftLabel(ev);

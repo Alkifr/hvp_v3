@@ -2,35 +2,19 @@ import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 
-import { apiPost } from "../../lib/api";
+import {
+  importEventsInChunks,
+  PartialEventImportError,
+  previewEventsInChunks,
+  type EventImportPreviewRow,
+  type EventImportProgress
+} from "../../lib/eventImport";
 import { downloadEventImportTemplate } from "../../lib/importTemplates";
-import { normalizeImportRowsDates } from "../../lib/localDate";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
-
-type ImportPreviewRow = {
-  rowIndex: number;
-  ok: boolean;
-  title?: string;
-  startAt?: string;
-  endAt?: string;
-  budgetStartAt?: string | null;
-  budgetEndAt?: string | null;
-  actualStartAt?: string | null;
-  actualEndAt?: string | null;
-  towStartAt?: string | null;
-  towEndAt?: string | null;
-  aircraftTail?: string;
-  eventTypeKey?: string;
-  hangar?: string | null;
-  stand?: string | null;
-  layout?: string | null;
-  warnings?: string[];
-  error?: string;
-};
 
 type PreviewStatusFilter = "" | "ok" | "warn" | "error";
 
-function rowStatus(row: ImportPreviewRow): Exclude<PreviewStatusFilter, ""> {
+function rowStatus(row: EventImportPreviewRow): Exclude<PreviewStatusFilter, ""> {
   if (!row.ok) return "error";
   if ((row.warnings?.length ?? 0) > 0) return "warn";
   return "ok";
@@ -114,8 +98,9 @@ export function EventImportView() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<any | null>(null);
   const [statusFilter, setStatusFilter] = useState<PreviewStatusFilter>("");
+  const [jobProgress, setJobProgress] = useState<EventImportProgress | null>(null);
 
-  const previewRows = ((importResult as any)?.rows ?? []) as ImportPreviewRow[];
+  const previewRows = ((importResult as any)?.rows ?? []) as EventImportPreviewRow[];
   const resultErrors = (((importResult as any)?.errors ?? []) as Array<{ rowIndex: number; message: string }>);
 
   const statusCounts = useMemo(() => {
@@ -137,32 +122,64 @@ export function EventImportView() {
   }, [previewRows, statusFilter]);
 
   const previewM = useMutation({
-    mutationFn: (rows: any[]) => apiPost("/api/events/import", { dryRun: true, rows: normalizeImportRowsDates(rows) }),
+    mutationFn: (rows: any[]) => previewEventsInChunks(rows, setJobProgress),
+    onMutate: () => {
+      setJobProgress(null);
+      setImportError(null);
+    },
     onSuccess: (res) => {
       setStatusFilter("");
       setImportResult(res);
-    }
+    },
+    onSettled: () => setJobProgress(null)
   });
 
   const importM = useMutation({
-    mutationFn: (rows: any[]) => apiPost("/api/events/import", { rows: normalizeImportRowsDates(rows) }),
+    mutationFn: (rows: any[]) => importEventsInChunks(rows, setJobProgress),
+    onMutate: () => {
+      setJobProgress(null);
+      setImportError(null);
+    },
     onSuccess: async (res) => {
       setStatusFilter("");
       setImportResult(res);
-      // обновим все варианты запросов событий
       await qc.invalidateQueries({ queryKey: ["events"] });
       await qc.invalidateQueries({ queryKey: ["reservations"] });
       await qc.invalidateQueries({ queryKey: ["sandboxes"] });
-    }
+    },
+    onError: async (err) => {
+      if (err instanceof PartialEventImportError) {
+        setStatusFilter("");
+        setImportResult(err.partial);
+        await qc.invalidateQueries({ queryKey: ["events"] });
+        await qc.invalidateQueries({ queryKey: ["reservations"] });
+        await qc.invalidateQueries({ queryKey: ["sandboxes"] });
+      }
+    },
+    onSettled: () => setJobProgress(null)
   });
 
   const isBusy = previewM.isPending || importM.isPending;
   const busyMode = importM.isPending ? "import" : previewM.isPending ? "preview" : null;
   const busyTitle = busyMode === "import" ? "Импорт событий" : "Проверка файла";
+  const progressPct =
+    jobProgress && jobProgress.total > 0 ? Math.min(100, Math.round((jobProgress.done / jobProgress.total) * 100)) : null;
   const busyText =
     busyMode === "import"
-      ? `Создаём события и резервы по ${importRows?.length ?? 0} строкам…`
-      : `Сверяем справочники и конфликты мест по ${importRows?.length ?? 0} строкам…`;
+      ? jobProgress
+        ? `Пакет ${jobProgress.chunk} из ${jobProgress.chunks}: создаём события (${jobProgress.done} из ${jobProgress.total} строк${jobProgress.createdEvents ? `, уже создано ${jobProgress.createdEvents}` : ""})…`
+        : `Создаём события и резервы по ${importRows?.length ?? 0} строкам пакетами…`
+      : jobProgress
+        ? `Пакет ${jobProgress.chunk} из ${jobProgress.chunks}: сверяем справочники (${jobProgress.done} из ${jobProgress.total} строк)…`
+        : `Сверяем справочники и конфликты мест по ${importRows?.length ?? 0} строкам…`;
+  const errorTitle = importError
+    ? "Не удалось проверить файл"
+    : importM.error
+      ? "Не удалось завершить импорт"
+      : "Не удалось проверить файл";
+  const errorText =
+    importError ||
+    String(((previewM.error ?? importM.error) as { message?: unknown } | null)?.message ?? previewM.error ?? importM.error);
 
   return (
     <div className="eventImportPage">
@@ -289,11 +306,8 @@ export function EventImportView() {
 
         {(previewM.error || importM.error || importError) && (
           <div className="eventImportErrorBanner" role="alert">
-            <strong>Не удалось проверить файл</strong>
-            <div>
-              {importError ||
-                String(((previewM.error ?? importM.error) as any)?.message ?? previewM.error ?? importM.error)}
-            </div>
+            <strong>{errorTitle}</strong>
+            <div>{errorText}</div>
           </div>
         )}
 
@@ -305,11 +319,27 @@ export function EventImportView() {
               <span>{busyText}</span>
             </div>
             <div className="massCalculationMeta">
-              <span>{importRows?.length ?? 0} строк</span>
-              <span>{busyMode === "import" ? "запись в план" : "dry-run"}</span>
+              <span>
+                {jobProgress
+                  ? `${jobProgress.done} / ${jobProgress.total} строк`
+                  : `${importRows?.length ?? 0} строк`}
+              </span>
+              <span>
+                {busyMode === "import"
+                  ? jobProgress
+                    ? `пакет ${jobProgress.chunk}/${jobProgress.chunks}`
+                    : "запись в план"
+                  : jobProgress
+                    ? `пакет ${jobProgress.chunk}/${jobProgress.chunks}`
+                    : "dry-run"}
+              </span>
+              {progressPct != null ? <span>{progressPct}%</span> : null}
             </div>
             <div className="massProgressTrack" aria-hidden="true">
-              <div className="massProgressBar" />
+              <div
+                className={`massProgressBar${progressPct != null ? " isDeterminate" : ""}`}
+                style={progressPct != null ? { width: `${progressPct}%` } : undefined}
+              />
             </div>
           </div>
         ) : null}
@@ -477,7 +507,8 @@ export function EventImportView() {
         <div className="muted" style={{ display: "grid", gap: 6 }}>
           <div>
             Подсказка: сначала нажмите <strong>«Предпросмотр»</strong> — он покажет ошибки сопоставления/конфликтов, и только потом
-            станет доступна кнопка <strong>«Импортировать»</strong>.
+            станет доступна кнопка <strong>«Импортировать»</strong>. Большие файлы (сотни и тысячи строк) отправляются пакетами,
+            чтобы не упираться в таймаут прокси.
           </div>
           <div>
             После импорта откройте «План» — события появятся в выбранном диапазоне текущего контура.

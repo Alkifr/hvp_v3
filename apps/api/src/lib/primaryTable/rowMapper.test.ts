@@ -23,7 +23,7 @@ test("maps a golden event row including metrics and external analytics", () => {
       manufactureDate: new Date("2016-07-01T00:00:00.000Z"),
       operatorId: "operator-1",
       operator: { name: "Заказчик" },
-      type: { name: "A320" }
+      type: { name: "A320", bodyType: "NARROW_BODY" }
     },
     hangar: { id: "hangar-1", code: "H1", name: "Ангар 1", isPhysical: true, station: "SVO" },
     workshop: { name: "ME" },
@@ -45,15 +45,28 @@ test("maps a golden event row including metrics and external analytics", () => {
     aCheckAnalysis: { status: "Готово", quantity: 2, program: "План" }
   });
 
+  assert.equal(row["primary.a"], "Узкий");
   assert.equal(row["primary.g"], "RA-00001");
   assert.equal(row["primary.l"], "C-check");
   assert.equal(row["primary.n"], "SVO");
   assert.equal(row["primary.t"], 4);
-  assert.equal(row["primary.ab"], 2);
+  assert.equal(row["primary.ab"], 1);
   assert.equal(row["primary.ac"], 24);
-  assert.equal(row["primary.aq"], -1);
+  assert.equal(row["primary.ai"], "Завершено");
+  assert.equal(row["primary.aq"], 0);
   assert.equal(row["primary.bd"], 30);
-  assert.equal(row["primary.be"], 15);
+  assert.equal(row["primary.be"], 30);
   assert.equal(row["primary.fy"], "ROLL-1");
   assert.equal(row["primary.gg"], 2);
+});
+
+test("maps fuselage from aircraft type bodyType including virtual aircraft", () => {
+  const wide = toPrimaryTableRow({
+    id: "v1",
+    status: "IN_PROGRESS",
+    startAt: new Date("2026-07-01T08:00:00.000Z"),
+    endAt: new Date("2026-07-02T08:00:00.000Z"),
+    virtualAircraft: { aircraftTypeId: "type-wide", label: "Вирт" }
+  }, undefined, new Map([["type-wide", "WIDE_BODY"]]));
+  assert.equal(wide["primary.a"], "Широкий");
 });

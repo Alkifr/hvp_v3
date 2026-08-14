@@ -15,6 +15,7 @@ import {
   toExcelDateValue
 } from "../lib/primaryTable/dateFormat.js";
 import { writePrimaryTableHeaderRows } from "../lib/primaryTable/exportHeaders.js";
+import { isSlotDurationColumn } from "../lib/primaryTable/formulaEngine.js";
 import { queryPrimaryTable } from "../lib/primaryTable/queryService.js";
 import type { PrimaryQueryInput } from "../lib/primaryTable/types.js";
 import { canWriteInContext, sandboxIdFor } from "../plugins/sandbox.js";
@@ -37,7 +38,8 @@ const zQueryBody = z.object({
     .optional()
     .default([]),
   cursor: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional().default(100)
+  eventIds: z.array(zUuid).max(2000).optional(),
+  limit: z.coerce.number().int().min(1).max(2000).optional().default(100)
 });
 
 const zExtension = z
@@ -132,6 +134,7 @@ function toQueryInput(body: z.infer<typeof zQueryBody>, opts?: { rawDates?: bool
     conditions: body.filters.conditions,
     sort: body.sort,
     cursor: body.cursor,
+    eventIds: body.eventIds,
     limit: body.limit,
     rawDates: opts?.rawDates
   };
@@ -261,6 +264,9 @@ export const primaryTableRoutes: FastifyPluginAsync = async (app) => {
                 if (isTemporalPrimaryType(column.type) && raw != null) {
                   return csvCell(formatPrimaryDateDisplay(raw, column.type) ?? "");
                 }
+                if (isSlotDurationColumn(column) && typeof raw === "number" && Number.isFinite(raw)) {
+                  return csvCell(raw.toFixed(2).replace(".", ","));
+                }
                 return csvCell(raw);
               })
               .join(";")}\r\n`
@@ -297,12 +303,18 @@ export const primaryTableRoutes: FastifyPluginAsync = async (app) => {
         });
         const excelRow = worksheet.addRow(values);
         columns.forEach((column, index) => {
-          if (!isTemporalPrimaryType(column.type)) return;
-          const excel = toExcelDateValue(row[column.key], column.type);
-          if (!excel) return;
           const cell = excelRow.getCell(index + 1);
-          cell.value = excel.value;
-          cell.numFmt = excel.numFmt;
+          if (isTemporalPrimaryType(column.type)) {
+            const excel = toExcelDateValue(row[column.key], column.type);
+            if (!excel) return;
+            cell.value = excel.value;
+            cell.numFmt = excel.numFmt;
+            return;
+          }
+          if (isSlotDurationColumn(column) && typeof cell.value === "number" && Number.isFinite(cell.value)) {
+            cell.value = Math.round(cell.value * 100) / 100;
+            cell.numFmt = "0.00";
+          }
         });
         excelRow.commit();
         exported += 1;

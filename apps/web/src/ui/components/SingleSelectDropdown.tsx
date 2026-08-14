@@ -27,6 +27,8 @@ export function SingleSelectDropdown(props: {
   searchPlaceholder?: string;
   compact?: boolean;
   allowEmpty?: boolean;
+  showReset?: boolean;
+  onReset?: () => void;
   emptyLabel?: string;
   className?: string;
   disabled?: boolean;
@@ -124,11 +126,14 @@ export function SingleSelectDropdown(props: {
     });
   }, [props.options, search]);
 
+  const allowEmpty = props.allowEmpty !== false;
+  const showReset = props.showReset ?? allowEmpty;
+
   const selectedLabel = useMemo(() => {
     if (!props.value) return props.placeholder ?? "— выберите —";
     const selected = props.options.find((o) => o.id === props.value);
     if (!selected) return props.placeholder ?? "— выберите —";
-    return selected.description ? `${selected.label} — ${selected.description}` : selected.label;
+    return selected.label;
   }, [props.value, props.options, props.placeholder]);
 
   const keepWheelInsidePanel = (e: WheelEvent<HTMLDivElement>) => {
@@ -187,9 +192,20 @@ export function SingleSelectDropdown(props: {
             onWheel={keepWheelInsidePanel}
           >
             <div className="msdPanelHeader">
-              {props.allowEmpty !== false ? (
+              {showReset ? (
                 <div className="msdActions" role="group" aria-label="Сброс">
-                  <button type="button" onClick={() => pick("")} disabled={!props.value}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (props.onReset) {
+                        props.onReset();
+                        setOpen(false);
+                        return;
+                      }
+                      pick("");
+                    }}
+                    disabled={props.onReset ? false : !props.value}
+                  >
                     Сбросить
                   </button>
                 </div>
@@ -206,7 +222,7 @@ export function SingleSelectDropdown(props: {
                 </div>
               ) : null}
             </div>
-            {props.allowEmpty !== false ? (
+            {allowEmpty ? (
               <button
                 type="button"
                 className={`ssdOption${!props.value ? " ssdOptionActive" : ""}`}

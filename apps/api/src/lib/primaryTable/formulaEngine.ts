@@ -44,11 +44,40 @@ function ratio(numerator: number | null, denominator: number | null, minusOne = 
   return numerator / denominator - (minusOne ? 1 : 0);
 }
 
-export function durationHours(start: unknown, end: unknown): number | null {
+function elapsedMs(start: unknown, end: unknown): number | null {
   const from = date(start);
   const to = date(end);
   if (!from || !to || to < from) return null;
-  return (to.getTime() - from.getTime()) / MS_HOUR;
+  return to.getTime() - from.getTime();
+}
+
+export function durationHours(start: unknown, end: unknown): number | null {
+  const ms = elapsedMs(start, end);
+  if (ms == null) return null;
+  return Math.round((ms / MS_HOUR) * 100) / 100;
+}
+
+export function durationDays(start: unknown, end: unknown): number | null {
+  const ms = elapsedMs(start, end);
+  if (ms == null) return null;
+  return Math.round((ms / (24 * MS_HOUR)) * 100) / 100;
+}
+
+const SLOT_DURATION_KEYS = new Set([
+  "primary.t",
+  "primary.w",
+  "primary.ab",
+  "primary.ac",
+  "primary.ao",
+  "primary.ap",
+  "primary.aq",
+  "primary.as",
+  "primary.at"
+]);
+
+export function isSlotDurationColumn(column: { key?: string; label?: string | null }): boolean {
+  if (column.label && /продолжительность/i.test(column.label)) return true;
+  return Boolean(column.key && SLOT_DURATION_KEYS.has(column.key));
 }
 
 export function inclusiveCalendarDays(start: unknown, end: unknown): number | null {
@@ -97,9 +126,9 @@ export function applyPrimaryTableFormulas(row: Row): Row {
   set(row, "J", yearsBetween(row["primary.i"], planStart));
   set(row, "T", inclusiveCalendarDays(customerStart, customerEnd));
   set(row, "W", inclusiveCalendarDays(budgetStart, budgetEnd));
-  set(row, "AB", inclusiveCalendarDays(planStart, planEnd));
+  set(row, "AB", durationDays(planStart, planEnd));
   set(row, "AC", durationHours(planStart, planEnd));
-  set(row, "AO", inclusiveCalendarDays(actualStart, actualEnd));
+  set(row, "AO", durationDays(actualStart, actualEnd));
   set(row, "AP", durationHours(actualStart, actualEnd));
   set(row, "AQ", num(row, "W") != null && num(row, "AO") != null ? num(row, "W")! - num(row, "AO")! : null);
   set(row, "AS", num(row, "AB") != null && num(row, "AO") != null ? num(row, "AB")! - num(row, "AO")! : null);

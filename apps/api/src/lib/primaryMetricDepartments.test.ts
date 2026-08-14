@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { skillCodeToDepartment, collectLaborMetricsFromImportRow } from "./primaryMetricDepartments.js";
+import {
+  skillCodeToDepartment,
+  collectLaborMetricsFromImportRow,
+  isLiveLaborExcelColumn
+} from "./primaryMetricDepartments.js";
 
 test("maps skill codes to PrimaryMetricDepartment", () => {
   assert.equal(skillCodeToDepartment("ME"), "ME");
@@ -33,4 +37,11 @@ test("collects labor metrics from import row columns", () => {
       { block: "WP_PLAN_MPS", department: "CAB_REP", manHours: 2.5 }
     ]
   );
+});
+
+test("recognizes 18 live labor excel columns", () => {
+  assert.equal(isLiveLaborExcelColumn("AX"), true);
+  assert.equal(isLiveLaborExcelColumn("fu"), true);
+  assert.equal(isLiveLaborExcelColumn("BO"), false);
+  assert.equal(isLiveLaborExcelColumn("CJ"), false);
 });

@@ -1,4 +1,5 @@
 import { applyPrimaryTableFormulas } from "./formulaEngine.js";
+import { eventStatusLabel } from "../eventStatusCatalog.js";
 
 const DEPARTMENTS = ["ME", "AV", "INT", "NDT", "SHOP", "CAB_REP"] as const;
 
@@ -38,7 +39,36 @@ function reason(event: any, kind: string): string | null {
   return event.slotDeviations?.find((item: any) => item.kind === kind)?.reason ?? event.notes ?? null;
 }
 
-export function toPrimaryTableRow(event: any): Record<string, unknown> {
+function bodyTypeLabel(code: string | null | undefined): string | null {
+  if (code === "NARROW_BODY") return "Узкий";
+  if (code === "WIDE_BODY") return "Широкий";
+  return null;
+}
+
+function eventBodyTypeLabel(
+  event: any,
+  bodyTypeByAircraftTypeId?: Map<string, string | null>
+): string | null {
+  const fromAircraft = bodyTypeLabel(event.aircraft?.type?.bodyType);
+  if (fromAircraft) return fromAircraft;
+  const virtualTypeId = event.virtualAircraft?.aircraftTypeId;
+  if (!virtualTypeId || !bodyTypeByAircraftTypeId) return null;
+  return bodyTypeLabel(bodyTypeByAircraftTypeId.get(virtualTypeId));
+}
+
+function eventStatusName(code: string | null | undefined, names?: Map<string, string>): string | null {
+  if (!code) return null;
+  const named = names?.get(code)?.trim();
+  if (named) return named;
+  const fallback = eventStatusLabel(code);
+  return fallback === "—" ? null : fallback;
+}
+
+export function toPrimaryTableRow(
+  event: any,
+  statusNames?: Map<string, string>,
+  bodyTypeByAircraftTypeId?: Map<string, string | null>
+): Record<string, unknown> {
   const row: Record<string, unknown> = {};
   const put = (column: string, value: unknown) => {
     row[`primary.${column.toLowerCase()}`] = value ?? null;
@@ -53,7 +83,7 @@ export function toPrimaryTableRow(event: any): Record<string, unknown> {
   const customerSlot = event.customerSlot;
   const rolling = event.ptoRollingEntries?.[0];
 
-  put("A", extension?.fleetCode);
+  put("A", eventBodyTypeLabel(event, bodyTypeByAircraftTypeId));
   put("E", aircraft?.operator?.name);
   put("F", extension?.externalExecution ?? (hangar?.isPhysical === false ? true : null));
   put("G", aircraft?.tailNumber ?? event.virtualAircraft?.label);
@@ -74,12 +104,12 @@ export function toPrimaryTableRow(event: any): Record<string, unknown> {
   put("Y", iso(event.startAt));
   put("Z", iso(event.endAt));
   put("AA", iso(event.endAt));
-  put("AD", extension?.agreementStatus ?? event.status);
+  put("AD", extension?.agreementStatus ?? eventStatusName(event.status, statusNames));
   put("AE", event.notes);
   put("AF", hangar?.code ?? hangar?.name);
   put("AG", stand?.code ?? stand?.name);
   put("AH", event.workshop?.name);
-  put("AI", event.status);
+  put("AI", eventStatusName(event.status, statusNames));
   put("AJ", extension?.iiCCheckFact);
   put("AK", iso(event.actualStartAt));
   put("AL", iso(event.actualStartAt));

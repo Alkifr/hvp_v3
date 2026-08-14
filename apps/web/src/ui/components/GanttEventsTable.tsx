@@ -2,137 +2,40 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
-import { apiDelete, apiGet, apiPatch, apiPut } from "../../lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
+import {
+  buildGanttTableColumns,
+  defaultWidths,
+  extraPrimaryFieldKeys,
+  factoryColumnConfig,
+  formatPrimaryCell,
+  isFullCatalogVisible,
+  normalizeColOrder,
+  PINNED_LEFT_IDS,
+  resolveVisibleIds,
+  safeReadTableCols,
+  safeWriteTableCols,
+  shouldUseFactoryHidden,
+  TABLE_KEY,
+  type GanttTableColConfig,
+  type GanttTableColDef,
+  type GanttTableColId,
+  type PrimaryCatalogField
+} from "../../lib/ganttTableColumns";
 import { FIELD_LABEL, resolveHistoryValue, type HistoryRefMaps } from "../../lib/eventHistoryFormat";
 import {
   DEFAULT_EVENT_STATUS,
+  overlayStatusCatalog,
   SELECTABLE_EVENT_STATUSES,
-  STATUS_LABEL,
+  statusCatalogLabel,
+  type EventStatusCatalogItem,
   type EventStatusCode
 } from "../../lib/eventStatusCatalog";
 import { SingleSelectDropdown } from "./SingleSelectDropdown";
 import { useActiveSandbox } from "./SandboxSwitcher";
 
-const TABLE_COLS_LS_KEY = "hangarPlanning:ganttTableColumns:v4";
-
-type TableColId =
-  | "title"
-  | "level"
-  | "status"
-  | "planningKind"
-  | "aircraftId"
-  | "operator"
-  | "aircraftType"
-  | "eventTypeId"
-  | "workshopId"
-  | "startAtLocal"
-  | "endAtLocal"
-  | "tatOper"
-  | "budgetStartAtLocal"
-  | "budgetEndAtLocal"
-  | "tatBudget"
-  | "actualStartAtLocal"
-  | "actualEndAtLocal"
-  | "tatActual"
-  | "hangarId"
-  | "layoutId"
-  | "standId"
-  | "allowOverlap"
-  | "notes"
-  | "actions";
-
-type TableColDef = {
-  id: TableColId;
-  label: string;
-  defaultWidth: number;
-  minWidth: number;
-  sticky?: "left";
-  hideable?: boolean;
-};
-
-const TABLE_COLUMNS: TableColDef[] = [
-  // Действия слева: не пересекаются с горизонтальным скроллом (best practice для wide tables).
-  { id: "actions", label: "", defaultWidth: 108, minWidth: 96, sticky: "left", hideable: false },
-  { id: "title", label: "Название", defaultWidth: 180, minWidth: 100, sticky: "left", hideable: false },
-  { id: "level", label: "Уровень", defaultWidth: 120, minWidth: 80 },
-  { id: "status", label: "Статус", defaultWidth: 120, minWidth: 80 },
-  { id: "planningKind", label: "Тип план.", defaultWidth: 110, minWidth: 80 },
-  { id: "aircraftId", label: "Борт", defaultWidth: 110, minWidth: 72 },
-  { id: "operator", label: "Оператор", defaultWidth: 140, minWidth: 80 },
-  { id: "aircraftType", label: "Тип ВС", defaultWidth: 140, minWidth: 80 },
-  { id: "eventTypeId", label: "Тип события", defaultWidth: 140, minWidth: 90 },
-  { id: "workshopId", label: "Цех", defaultWidth: 140, minWidth: 90 },
-  { id: "startAtLocal", label: "Опер. начало", defaultWidth: 150, minWidth: 110 },
-  { id: "endAtLocal", label: "Опер. окончание", defaultWidth: 150, minWidth: 110 },
-  { id: "tatOper", label: "TAT опер.", defaultWidth: 110, minWidth: 72 },
-  { id: "budgetStartAtLocal", label: "Бюдж. начало", defaultWidth: 150, minWidth: 110 },
-  { id: "budgetEndAtLocal", label: "Бюдж. окончание", defaultWidth: 150, minWidth: 110 },
-  { id: "tatBudget", label: "TAT бюдж.", defaultWidth: 110, minWidth: 72 },
-  { id: "actualStartAtLocal", label: "Факт начало", defaultWidth: 150, minWidth: 110 },
-  { id: "actualEndAtLocal", label: "Факт окончание", defaultWidth: 150, minWidth: 110 },
-  { id: "tatActual", label: "TAT факт", defaultWidth: 110, minWidth: 72 },
-  { id: "hangarId", label: "Ангар", defaultWidth: 120, minWidth: 80 },
-  { id: "layoutId", label: "Вариант", defaultWidth: 140, minWidth: 80 },
-  { id: "standId", label: "Место", defaultWidth: 100, minWidth: 64 },
-  { id: "allowOverlap", label: "Нахлёст", defaultWidth: 80, minWidth: 56 },
-  { id: "notes", label: "Примечание", defaultWidth: 180, minWidth: 90 }
-];
-
-const DEFAULT_COL_WIDTHS = Object.fromEntries(TABLE_COLUMNS.map((c) => [c.id, c.defaultWidth])) as Record<
-  TableColId,
-  number
->;
-const DEFAULT_COL_ORDER = TABLE_COLUMNS.map((c) => c.id);
-const DEFAULT_HIDDEN_COLS: TableColId[] = [];
-const COL_BY_ID = Object.fromEntries(TABLE_COLUMNS.map((c) => [c.id, c])) as Record<TableColId, TableColDef>;
-const PINNED_LEFT_IDS: TableColId[] = ["actions", "title"];
-
-function normalizeColOrder(order: unknown): TableColId[] {
-  const known = new Set(DEFAULT_COL_ORDER);
-  const seen = new Set<TableColId>();
-  const middle: TableColId[] = [];
-  if (Array.isArray(order)) {
-    for (const id of order) {
-      if (typeof id !== "string" || !known.has(id as TableColId)) continue;
-      const colId = id as TableColId;
-      if (PINNED_LEFT_IDS.includes(colId) || seen.has(colId)) continue;
-      seen.add(colId);
-      middle.push(colId);
-    }
-  }
-  for (const id of DEFAULT_COL_ORDER) {
-    if (PINNED_LEFT_IDS.includes(id) || seen.has(id)) continue;
-    middle.push(id);
-  }
-  return [...PINNED_LEFT_IDS, ...middle];
-}
-
-function safeReadTableCols(): {
-  widths?: Partial<Record<TableColId, number>>;
-  hidden?: TableColId[];
-  order?: TableColId[];
-} | null {
-  try {
-    if (typeof window === "undefined") return null;
-    const raw =
-      window.localStorage.getItem(TABLE_COLS_LS_KEY) ??
-      window.localStorage.getItem("hangarPlanning:ganttTableColumns:v2") ??
-      window.localStorage.getItem("hangarPlanning:ganttTableColumns:v1");
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function safeWriteTableCols(v: { widths: Record<TableColId, number>; hidden: TableColId[]; order: TableColId[] }) {
-  try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(TABLE_COLS_LS_KEY, JSON.stringify(v));
-  } catch {
-    // ignore
-  }
-}
+type TableColId = GanttTableColId;
+type TableColDef = GanttTableColDef;
 
 function formatAircraftTypeLabel(type: { icaoType?: string | null; name: string } | null | undefined): string {
   if (!type) return "—";
@@ -189,6 +92,16 @@ function IconGrip() {
       <circle cx="15" cy="12" r="1.5" />
       <circle cx="9" cy="17" r="1.5" />
       <circle cx="15" cy="17" r="1.5" />
+    </svg>
+  );
+}
+
+function IconInfo() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 10.5V17" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="12" cy="7.2" r="1.1" fill="currentColor" />
     </svg>
   );
 }
@@ -307,14 +220,41 @@ function eventPlanningKind(ev: GanttTableEvent): "PLANNED" | "UNPLANNED" {
   return ev.budgetStartAt && ev.budgetEndAt ? "PLANNED" : "UNPLANNED";
 }
 
-function tatDetailed(startLocal: string, endLocal: string): string {
+function durationDaysLabel(startLocal: string, endLocal: string): string {
   if (!startLocal || !endLocal) return "—";
   const s = dayjs(startLocal);
   const e = dayjs(endLocal);
-  if (!s.isValid() || !e.isValid() || e.valueOf() <= s.valueOf()) return "—";
-  const hours = Math.max(0, e.diff(s, "minute")) / 60;
-  return `${Number(hours.toFixed(1))} ч / ${Number((hours / 24).toFixed(2))} дн`;
+  if (!s.isValid() || !e.isValid() || e.valueOf() < s.valueOf()) return "—";
+  return (e.diff(s, "minute") / 60 / 24).toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
+
+function durationHoursLabel(startLocal: string, endLocal: string): string {
+  if (!startLocal || !endLocal) return "—";
+  const s = dayjs(startLocal);
+  const e = dayjs(endLocal);
+  if (!s.isValid() || !e.isValid() || e.valueOf() < s.valueOf()) return "—";
+  return (Math.max(0, e.diff(s, "minute")) / 60).toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function timeOfLocal(local: string): string {
+  if (!local) return "—";
+  const d = dayjs(local);
+  return d.isValid() ? d.format("HH:mm") : "—";
+}
+
+type SavedTableView = {
+  id: string;
+  tableKey: string;
+  name: string;
+  isActive: boolean;
+  config: GanttTableColConfig;
+};
 
 function draftFromEvent(ev: GanttTableEvent): RowDraft {
   const placements = ev.placements ?? [];
@@ -466,6 +406,9 @@ function ConfirmDrawer(props: {
   );
 }
 
+const SELECT_COL_ID = "__select";
+const SELECT_COL_WIDTH = 40;
+
 export function GanttEventsTable(props: {
   events: GanttTableEvent[];
   canEdit: boolean;
@@ -480,8 +423,14 @@ export function GanttEventsTable(props: {
   aircraftTypes: AircraftTypeRef[];
   operators: Array<{ id: string; code?: string | null; name: string }>;
   onOpenEvent: (eventId: string) => void;
+  settingsOpen: boolean;
+  onSettingsOpenChange: (open: boolean) => void;
+  selectedIds?: string[];
+  onSelectedIdsChange?: (ids: string[]) => void;
 }) {
   const allowColumnReorder = props.allowColumnReorder !== false;
+  const colPickerOpen = props.settingsOpen;
+  const setColPickerOpen = props.onSettingsOpenChange;
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
   const savedCols = useMemo(() => safeReadTableCols(), []);
@@ -491,61 +440,212 @@ export function GanttEventsTable(props: {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [changeReason, setChangeReason] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
+  const [colMenuQuery, setColMenuQuery] = useState("");
+  const [saveAsName, setSaveAsName] = useState("");
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [factorySelected, setFactorySelected] = useState(false);
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const appliedServerView = useRef(false);
+  const infoRef = useRef<HTMLDivElement | null>(null);
+
+  const catalogQ = useQuery({
+    queryKey: ["analytics", "primary-table", "meta"],
+    queryFn: () =>
+      apiGet<{ ok: true; fields: PrimaryCatalogField[] }>("/api/analytics/primary-table/meta")
+  });
+  const eventStatusesQ = useQuery({
+    queryKey: ["ref", "event-statuses"],
+    queryFn: () => apiGet<EventStatusCatalogItem[]>("/api/ref/event-statuses"),
+    staleTime: 60_000
+  });
+  const statusCatalog = useMemo(() => overlayStatusCatalog(eventStatusesQ.data), [eventStatusesQ.data]);
+  const statusSelectOptions = useMemo(() => {
+    const selectable = statusCatalog.filter((s) => s.selectable);
+    const current = draft?.status;
+    if (current && !selectable.some((s) => s.code === current)) {
+      const extra = statusCatalog.find((s) => s.code === current);
+      if (extra) return [...selectable, extra];
+    }
+    return selectable;
+  }, [statusCatalog, draft?.status]);
+  const viewsQ = useQuery({
+    queryKey: ["table-views", TABLE_KEY],
+    queryFn: () => apiGet<{ ok: true; views: SavedTableView[] }>(`/api/table-views?tableKey=${TABLE_KEY}`)
+  });
+
+  const tableColumns = useMemo(() => buildGanttTableColumns(catalogQ.data?.fields), [catalogQ.data?.fields]);
+  const colById = useMemo(() => new Map(tableColumns.map((c) => [c.id, c])), [tableColumns]);
+
   const [colWidths, setColWidths] = useState<Record<TableColId, number>>(() => {
-    const next = { ...DEFAULT_COL_WIDTHS };
-    const saved = savedCols?.widths;
-    if (saved) {
-      for (const col of TABLE_COLUMNS) {
-        const w = Number(saved[col.id]);
-        if (Number.isFinite(w)) next[col.id] = Math.max(col.minWidth, Math.round(w));
-      }
+    const columns = buildGanttTableColumns(null);
+    const next = defaultWidths(columns);
+    for (const col of columns) {
+      const w = Number(savedCols?.widths?.[col.id]);
+      if (Number.isFinite(w)) next[col.id] = Math.max(col.minWidth, Math.round(w));
     }
     return next;
   });
-  const [hiddenCols, setHiddenCols] = useState<Set<TableColId>>(() => {
-    const arr = savedCols?.hidden;
-    if (!Array.isArray(arr)) return new Set(DEFAULT_HIDDEN_COLS);
-    const hideable = new Set(TABLE_COLUMNS.filter((c) => c.hideable !== false).map((c) => c.id));
-    return new Set(arr.filter((id): id is TableColId => hideable.has(id as TableColId)));
-  });
-  const [colOrder, setColOrder] = useState<TableColId[]>(() => normalizeColOrder(savedCols?.order));
-  const [colMenu, setColMenu] = useState<null | { x: number; y: number }>(null);
+  const [visibleIds, setVisibleIds] = useState<Set<TableColId>>(
+    () => new Set(resolveVisibleIds(savedCols, buildGanttTableColumns(null)))
+  );
+  const [colOrder, setColOrder] = useState<TableColId[]>(() =>
+    normalizeColOrder(savedCols?.order, buildGanttTableColumns(null))
+  );
   const [dragColId, setDragColId] = useState<TableColId | null>(null);
-  const colMenuRef = useRef<HTMLDivElement | null>(null);
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  const columnsReady = useRef(true);
+
+  const applyConfig = useCallback(
+    (
+      config: GanttTableColConfig | null | undefined,
+      columns: GanttTableColDef[],
+      opts?: { allowShowAll?: boolean }
+    ) => {
+      const factory = factoryColumnConfig(columns);
+      if (!config) {
+        setColWidths(factory.widths);
+        setVisibleIds(new Set(factory.visible));
+        setColOrder(normalizeColOrder(factory.order, columns));
+        return;
+      }
+      const nextWidths = { ...factory.widths };
+      for (const col of columns) {
+        const w = Number(config.widths?.[col.id]);
+        if (Number.isFinite(w)) nextWidths[col.id] = Math.max(col.minWidth, Math.round(w));
+      }
+      setColWidths(nextWidths);
+      setVisibleIds(new Set(resolveVisibleIds(config, columns, opts)));
+      setColOrder(normalizeColOrder(config.order?.length ? config.order : factory.order, columns));
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!tableColumns.length) return;
+    setColWidths((prev) => ({ ...defaultWidths(tableColumns), ...prev }));
+    setVisibleIds((prev) => new Set(resolveVisibleIds({ visible: Array.from(prev), hidden: [], order: [], widths: {} }, tableColumns)));
+    setColOrder((prev) => normalizeColOrder(prev, tableColumns));
+  }, [tableColumns]);
+
+  useEffect(() => {
+    if (appliedServerView.current || factorySelected || !viewsQ.data || !tableColumns.length) return;
+    if (!catalogQ.data && !catalogQ.isError) return;
+    appliedServerView.current = true;
+    const active = viewsQ.data.views.find((v) => v.isActive);
+    if (!active?.config) return;
+    const cfg = active.config;
+    const looksUnrestricted =
+      isFullCatalogVisible(cfg.visible, tableColumns.length) ||
+      ((!cfg.visible || cfg.visible.length === 0) && shouldUseFactoryHidden(cfg.hidden, tableColumns.length));
+    if (looksUnrestricted) {
+      setFactorySelected(true);
+      setActiveViewId(null);
+      applyConfig(null, tableColumns);
+      return;
+    }
+    setActiveViewId(active.id);
+    applyConfig(cfg, tableColumns, { allowShowAll: true });
+  }, [viewsQ.data, catalogQ.data, catalogQ.isError, tableColumns, applyConfig, factorySelected]);
 
   const orderedColumns = useMemo(
-    () => colOrder.map((id) => COL_BY_ID[id]).filter(Boolean),
-    [colOrder]
+    () => colOrder.map((id) => colById.get(id)).filter((c): c is TableColDef => Boolean(c)),
+    [colOrder, colById]
   );
 
   const visibleColumns = useMemo(
-    () => orderedColumns.filter((c) => !hiddenCols.has(c.id)),
-    [orderedColumns, hiddenCols]
+    () => orderedColumns.filter((c) => c.hideable === false || visibleIds.has(c.id)),
+    [orderedColumns, visibleIds]
   );
+  const selectionEnabled = Boolean(props.canEdit && props.onSelectedIdsChange);
+  const selectedIdSet = useMemo(() => new Set(props.selectedIds ?? []), [props.selectedIds]);
+  const displayColumns = useMemo<TableColDef[]>(() => {
+    if (!selectionEnabled) return visibleColumns;
+    return [
+      {
+        id: SELECT_COL_ID,
+        label: "",
+        group: null,
+        subgroup: null,
+        defaultWidth: SELECT_COL_WIDTH,
+        minWidth: SELECT_COL_WIDTH,
+        sticky: "left",
+        hideable: false,
+        kind: "actions"
+      },
+      ...visibleColumns
+    ];
+  }, [selectionEnabled, visibleColumns]);
+
+  const extraPrimaryKeys = useMemo(
+    () => extraPrimaryFieldKeys(visibleColumns.map((c) => c.id)),
+    [visibleColumns]
+  );
+  const eventIds = useMemo(() => props.events.map((e) => e.id), [props.events]);
+
+  const primaryQ = useQuery({
+    queryKey: [
+      "analytics",
+      "primary-table",
+      "gantt-rows",
+      props.eventsQueryFromISO,
+      props.eventsQueryToISO,
+      extraPrimaryKeys,
+      eventIds
+    ],
+    enabled: extraPrimaryKeys.length > 0 && eventIds.length > 0,
+    queryFn: () =>
+      apiPost<{ ok: true; rows: Array<Record<string, unknown>> }>("/api/analytics/primary-table/query", {
+        from: props.eventsQueryFromISO,
+        to: props.eventsQueryToISO,
+        fields: extraPrimaryKeys,
+        eventIds,
+        limit: Math.min(2000, Math.max(eventIds.length, 1))
+      })
+  });
+
+  const primaryByEventId = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>();
+    for (const row of primaryQ.data?.rows ?? []) {
+      const id = typeof row.eventId === "string" ? row.eventId : null;
+      if (id) map.set(id, row);
+    }
+    return map;
+  }, [primaryQ.data?.rows]);
 
   const stickyLeftById = useMemo(() => {
     const map = new Map<TableColId, number>();
     let left = 0;
-    for (const col of visibleColumns) {
+    for (const col of displayColumns) {
       if (col.sticky !== "left") continue;
       map.set(col.id, left);
-      left += colWidths[col.id] ?? col.defaultWidth;
+      left += col.id === SELECT_COL_ID ? SELECT_COL_WIDTH : (colWidths[col.id] ?? col.defaultWidth);
     }
     return map;
-  }, [visibleColumns, colWidths]);
+  }, [displayColumns, colWidths]);
 
   const lastStickyLeftId = useMemo(() => {
     let last: TableColId | null = null;
-    for (const col of visibleColumns) {
+    for (const col of displayColumns) {
       if (col.sticky === "left") last = col.id;
     }
     return last;
-  }, [visibleColumns]);
+  }, [displayColumns]);
+
+  const currentConfig = useMemo<GanttTableColConfig>(() => {
+    const pinned = tableColumns.filter((c) => c.hideable === false).map((c) => c.id);
+    const visible = Array.from(new Set([...pinned, ...visibleIds]));
+    return {
+      widths: colWidths,
+      visible,
+      hidden: tableColumns.filter((c) => c.hideable !== false && !visibleIds.has(c.id)).map((c) => c.id),
+      order: colOrder
+    };
+  }, [colWidths, visibleIds, colOrder, tableColumns]);
 
   useEffect(() => {
-    safeWriteTableCols({ widths: colWidths, hidden: Array.from(hiddenCols), order: colOrder });
-  }, [colWidths, hiddenCols, colOrder]);
+    if (!columnsReady.current) return;
+    safeWriteTableCols(currentConfig);
+  }, [currentConfig]);
 
   // Горизонтальный скролл всегда у нижнего края экрана: высота wrap = оставшееся место до низа viewport.
   useEffect(() => {
@@ -569,22 +669,25 @@ export function GanttEventsTable(props: {
   }, [localError, confirmOpen]);
 
   useEffect(() => {
-    if (!colMenu) return;
+    if (!infoOpen && !colPickerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setInfoOpen(false);
+      setColPickerOpen(false);
+    };
     const onDoc = (e: MouseEvent) => {
-      if (colMenuRef.current && e.target instanceof Node && !colMenuRef.current.contains(e.target)) {
-        setColMenu(null);
+      if (!infoOpen) return;
+      if (infoRef.current && e.target instanceof Node && !infoRef.current.contains(e.target)) {
+        setInfoOpen(false);
       }
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setColMenu(null);
-    };
-    document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDoc);
     return () => {
-      document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDoc);
     };
-  }, [colMenu]);
+  }, [infoOpen, colPickerOpen, setColPickerOpen]);
 
   const startColResize = useCallback((col: TableColDef, e: ReactPointerEvent) => {
     e.preventDefault();
@@ -605,23 +708,16 @@ export function GanttEventsTable(props: {
     window.addEventListener("pointerup", onUp, { once: true });
   }, [colWidths]);
 
-  const toggleColHidden = useCallback((id: TableColId) => {
-    const def = TABLE_COLUMNS.find((c) => c.id === id);
+  const toggleColVisible = useCallback((id: TableColId) => {
+    const def = colById.get(id);
     if (!def || def.hideable === false) return;
-    setHiddenCols((prev) => {
+    setVisibleIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }, []);
-
-  const resetColumns = useCallback(() => {
-    setColWidths({ ...DEFAULT_COL_WIDTHS });
-    setHiddenCols(new Set(DEFAULT_HIDDEN_COLS));
-    setColOrder([...DEFAULT_COL_ORDER]);
-    setColMenu(null);
-  }, []);
+  }, [colById]);
 
   const moveColumn = useCallback((fromId: TableColId, toId: TableColId) => {
     if (fromId === toId || PINNED_LEFT_IDS.includes(fromId) || PINNED_LEFT_IDS.includes(toId)) return;
@@ -632,13 +728,14 @@ export function GanttEventsTable(props: {
       if (from < 0 || to < 0) return prev;
       next.splice(from, 1);
       next.splice(to, 0, fromId);
-      return normalizeColOrder(next);
+      return normalizeColOrder(next, tableColumns);
     });
-  }, []);
+  }, [tableColumns]);
 
   const colStyle = useCallback(
     (id: TableColId): CSSProperties => {
-      const w = colWidths[id] ?? DEFAULT_COL_WIDTHS[id];
+      const col = colById.get(id);
+      const w = id === SELECT_COL_ID ? SELECT_COL_WIDTH : (colWidths[id] ?? col?.defaultWidth ?? 120);
       const left = stickyLeftById.get(id);
       return {
         width: w,
@@ -647,7 +744,7 @@ export function GanttEventsTable(props: {
         ...(left != null ? { left } : {})
       };
     },
-    [colWidths, stickyLeftById]
+    [colWidths, stickyLeftById, colById]
   );
 
   const layoutsQ = useQuery({
@@ -744,6 +841,36 @@ export function GanttEventsTable(props: {
         (a, b) => Date.parse(a.startAt) - Date.parse(b.startAt) || a.title.localeCompare(b.title, "ru")
       ),
     [props.events]
+  );
+  const visibleEventIds = useMemo(() => sortedEvents.map((ev) => ev.id), [sortedEvents]);
+  const selectedVisibleCount = useMemo(
+    () => visibleEventIds.reduce((n, id) => n + (selectedIdSet.has(id) ? 1 : 0), 0),
+    [visibleEventIds, selectedIdSet]
+  );
+  const allVisibleSelected = visibleEventIds.length > 0 && selectedVisibleCount === visibleEventIds.length;
+
+  const toggleSelected = (eventId: string, selected: boolean) => {
+    if (!props.onSelectedIdsChange) return;
+    const next = new Set(selectedIdSet);
+    if (selected) next.add(eventId);
+    else next.delete(eventId);
+    props.onSelectedIdsChange([...next]);
+  };
+
+  const toggleAllVisible = (selected: boolean) => {
+    if (!props.onSelectedIdsChange) return;
+    props.onSelectedIdsChange(selected ? visibleEventIds : []);
+  };
+
+  const renderSelectCell = (ev: GanttTableEvent) => (
+    <input
+      type="checkbox"
+      className="ganttTableSelectBox"
+      checked={selectedIdSet.has(ev.id)}
+      onChange={(e) => toggleSelected(ev.id, e.target.checked)}
+      onClick={(e) => e.stopPropagation()}
+      aria-label="Выбрать событие"
+    />
   );
 
   // если событие исчезло из выборки — сбрасываем черновик
@@ -899,11 +1026,118 @@ export function GanttEventsTable(props: {
       setDraft(null);
       setOriginal(null);
       void qc.invalidateQueries({ queryKey: ["events", props.eventsQueryFromISO, props.eventsQueryToISO] });
+      void qc.invalidateQueries({ queryKey: ["analytics", "primary-table", "gantt-rows"] });
     },
     onError: (e: any) => {
       setLocalError(String(e?.message ?? e));
     }
   });
+
+  const views = viewsQ.data?.views ?? [];
+  const activeView = factorySelected
+    ? null
+    : (activeViewId ? views.find((v) => v.id === activeViewId) : null) ??
+      (appliedServerView.current ? views.find((v) => v.isActive) ?? null : null);
+
+  const saveViewM = useMutation({
+    mutationFn: async () => {
+      if (!activeView) throw new Error("NO_ACTIVE_VIEW");
+      return apiPatch<{ ok: true; view: SavedTableView }>(`/api/table-views/${activeView.id}`, {
+        config: currentConfig
+      });
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["table-views", TABLE_KEY] });
+    },
+    onError: (e: any) => setLocalError(String(e?.message ?? e))
+  });
+
+  const saveViewAsM = useMutation({
+    mutationFn: async (name: string) => {
+      return apiPost<{ ok: true; view: SavedTableView }>("/api/table-views", {
+        tableKey: TABLE_KEY,
+        name,
+        config: currentConfig,
+        isActive: true
+      });
+    },
+    onSuccess: async (res) => {
+      appliedServerView.current = true;
+      setFactorySelected(false);
+      setActiveViewId(res.view.id);
+      setSaveAsName("");
+      await qc.invalidateQueries({ queryKey: ["table-views", TABLE_KEY] });
+    },
+    onError: (e: any) => setLocalError(String(e?.message ?? e))
+  });
+
+  const activateViewM = useMutation({
+    mutationFn: async (view: SavedTableView) => {
+      await apiPatch(`/api/table-views/${view.id}`, { isActive: true });
+      return view;
+    },
+    onSuccess: async (view) => {
+      appliedServerView.current = true;
+      setFactorySelected(false);
+      setActiveViewId(view.id);
+      applyConfig(view.config, tableColumns, { allowShowAll: true });
+      await qc.invalidateQueries({ queryKey: ["table-views", TABLE_KEY] });
+    },
+    onError: (e: any) => setLocalError(String(e?.message ?? e))
+  });
+
+  const deleteViewM = useMutation({
+    mutationFn: async (id: string) => {
+      await apiDelete(`/api/table-views/${id}`);
+      return id;
+    },
+    onSuccess: async () => {
+      setActiveViewId(null);
+      setFactorySelected(true);
+      applyConfig(null, tableColumns);
+      await qc.invalidateQueries({ queryKey: ["table-views", TABLE_KEY] });
+    },
+    onError: (e: any) => setLocalError(String(e?.message ?? e))
+  });
+
+  const deactivateViewM = useMutation({
+    mutationFn: async (id: string) => {
+      await apiPatch(`/api/table-views/${id}`, { isActive: false });
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["table-views", TABLE_KEY] });
+    },
+    onError: (e: any) => setLocalError(String(e?.message ?? e))
+  });
+
+  const selectFactoryDefault = () => {
+    const currentId = activeView?.id;
+    setFactorySelected(true);
+    setActiveViewId(null);
+    applyConfig(null, tableColumns);
+    if (currentId) deactivateViewM.mutate(currentId);
+  };
+
+  const promptSaveAs = () => {
+    const fallback = activeView ? `${activeView.name} (копия)` : "Мой набор";
+    const name = (saveAsName.trim() || window.prompt("Название набора столбцов", fallback) || "").trim();
+    if (!name) return;
+    saveViewAsM.mutate(name);
+  };
+
+  const onSaveView = () => {
+    if (!activeView) {
+      promptSaveAs();
+      return;
+    }
+    saveViewM.mutate();
+  };
+
+  const onDeleteView = () => {
+    if (!activeView) return;
+    if (!window.confirm(`Удалить набор «${activeView.name}»?`)) return;
+    deleteViewM.mutate(activeView.id);
+  };
 
   const resolveAircraftMeta = (ev: GanttTableEvent, d?: RowDraft | null) => {
     // Как в карточке: при выбранном борте в черновике — предпросмотр оператора/типа до сохранения.
@@ -954,12 +1188,13 @@ export function GanttEventsTable(props: {
     const parts: string[] = [];
     if (col.sticky === "left") parts.push("ganttTableStickyCol");
     if (col.id === "actions") parts.push("ganttTableActionsCol");
+    if (col.id === SELECT_COL_ID) parts.push("ganttTableSelectCol");
     if (col.id === lastStickyLeftId) parts.push("ganttTableStickyColEdge");
     return parts.length ? parts.join(" ") : undefined;
   };
 
   const renderReadonlyCell = (col: TableColDef, ev: GanttTableEvent, meta: { operator: string; aircraftType: string }) => {
-    switch (col.id) {
+    switch (col.kind) {
       case "title":
         return (
           <span className="ganttTableCellText" title={ev.title}>
@@ -969,7 +1204,7 @@ export function GanttEventsTable(props: {
       case "level":
         return ev.level === "STRATEGIC" ? "Стратегический" : "Оперативный";
       case "status":
-        return STATUS_LABEL[ev.status] ?? ev.status;
+        return statusCatalogLabel(ev.status, statusCatalog);
       case "planningKind":
         return eventPlanningKind(ev) === "PLANNED" ? "Плановое" : "Внеплановое";
       case "aircraftId":
@@ -1005,28 +1240,44 @@ export function GanttEventsTable(props: {
         return formatCellDate(ev.startAt);
       case "endAtLocal":
         return formatCellDate(ev.endAt);
-      case "tatOper":
-        return <span className="ganttTableReadonly">{tatDetailed(toInputLocal(ev.startAt), toInputLocal(ev.endAt))}</span>;
+      case "tatPlanDays":
+        return <span className="ganttTableReadonly">{durationDaysLabel(toInputLocal(ev.startAt), toInputLocal(ev.endAt))}</span>;
+      case "tatPlanHours":
+        return <span className="ganttTableReadonly">{durationHoursLabel(toInputLocal(ev.startAt), toInputLocal(ev.endAt))}</span>;
+      case "timeOfStart":
+        return timeOfLocal(toInputLocal(ev.startAt));
+      case "timeOfEnd":
+        return timeOfLocal(toInputLocal(ev.endAt));
       case "budgetStartAtLocal":
         return formatCellDate(ev.budgetStartAt);
       case "budgetEndAtLocal":
         return formatCellDate(ev.budgetEndAt);
-      case "tatBudget":
+      case "tatBudgetDays":
         return (
           <span className="ganttTableReadonly">
-            {tatDetailed(toInputLocal(ev.budgetStartAt), toInputLocal(ev.budgetEndAt))}
+            {durationDaysLabel(toInputLocal(ev.budgetStartAt), toInputLocal(ev.budgetEndAt))}
           </span>
         );
       case "actualStartAtLocal":
         return formatCellDate(ev.actualStartAt);
       case "actualEndAtLocal":
         return formatCellDate(ev.actualEndAt);
-      case "tatActual":
+      case "tatActualDays":
         return (
           <span className="ganttTableReadonly">
-            {tatDetailed(toInputLocal(ev.actualStartAt), toInputLocal(ev.actualEndAt))}
+            {durationDaysLabel(toInputLocal(ev.actualStartAt), toInputLocal(ev.actualEndAt))}
           </span>
         );
+      case "tatActualHours":
+        return (
+          <span className="ganttTableReadonly">
+            {durationHoursLabel(toInputLocal(ev.actualStartAt), toInputLocal(ev.actualEndAt))}
+          </span>
+        );
+      case "timeOfActualStart":
+        return timeOfLocal(toInputLocal(ev.actualStartAt));
+      case "timeOfActualEnd":
+        return timeOfLocal(toInputLocal(ev.actualEndAt));
       case "hangarId":
         return (
           <span className="ganttTableCellText" title={ev.hangar?.name ?? undefined}>
@@ -1063,8 +1314,16 @@ export function GanttEventsTable(props: {
             </button>
           </div>
         );
-      default:
-        return null;
+      case "primary":
+      default: {
+        const value = primaryByEventId.get(ev.id)?.[col.id];
+        const text = formatPrimaryCell(value, { key: col.id, label: col.label });
+        return (
+          <span className="ganttTableReadonly ganttTableCellText" title={text === "—" ? undefined : text}>
+            {text}
+          </span>
+        );
+      }
     }
   };
 
@@ -1081,7 +1340,7 @@ export function GanttEventsTable(props: {
       budgetDisabled: boolean;
     }
   ): ReactNode => {
-    switch (col.id) {
+    switch (col.kind) {
       case "title":
         return (
           <input className="evInput ganttTableInput" value={d.title} onChange={(e) => patchDraft({ title: e.target.value })} />
@@ -1104,9 +1363,9 @@ export function GanttEventsTable(props: {
             value={d.status}
             onChange={(e) => patchDraft({ status: e.target.value as RowDraft["status"] })}
           >
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>
-                {STATUS_LABEL[s]}
+            {statusSelectOptions.map((s) => (
+              <option key={s.code} value={s.code}>
+                {s.name}
               </option>
             ))}
           </select>
@@ -1209,8 +1468,14 @@ export function GanttEventsTable(props: {
             onChange={(e) => patchDraft({ endAtLocal: e.target.value })}
           />
         );
-      case "tatOper":
-        return <span className="ganttTableReadonly">{tatDetailed(d.startAtLocal, d.endAtLocal)}</span>;
+      case "tatPlanDays":
+        return <span className="ganttTableReadonly">{durationDaysLabel(d.startAtLocal, d.endAtLocal)}</span>;
+      case "tatPlanHours":
+        return <span className="ganttTableReadonly">{durationHoursLabel(d.startAtLocal, d.endAtLocal)}</span>;
+      case "timeOfStart":
+        return <span className="ganttTableReadonly">{timeOfLocal(d.startAtLocal)}</span>;
+      case "timeOfEnd":
+        return <span className="ganttTableReadonly">{timeOfLocal(d.endAtLocal)}</span>;
       case "budgetStartAtLocal":
         return (
           <input
@@ -1231,8 +1496,8 @@ export function GanttEventsTable(props: {
             onChange={(e) => patchDraft({ budgetEndAtLocal: e.target.value })}
           />
         );
-      case "tatBudget":
-        return <span className="ganttTableReadonly">{tatDetailed(d.budgetStartAtLocal, d.budgetEndAtLocal)}</span>;
+      case "tatBudgetDays":
+        return <span className="ganttTableReadonly">{durationDaysLabel(d.budgetStartAtLocal, d.budgetEndAtLocal)}</span>;
       case "actualStartAtLocal":
         return (
           <input
@@ -1251,8 +1516,14 @@ export function GanttEventsTable(props: {
             onChange={(e) => patchDraft({ actualEndAtLocal: e.target.value })}
           />
         );
-      case "tatActual":
-        return <span className="ganttTableReadonly">{tatDetailed(d.actualStartAtLocal, d.actualEndAtLocal)}</span>;
+      case "tatActualDays":
+        return <span className="ganttTableReadonly">{durationDaysLabel(d.actualStartAtLocal, d.actualEndAtLocal)}</span>;
+      case "tatActualHours":
+        return <span className="ganttTableReadonly">{durationHoursLabel(d.actualStartAtLocal, d.actualEndAtLocal)}</span>;
+      case "timeOfActualStart":
+        return <span className="ganttTableReadonly">{timeOfLocal(d.actualStartAtLocal)}</span>;
+      case "timeOfActualEnd":
+        return <span className="ganttTableReadonly">{timeOfLocal(d.actualEndAtLocal)}</span>;
       case "hangarId":
         return ctx.locationLocked ? (
           <input
@@ -1359,48 +1630,74 @@ export function GanttEventsTable(props: {
             </button>
           </div>
         );
-      default:
-        return null;
+      case "primary":
+      default: {
+        const value = primaryByEventId.get(ev.id)?.[col.id];
+        const text = formatPrimaryCell(value, { key: col.id, label: col.label });
+        return (
+          <span className="ganttTableReadonly ganttTableCellText" title={text === "—" ? undefined : text}>
+            {text}
+          </span>
+        );
+      }
     }
   };
 
   return (
     <div className="ganttTablePanel">
-      <div className="ganttTableHint muted">
-        Редактирование: клик по строке → правки в черновике → сохранить. Действия закреплены слева. ПКМ по заголовку —
-        видимость и порядок столбцов. Тяните край заголовка для ширины. Горизонтальный скролл — у нижнего края экрана.
-      </div>
-
       {localError && !confirmOpen ? <div className="error ganttTableError">{localError}</div> : null}
 
       <div className="ganttTableWrap" ref={tableWrapRef}>
         <table className="ganttEventsTable">
           <colgroup>
-            {visibleColumns.map((col) => (
-              <col key={col.id} style={{ width: colWidths[col.id] }} />
+            {displayColumns.map((col) => (
+              <col key={col.id} style={{ width: col.id === SELECT_COL_ID ? SELECT_COL_WIDTH : colWidths[col.id] }} />
             ))}
           </colgroup>
           <thead>
             <tr
               onContextMenu={(e) => {
                 e.preventDefault();
-                setColMenu({ x: e.clientX, y: e.clientY });
+                setColPickerOpen(true);
               }}
             >
-              {visibleColumns.map((col) => (
+              {displayColumns.map((col) => (
                 <th
                   key={col.id}
                   className={cellClass(col)}
                   style={colStyle(col.id)}
-                  title={col.id === "actions" ? "Действия · ПКМ — столбцы" : `${col.label} · ПКМ — столбцы`}
+                  title={
+                    col.id === SELECT_COL_ID
+                      ? "Выбрать все отфильтрованные"
+                      : col.id === "actions"
+                        ? "Действия · ПКМ — настройки"
+                        : col.label
+                  }
                 >
-                  <span className="ganttTableThLabel">{col.id === "actions" ? "…" : col.label}</span>
-                  <button
-                    type="button"
-                    className="ganttTableColResize"
-                    aria-label={`Изменить ширину столбца «${col.label || "Действия"}»`}
-                    onPointerDown={(e) => startColResize(col, e)}
-                  />
+                  {col.id === SELECT_COL_ID ? (
+                    <input
+                      type="checkbox"
+                      className="ganttTableSelectBox"
+                      checked={allVisibleSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected;
+                      }}
+                      onChange={(e) => toggleAllVisible(e.target.checked)}
+                      onClick={(e) => e.stopPropagation()}
+                      disabled={visibleEventIds.length === 0}
+                      aria-label="Выбрать все отфильтрованные"
+                    />
+                  ) : (
+                    <>
+                      <span className="ganttTableThLabel">{col.id === "actions" ? "…" : col.label}</span>
+                      <button
+                        type="button"
+                        className="ganttTableColResize"
+                        aria-label={`Изменить ширину столбца «${col.label || "Действия"}»`}
+                        onPointerDown={(e) => startColResize(col, e)}
+                      />
+                    </>
+                  )}
                 </th>
               ))}
             </tr>
@@ -1408,17 +1705,19 @@ export function GanttEventsTable(props: {
           <tbody>
             {sortedEvents.length === 0 ? (
               <tr>
-                <td colSpan={Math.max(1, visibleColumns.length)} className="ganttTableEmpty">
+                <td colSpan={Math.max(1, displayColumns.length)} className="ganttTableEmpty">
                   Нет событий в выбранном периоде и фильтрах
                 </td>
               </tr>
             ) : (
               sortedEvents.map((ev) => {
                 const isEditing = editingId === ev.id && draft;
+                const isSelected = selectedIdSet.has(ev.id);
                 const meta = resolveAircraftMeta(ev, isEditing ? draft : null);
                 const rowClass = [
                   isEditing ? "ganttTableRowEditing" : "",
-                  isEditing && isDirty ? "ganttTableRowDirty" : ""
+                  isEditing && isDirty ? "ganttTableRowDirty" : "",
+                  !isEditing && isSelected ? "ganttTableRowSelected" : ""
                 ]
                   .filter(Boolean)
                   .join(" ");
@@ -1431,14 +1730,16 @@ export function GanttEventsTable(props: {
                       onClick={() => beginEdit(ev)}
                       title={props.canEdit ? "Нажмите, чтобы редактировать" : "Открыть карточку"}
                     >
-                      {visibleColumns.map((col) => (
+                      {displayColumns.map((col) => (
                         <td
                           key={col.id}
                           className={cellClass(col)}
                           style={colStyle(col.id)}
-                          onClick={col.id === "actions" ? (e) => e.stopPropagation() : undefined}
+                          onClick={
+                            col.id === "actions" || col.id === SELECT_COL_ID ? (e) => e.stopPropagation() : undefined
+                          }
                         >
-                          {renderReadonlyCell(col, ev, meta)}
+                          {col.id === SELECT_COL_ID ? renderSelectCell(ev) : renderReadonlyCell(col, ev, meta)}
                         </td>
                       ))}
                     </tr>
@@ -1458,9 +1759,14 @@ export function GanttEventsTable(props: {
 
                 return (
                   <tr key={ev.id} className={rowClass}>
-                    {visibleColumns.map((col) => (
-                      <td key={col.id} className={cellClass(col)} style={colStyle(col.id)}>
-                        {renderEditCell(col, ev, d, meta, ctx)}
+                    {displayColumns.map((col) => (
+                      <td
+                        key={col.id}
+                        className={cellClass(col)}
+                        style={colStyle(col.id)}
+                        onClick={col.id === SELECT_COL_ID ? (e) => e.stopPropagation() : undefined}
+                      >
+                        {col.id === SELECT_COL_ID ? renderSelectCell(ev) : renderEditCell(col, ev, d, meta, ctx)}
                       </td>
                     ))}
                   </tr>
@@ -1471,69 +1777,218 @@ export function GanttEventsTable(props: {
         </table>
       </div>
 
-      {colMenu ? (
+      {colPickerOpen ? (
         <div
-          ref={colMenuRef}
-          className="ganttTableColMenu"
-          style={{ left: colMenu.x, top: colMenu.y }}
-          role="menu"
+          className="modalBackdrop"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setInfoOpen(false);
+              setColPickerOpen(false);
+            }
+          }}
         >
-          <div className="ganttTableColMenuTitle">Столбцы</div>
-          {allowColumnReorder ? (
-            <div className="ganttTableColMenuHint muted">Перетащите, чтобы изменить порядок</div>
-          ) : null}
-          <div className="ganttTableColMenuList">
-            {orderedColumns.map((col) => {
-              const locked = col.hideable === false;
-              const checked = !hiddenCols.has(col.id);
-              const reorderLocked = !allowColumnReorder || PINNED_LEFT_IDS.includes(col.id);
-              return (
-                <label
-                  key={col.id}
-                  className={`ganttTableColMenuItem${locked ? " ganttTableColMenuItemLocked" : ""}${
-                    dragColId === col.id ? " ganttTableColMenuItemDragging" : ""
-                  }`}
-                  draggable={!reorderLocked}
-                  onDragStart={(e) => {
-                    if (reorderLocked) {
-                      e.preventDefault();
-                      return;
-                    }
-                    setDragColId(col.id);
-                    e.dataTransfer.effectAllowed = "move";
-                    e.dataTransfer.setData("text/plain", col.id);
-                  }}
-                  onDragOver={(e) => {
-                    if (reorderLocked || !dragColId || dragColId === col.id) return;
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "move";
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (!allowColumnReorder) return;
-                    const from = (e.dataTransfer.getData("text/plain") as TableColId) || dragColId;
-                    if (from) moveColumn(from, col.id);
-                    setDragColId(null);
-                  }}
-                  onDragEnd={() => setDragColId(null)}
+          <div className="modalWindow ganttTableColsModal" role="dialog" aria-labelledby="ganttTableColsTitle">
+            <div className="modalHeader">
+              <div className="ganttTableSettingsTitle">
+                <div className="modalTitle" id="ganttTableColsTitle">
+                  Настройки
+                </div>
+                <div className="ganttTableInfoWrap" ref={infoRef}>
+                  <button
+                    type="button"
+                    className="ganttTableInfoBtn"
+                    aria-label="Справка по таблице"
+                    title="Справка по таблице"
+                    onClick={() => setInfoOpen((v) => !v)}
+                  >
+                    <IconInfo />
+                  </button>
+                  {infoOpen ? (
+                    <div className="ganttTableInfoPop ganttTableInfoPopModal" role="note">
+                      Редактирование: клик по строке → правки в черновике → сохранить. Чекбоксы слева — массовая смена
+                      статуса (панель под фильтрами). Действия и «Форма ТО» закреплены слева. ПКМ по заголовку открывает
+                      эти настройки. Наборы хранятся на пользователе. Трудоёмкость ME / AV / INT / NDT / SHOP / CabRep
+                      (бюджет, MPS, факт) — только чтение; правка в карточке.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="modalClose"
+                aria-label="Закрыть"
+                onClick={() => {
+                  setInfoOpen(false);
+                  setColPickerOpen(false);
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div className="modalBody ganttTableColsModalBody">
+              <aside className="ganttTableColsPresets">
+                <div className="ganttTableColsPresetsTitle">Заготовки</div>
+                <button
+                  type="button"
+                  className={`ganttTableColsPreset${activeView ? "" : " isActive"}`}
+                  onClick={selectFactoryDefault}
                 >
-                  <span className={`ganttTableColMenuGrip${reorderLocked ? " ganttTableColMenuGripLocked" : ""}`} title={reorderLocked ? "Фиксированный столбец" : "Перетащить"}>
-                    <IconGrip />
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={locked}
-                    onChange={() => toggleColHidden(col.id)}
-                  />
-                  <span>{col.label || "Действия"}</span>
-                </label>
-              );
-            })}
+                  <span>По умолчанию</span>
+                  <span className="muted">24 столбца</span>
+                </button>
+                {views.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    className={`ganttTableColsPreset${activeView?.id === v.id ? " isActive" : ""}`}
+                    onClick={() => activateViewM.mutate(v)}
+                  >
+                    <span>{v.name}</span>
+                    <span className="muted">
+                      {Array.isArray(v.config?.visible) && v.config.visible.length
+                        ? `${v.config.visible.length} столбцов`
+                        : "Сохранённый набор"}
+                    </span>
+                  </button>
+                ))}
+                {views.length === 0 ? (
+                  <div className="muted ganttTableColsPresetsEmpty">Пока нет сохранённых наборов</div>
+                ) : null}
+              </aside>
+              <div className="ganttTableColsPicker">
+                <input
+                  className="evInput ganttTableInput"
+                  placeholder="Поиск по названию или группе"
+                  value={colMenuQuery}
+                  onChange={(e) => setColMenuQuery(e.target.value)}
+                />
+                {allowColumnReorder ? (
+                  <div className="ganttTableColMenuHint muted">Отметьте реквизиты. Перетащите строку, чтобы изменить порядок.</div>
+                ) : (
+                  <div className="ganttTableColMenuHint muted">Отметьте реквизиты для текущего набора.</div>
+                )}
+                <div className="ganttTableColMenuList ganttTableColsPickerList">
+                  {orderedColumns.map((col, index) => {
+                    const q = colMenuQuery.trim().toLocaleLowerCase("ru");
+                    if (q) {
+                      const hay = `${col.label} ${col.group ?? ""} ${col.subgroup ?? ""} ${col.id}`.toLocaleLowerCase("ru");
+                      if (!hay.includes(q)) return null;
+                    }
+                    const prev = orderedColumns
+                      .slice(0, index)
+                      .reverse()
+                      .find((c) => {
+                        if (!q) return true;
+                        const hay = `${c.label} ${c.group ?? ""} ${c.subgroup ?? ""} ${c.id}`.toLocaleLowerCase("ru");
+                        return hay.includes(q);
+                      });
+                    const showGroup = col.group && col.group !== prev?.group;
+                    const showSub = col.subgroup && (col.subgroup !== prev?.subgroup || col.group !== prev?.group);
+                    const locked = col.hideable === false;
+                    const checked = locked || visibleIds.has(col.id);
+                    const reorderLocked = !allowColumnReorder || PINNED_LEFT_IDS.includes(col.id);
+                    return (
+                      <div key={col.id}>
+                        {showGroup ? <div className="ganttTableColMenuGroup">{col.group}</div> : null}
+                        {showSub ? <div className="ganttTableColMenuSubgroup">{col.subgroup}</div> : null}
+                        <label
+                          className={`ganttTableColMenuItem${locked ? " ganttTableColMenuItemLocked" : ""}${
+                            dragColId === col.id ? " ganttTableColMenuItemDragging" : ""
+                          }`}
+                          draggable={!reorderLocked}
+                          onDragStart={(e) => {
+                            if (reorderLocked) {
+                              e.preventDefault();
+                              return;
+                            }
+                            setDragColId(col.id);
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/plain", col.id);
+                          }}
+                          onDragOver={(e) => {
+                            if (reorderLocked || !dragColId || dragColId === col.id) return;
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = "move";
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            if (!allowColumnReorder) return;
+                            const from = e.dataTransfer.getData("text/plain") || dragColId;
+                            if (from) moveColumn(from, col.id);
+                            setDragColId(null);
+                          }}
+                          onDragEnd={() => setDragColId(null)}
+                        >
+                          <span
+                            className={`ganttTableColMenuGrip${reorderLocked ? " ganttTableColMenuGripLocked" : ""}`}
+                            title={reorderLocked ? "Фиксированный столбец" : "Перетащить"}
+                          >
+                            <IconGrip />
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={locked}
+                            onChange={() => toggleColVisible(col.id)}
+                          />
+                          <span>{col.label || "Действия"}</span>
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="ganttTableColsModalFooter">
+              <input
+                className="evInput ganttTableInput"
+                placeholder="Название нового набора"
+                value={saveAsName}
+                onChange={(e) => setSaveAsName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const name = saveAsName.trim();
+                    if (name) saveViewAsM.mutate(name);
+                  }
+                }}
+              />
+              <button
+                className="btn"
+                type="button"
+                disabled={saveViewAsM.isPending || !saveAsName.trim()}
+                onClick={() => {
+                  const name = saveAsName.trim();
+                  if (name) saveViewAsM.mutate(name);
+                }}
+              >
+                Сохранить как…
+              </button>
+              {activeView ? (
+                <button className="btn" type="button" disabled={saveViewM.isPending} onClick={onSaveView}>
+                  Сохранить
+                </button>
+              ) : null}
+              {activeView ? (
+                <button className="btn" type="button" disabled={deleteViewM.isPending} onClick={onDeleteView}>
+                  Удалить
+                </button>
+              ) : null}
+              <button className="btn" type="button" onClick={selectFactoryDefault}>
+                Сбросить к 24
+              </button>
+              <button
+                className="btn btnPrimary"
+                type="button"
+                onClick={() => {
+                  setInfoOpen(false);
+                  setColPickerOpen(false);
+                }}
+              >
+                Готово
+              </button>
+            </div>
           </div>
-          <button type="button" className="btn ganttTableColMenuReset" onClick={resetColumns}>
-            Сбросить ширины, видимость и порядок
-          </button>
         </div>
       ) : null}
 

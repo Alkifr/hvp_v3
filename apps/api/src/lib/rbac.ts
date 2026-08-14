@@ -20,3 +20,12 @@ export function isSystemAdmin(roles: string[] | null | undefined): boolean {
   return list.includes("ADMIN") || list.includes("SUPER_ADMIN");
 }
 
+export function assertSystemAdmin(req: FastifyRequest) {
+  const roles = (req as any).auth?.roles as string[] | undefined;
+  if (!isSystemAdmin(roles)) {
+    const err: any = new Error("FORBIDDEN");
+    err.statusCode = 403;
+    throw err;
+  }
+}
+

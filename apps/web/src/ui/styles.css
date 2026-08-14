@@ -1493,6 +1493,11 @@ a {
   animation: massProgressSlide 1.2s ease-in-out infinite;
 }
 
+.massProgressBar.isDeterminate {
+  animation: none;
+  transform: none;
+}
+
 .massSolverNotice {
   padding: 9px 11px;
   border-radius: 12px;
@@ -2875,11 +2880,86 @@ main.content:has(.ganttPage) {
 
 .ganttTableCard {
   overflow: hidden;
+  padding: 0;
+}
+
+.ganttTableCard .ganttTableWrap {
+  border: 0;
+  border-radius: 14px;
 }
 
 .ganttTablePanel {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+}
+
+.ganttTableSettingsBtn {
+  height: 38px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ganttTableSettingsTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ganttTableInfoWrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.ganttTableInfoBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 999px;
+  background: #fff;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.ganttTableInfoBtn:hover {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.ganttTableInfoPop {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(420px, 86vw);
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+  font-size: 12px;
+  line-height: 1.45;
+  color: #334155;
+}
+
+.ganttTableInfoPopModal {
+  z-index: 90;
+}
+
+.ganttTableViewSelect {
+  display: grid;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.ganttTableViewSelect span {
+  font-size: 11px;
 }
 
 .ganttTableHint {
@@ -2916,12 +2996,15 @@ main.content:has(.ganttPage) {
   border-right: 1px solid rgba(148, 163, 184, 0.14);
   padding: 4px 6px;
   vertical-align: middle;
-  white-space: nowrap;
   text-align: left;
   background: #fff;
   overflow: hidden;
-  text-overflow: ellipsis;
   max-width: 0; /* force ellipsis with table-layout: fixed + explicit widths */
+}
+
+.ganttEventsTable td {
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .ganttEventsTable th {
@@ -2932,8 +3015,11 @@ main.content:has(.ganttPage) {
   color: #334155;
   font-weight: 700;
   font-size: 11px;
-  letter-spacing: 0.02em;
-  overflow: hidden;
+  letter-spacing: 0.01em;
+  white-space: normal;
+  vertical-align: bottom;
+  min-height: 64px;
+  padding: 8px 8px 6px;
 }
 
 .ganttEventsTable tbody tr {
@@ -3000,9 +3086,15 @@ main.content:has(.ganttPage) {
 }
 
 .ganttTableThLabel {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.25;
+  max-height: 4.05em;
   padding-right: 8px;
 }
 
@@ -3046,6 +3138,30 @@ main.content:has(.ganttPage) {
   border: 1px solid rgba(148, 163, 184, 0.35);
   background: #fff;
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+}
+
+.ganttTableColMenuWide {
+  min-width: 320px;
+  max-width: min(92vw, 420px);
+  max-height: min(78vh, 640px);
+}
+
+.ganttTableColMenuWide .evInput {
+  margin-bottom: 8px;
+}
+
+.ganttTableColMenuGroup {
+  font-size: 11px;
+  font-weight: 700;
+  color: #334155;
+  padding: 8px 6px 2px;
+}
+
+.ganttTableColMenuSubgroup {
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748b;
+  padding: 4px 6px 0;
 }
 
 .ganttTableColMenuTitle {
@@ -3109,6 +3225,112 @@ main.content:has(.ganttPage) {
   width: 100%;
   margin-top: 8px;
   font-size: 12px;
+}
+
+.modalWindow.ganttTableColsModal {
+  width: min(980px, 96vw);
+  height: min(82vh, 740px);
+}
+
+.ganttTableColsModalBody {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.ganttTableColsPresets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-right: 1px solid rgba(148, 163, 184, 0.28);
+  overflow: auto;
+  min-height: 0;
+}
+
+.ganttTableColsPresetsTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  padding: 2px 6px 8px;
+}
+
+.ganttTableColsPreset {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: #0f172a;
+}
+
+.ganttTableColsPreset:hover {
+  background: #f8fafc;
+}
+
+.ganttTableColsPreset.isActive {
+  background: #eff6ff;
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
+.ganttTableColsPresetsEmpty {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.ganttTableColsPicker {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+}
+
+.ganttTableColsPicker .ganttTableInput {
+  margin-bottom: 4px;
+}
+
+.ganttTableColsPickerList {
+  overflow: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding-right: 4px;
+}
+
+.ganttTableColsModalFooter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.ganttTableColsModalFooter .ganttTableInput {
+  flex: 1 1 180px;
+  min-width: 160px;
+}
+
+@media (max-width: 720px) {
+  .ganttTableColsModalBody {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .ganttTableColsPresets {
+    border-right: 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+    max-height: 28vh;
+  }
 }
 
 .ganttTableRowActions {
@@ -3405,6 +3627,165 @@ main.content:has(.ganttPage) {
 
 .ganttDndHint {
   font-size: 12px;
+}
+
+.ganttDndRange {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #1d4ed8;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.ganttDndRangeLive {
+  color: #1e40af;
+}
+
+.ganttDndGhostLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.ganttDndGhostItem {
+  position: absolute;
+  top: 10px;
+  height: 24px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.3);
+  box-sizing: border-box;
+}
+
+.ganttDndGhostEnvelope {
+  position: absolute;
+  top: 6px;
+  height: 32px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.1);
+  border: 2px dashed rgba(37, 99, 235, 0.7);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.ganttDndGhostLabel {
+  color: #1d4ed8;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  min-width: max-content;
+  padding: 0 6px;
+  text-shadow: 0 0 4px #fff, 0 0 4px #fff;
+  pointer-events: none;
+}
+
+.ganttBulkStatusBar {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.06);
+  overflow: hidden;
+}
+
+.ganttBulkStatusToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.ganttBulkStatusToggle:hover {
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.ganttBulkStatusTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.ganttBulkStatusHint {
+  font-size: 12px;
+}
+
+.ganttBulkStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.16);
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ganttBulkStatusToggle .evCardChevron {
+  margin-left: auto;
+  margin-right: 2px;
+}
+
+.ganttBulkStatusBody {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 8px;
+}
+
+.ganttBulkStatusCount {
+  font-size: 12px;
+  color: #334155;
+}
+
+.ganttTableSelectCol {
+  text-align: center;
+  overflow: visible;
+  z-index: 3;
+}
+
+.ganttEventsTable th.ganttTableSelectCol {
+  z-index: 6;
+  vertical-align: middle;
+  padding: 8px 4px;
+  background: #f8fafc;
+}
+
+.ganttTableSelectBox {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+.ganttEventsTable tbody tr.ganttTableRowSelected td {
+  background: rgba(37, 99, 235, 0.07);
+}
+
+.ganttEventsTable tbody tr.ganttTableRowSelected td.ganttTableStickyCol {
+  background: rgba(37, 99, 235, 0.07);
+}
+
+.ganttEventsTable tbody tr.ganttTableRowSelected:hover td,
+.ganttEventsTable tbody tr.ganttTableRowSelected:hover td.ganttTableStickyCol {
+  background: rgba(37, 99, 235, 0.11);
 }
 
 .ganttTimelineScaleMenu {
@@ -3787,6 +4168,8 @@ main.content:has(.ganttPage) {
 }
 
 .legendBarSample {
+  position: relative;
+  overflow: hidden;
   width: 56px !important;
   height: 16px;
 }
@@ -4700,6 +5083,16 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   box-sizing: border-box;
+  z-index: 2;
+}
+
+.barStatusStripe {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  pointer-events: none;
   z-index: 2;
 }
 
@@ -6397,6 +6790,12 @@ textarea {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
 }
 
+.evInputInvalid,
+.evInput.evInputInvalid:focus {
+  border-color: rgba(185, 28, 28, 0.65);
+  box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.12);
+}
+
 .laborMetricsPanel {
   display: grid;
   gap: 14px;
@@ -6696,6 +7095,208 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.evStagesPanel {
+  margin-top: 8px;
+  border: 1px dashed rgba(100, 116, 139, 0.45);
+  border-radius: 10px;
+  background: #f1f5f9;
+}
+
+.evStagesSummary {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  user-select: none;
+  font: inherit;
+  text-align: left;
+}
+
+.evStagesSummary:hover {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.evStagesSummaryTitle {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.evStagesSummaryMeta {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.evStagesPanel .evCardChevron {
+  margin-right: 0;
+}
+
+.evStagesChevronOpen {
+  transform: rotate(45deg);
+  margin-top: 0;
+  margin-bottom: -4px;
+}
+
+.evStagesBody {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.evStagesAlerts {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  background: rgba(255, 247, 237, 0.95);
+  color: #9a3412;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.evStagesAlertsHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.evStagesAlignBtn {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  min-height: 26px;
+  font-size: 11.5px;
+}
+
+.evStagesAlerts ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.evStagesAlerts li + li {
+  margin-top: 2px;
+}
+
+.evStagesList {
+  display: grid;
+  gap: 6px;
+}
+
+.evStageCard {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+}
+
+.evStageHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.evStageHead strong {
+  font-size: 12.5px;
+  color: #0f172a;
+}
+
+.evStageTat {
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.evStageRemove {
+  margin-left: auto;
+  padding: 3px 8px;
+  min-height: 26px;
+  font-size: 11.5px;
+}
+
+.evStageDates,
+.evStagePlace {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+}
+
+.evStagePlace {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.evStagesPanel .evFieldLabel {
+  font-size: 11px;
+}
+
+.evStagesPanel .evInput,
+.evStagesPanel .evSelect .msdBtn {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  border-radius: 6px;
+}
+
+.evStageExtraToggle {
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font-size: 11.5px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.evStageExtraToggle:hover {
+  text-decoration: underline;
+}
+
+.evStageExtra {
+  display: grid;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.4);
+}
+
+.evStageAuto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px dashed rgba(100, 116, 139, 0.45);
+  background: rgba(226, 232, 240, 0.7);
+  color: #475569;
+  font-size: 11.5px;
+}
+
+.evStageAutoLabel {
+  font-weight: 650;
+}
+
+.evStageAutoRange,
+.evStageAutoTat {
+  color: #64748b;
+}
+
+.evStageAutoTat {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.evStagesActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .evTowList {
@@ -9283,6 +9884,8 @@ textarea {
   .evPeriodGrid,
   .evLocationGrid,
   .evPlacementGrid,
+  .evStageDates,
+  .evStagePlace,
   .evTowGrid,
   .itpPassportGrid,
   .itpFormGrid,
@@ -10255,6 +10858,34 @@ textarea.refInput {
   margin: 0 0 4px;
 }
 
+.reportPagerSize {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.reportPagerSize select {
+  min-width: 88px;
+}
+
+.reportResultPager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.reportResultPagerBtns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .reportBuilder {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
@@ -10365,28 +10996,14 @@ textarea.refInput {
   align-items: end;
 }
 
-.reportDatasetGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
+.reportSourceField {
+  max-width: 520px;
+  width: 100%;
 }
 
-.reportDatasetCard {
-  display: grid;
-  gap: 6px;
-  text-align: left;
-  padding: 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: #fff;
-  cursor: pointer;
-  font: inherit;
-  color: #0f172a;
-}
-
-.reportDatasetCard.active {
-  border-color: #0d9488;
-  background: #f0fdfa;
+.reportSourceField .msdRoot,
+.reportSourceField .ssdCombobox {
+  width: 100%;
 }
 
 .reportBuilderCompareRow {
@@ -10544,6 +11161,12 @@ textarea.refInput {
 .reportBuilderFilters {
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   display: grid;
+}
+
+.reportSummaryLabel {
+  display: block;
+  margin: 4px 0 8px;
+  font-size: 13px;
 }
 
 .reportSortRow {

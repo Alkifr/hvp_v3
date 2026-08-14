@@ -113,6 +113,7 @@ export type HistoryRefMaps = {
   operators?: Map<string, string>;
   eventTypes: Map<string, string>;
   workshops?: Map<string, string>;
+  statuses?: Map<string, string>;
 };
 
 export type DiffEntry = {
@@ -455,7 +456,7 @@ export function resolveHistoryValue(rawKey: string | undefined, v: unknown, maps
       const d = dayjs(v);
       if (d.isValid()) return d.format("DD.MM.YYYY HH:mm");
     }
-    if (rawKey === "status") return STATUS_LABEL[v] ?? LEGACY_STATUS_LABEL[v] ?? formatHistoryValue(v);
+    if (rawKey === "status") return maps?.statuses?.get(v) ?? STATUS_LABEL[v] ?? LEGACY_STATUS_LABEL[v] ?? formatHistoryValue(v);
     if (rawKey === "level") return LEVEL_LABEL[v] ?? formatHistoryValue(v);
     if (rawKey === "planningKind") {
       return v === "PLANNED" ? "Плановое" : v === "UNPLANNED" ? "Внеплановое" : formatHistoryValue(v);

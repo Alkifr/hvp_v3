@@ -3,6 +3,8 @@ import argon2 from "argon2";
 import path from "node:path";
 import dotenv from "dotenv";
 
+import { checkEventCountPresets, checkEventCountReportConfig } from "../src/lib/reportPresets.js";
+
 const prisma = new PrismaClient();
 
 // .env лежит в корне репо, а seed запускается из apps/api
@@ -200,6 +202,20 @@ async function main() {
       operatorId: operator.id,
       typeId: typeA320.id
     }
+  });
+
+  await prisma.eventStatusCatalog.createMany({
+    data: [
+      { code: EventStatus.PENDING_EXECUTOR_APPROVAL, name: "На согласовании с исполнителем", color: "#FFC182", sortOrder: 10, selectable: true, allowsAutoInProgress: false, manualOnly: true },
+      { code: EventStatus.PENDING_CUSTOMER_APPROVAL, name: "На согласовании с заказчиком", color: "#F8FA7F", sortOrder: 20, selectable: true, allowsAutoInProgress: false, manualOnly: true },
+      { code: EventStatus.APPROVED_BY_EXECUTOR, name: "Согласовано с исполнителем", color: "#FFC1FF", sortOrder: 30, selectable: true, allowsAutoInProgress: true, manualOnly: false },
+      { code: EventStatus.APPROVED_BY_CUSTOMER, name: "Согласовано с заказчиком", color: "#7BFA7F", sortOrder: 40, selectable: true, allowsAutoInProgress: true, manualOnly: false },
+      { code: EventStatus.IN_PROGRESS, name: "В работе", color: null, sortOrder: 50, selectable: true, allowsAutoInProgress: false, manualOnly: false },
+      { code: EventStatus.DONE, name: "Завершено", color: "#16a34a", sortOrder: 60, selectable: true, allowsAutoInProgress: false, manualOnly: false },
+      { code: EventStatus.CANCELLED, name: "Отменено", color: null, sortOrder: 70, selectable: true, allowsAutoInProgress: false, manualOnly: true },
+      { code: EventStatus.DELETED, name: "Удалено", color: null, sortOrder: 80, selectable: false, allowsAutoInProgress: false, manualOnly: true }
+    ],
+    skipDuplicates: true
   });
 
   const aCheck = await prisma.eventType.upsert({
@@ -447,6 +463,28 @@ async function main() {
     update: { qtyReserved: 2, notes: "План" },
     create: { eventId: event.id, materialId: matFilter.id, warehouseId: wh.id, qtyReserved: 2, needByDate: start, notes: "План" }
   });
+
+  for (const preset of checkEventCountPresets({ aCheck: aCheck.name, cCheck: cCheck.name })) {
+    const config = checkEventCountReportConfig(preset.eventTypeName);
+    const existing = await prisma.savedReport.findFirst({
+      where: { ownerId: admin.id, name: preset.name }
+    });
+    if (existing) {
+      await prisma.savedReport.update({
+        where: { id: existing.id },
+        data: { description: preset.description, config }
+      });
+    } else {
+      await prisma.savedReport.create({
+        data: {
+          name: preset.name,
+          description: preset.description,
+          ownerId: admin.id,
+          config
+        }
+      });
+    }
+  }
 
   const counts = {
     users: await prisma.user.count(),

@@ -46,6 +46,35 @@ export const LABOR_METRIC_BLOCKS = [
 
 export type LaborMetricBlockCode = (typeof LABOR_METRIC_BLOCKS)[number]["block"];
 
+/** Excel-колонки живых ч/ч (3 блока × 6 квалификаций). Совпадает с rowMapper METRIC_COLUMNS. */
+export const LIVE_LABOR_EXCEL_COLUMNS = [
+  "AX",
+  "AY",
+  "AZ",
+  "BA",
+  "BB",
+  "BC",
+  "BF",
+  "BG",
+  "BH",
+  "BI",
+  "BJ",
+  "BK",
+  "FP",
+  "FQ",
+  "FR",
+  "FS",
+  "FT",
+  "FU"
+] as const;
+
+const LIVE_LABOR_EXCEL_SET = new Set<string>(LIVE_LABOR_EXCEL_COLUMNS);
+
+export function isLiveLaborExcelColumn(excelColumn: string | null | undefined): boolean {
+  if (!excelColumn) return false;
+  return LIVE_LABOR_EXCEL_SET.has(excelColumn.toUpperCase());
+}
+
 /** Префиксы колонок импорта событий → блоки EventReportMetric. */
 export const LABOR_IMPORT_BLOCK_PREFIXES = [
   { prefix: "laborBudget", block: "LABOR_BUDGET" as const, title: "Трудоемкость (Бюджет)" },

@@ -57,7 +57,7 @@ const REF_GROUPS: RefGroup[] = [
     label: "События",
     items: [
       { kind: "event-types", title: "Типы событий" },
-      { kind: "event-statuses", title: "Статусы", hint: "системный справочник" }
+      { kind: "event-statuses", title: "Статусы", hint: "название и цвет на Гантте" }
     ]
   },
   {
@@ -184,8 +184,8 @@ function NumberInput(props: { value: number; onChange: (v: number) => void; step
   );
 }
 
-function BoolToggle(props: { value: boolean; onChange: (v: boolean) => void; label?: string }) {
-  return <SwitchToggle compact checked={props.value} onChange={props.onChange} label={props.label ?? "активен"} />;
+function BoolToggle(props: { value: boolean; onChange: (v: boolean) => void; label?: string; disabled?: boolean }) {
+  return <SwitchToggle compact checked={props.value} onChange={props.onChange} label={props.label ?? "активен"} disabled={props.disabled} />;
 }
 
 function refNum(v: unknown, fallback = 0): number {
@@ -370,10 +370,10 @@ export function ReferenceView() {
 
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0, staleTime: 60_000 });
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
-  const isAdmin = Boolean(me?.roles?.includes("ADMIN"));
-  const canWrite = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"));
-  const isReadOnlyCatalog = kind === "event-statuses";
-  const canMutate = canWrite && !isReadOnlyCatalog;
+  const isAdmin = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("SUPER_ADMIN"));
+  const canWrite = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER") || me?.roles?.includes("SUPER_ADMIN"));
+  const canMutate = kind === "event-statuses" ? isAdmin : canWrite;
+  const canCreateOrDelete = canMutate && kind !== "event-statuses";
 
   const url = useMemo(() => `/api/ref/${kind}`, [kind]);
 
@@ -649,6 +649,9 @@ export function ReferenceView() {
   const [fScoreScope, setFScoreScope] = useState("PLACEMENT");
   const [fScoreValue, setFScoreValue] = useState(0);
   const [fScoreUnit, setFScoreUnit] = useState("POINTS");
+  const [fSortOrder, setFSortOrder] = useState(0);
+  const [fAllowsAutoInProgress, setFAllowsAutoInProgress] = useState(false);
+  const [fManualOnly, setFManualOnly] = useState(false);
 
   const standsForPriorityQ = useQuery({
     queryKey: ["ref", "stands", "priority-form", fLayoutId],
@@ -697,6 +700,9 @@ export function ReferenceView() {
     setFScoreScope("PLACEMENT");
     setFScoreValue(0);
     setFScoreUnit("POINTS");
+    setFSortOrder(0);
+    setFAllowsAutoInProgress(false);
+    setFManualOnly(false);
     setFBodyType("");
 
     if (k === "operators") {
@@ -792,7 +798,7 @@ export function ReferenceView() {
     setFManufactureDate(toDateInputValue(row.manufactureDate));
     setFOperatorId(String(row.operatorId ?? ""));
     setFTypeId(String(kind === "placement-priorities" ? row.standId ?? "" : row.typeId ?? row.aircraftTypeId ?? ""));
-    setFColor(String(row.color ?? "#3b82f6"));
+    setFColor(String(row.color ?? (kind === "event-statuses" ? "" : "#3b82f6")));
     setFHangarId(String(row.hangarId ?? ""));
     setFLayoutId(String(row.layoutId ?? ""));
     setFDescription(String(row.description ?? ""));
@@ -825,6 +831,9 @@ export function ReferenceView() {
     setFScoreScope(String(row.scope ?? "PLACEMENT"));
     setFScoreValue(Number(row.value ?? 0));
     setFScoreUnit(String(row.unit ?? "POINTS"));
+    setFSortOrder(Number(row.sortOrder ?? 0));
+    setFAllowsAutoInProgress(Boolean(row.allowsAutoInProgress));
+    setFManualOnly(Boolean(row.manualOnly));
     setFPersonSkillIds(
       Array.isArray(row.skills) ? row.skills.map((s: any) => String(s.skill?.id ?? s.skillId ?? "")).filter(Boolean) : []
     );
@@ -910,6 +919,16 @@ export function ReferenceView() {
       };
     if (kind === "event-types")
       return { code: fCode.trim(), name: fName.trim(), color: fColor.trim() ? fColor.trim() : undefined, isActive: fIsActive };
+    if (kind === "event-statuses")
+      return {
+        name: fName.trim(),
+        color: fColor.trim() ? fColor.trim() : null,
+        sortOrder: Number.isFinite(fSortOrder) ? fSortOrder : 0,
+        selectable: fIsActive,
+        isActive: fIsActive,
+        allowsAutoInProgress: fAllowsAutoInProgress,
+        manualOnly: fManualOnly
+      };
     if (kind === "workshops") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
     if (kind === "hangars") {
       return {
@@ -1120,7 +1139,7 @@ export function ReferenceView() {
                 </label>
               </>
             ) : null}
-            {canMutate ? (
+            {canCreateOrDelete ? (
               <button className="btn btnPrimary" onClick={openCreate}>
                 + Добавить
               </button>
@@ -1476,6 +1495,7 @@ export function ReferenceView() {
               <div className="muted refSectionHint">
                 {REF_SINGULAR[kind]}
                 {mode === "edit" ? " · выбранная строка подсвечена в списке" : ""}
+                {kind === "event-statuses" ? " · код фиксирован логикой планирования" : ""}
               </div>
             </div>
             <button className="btn" onClick={() => setMode(null)}>
@@ -1500,6 +1520,13 @@ export function ReferenceView() {
               <label style={{ display: "grid", gap: 6 }}>
                 <span className="muted">Код</span>
                 <TextInput value={fCode} onChange={setFCode} style={{ width: 220 }} />
+              </label>
+            ) : null}
+
+            {kind === "event-statuses" ? (
+              <label style={{ display: "grid", gap: 6 }}>
+                <span className="muted">Код</span>
+                <input value={fCode} readOnly style={{ width: 280, opacity: 0.72 }} />
               </label>
             ) : null}
 
@@ -1618,6 +1645,45 @@ export function ReferenceView() {
                   <TextInput value={fColor} onChange={setFColor} style={{ width: 140 }} />
                 </div>
               </label>
+            ) : null}
+
+            {kind === "event-statuses" ? (
+              <>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Цвет полоски на Гантте</span>
+                  <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                    <input
+                      type="color"
+                      value={/^#[0-9a-fA-F]{6}$/i.test(fColor) ? fColor : "#cccccc"}
+                      onChange={(e) => setFColor(e.target.value)}
+                    />
+                    <TextInput value={fColor} onChange={setFColor} placeholder="#RRGGBB или пусто" style={{ width: 160 }} />
+                    {fColor ? (
+                      <button type="button" className="btn btnGhost" onClick={() => setFColor("")}>
+                        Без полоски
+                      </button>
+                    ) : null}
+                  </div>
+                </label>
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span className="muted">Порядок</span>
+                  <NumberInput value={fSortOrder} onChange={setFSortOrder} step={10} style={{ width: 140 }} />
+                </label>
+                <SwitchToggle
+                  checked={fAllowsAutoInProgress}
+                  onChange={setFAllowsAutoInProgress}
+                  disabled={editId === "DELETED" || editId === "CANCELLED"}
+                  label="Автоперевод в «В работе»"
+                  hint="После наступления оперативного начала событие само перейдёт во «В работе». Для статусов «На согласовании» по умолчанию выключено."
+                />
+                <SwitchToggle
+                  checked={fManualOnly}
+                  onChange={setFManualOnly}
+                  disabled={editId === "DELETED"}
+                  label="Только вручную"
+                  hint="Не слать уведомление о просрочке без факта. Автоперевод в «В работе» для такого статуса всё равно задаётся переключателем выше."
+                />
+              </>
             ) : null}
 
             {kind === "shifts" ? (
@@ -1912,7 +1978,12 @@ export function ReferenceView() {
               </>
             ) : null}
 
-            <BoolToggle value={fIsActive} onChange={setFIsActive} />
+            <BoolToggle
+              value={fIsActive}
+              onChange={setFIsActive}
+              label={kind === "event-statuses" ? "показывать в форме" : undefined}
+              disabled={kind === "event-statuses" && editId === "DELETED"}
+            />
 
             <button
               className="btn btnPrimary"
@@ -1979,11 +2050,11 @@ export function ReferenceView() {
             <div className="muted">
               {search
                 ? "Попробуйте изменить запрос или очистить поиск."
-                : canMutate
-                  ? "Нажмите «Добавить», чтобы создать первую запись."
-                  : isReadOnlyCatalog
-                    ? "Системный справочник — записи только для просмотра."
-                  : "Обратитесь к администратору для наполнения справочника."}
+                : kind === "event-statuses"
+                  ? "Статусы создаются системой. Администратор может изменить название и цвет."
+                  : canMutate
+                    ? "Нажмите «Добавить», чтобы создать первую запись."
+                    : "Обратитесь к администратору для наполнения справочника."}
             </div>
           </div>
         ) : (
@@ -2111,12 +2182,21 @@ export function ReferenceView() {
                         {kind === "event-statuses" ? (
                           <>
                             <span className="refLink">
+                              Полоска Гантта: <strong>{row.color || "нет"}</strong>
+                            </span>
+                            <span className="refLink">
+                              Порядок: <strong>{row.sortOrder ?? "—"}</strong>
+                            </span>
+                            <span className="refLink">
                               В форме: <strong>{row.selectable ? "да" : "нет"}</strong>
                             </span>
                             <span className="refLink">
                               Авто «В работе»: <strong>{row.allowsAutoInProgress ? "да" : "нет"}</strong>
                             </span>
-                            {row.isSystem ? <span className="refLink">Системный</span> : null}
+                            <span className="refLink">
+                              Только вручную: <strong>{row.manualOnly ? "да" : "нет"}</strong>
+                            </span>
+                            {row.isSystem ? <span className="refLink">Код системный</span> : null}
                           </>
                         ) : null}
                         {(row as any).standsSummary ? (
@@ -2214,6 +2294,7 @@ export function ReferenceView() {
                                 </svg>
                               </button>
                             ) : null}
+                            {canCreateOrDelete ? (
                             <button
                               className="btn btnGhost refIconButton refBtnDanger"
                               onClick={() => {
@@ -2230,6 +2311,7 @@ export function ReferenceView() {
                                 <path d="M7 7l1 13h8l1-13" />
                               </svg>
                             </button>
+                            ) : null}
                           </>
                         ) : (
                           <span className="muted">только просмотр</span>

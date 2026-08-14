@@ -436,6 +436,7 @@ model User {
   activityLogs       UserActivityLog[]
   ownedReports       SavedReport[]         @relation("ReportOwner")
   reportShares       SavedReportShare[]
+  savedTableViews    SavedTableView[]
   notificationReads  AppNotificationRead[]
 
   @@index([isActive])
@@ -617,6 +618,24 @@ model EventType {
 
   events                 MaintenanceEvent[]
   placementPriorityRules PlacementPriorityRuleEventType[]
+}
+
+/// Редактируемые подписи и палитра статусов события. Код = enum EventStatus (логика планирования).
+model EventStatusCatalog {
+  code                 EventStatus @id
+  name                 String
+  /// hex полоски на Гантте, например #FFC182; пусто — без полоски
+  color                String?
+  sortOrder            Int         @default(0)
+  selectable           Boolean     @default(true)
+  /// После опер. начала автоматически переводить во «В работе»
+  allowsAutoInProgress Boolean     @default(false)
+  /// Автоматика не трогает (нет авто «В работе» и просрочки без факта)
+  manualOnly           Boolean     @default(false)
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  @@index([sortOrder])
 }
 
 model Workshop {
@@ -1316,4 +1335,22 @@ model SavedReportShare {
 
   @@id([reportId, userId])
   @@index([userId])
+}
+
+/// Именованный набор столбцов таблицы (порядок, видимость, ширины) на пользователя.
+model SavedTableView {
+  id        String   @id @default(uuid())
+  userId    String
+  tableKey  String
+  name      String
+  isActive  Boolean  @default(false)
+  /// { order: string[], hidden: string[], widths: Record<string, number> }
+  config    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tableKey, name])
+  @@index([userId, tableKey])
 }

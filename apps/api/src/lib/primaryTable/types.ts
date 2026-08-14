@@ -55,6 +55,8 @@ export type PrimaryQueryInput = {
   sort: PrimarySort[];
   cursor?: string;
   limit: number;
+  /** Если задан — выборка только этих событий (sandbox + не DELETED). */
+  eventIds?: string[];
   /** Если true — даты остаются ISO (для Excel Date-ячеек). По умолчанию — пользовательский формат. */
   rawDates?: boolean;
 };

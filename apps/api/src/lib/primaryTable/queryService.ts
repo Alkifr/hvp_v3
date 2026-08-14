@@ -138,38 +138,66 @@ export async function queryPrimaryTable(
   let cursor = decodeCursor(input.cursor);
   if (input.cursor && !cursor) throw Object.assign(new Error("INVALID_CURSOR"), { statusCode: 400 });
 
+  const eventIds = Array.from(new Set((input.eventIds ?? []).filter((id) => typeof id === "string" && id.length > 0)));
   const collected: Array<Record<string, unknown>> = [];
   const batchSize = Math.min(500, Math.max(input.limit * 3, 100));
   let exhausted = false;
 
-  while (collected.length <= input.limit && !exhausted) {
+  const [statusRows, aircraftTypes] = await Promise.all([
+    app.prisma.eventStatusCatalog.findMany({ select: { code: true, name: true } }),
+    app.prisma.aircraftType.findMany({ select: { id: true, bodyType: true } })
+  ]);
+  const statusNames = new Map<string, string>(
+    statusRows.map((row: { code: string; name: string }) => [row.code, row.name])
+  );
+  const bodyTypeByAircraftTypeId = new Map<string, string | null>(
+    aircraftTypes.map((row: { id: string; bodyType: string | null }) => [row.id, row.bodyType])
+  );
+
+  if (eventIds.length) {
     const events = await app.prisma.maintenanceEvent.findMany({
       where: {
         sandboxId,
         status: { not: EventStatus.DELETED },
-        startAt: { lt: input.to },
-        endAt: { gt: input.from },
-        ...(cursor
-          ? {
-              OR: [
-                { startAt: { gt: new Date(cursor.startAt) } },
-                { startAt: new Date(cursor.startAt), id: { gt: cursor.id } }
-              ]
-            }
-          : {})
+        id: { in: eventIds }
       },
-      include: EVENT_INCLUDE,
-      orderBy: [{ startAt: "asc" }, { id: "asc" }],
-      take: batchSize
+      include: EVENT_INCLUDE
     });
-    if (events.length < batchSize) exhausted = true;
-    if (!events.length) break;
-    const scannedLast = events.at(-1)!;
-    cursor = { startAt: scannedLast.startAt.toISOString(), id: scannedLast.id };
+    exhausted = true;
     for (const event of events) {
-      const row = toPrimaryTableRow(event);
+      const row = toPrimaryTableRow(event, statusNames, bodyTypeByAircraftTypeId);
       if (matches(row, input.conditions)) collected.push(row);
-      if (collected.length > input.limit) break;
+    }
+  } else {
+    while (collected.length <= input.limit && !exhausted) {
+      const events = await app.prisma.maintenanceEvent.findMany({
+        where: {
+          sandboxId,
+          status: { not: EventStatus.DELETED },
+          startAt: { lt: input.to },
+          endAt: { gt: input.from },
+          ...(cursor
+            ? {
+                OR: [
+                  { startAt: { gt: new Date(cursor.startAt) } },
+                  { startAt: new Date(cursor.startAt), id: { gt: cursor.id } }
+                ]
+              }
+            : {})
+        },
+        include: EVENT_INCLUDE,
+        orderBy: [{ startAt: "asc" }, { id: "asc" }],
+        take: batchSize
+      });
+      if (events.length < batchSize) exhausted = true;
+      if (!events.length) break;
+      const scannedLast = events.at(-1)!;
+      cursor = { startAt: scannedLast.startAt.toISOString(), id: scannedLast.id };
+      for (const event of events) {
+        const row = toPrimaryTableRow(event, statusNames, bodyTypeByAircraftTypeId);
+        if (matches(row, input.conditions)) collected.push(row);
+        if (collected.length > input.limit) break;
+      }
     }
   }
 
@@ -178,7 +206,7 @@ export async function queryPrimaryTable(
   const pageCursor = page.at(-1);
   sortRows(page, input.sort);
   const rows = page.map((row) => {
-    const projected: Record<string, unknown> = {};
+    const projected: Record<string, unknown> = { eventId: row.__eventId ?? null };
     for (const column of requestedColumns) {
       const value = row[column.key] ?? null;
       projected[column.key] =
