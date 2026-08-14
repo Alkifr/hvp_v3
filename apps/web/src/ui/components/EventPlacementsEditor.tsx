@@ -8,7 +8,6 @@ import {
   placementWarnings,
   type PlacementDraft
 } from "../../lib/placementDraft";
-import { DateTimeTextInput } from "./DateTimeTextInput";
 import { SingleSelectDropdown } from "./SingleSelectDropdown";
 import { SwitchToggle } from "./SwitchToggle";
 
@@ -108,8 +107,8 @@ export function EventPlacementsEditor(props: {
           </div>
         ) : (
           <div className="muted small">
-            Первый этап начинается, а последний заканчивается вместе с оперативным периодом события. Даты: 03012026 или
-            03.01.2026 14:00.
+            Первый этап начинается, а последний заканчивается вместе с оперативным периодом события. Дату и время можно
+            ввести вручную или выбрать в календаре.
           </div>
         )}
         <div className="evStagesList">
@@ -146,22 +145,24 @@ export function EventPlacementsEditor(props: {
                 <div className="evStageDates">
                   <label className="evField">
                     <span className="evFieldLabel">Начало</span>
-                    <DateTimeTextInput
+                    <input
                       className="evInput"
+                      type="datetime-local"
                       value={p.startAtLocal}
                       disabled={props.disabled}
                       aria-label={`Начало этапа ${item.index + 1}`}
-                      onChange={(startAtLocal) => props.onPatch(p.clientKey, { startAtLocal })}
+                      onChange={(e) => props.onPatch(p.clientKey, { startAtLocal: e.target.value })}
                     />
                   </label>
                   <label className="evField">
                     <span className="evFieldLabel">Окончание</span>
-                    <DateTimeTextInput
+                    <input
                       className="evInput"
+                      type="datetime-local"
                       value={p.endAtLocal}
                       disabled={props.disabled}
                       aria-label={`Окончание этапа ${item.index + 1}`}
-                      onChange={(endAtLocal) => props.onPatch(p.clientKey, { endAtLocal })}
+                      onChange={(e) => props.onPatch(p.clientKey, { endAtLocal: e.target.value })}
                     />
                   </label>
                 </div>
@@ -236,40 +237,44 @@ export function EventPlacementsEditor(props: {
                     <div className="evStageDates">
                       <label className="evField">
                         <span className="evFieldLabel">Бюджет: начало</span>
-                        <DateTimeTextInput
+                        <input
                           className="evInput"
+                          type="datetime-local"
                           value={p.budgetStartAtLocal}
                           disabled={props.disabled || props.planningKind === "UNPLANNED"}
-                          onChange={(budgetStartAtLocal) => props.onPatch(p.clientKey, { budgetStartAtLocal })}
+                          onChange={(e) => props.onPatch(p.clientKey, { budgetStartAtLocal: e.target.value })}
                         />
                       </label>
                       <label className="evField">
                         <span className="evFieldLabel">Бюджет: окончание</span>
-                        <DateTimeTextInput
+                        <input
                           className="evInput"
+                          type="datetime-local"
                           value={p.budgetEndAtLocal}
                           disabled={props.disabled || props.planningKind === "UNPLANNED"}
-                          onChange={(budgetEndAtLocal) => props.onPatch(p.clientKey, { budgetEndAtLocal })}
+                          onChange={(e) => props.onPatch(p.clientKey, { budgetEndAtLocal: e.target.value })}
                         />
                       </label>
                     </div>
                     <div className="evStageDates">
                       <label className="evField">
                         <span className="evFieldLabel">Факт: начало</span>
-                        <DateTimeTextInput
+                        <input
                           className="evInput"
+                          type="datetime-local"
                           value={p.actualStartAtLocal}
                           disabled={props.disabled}
-                          onChange={(actualStartAtLocal) => props.onPatch(p.clientKey, { actualStartAtLocal })}
+                          onChange={(e) => props.onPatch(p.clientKey, { actualStartAtLocal: e.target.value })}
                         />
                       </label>
                       <label className="evField">
                         <span className="evFieldLabel">Факт: окончание</span>
-                        <DateTimeTextInput
+                        <input
                           className="evInput"
+                          type="datetime-local"
                           value={p.actualEndAtLocal}
                           disabled={props.disabled}
-                          onChange={(actualEndAtLocal) => props.onPatch(p.clientKey, { actualEndAtLocal })}
+                          onChange={(e) => props.onPatch(p.clientKey, { actualEndAtLocal: e.target.value })}
                         />
                       </label>
                     </div>

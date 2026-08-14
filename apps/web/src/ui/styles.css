@@ -7245,6 +7245,11 @@ textarea {
   border-radius: 6px;
 }
 
+.evStagesPanel .evInput[type="datetime-local"] {
+  min-width: 0;
+  color-scheme: light;
+}
+
 .evStageExtraToggle {
   justify-self: start;
   border: 0;
