@@ -1503,7 +1503,7 @@ export function ReportBuilderPanel(props: Props) {
                 </tbody>
               </table>
               {runResult.truncated ? (
-                <div className="muted">Показаны первые 10 000 исходных строк</div>
+                <div className="muted">Показаны первые 10 000 исходных строк</div>
               ) : null}
             </div>
           ) : null}
