@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { assertPermission } from "../../lib/rbac.js";
-import { parseRecipients, sendMail, smtpConfigFromSettings } from "../../lib/mailer.js";
+import { sendMail, smtpConfigFromSettings } from "../../lib/mailer.js";
 
 const SETTINGS_ID = "default";
 
@@ -25,8 +25,6 @@ function serializeSettings(row: {
   smtpUser: string | null;
   smtpPass: string | null;
   mailFrom: string | null;
-  recipients: unknown;
-  subjectTemplate: string;
   updatedAt: Date;
 }) {
   return {
@@ -37,8 +35,6 @@ function serializeSettings(row: {
     smtpUser: row.smtpUser,
     hasPassword: Boolean(row.smtpPass && row.smtpPass.length > 0),
     mailFrom: row.mailFrom,
-    recipients: parseRecipients(row.recipients),
-    subjectTemplate: row.subjectTemplate,
     updatedAt: row.updatedAt
   };
 }
@@ -94,16 +90,11 @@ export const mailDigestRoutes: FastifyPluginAsync = async (app) => {
     if (!smtp) throw app.httpErrors.badRequest("Не настроен SMTP host");
     if (!settings.smtpPass) throw app.httpErrors.badRequest("Не задан SMTP пароль");
 
-    const recipients = parseRecipients(settings.recipients);
-    const to =
-      body.to?.trim().toLowerCase() ||
-      settings.smtpUser?.trim().toLowerCase() ||
-      recipients[0] ||
-      null;
-    if (!to) throw app.httpErrors.badRequest("Укажите адрес для теста или заполните SMTP user / получателей");
+    const to = body.to?.trim().toLowerCase() || settings.smtpUser?.trim().toLowerCase() || null;
+    if (!to) throw app.httpErrors.badRequest("Укажите адрес для теста или заполните SMTP user");
 
     const text = [
-      "Тестовое письмо HVP — email-дайджест изменений.",
+      "Тестовое письмо HVP — проверка SMTP для рассылки.",
       "",
       `Время: ${new Date().toISOString()}`,
       `SMTP: ${smtp.smtpHost}:${smtp.smtpPort} (secure=${smtp.smtpSecure})`
@@ -112,7 +103,7 @@ export const mailDigestRoutes: FastifyPluginAsync = async (app) => {
     try {
       const result = await sendMail(smtp, {
         to: [to],
-        subject: `[тест] ${settings.subjectTemplate || "Изменения плана ТО"}`,
+        subject: "[тест] SMTP HVP",
         text
       });
       return { ok: true, messageId: result.messageId, to };

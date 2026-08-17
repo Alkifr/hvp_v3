@@ -16,6 +16,7 @@ import { RmItpView } from "./pages/RmItpView";
 import { HelpView } from "./pages/HelpView";
 import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { NotificationBell } from "./components/NotificationBell";
+import { AnnouncementModal } from "./components/AnnouncementModal";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { authMe } from "./auth/authApi";
 import { getActiveSandboxId, setActiveSandboxId } from "../lib/api";
@@ -383,6 +384,7 @@ function AppShell(props: {
         {!isMobile && page === "mail" && canMail ? <MailDigestView /> : null}
         {page === "help" && <HelpView permissions={permissions} onNavigate={(p) => setPage(p as Page)} />}
       </main>
+      <AnnouncementModal />
     </div>
   );
 }

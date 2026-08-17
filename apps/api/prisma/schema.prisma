@@ -439,8 +439,10 @@ model User {
   presenceEvents     UserPresenceEvent[]
   ownedReports       SavedReport[]         @relation("ReportOwner")
   reportShares       SavedReportShare[]
-  savedTableViews    SavedTableView[]
-  notificationReads  AppNotificationRead[]
+  savedTableViews          SavedTableView[]
+  notificationReads        AppNotificationRead[]
+  authoredAnnouncements    AppAnnouncement[] @relation("AnnouncementAuthor")
+  announcementDismissals   AppAnnouncementDismissal[]
 
   @@index([isActive])
 }
@@ -1223,6 +1225,41 @@ model AppNotificationRead {
   @@index([userId, readAt])
 }
 
+/// Системные объявления админов: обновления, ограничения, приостановки на период.
+model AppAnnouncement {
+  id          String    @id @default(uuid())
+  /// UPDATE | CHANGE | MAINTENANCE | OUTAGE
+  kind        String
+  title       String
+  body        String
+  /// Начало периода ограничения/приостановки (информативно; показ сразу после публикации)
+  startsAt    DateTime?
+  /// Окончание периода: после этой даты объявление скрывается само
+  endsAt      DateTime?
+  isActive    Boolean   @default(true)
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  createdBy  User?                       @relation("AnnouncementAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  dismissals AppAnnouncementDismissal[]
+
+  @@index([isActive, createdAt])
+  @@index([endsAt])
+}
+
+model AppAnnouncementDismissal {
+  announcementId String
+  userId         String
+  dismissedAt    DateTime @default(now())
+
+  announcement AppAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([announcementId, userId])
+  @@index([userId])
+}
+
 model MaintenanceEventAudit {
   id        String           @id @default(uuid())
   eventId   String
@@ -1282,55 +1319,72 @@ model UserPresenceEvent {
   @@index([createdAt])
 }
 
-/// Singleton-настройки SMTP и получателей email-дайджеста изменений.
+/// Singleton SMTP. Содержание рассылок — в MailDigestVariant.
 model MailDigestSettings {
-  id              String   @id @default("default")
-  smtpHost        String?
-  smtpPort        Int      @default(465)
-  smtpSecure      Boolean  @default(true)
-  smtpUser        String?
-  smtpPass        String?
-  mailFrom        String?
+  id         String   @id @default("default")
+  smtpHost   String?
+  smtpPort   Int      @default(465)
+  smtpSecure Boolean  @default(true)
+  smtpUser   String?
+  smtpPass   String?
+  mailFrom   String?
+  updatedAt  DateTime @updatedAt
+}
+
+/// Сохранённый вариант рассылки (тема, период, колонки, получатели, расписание).
+model MailDigestVariant {
+  id               String   @id @default(uuid())
+  name             String
+  /// Тема письма; пустая — берётся name
+  subjectTemplate  String   @default("Изменения плана ТО")
+  description      String?
   /// string[] — список email получателей
-  recipients      Json     @default("[]")
-  /// Тема письма (= название рассылки)
-  subjectTemplate String   @default("Изменения плана ТО")
-  description     String?
+  recipients       Json     @default("[]")
   /// last1 | last7 | last30 | custom
-  periodMode      String   @default("last7")
+  periodMode       String   @default("last7")
   periodCustomFrom String?
   periodCustomTo   String?
   /// manual | daily | weekly | monthly
-  scheduleMode    String   @default("manual")
+  scheduleMode     String   @default("manual")
   /// HH:mm, время по МСК
-  scheduleTime    String   @default("09:00")
+  scheduleTime     String   @default("09:00")
   /// number[] ISO weekday 1=Пн … 7=Вс
-  scheduleWeekdays Json    @default("[1,2,3,4,5]")
-  scheduleMonthDay Int     @default(1)
-  isActive        Boolean  @default(true)
-  lastAutoSentAt  DateTime?
+  scheduleWeekdays Json     @default("[1,2,3,4,5]")
+  scheduleMonthDay Int      @default(1)
+  isActive         Boolean  @default(true)
+  lastAutoSentAt   DateTime?
   /// string[] — колонки письма (см. mailDigestColumns)
-  columns         Json     @default("[\"kind\",\"aircraftType\",\"aircraft\",\"title\",\"detail\",\"previous\"]")
-  updatedAt       DateTime @updatedAt
+  columns          Json     @default("[\"kind\",\"aircraftType\",\"aircraft\",\"title\",\"detail\",\"previous\"]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  sendLogs         MailDigestSendLog[]
+
+  @@index([updatedAt])
 }
 
 /// История отправок дайджеста (ручных и по расписанию).
 model MailDigestSendLog {
-  id         String   @id @default(uuid())
-  createdAt  DateTime @default(now())
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  variantId   String?
+  /// Снимок названия на момент отправки
+  variantName String?
   /// SENT | FAILED | EMPTY
-  status     String
+  status      String
   /// self | all | schedule
-  target     String
-  actorEmail String?
-  recipients Json     @default("[]")
-  subject    String
-  error      String?
-  stats      Json?
-  periodFrom DateTime?
-  periodTo   DateTime?
+  target      String
+  actorEmail  String?
+  recipients  Json     @default("[]")
+  subject     String
+  error       String?
+  stats       Json?
+  periodFrom  DateTime?
+  periodTo    DateTime?
+
+  variant MailDigestVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
+  @@index([variantId, createdAt])
 }
 
 model StandReservation {

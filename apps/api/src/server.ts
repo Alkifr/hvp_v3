@@ -21,6 +21,7 @@ import { reportRoutes } from "./routes/reports.js";
 import { primaryTableRoutes } from "./routes/primaryTable.js";
 import { tableViewRoutes } from "./routes/tableViews.js";
 import { notificationsRoutes } from "./routes/notifications.js";
+import { announcementRoutes } from "./routes/announcements.js";
 import { presenceRoutes } from "./routes/presence.js";
 import { mailDigestComposeRoutes } from "./routes/mailDigest.js";
 import { runEventStatusMaintenance } from "./lib/eventMaintenance.js";
@@ -56,6 +57,7 @@ export async function buildServer() {
   await app.register(reportRoutes, { prefix: "/api/reports" });
   await app.register(tableViewRoutes, { prefix: "/api/table-views" });
   await app.register(notificationsRoutes, { prefix: "/api/notifications" });
+  await app.register(announcementRoutes, { prefix: "/api/announcements" });
   await app.register(presenceRoutes, { prefix: "/api/presence" });
   await app.register(mailDigestComposeRoutes, { prefix: "/api/mail-digest" });
   await app.register(adminRoutes, { prefix: "/api/admin" });

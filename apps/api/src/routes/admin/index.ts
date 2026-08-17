@@ -10,9 +10,11 @@ import { queryActivityFeed } from "../../lib/activityFeed.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { queryPresenceHeatmap } from "../../lib/userPresence.js";
 import { mailDigestRoutes } from "./mailDigest.js";
+import { announcementAdminRoutes } from "./announcements.js";
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
   await app.register(mailDigestRoutes);
+  await app.register(announcementAdminRoutes);
 
   // Журнал активности по всем пользователям (или фильтр по email)
   app.get("/activity", async (req) => {

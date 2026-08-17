@@ -18,6 +18,7 @@ import {
 } from "../lib/mailDigestPeriod.js";
 import { dispatchChangeDigest } from "../lib/mailDigestSend.js";
 import {
+  DEFAULT_DIGEST_COLUMNS,
   DIGEST_COLUMN_CATALOG,
   DIGEST_COLUMN_KEYS,
   parseDigestColumns
@@ -26,6 +27,7 @@ import {
 const SETTINGS_ID = "default";
 const zEmail = z.string().trim().email().max(200);
 const zYmd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const zUuid = z.string().uuid();
 
 function assertCanCompose(req: unknown) {
   assertAnyPermission(req as any, ["mail:send", "admin:mail"]);
@@ -39,10 +41,16 @@ async function ensureSettings(prisma: any) {
   });
 }
 
-function serializeCompose(row: {
-  recipients: unknown;
+function smtpReadyOf(row: { smtpHost: string | null; smtpPass: string | null }) {
+  return Boolean(row.smtpHost?.trim() && row.smtpPass);
+}
+
+function serializeVariant(row: {
+  id: string;
+  name: string;
   subjectTemplate: string;
   description: string | null;
+  recipients: unknown;
   periodMode: string;
   periodCustomFrom: string | null;
   periodCustomTo: string | null;
@@ -53,14 +61,15 @@ function serializeCompose(row: {
   isActive: boolean;
   lastAutoSentAt: Date | null;
   columns: unknown;
-  smtpHost: string | null;
-  smtpPass: string | null;
-  mailFrom: string | null;
+  createdAt: Date;
+  updatedAt: Date;
 }) {
   return {
-    recipients: parseRecipients(row.recipients),
+    id: row.id,
+    name: row.name,
     subjectTemplate: row.subjectTemplate,
     description: row.description ?? "",
+    recipients: parseRecipients(row.recipients),
     periodMode: parseDigestPeriodMode(row.periodMode),
     periodCustomFrom: row.periodCustomFrom,
     periodCustomTo: row.periodCustomTo,
@@ -71,9 +80,8 @@ function serializeCompose(row: {
     isActive: row.isActive,
     lastAutoSentAt: row.lastAutoSentAt?.toISOString() ?? null,
     columns: parseDigestColumns(row.columns),
-    columnCatalog: DIGEST_COLUMN_CATALOG,
-    mailFrom: row.mailFrom,
-    smtpReady: Boolean(row.smtpHost?.trim() && row.smtpPass)
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString()
   };
 }
 
@@ -86,7 +94,29 @@ const zPeriodBody = z.object({
   columns: z.array(z.enum(DIGEST_COLUMN_KEYS)).min(1).max(DIGEST_COLUMN_KEYS.length).optional()
 });
 
-function periodFromBody(body: z.infer<typeof zPeriodBody>, settings: { periodMode: string; periodCustomFrom: string | null; periodCustomTo: string | null }) {
+const zVariantWrite = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  subjectTemplate: z.string().trim().min(1).max(300).optional(),
+  description: z.string().max(2000).nullable().optional(),
+  recipients: z.array(zEmail).max(200).optional(),
+  periodMode: z.enum(DIGEST_PERIOD_MODES).optional(),
+  periodCustomFrom: zYmd.nullable().optional(),
+  periodCustomTo: zYmd.nullable().optional(),
+  scheduleMode: z.enum(DIGEST_SCHEDULE_MODES).optional(),
+  scheduleTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .optional(),
+  scheduleWeekdays: z.array(z.number().int().min(1).max(7)).max(7).optional(),
+  scheduleMonthDay: z.number().int().min(1).max(28).optional(),
+  isActive: z.boolean().optional(),
+  columns: z.array(z.enum(DIGEST_COLUMN_KEYS)).min(1).max(DIGEST_COLUMN_KEYS.length).optional()
+});
+
+function periodFromBody(
+  body: z.infer<typeof zPeriodBody>,
+  settings: { periodMode: string; periodCustomFrom: string | null; periodCustomTo: string | null }
+) {
   if (body.from && body.to) {
     if (!(body.to > body.from)) throw Object.assign(new Error(UserMsg.END_AFTER_START), { statusCode: 400 });
     return { from: body.from, to: body.to };
@@ -98,43 +128,169 @@ function periodFromBody(body: z.infer<typeof zPeriodBody>, settings: { periodMod
   });
 }
 
+function serializeLog(row: {
+  id: string;
+  createdAt: Date;
+  variantId: string | null;
+  variantName: string | null;
+  status: string;
+  target: string;
+  actorEmail: string | null;
+  recipients: unknown;
+  subject: string;
+  error: string | null;
+  stats: unknown;
+  periodFrom: Date | null;
+  periodTo: Date | null;
+}) {
+  return {
+    id: row.id,
+    createdAt: row.createdAt.toISOString(),
+    variantId: row.variantId,
+    variantName: row.variantName,
+    status: row.status,
+    target: row.target,
+    actorEmail: row.actorEmail,
+    recipients: parseRecipients(row.recipients),
+    subject: row.subject,
+    error: row.error,
+    stats: row.stats,
+    periodFrom: row.periodFrom?.toISOString() ?? null,
+    periodTo: row.periodTo?.toISOString() ?? null
+  };
+}
+
+async function getVariantOrThrow(app: { prisma: any; httpErrors: { notFound: (m: string) => Error } }, id: string) {
+  const row = await app.prisma.mailDigestVariant.findUnique({ where: { id } });
+  if (!row) throw app.httpErrors.notFound("Вариант рассылки не найден");
+  return row;
+}
+
+function defaultVariantName(existingCount: number) {
+  return existingCount <= 0 ? "Изменения плана ТО" : `Рассылка ${existingCount + 1}`;
+}
+
 export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
-  app.get("/compose", async (req) => {
+  app.get("/", async (req) => {
     assertCanCompose(req);
-    const row = await ensureSettings(app.prisma);
-    return serializeCompose(row);
+    const settings = await ensureSettings(app.prisma);
+    const [variants, sentCount] = await Promise.all([
+      app.prisma.mailDigestVariant.findMany({
+        orderBy: { updatedAt: "desc" },
+        include: {
+          sendLogs: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: { createdAt: true, status: true, target: true }
+          }
+        }
+      }),
+      app.prisma.mailDigestSendLog.count({ where: { status: "SENT" } })
+    ]);
+
+    return {
+      smtpReady: smtpReadyOf(settings),
+      mailFrom: settings.mailFrom,
+      columnCatalog: DIGEST_COLUMN_CATALOG,
+      sentCount,
+      variants: variants.map((row) => {
+        const last = row.sendLogs[0];
+        return {
+          ...serializeVariant(row),
+          lastSendAt: last?.createdAt.toISOString() ?? null,
+          lastSendStatus: last?.status ?? null,
+          lastSendTarget: last?.target ?? null
+        };
+      })
+    };
   });
 
-  app.put("/compose", async (req) => {
+  app.post("/", async (req) => {
     assertCanCompose(req);
-    const body = z
-      .object({
-        recipients: z.array(zEmail).max(200).optional(),
-        subjectTemplate: z.string().trim().min(1).max(300).optional(),
-        description: z.string().max(2000).nullable().optional(),
-        periodMode: z.enum(DIGEST_PERIOD_MODES).optional(),
-        periodCustomFrom: zYmd.nullable().optional(),
-        periodCustomTo: zYmd.nullable().optional(),
-        scheduleMode: z.enum(DIGEST_SCHEDULE_MODES).optional(),
-        scheduleTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
-        scheduleWeekdays: z.array(z.number().int().min(1).max(7)).max(7).optional(),
-        scheduleMonthDay: z.number().int().min(1).max(28).optional(),
-        isActive: z.boolean().optional(),
-        columns: z.array(z.enum(DIGEST_COLUMN_KEYS)).min(1).max(DIGEST_COLUMN_KEYS.length).optional()
-      })
-      .parse(req.body ?? {});
+    const body = zVariantWrite.parse(req.body ?? {});
+    const count = await app.prisma.mailDigestVariant.count();
+    const scheduleMode = body.scheduleMode ? parseDigestScheduleMode(body.scheduleMode) : "manual";
+    const weekdays = body.scheduleWeekdays !== undefined ? parseWeekdays(body.scheduleWeekdays) : [1, 2, 3, 4, 5];
+    if (scheduleMode === "weekly" && weekdays.length === 0) {
+      throw app.httpErrors.badRequest("Выберите хотя бы один день недели");
+    }
+    const name = (body.name?.trim() || defaultVariantName(count)).slice(0, 200);
+    const created = await app.prisma.mailDigestVariant.create({
+      data: {
+        name,
+        subjectTemplate: (body.subjectTemplate?.trim() || name).slice(0, 300),
+        description: body.description?.trim() || null,
+        recipients: body.recipients?.map((e) => e.trim().toLowerCase()) ?? [],
+        periodMode: scheduleMode !== "manual" && body.periodMode === "custom" ? "last7" : (body.periodMode ?? "last7"),
+        periodCustomFrom: body.periodCustomFrom ?? null,
+        periodCustomTo: body.periodCustomTo ?? null,
+        scheduleMode,
+        scheduleTime: body.scheduleTime ?? "09:00",
+        scheduleWeekdays: weekdays,
+        scheduleMonthDay: body.scheduleMonthDay ?? 1,
+        isActive: body.isActive ?? true,
+        columns: parseDigestColumns(body.columns ?? DEFAULT_DIGEST_COLUMNS)
+      }
+    });
+    return serializeVariant(created);
+  });
 
-    const existing = await ensureSettings(app.prisma);
+  app.get("/history", async (req) => {
+    assertCanCompose(req);
+    const q = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).optional(),
+        variantId: zUuid.optional(),
+        status: z.enum(["SENT", "FAILED", "EMPTY"]).optional(),
+        target: z.enum(["self", "all", "schedule", "manual"]).optional()
+      })
+      .parse(req.query ?? {});
+    const rows = await app.prisma.mailDigestSendLog.findMany({
+      where: {
+        ...(q.variantId ? { variantId: q.variantId } : {}),
+        ...(q.status ? { status: q.status } : {}),
+        ...(q.target === "manual"
+          ? { target: { in: ["self", "all"] } }
+          : q.target
+            ? { target: q.target }
+            : {})
+      },
+      orderBy: { createdAt: "desc" },
+      take: q.limit ?? 80
+    });
+    return { items: rows.map(serializeLog) };
+  });
+
+  app.get("/:id", async (req) => {
+    assertCanCompose(req);
+    const { id } = z.object({ id: zUuid }).parse(req.params);
+    const row = await getVariantOrThrow(app, id);
+    const settings = await ensureSettings(app.prisma);
+    return {
+      ...serializeVariant(row),
+      columnCatalog: DIGEST_COLUMN_CATALOG,
+      mailFrom: settings.mailFrom,
+      smtpReady: smtpReadyOf(settings)
+    };
+  });
+
+  app.put("/:id", async (req) => {
+    assertCanCompose(req);
+    const { id } = z.object({ id: zUuid }).parse(req.params);
+    const body = zVariantWrite.parse(req.body ?? {});
+    const existing = await getVariantOrThrow(app, id);
     const scheduleMode = body.scheduleMode ?? parseDigestScheduleMode(existing.scheduleMode);
-    const weekdays = body.scheduleWeekdays !== undefined ? parseWeekdays(body.scheduleWeekdays) : parseWeekdays(existing.scheduleWeekdays);
+    const weekdays =
+      body.scheduleWeekdays !== undefined ? parseWeekdays(body.scheduleWeekdays) : parseWeekdays(existing.scheduleWeekdays);
     if (scheduleMode === "weekly" && weekdays.length === 0) {
       throw app.httpErrors.badRequest("Выберите хотя бы один день недели");
     }
 
     const data: Record<string, unknown> = {};
-    if (body.recipients !== undefined) data.recipients = body.recipients.map((e) => e.trim().toLowerCase());
+    if (body.name !== undefined) data.name = body.name.trim();
     if (body.subjectTemplate !== undefined) data.subjectTemplate = body.subjectTemplate.trim();
     if (body.description !== undefined) data.description = body.description?.trim() || null;
+    if (body.recipients !== undefined) data.recipients = body.recipients.map((e) => e.trim().toLowerCase());
     if (body.periodMode !== undefined) {
       data.periodMode = scheduleMode !== "manual" && body.periodMode === "custom" ? "last7" : body.periodMode;
     }
@@ -147,31 +303,38 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
     if (body.isActive !== undefined) data.isActive = body.isActive;
     if (body.columns !== undefined) data.columns = parseDigestColumns(body.columns);
 
-    const updated = await app.prisma.mailDigestSettings.update({
-      where: { id: existing.id },
-      data
-    });
-    return serializeCompose(updated);
+    const updated = await app.prisma.mailDigestVariant.update({ where: { id: existing.id }, data });
+    return serializeVariant(updated);
   });
 
-  app.post("/preview", async (req) => {
+  app.delete("/:id", async (req) => {
     assertCanCompose(req);
+    const { id } = z.object({ id: zUuid }).parse(req.params);
+    await getVariantOrThrow(app, id);
+    await app.prisma.mailDigestVariant.delete({ where: { id } });
+    return { ok: true as const };
+  });
+
+  app.post("/:id/preview", async (req) => {
+    assertCanCompose(req);
+    const { id } = z.object({ id: zUuid }).parse(req.params);
     const body = zPeriodBody.parse(req.body ?? {});
-    const settings = await ensureSettings(app.prisma);
+    const variant = await getVariantOrThrow(app, id);
     let period: { from: Date; to: Date };
     try {
-      period = periodFromBody(body, settings);
+      period = periodFromBody(body, variant);
     } catch (e: any) {
       throw app.httpErrors.badRequest(e?.message || UserMsg.VALIDATION);
     }
     return await buildChangeDigest(app.prisma, {
       ...period,
-      columns: body.columns ?? settings.columns
+      columns: body.columns ?? variant.columns
     });
   });
 
-  app.post("/send", async (req) => {
+  app.post("/:id/send", async (req) => {
     assertCanCompose(req);
+    const { id } = z.object({ id: zUuid }).parse(req.params);
     const body = zPeriodBody
       .extend({
         text: z.string().max(200_000).optional(),
@@ -182,10 +345,11 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.body ?? {});
 
+    const variant = await getVariantOrThrow(app, id);
     const settings = await ensureSettings(app.prisma);
     let period: { from: Date; to: Date };
     try {
-      period = periodFromBody(body, settings);
+      period = periodFromBody(body, variant);
     } catch (e: any) {
       throw app.httpErrors.badRequest(e?.message || UserMsg.VALIDATION);
     }
@@ -197,16 +361,15 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
         ? selfEmail
           ? [selfEmail]
           : []
-        : (body.recipients?.length ? body.recipients : parseRecipients(settings.recipients)).map((e) =>
-            e.trim().toLowerCase()
-          );
+        : (body.recipients?.length ? body.recipients : parseRecipients(variant.recipients)).map((e) => e.trim().toLowerCase());
 
     const result = await dispatchChangeDigest(app.prisma, {
-      settings,
+      smtp: settings,
+      variant,
       from: period.from,
       to: period.to,
       recipients,
-      subject: body.subject?.trim() || settings.subjectTemplate,
+      subject: body.subject?.trim() || variant.subjectTemplate || variant.name,
       text: body.text,
       html: body.html,
       columns: body.columns,
@@ -218,33 +381,5 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(result.error || "Не удалось отправить письмо");
     }
     return { ok: true as const, messageId: result.messageId, recipients: result.recipients, subject: result.subject };
-  });
-
-  app.get("/history", async (req) => {
-    assertCanCompose(req);
-    const q = z
-      .object({
-        limit: z.coerce.number().int().min(1).max(100).optional()
-      })
-      .parse(req.query ?? {});
-    const rows = await app.prisma.mailDigestSendLog.findMany({
-      orderBy: { createdAt: "desc" },
-      take: q.limit ?? 40
-    });
-    return {
-      items: rows.map((row) => ({
-        id: row.id,
-        createdAt: row.createdAt.toISOString(),
-        status: row.status,
-        target: row.target,
-        actorEmail: row.actorEmail,
-        recipients: parseRecipients(row.recipients),
-        subject: row.subject,
-        error: row.error,
-        stats: row.stats,
-        periodFrom: row.periodFrom?.toISOString() ?? null,
-        periodTo: row.periodTo?.toISOString() ?? null
-      }))
-    };
   });
 };

@@ -8,7 +8,7 @@
     "build": "prisma generate --schema prisma/schema.prisma && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint .",
-    "test": "node --import tsx --test src/lib/primaryTable/*.test.ts src/lib/placementGaps.test.ts src/lib/reportAggregates.test.ts src/lib/reportPresets.test.ts src/lib/userErrors.test.ts src/lib/userPresence.test.ts src/lib/mailDigestPeriod.test.ts src/lib/mailDigestColumns.test.ts src/lib/bootEnv.test.ts src/lib/primaryMetricDepartments.test.ts src/lib/digestClaim.test.ts src/lib/webDist.test.ts",
+    "test": "node --import tsx --test src/lib/primaryTable/*.test.ts src/lib/placementGaps.test.ts src/lib/reportAggregates.test.ts src/lib/reportPresets.test.ts src/lib/userErrors.test.ts src/lib/userPresence.test.ts src/lib/mailDigestPeriod.test.ts src/lib/mailDigestColumns.test.ts src/lib/bootEnv.test.ts src/lib/primaryMetricDepartments.test.ts src/lib/digestClaim.test.ts src/lib/webDist.test.ts src/lib/announcements.test.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",

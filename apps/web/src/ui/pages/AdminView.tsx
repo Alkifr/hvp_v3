@@ -8,6 +8,7 @@ import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import type { SandboxSummary } from "../components/SandboxSwitcher";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { formatPresenceWhen, UserPresencePanel } from "../components/UserPresencePanel";
+import { AdminAnnouncementsPanel } from "./AdminAnnouncementsPanel";
 
 type Role = { id: string; code: string; name: string; isSystem: boolean; permissions: { permission: Permission }[] };
 type Permission = { id: string; code: string; name: string };
@@ -48,7 +49,7 @@ type MailDigestSettings = {
   updatedAt: string;
 };
 
-type AdminTab = "users" | "roles" | "activity" | "presence" | "cleanup" | "mail";
+type AdminTab = "users" | "roles" | "activity" | "presence" | "announce" | "cleanup" | "mail";
 type AdminUserFilter = "all" | "active" | "inactive" | "password";
 
 type AdminUser = {
@@ -137,6 +138,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     if (canRoles) tabs.push({ id: "roles", label: "Роли" });
     if (canUsers) tabs.push({ id: "activity", label: "Журнал" });
     if (canUsers) tabs.push({ id: "presence", label: "Присутствие" });
+    if (canUsers) tabs.push({ id: "announce", label: "Уведомления" });
     if (canMail) tabs.push({ id: "mail", label: "Почта SMTP" });
     if (canCleanup) tabs.push({ id: "cleanup", label: "Особые функции" });
     return tabs;
@@ -697,6 +699,8 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           onSelectUser={setPresenceUserId}
         />
       ) : null}
+
+      {activeTab === "announce" && canUsers ? <AdminAnnouncementsPanel /> : null}
 
       {activeTab === "mail" && canMail ? (
         <section className="card adminPanel">

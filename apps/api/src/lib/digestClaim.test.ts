@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { startOfMskDay } from "./mailDigestPeriod.js";
-import { canClaimDigestSlot } from "./digestClaim.js";
+import { canClaimDigestSlot, digestVariantLockKey } from "./digestClaim.js";
 
 test("canClaimDigestSlot allows first send of the MSK day", () => {
   const now = new Date("2026-08-17T10:00:00.000Z");
@@ -16,4 +16,12 @@ test("canClaimDigestSlot rejects a second send the same MSK day", () => {
   const todayStart = startOfMskDay(now);
   assert.equal(canClaimDigestSlot(todayStart, now), false);
   assert.equal(canClaimDigestSlot(new Date("2026-08-17T06:05:00.000Z"), now), false);
+});
+
+test("digestVariantLockKey is stable and distinct", () => {
+  const a = digestVariantLockKey("11111111-1111-4111-8111-111111111111");
+  const b = digestVariantLockKey("22222222-2222-4222-8222-222222222222");
+  assert.equal(a, digestVariantLockKey("11111111-1111-4111-8111-111111111111"));
+  assert.notEqual(a, b);
+  assert.equal(Number.isInteger(a), true);
 });
