@@ -66,3 +66,14 @@ test("serializeUserError: Zod issues become a field-level user message", () => {
   assert.equal(out.notifyAdmins, false);
   assert.match(out.message, /Дата окончания|поля/i);
 });
+
+test("serializeUserError: Prisma unique conflict without generated class", () => {
+  const err = Object.assign(new Error("Unique constraint failed"), {
+    name: "PrismaClientKnownRequestError",
+    code: "P2002"
+  });
+  const out = serializeUserError(err);
+  assert.equal(out.statusCode, 409);
+  assert.equal(out.code, "RECORD_CONFLICT");
+  assert.equal(out.notifyAdmins, false);
+});

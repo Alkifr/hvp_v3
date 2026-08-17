@@ -264,15 +264,36 @@ function isZodError(err: unknown): err is z.ZodError {
   return err instanceof z.ZodError || (err != null && typeof err === "object" && (err as { name?: string }).name === "ZodError");
 }
 
+function isConstructedAs(err: unknown, ctor: unknown): boolean {
+  return typeof ctor === "function" && err instanceof (ctor as new (...args: never[]) => object);
+}
+
+function prismaKnownCode(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  if (isConstructedAs(err, Prisma.PrismaClientKnownRequestError)) {
+    const code = (err as { code?: string }).code;
+    return typeof code === "string" ? code : null;
+  }
+  const rec = err as { name?: string; code?: string };
+  if (rec.name === "PrismaClientKnownRequestError" && typeof rec.code === "string") return rec.code;
+  return null;
+}
+
+function isPrismaValidationError(err: unknown): err is { message: string } {
+  if (isConstructedAs(err, Prisma.PrismaClientValidationError)) return true;
+  return Boolean(err && typeof err === "object" && (err as { name?: string }).name === "PrismaClientValidationError");
+}
+
 function prismaUserError(err: unknown): SerializedUserError | null {
-  if (err instanceof Prisma.PrismaClientKnownRequestError) {
-    if (err.code === "P2002") {
+  const code = prismaKnownCode(err);
+  if (code) {
+    if (code === "P2002") {
       return { statusCode: 409, code: "RECORD_CONFLICT", message: UserMsg.RECORD_CONFLICT, notifyAdmins: false };
     }
-    if (err.code === "P2003") {
+    if (code === "P2003") {
       return { statusCode: 409, code: "RECORD_IN_USE", message: UserMsg.RECORD_IN_USE, notifyAdmins: false };
     }
-    if (err.code === "P2025") {
+    if (code === "P2025") {
       return { statusCode: 404, code: "RECORD_NOT_FOUND", message: UserMsg.RECORD_NOT_FOUND, notifyAdmins: false };
     }
     return {
@@ -280,10 +301,10 @@ function prismaUserError(err: unknown): SerializedUserError | null {
       code: "INTERNAL",
       message: UserMsg.INTERNAL,
       notifyAdmins: true,
-      adminDetail: `Prisma ${err.code}: ${err.message}`
+      adminDetail: `Prisma ${code}: ${(err as { message?: string }).message ?? ""}`
     };
   }
-  if (err instanceof Prisma.PrismaClientValidationError) {
+  if (isPrismaValidationError(err)) {
     return {
       statusCode: 500,
       code: "INTERNAL",
