@@ -77,9 +77,7 @@ export function AnnouncementModal() {
       document.body.style.overflow = prev;
       document.removeEventListener("keydown", onKey);
     };
-    // mutate is stable; re-bind only when the shown announcement changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentId]);
+  }, [currentId, dismissM.mutate]);
 
   const period = useMemo(
     () => (current ? formatAnnouncementPeriod(current.startsAt, current.endsAt) : null),
