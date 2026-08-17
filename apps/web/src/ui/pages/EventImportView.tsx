@@ -80,7 +80,7 @@ function validateImportRowsShape(rows: any[]): string | null {
     `В шапке нет колонок: ${missing.join(", ")}.`
   ];
   if (looksLikeMassPlan) {
-    parts.push("Похоже, это файл массового планирования — откройте раздел «Массовое планирование».");
+    parts.push("Похоже, это файл массового планирования — перейдите на вкладку «Массовое планирование».");
   } else {
     parts.push(
       "Нужны колонки: Aircraft, Event_name, startAt, endAt (также можно Operator, AircraftType, Event_Title, Hangar, HangarStand, laborBudget_*/laborMps_*/laborActual_*)."
@@ -89,7 +89,7 @@ function validateImportRowsShape(rows: any[]): string | null {
   return parts.join(" ");
 }
 
-export function EventImportView() {
+export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: () => void }) {
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
 
@@ -181,23 +181,27 @@ export function EventImportView() {
     importError ||
     String(((previewM.error ?? importM.error) as { message?: unknown } | null)?.message ?? previewM.error ?? importM.error);
 
+  const looksLikeMassPlanError = Boolean(importError && /массового планирования/i.test(importError));
+
   return (
     <div className="eventImportPage">
-      <section className="massHero">
-        <div className="massHeroText">
-          <div className="massEyebrow">Загрузка данных</div>
-          <h1>Импорт событий</h1>
-          <p>
-            Загружайте события из Excel/CSV, проверяйте сопоставления и конфликты в предпросмотре, затем переносите строки
-            в текущий рабочий контур или активную песочницу.
-          </p>
-        </div>
-        <div className="massHeroStats" aria-label="Параметры импорта">
-          <span><b>{importRows?.length ?? 0}</b> строк</span>
-          <span><b>{activeSandbox ? "Песочница" : "Рабочий контур"}</b></span>
-          <span><b>{importResult ? "Есть предпросмотр" : "Ожидает файл"}</b></span>
-        </div>
-      </section>
+      {props.hideHero ? null : (
+        <section className="massHero">
+          <div className="massHeroText">
+            <div className="massEyebrow">Загрузка данных</div>
+            <h1>Импорт событий</h1>
+            <p>
+              Загружайте события из Excel/CSV, проверяйте сопоставления и конфликты в предпросмотре, затем переносите строки
+              в текущий рабочий контур или активную песочницу.
+            </p>
+          </div>
+          <div className="massHeroStats" aria-label="Параметры импорта">
+            <span><b>{importRows?.length ?? 0}</b> строк</span>
+            <span><b>{activeSandbox ? "Песочница" : "Рабочий контур"}</b></span>
+            <span><b>{importResult ? "Есть предпросмотр" : "Ожидает файл"}</b></span>
+          </div>
+        </section>
+      )}
 
       <div className="card" style={{ display: "grid", gap: 10 }}>
         <div className="muted">
@@ -308,6 +312,13 @@ export function EventImportView() {
           <div className="eventImportErrorBanner" role="alert">
             <strong>{errorTitle}</strong>
             <div>{errorText}</div>
+            {looksLikeMassPlanError && props.onOpenMassPlan ? (
+              <div>
+                <button type="button" className="btn btnGhost" onClick={props.onOpenMassPlan}>
+                  Открыть массовое планирование
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
 

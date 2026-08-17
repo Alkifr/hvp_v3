@@ -5,6 +5,7 @@ import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { DONE_SCHEDULE_LOCK_MESSAGE, isDoneScheduleLocked } from "../../lib/eventStatus.js";
+import { UserMsg } from "../../lib/userErrors.js";
 import {
   assertChangeReasonIfNeeded,
   canWriteInContext,
@@ -175,7 +176,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     const event = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req) }
     });
-    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     if (isDoneScheduleLocked(event.status)) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }
@@ -188,7 +189,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     const startAt = body.startAt ?? event.startAt;
     const endAt = body.endAt ?? event.endAt;
     if (endAt <= startAt) {
-      throw app.httpErrors.badRequest("endAt must be after startAt");
+      throw app.httpErrors.badRequest(UserMsg.END_AFTER_START);
     }
 
     if (!body.allowOverlap) {
@@ -220,7 +221,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       where: { id: body.standId, layoutId: body.layoutId },
       select: { id: true }
     });
-    if (!stand) throw app.httpErrors.badRequest("Stand does not belong to selected layout");
+    if (!stand) throw app.httpErrors.badRequest(UserMsg.STAND_NOT_IN_LAYOUT);
 
     if (!body.allowOverlap) {
       const layoutConflict = await findLayoutConflict(app.prisma, {
@@ -270,7 +271,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       req,
       changed,
       body.changeReason,
-      "changeReason is required when changing reservation"
+      UserMsg.CHANGE_REASON_REQUIRED
     );
 
     await app.prisma.maintenanceEventAudit.create({
@@ -326,7 +327,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.body);
 
-    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required for drag-and-drop move");
+    assertChangeReasonIfNeeded(req, true, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
 
     const bump = Boolean(body.bumpOnConflict);
     const sbId = sandboxIdFor(req);
@@ -336,7 +337,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         where: { id: body.eventId, sandboxId: sbId },
         include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
       });
-      if (!event) throw app.httpErrors.notFound("Event not found");
+      if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
       if (isDoneScheduleLocked(event.status)) {
         throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
       }
@@ -349,7 +350,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         where: { id: body.standId, layoutId: body.layoutId },
         select: { id: true }
       });
-      if (!stand) throw app.httpErrors.badRequest("Stand does not belong to selected layout");
+      if (!stand) throw app.httpErrors.badRequest(UserMsg.STAND_NOT_IN_LAYOUT);
 
       const startAt = event.startAt;
       const endAt = event.endAt;
@@ -520,10 +521,10 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         bumpedEventId: zUuid.optional(),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
-      .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .refine((v) => v.endAt > v.startAt, { message: UserMsg.END_AFTER_START })
       .parse(req.body);
 
-    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required for drag-and-drop move");
+    assertChangeReasonIfNeeded(req, true, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
 
     const bump = Boolean(body.bumpOnConflict);
     const sbId = sandboxIdFor(req);
@@ -533,7 +534,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         where: { id: body.eventId, sandboxId: sbId },
         include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
       });
-      if (!event) throw app.httpErrors.notFound("Event not found");
+      if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
       if (isDoneScheduleLocked(event.status)) {
         throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
       }
@@ -546,7 +547,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         where: { id: body.standId, layoutId: body.layoutId },
         select: { id: true }
       });
-      if (!stand) throw app.httpErrors.badRequest("Stand does not belong to selected layout");
+      if (!stand) throw app.httpErrors.badRequest(UserMsg.STAND_NOT_IN_LAYOUT);
 
       const layoutConflict = await findLayoutConflict(tx, {
         sandboxId: sbId,
@@ -711,10 +712,10 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         endAt: zDateTime,
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
-      .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .refine((v) => v.endAt > v.startAt, { message: UserMsg.END_AFTER_START })
       .parse(req.body);
 
-    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required for drag-and-drop move");
+    assertChangeReasonIfNeeded(req, true, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
 
     const sbId = sandboxIdFor(req);
 
@@ -723,7 +724,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         where: { id: body.eventId, sandboxId: sbId },
         include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
       });
-      if (!event) throw app.httpErrors.notFound("Event not found");
+      if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
       if (isDoneScheduleLocked(event.status)) {
         throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
       }
@@ -890,10 +891,10 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         /** Смещение длительности сохраняется per-event; startAt/endAt — якорь лидера. */
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
-      .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .refine((v) => v.endAt > v.startAt, { message: UserMsg.END_AFTER_START })
       .parse(req.body);
 
-    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required for drag-and-drop move");
+    assertChangeReasonIfNeeded(req, true, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
 
     const sbId = sandboxIdFor(req);
     const uniqueIds = Array.from(new Set(body.eventIds));
@@ -905,7 +906,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           where: { id: { in: uniqueIds }, sandboxId: sbId },
           include: { reservations: { orderBy: [{ startAt: "asc" }] }, aircraft: true }
         });
-        if (events.length === 0) throw app.httpErrors.notFound("Events not found");
+        if (events.length === 0) throw app.httpErrors.notFound(UserMsg.EVENTS_NOT_FOUND);
 
         const byId = new Map(events.map((e) => [e.id, e]));
         const ordered = uniqueIds.map((id) => byId.get(id)).filter(Boolean) as typeof events;
@@ -1115,7 +1116,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       where: { id: eventId, ...sandboxFilter(req) },
       select: { id: true, status: true }
     });
-    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     if (isDoneScheduleLocked(event.status)) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }

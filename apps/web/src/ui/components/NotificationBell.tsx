@@ -62,7 +62,8 @@ type NotificationsResponse = {
 const KIND_LABEL: Record<string, string> = {
   EVENT_OVERDUE_NO_FACT: "Просрочка",
   EVENT_STATUS_IN_PROGRESS: "В работе",
-  EVENT_STATUS_DONE: "Завершено"
+  EVENT_STATUS_DONE: "Завершено",
+  USER_ERROR: "Ошибка"
 };
 
 export function NotificationBell(props: {

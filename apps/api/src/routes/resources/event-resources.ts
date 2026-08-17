@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { UserMsg } from "../../lib/userErrors.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 import {
   LABOR_METRIC_BLOCKS,
@@ -38,7 +39,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
       where: { id: eventId, ...sandboxFilter(req as any) },
       select: { id: true }
     });
-    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
 
     const [skills, metrics] = await Promise.all([
       app.prisma.skill.findMany({ where: { isActive: true }, orderBy: { code: "asc" } }),
@@ -122,7 +123,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
       where: { id: eventId, ...sandboxFilter(req as any) },
       select: { id: true }
     });
-    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
 
     const sandboxId = sandboxIdFor(req as any);
 
@@ -216,7 +217,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
       where: { id, ...sandboxFilter(req as any) },
       select: { id: true }
     });
-    if (!line) throw app.httpErrors.notFound("Plan line not found");
+    if (!line) throw app.httpErrors.notFound(UserMsg.PLAN_LINE_NOT_FOUND);
     await app.prisma.eventWorkPlanLine.delete({ where: { id } });
     return { ok: true };
   });
@@ -269,7 +270,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
       where: { id, ...sandboxFilter(req as any) },
       select: { id: true }
     });
-    if (!line) throw app.httpErrors.notFound("Actual line not found");
+    if (!line) throw app.httpErrors.notFound(UserMsg.ACTUAL_LINE_NOT_FOUND);
     await app.prisma.eventWorkActualLine.delete({ where: { id } });
     return { ok: true };
   });

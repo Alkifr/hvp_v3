@@ -12,6 +12,7 @@ import {
 } from "../../lib/eventStatus.js";
 import { DEFAULT_EVENT_STATUS, EVENT_STATUS_CATALOG, loadStatusAutomation } from "../../lib/eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
+import { UserMsg } from "../../lib/userErrors.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import {
@@ -89,7 +90,7 @@ function formatEventImportSchemaError(error: z.ZodError): string {
   parts.push(
     "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand, laborBudget_*/laborMps_*/laborActual_*)."
   );
-  parts.push("Если это файл массового планирования — откройте раздел «Массовое планирование», а не «Импорт».");
+  parts.push("Если это файл массового планирования — перейдите на вкладку «Массовое планирование», а не «Импорт событий».");
 
   return parts.join(" ");
 }
@@ -262,25 +263,25 @@ function assertPlacementPeriods(placements: PlacementInput[], eventStart: Date, 
   const sorted = [...placements].sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
   for (let i = 0; i < sorted.length; i++) {
     const p = sorted[i]!;
-    if (p.endAt <= p.startAt) throw new Error("Placement endAt must be after startAt");
+    if (p.endAt <= p.startAt) throw new Error(UserMsg.PLACEMENT_END_AFTER_START);
     if (Boolean(p.budgetStartAt) !== Boolean(p.budgetEndAt)) {
-      throw new Error("Placement budget period must have both dates");
+      throw new Error(UserMsg.BUDGET_BOTH_DATES);
     }
     if (p.budgetStartAt && p.budgetEndAt && p.budgetEndAt <= p.budgetStartAt) {
-      throw new Error("Placement budgetEndAt must be after budgetStartAt");
+      throw new Error(UserMsg.BUDGET_END_AFTER_START);
     }
     if (Boolean(p.actualStartAt) !== Boolean(p.actualEndAt)) {
-      throw new Error("Placement actual period must have both dates");
+      throw new Error(UserMsg.ACTUAL_BOTH_DATES);
     }
     if (p.actualStartAt && p.actualEndAt && p.actualEndAt <= p.actualStartAt) {
-      throw new Error("Placement actualEndAt must be after actualStartAt");
+      throw new Error(UserMsg.ACTUAL_END_AFTER_START);
     }
     if (p.startAt < eventStart || p.endAt > eventEnd) {
-      throw new Error("Placement interval must be within event startAt/endAt");
+      throw new Error(UserMsg.PLACEMENT_WITHIN_EVENT);
     }
     const prev = sorted[i - 1];
     if (prev && prev.endAt > p.startAt) {
-      throw new Error("Placement intervals must not overlap");
+      throw new Error(UserMsg.PLACEMENT_NO_OVERLAP);
     }
   }
 }
@@ -295,8 +296,8 @@ async function resolvePlacementLocation(tx: any, p: PlacementInput) {
       where: { id: standId },
       include: { layout: { select: { id: true, hangarId: true } } }
     });
-    if (!stand) throw new Error("Stand not found");
-    if (layoutId && stand.layoutId !== layoutId) throw new Error("Stand does not belong to selected layout");
+    if (!stand) throw new Error(UserMsg.STAND_NOT_FOUND);
+    if (layoutId && stand.layoutId !== layoutId) throw new Error(UserMsg.STAND_NOT_IN_LAYOUT);
     layoutId = stand.layoutId;
     hangarId = stand.layout.hangarId;
   } else if (layoutId) {
@@ -304,8 +305,8 @@ async function resolvePlacementLocation(tx: any, p: PlacementInput) {
       where: { id: layoutId },
       select: { id: true, hangarId: true }
     });
-    if (!layout) throw new Error("Layout not found");
-    if (hangarId && layout.hangarId !== hangarId) throw new Error("Layout does not belong to selected hangar");
+    if (!layout) throw new Error(UserMsg.LAYOUT_NOT_FOUND);
+    if (hangarId && layout.hangarId !== hangarId) throw new Error(UserMsg.LAYOUT_NOT_IN_HANGAR);
     hangarId = layout.hangarId;
   }
 
@@ -502,7 +503,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       where: { id, ...sandboxFilter(req), status: { not: EventStatus.DELETED } },
       include: eventInclude
     });
-    if (!row) throw app.httpErrors.notFound("Event not found");
+    if (!row) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     return serializeEvent(row);
   });
 
@@ -525,18 +526,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         endAt: zDateTime,
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
-      .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
+      .refine((v) => v.endAt > v.startAt, { message: UserMsg.END_AFTER_START })
       .parse(req.body);
 
     const ev = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req) }
     });
-    if (!ev) throw app.httpErrors.notFound("Event not found");
+    if (!ev) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     if (isDoneScheduleLocked(ev.status)) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }
     if (body.startAt < ev.startAt || body.endAt > ev.endAt) {
-      throw app.httpErrors.badRequest("Tow interval must be within event startAt/endAt");
+      throw app.httpErrors.badRequest(UserMsg.TOW_WITHIN_EVENT);
     }
 
     const sbId = sandboxIdFor(req);
@@ -574,7 +575,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       where: { id: eventId, ...sandboxFilter(req) },
       select: { id: true, status: true }
     });
-    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     if (isDoneScheduleLocked(event.status)) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }
@@ -605,7 +606,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       where: { id: eventId, ...sandboxFilter(req) },
       select: { id: true }
     });
-    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     return await app.prisma.eventPlacement.findMany({
       where: { eventId, ...sandboxFilter(req) },
       include: placementInclude,
@@ -625,13 +626,13 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.body);
 
-    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required when changing placements");
+    assertChangeReasonIfNeeded(req, true, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
 
     const event = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req) },
       include: { placements: true }
     });
-    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     if (isDoneScheduleLocked(event.status)) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }
@@ -1059,7 +1060,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         if (!Number.isFinite(startAt.valueOf()) || !Number.isFinite(endAt.valueOf())) {
           throw new Error(`Некорректные даты startAt/endAt: ${String(r.startAt)} / ${String(r.endAt)}`);
         }
-        if (endAt <= startAt) throw new Error("endAt должен быть позже startAt");
+        if (endAt <= startAt) throw new Error("Дата окончания должна быть позже даты начала");
         const budgetStartAt = parseOptionalDate(r.budgetStartAt, "budgetStartAt");
         const budgetEndAt = parseOptionalDate(r.budgetEndAt, "budgetEndAt");
         validateOptionalPeriod(budgetStartAt, budgetEndAt, "Бюджетный");
@@ -1436,16 +1437,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         autoFillGapPlacements: z.boolean().optional().default(true),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
-      .refine((v) => v.endAt > v.startAt, { message: "endAt must be after startAt" })
-      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: "budget period must have both dates" })
+      .refine((v) => v.endAt > v.startAt, { message: UserMsg.END_AFTER_START })
+      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: UserMsg.BUDGET_BOTH_DATES })
       .refine((v) => !v.budgetStartAt || !v.budgetEndAt || v.budgetEndAt > v.budgetStartAt, {
-        message: "budgetEndAt must be after budgetStartAt"
+        message: UserMsg.BUDGET_END_AFTER_START
       })
-      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: "actual period must have both dates" })
+      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: UserMsg.ACTUAL_BOTH_DATES })
       .refine((v) => !v.actualStartAt || !v.actualEndAt || v.actualEndAt > v.actualStartAt, {
-        message: "actualEndAt must be after actualStartAt"
+        message: UserMsg.ACTUAL_END_AFTER_START
       })
-      .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: "aircraftId or virtualAircraft required" })
+      .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: UserMsg.AIRCRAFT_REQUIRED })
       .parse(req.body);
 
     const { changeReason, placements, allowOverlap, autoFillGapPlacements, ...data } = body;
@@ -1604,7 +1605,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Этот статус нельзя выбрать");
     }
 
-    assertChangeReasonIfNeeded(req, true, body.changeReason, "changeReason is required when updating an event");
+    assertChangeReasonIfNeeded(req, true, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
 
     const uniqueIds = Array.from(new Set(body.eventIds));
     const sbId = sandboxIdFor(req);
@@ -1762,7 +1763,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         layout: true
       }
     });
-    if (!existing) throw app.httpErrors.notFound("Event not found");
+    if (!existing) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
 
     let { changeReason, placements, allowOverlap, autoFillGapPlacements, ...patch } = body;
     const scheduleLocked = isDoneScheduleLocked(existing.status, body.status);
@@ -1817,7 +1818,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const nextStart = scheduleLocked ? existing.startAt : (body.startAt ?? existing.startAt);
     const nextEnd = scheduleLocked ? existing.endAt : (body.endAt ?? existing.endAt);
     if (nextEnd <= nextStart) {
-      throw app.httpErrors.badRequest("endAt must be after startAt");
+      throw app.httpErrors.badRequest(UserMsg.END_AFTER_START);
     }
     const planning = scheduleLocked
       ? {
@@ -1836,10 +1837,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const nextBudgetStart = planning.budgetStartAt;
     const nextBudgetEnd = planning.budgetEndAt;
     if ((nextBudgetStart && !nextBudgetEnd) || (!nextBudgetStart && nextBudgetEnd)) {
-      throw app.httpErrors.badRequest("budget period must have both dates");
+      throw app.httpErrors.badRequest(UserMsg.BUDGET_BOTH_DATES);
     }
     if (nextBudgetStart && nextBudgetEnd && nextBudgetEnd <= nextBudgetStart) {
-      throw app.httpErrors.badRequest("budgetEndAt must be after budgetStartAt");
+      throw app.httpErrors.badRequest(UserMsg.BUDGET_END_AFTER_START);
     }
     let patchData = {
       ...patch,
@@ -1863,10 +1864,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         ? (existing as any).actualEndAt
         : body.actualEndAt;
     if ((nextActualStart && !nextActualEnd) || (!nextActualStart && nextActualEnd)) {
-      throw app.httpErrors.badRequest("actual period must have both dates");
+      throw app.httpErrors.badRequest(UserMsg.ACTUAL_BOTH_DATES);
     }
     if (nextActualStart && nextActualEnd && nextActualEnd <= nextActualStart) {
-      throw app.httpErrors.badRequest("actualEndAt must be after actualStartAt");
+      throw app.httpErrors.badRequest(UserMsg.ACTUAL_END_AFTER_START);
     }
 
     const automation = await loadStatusAutomation(app.prisma);
@@ -1995,7 +1996,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       req,
       changedKeys.length > 0,
       changeReason,
-      "changeReason is required when updating an event"
+      UserMsg.CHANGE_REASON_REQUIRED
     );
 
     if (changedKeys.length > 0) {
@@ -2042,7 +2043,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       where: { id, ...sandboxFilter(req) },
       select: { id: true }
     });
-    if (!existing) throw app.httpErrors.notFound("Event not found");
+    if (!existing) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     await app.prisma.maintenanceEvent.delete({ where: { id } });
     return { ok: true };
   });

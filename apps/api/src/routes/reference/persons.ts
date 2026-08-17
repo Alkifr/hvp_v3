@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { UserMsg } from "../../lib/userErrors.js";
 
 export const personsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
@@ -88,7 +89,7 @@ export const personsRoutes: FastifyPluginAsync = async (app) => {
         endAt: zDateTime,
         reason: z.string().trim().min(1).max(300).optional()
       })
-      .refine((v) => new Date(v.endAt) > new Date(v.startAt), { message: "endAt must be after startAt" })
+      .refine((v) => new Date(v.endAt) > new Date(v.startAt), { message: UserMsg.END_AFTER_START })
       .parse(req.body);
 
     return await app.prisma.personUnavailability.create({

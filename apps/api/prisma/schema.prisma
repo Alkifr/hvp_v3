@@ -426,14 +426,17 @@ model User {
   passwordHash       String
   isActive           Boolean  @default(true)
   mustChangePassword Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  lastLoginAt        DateTime?
+  lastSeenAt         DateTime?
 
   roles UserRole[]
 
   ownedSandboxes     Sandbox[]             @relation("SandboxOwner")
   sandboxMemberships SandboxMember[]
   activityLogs       UserActivityLog[]
+  presenceEvents     UserPresenceEvent[]
   ownedReports       SavedReport[]         @relation("ReportOwner")
   reportShares       SavedReportShare[]
   savedTableViews    SavedTableView[]
@@ -1187,10 +1190,10 @@ model EventTow {
   @@index([sandboxId])
 }
 
-/// Уведомления (колокольчик): просрочка без факта и др.
+/// Уведомления (колокольчик): просрочка без факта, ошибки пользователей (только админам) и др.
 model AppNotification {
   id        String   @id @default(uuid())
-  /// EVENT_OVERDUE_NO_FACT | EVENT_STATUS_IN_PROGRESS | EVENT_STATUS_DONE
+  /// EVENT_OVERDUE_NO_FACT | EVENT_STATUS_IN_PROGRESS | EVENT_STATUS_DONE | USER_ERROR
   kind      String
   title     String
   body      String?
@@ -1262,6 +1265,23 @@ model UserActivityLog {
   @@index([action, createdAt])
 }
 
+/// Лёгкий журнал присутствия: входы и переходы по разделам (не каждый клик).
+model UserPresenceEvent {
+  id        String   @id @default(uuid())
+  userId    String
+  /// LOGIN | PAGE | ACTION
+  kind      String
+  /// Раздел SPA: gantt, hangar, analytics, ...
+  page      String?
+  detail    String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+}
+
 /// Singleton-настройки SMTP и получателей email-дайджеста изменений.
 model MailDigestSettings {
   id              String   @id @default("default")
@@ -1273,8 +1293,44 @@ model MailDigestSettings {
   mailFrom        String?
   /// string[] — список email получателей
   recipients      Json     @default("[]")
+  /// Тема письма (= название рассылки)
   subjectTemplate String   @default("Изменения плана ТО")
+  description     String?
+  /// last1 | last7 | last30 | custom
+  periodMode      String   @default("last7")
+  periodCustomFrom String?
+  periodCustomTo   String?
+  /// manual | daily | weekly | monthly
+  scheduleMode    String   @default("manual")
+  /// HH:mm, время по МСК
+  scheduleTime    String   @default("09:00")
+  /// number[] ISO weekday 1=Пн … 7=Вс
+  scheduleWeekdays Json    @default("[1,2,3,4,5]")
+  scheduleMonthDay Int     @default(1)
+  isActive        Boolean  @default(true)
+  lastAutoSentAt  DateTime?
+  /// string[] — колонки письма (см. mailDigestColumns)
+  columns         Json     @default("[\"kind\",\"aircraftType\",\"aircraft\",\"title\",\"detail\",\"previous\"]")
   updatedAt       DateTime @updatedAt
+}
+
+/// История отправок дайджеста (ручных и по расписанию).
+model MailDigestSendLog {
+  id         String   @id @default(uuid())
+  createdAt  DateTime @default(now())
+  /// SENT | FAILED | EMPTY
+  status     String
+  /// self | all | schedule
+  target     String
+  actorEmail String?
+  recipients Json     @default("[]")
+  subject    String
+  error      String?
+  stats      Json?
+  periodFrom DateTime?
+  periodTo   DateTime?
+
+  @@index([createdAt])
 }
 
 model StandReservation {

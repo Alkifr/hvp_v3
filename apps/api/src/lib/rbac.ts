@@ -14,6 +14,14 @@ export function assertPermission(req: FastifyRequest, permission: string) {
   }
 }
 
+export function assertAnyPermission(req: FastifyRequest, permissions: string[]) {
+  if (!permissions.some((p) => requirePermission(req, p))) {
+    const err: any = new Error("FORBIDDEN");
+    err.statusCode = 403;
+    throw err;
+  }
+}
+
 /** Системный администратор: видит все песочницы (как наблюдатель), без прав владельца. */
 export function isSystemAdmin(roles: string[] | null | undefined): boolean {
   const list = roles ?? [];

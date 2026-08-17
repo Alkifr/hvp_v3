@@ -3,6 +3,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { isSystemAdmin } from "../lib/rbac.js";
+import { errorBody, UserMsg } from "../lib/userErrors.js";
 
 type SandboxContext = {
   id: string;
@@ -82,10 +83,10 @@ export const sandboxPlugin = fp(async (app) => {
 
     const ctx = await resolveSandboxFor(app, sandboxId, req.auth.id, req.auth.roles ?? []);
     if (ctx === null) {
-      return reply.code(404).send({ ok: false, error: "SANDBOX_NOT_FOUND" });
+      return reply.code(404).send(errorBody("SANDBOX_NOT_FOUND"));
     }
     if (ctx === "denied") {
-      return reply.code(403).send({ ok: false, error: "SANDBOX_ACCESS_DENIED" });
+      return reply.code(403).send(errorBody("SANDBOX_ACCESS_DENIED"));
     }
     req.sandbox = ctx;
   });
@@ -105,11 +106,11 @@ export async function loadSandboxForRequest(
   if (!sandboxId) return true;
   const ctx = await resolveSandboxFor(app, sandboxId, userId, req.auth?.roles ?? []);
   if (ctx === null) {
-    reply.code(404).send({ ok: false, error: "SANDBOX_NOT_FOUND" });
+    reply.code(404).send(errorBody("SANDBOX_NOT_FOUND"));
     return false;
   }
   if (ctx === "denied") {
-    reply.code(403).send({ ok: false, error: "SANDBOX_ACCESS_DENIED" });
+    reply.code(403).send(errorBody("SANDBOX_ACCESS_DENIED"));
     return false;
   }
   req.sandbox = ctx;
@@ -142,7 +143,7 @@ export function assertChangeReasonIfNeeded(
   req: FastifyRequest,
   changed: boolean,
   changeReason: string | null | undefined,
-  message = "changeReason is required when updating"
+  message = UserMsg.CHANGE_REASON_REQUIRED
 ): void {
   if (!changed) return;
   if (!changeReasonRequired(req)) return;

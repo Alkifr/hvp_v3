@@ -1,23 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { HangarView } from "./pages/HangarView";
 import { GanttView } from "./pages/GanttView";
-import { EventImportView } from "./pages/EventImportView";
-import { MassPlanView } from "./pages/MassPlanView";
+import { BulkEventsView } from "./pages/BulkEventsView";
 import { ReferenceView } from "./pages/ReferenceView";
 import { LoginView } from "./pages/LoginView";
 import { ProfileView } from "./pages/ProfileView";
 import { AdminView } from "./pages/AdminView";
 import { SandboxesView } from "./pages/SandboxesView";
 import { AnalyticsView } from "./pages/AnalyticsView";
+import { MailDigestView } from "./pages/MailDigestView";
 import { HelpView } from "./pages/HelpView";
 import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { NotificationBell } from "./components/NotificationBell";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { authMe } from "./auth/authApi";
 import { getActiveSandboxId, setActiveSandboxId } from "../lib/api";
+import { installPresenceTracker, reportPageView } from "../lib/presence";
 import { installFourDigitDateYearLimit } from "../lib/dateInput";
 import {
   applyEventDeepLink,
@@ -25,7 +26,7 @@ import {
   parseHashPage
 } from "../lib/eventDeepLink";
 
-const MOBILE_HIDDEN_PAGES = new Set<Page>(["import", "mass", "ref", "admin", "itp"]);
+const MOBILE_HIDDEN_PAGES = new Set<Page>(["import", "mass", "ref", "admin", "itp", "mail"]);
 
 type Page =
   | "gantt"
@@ -38,6 +39,7 @@ type Page =
   | "admin"
   | "sandboxes"
   | "analytics"
+  | "mail"
   | "help";
 
 function isPage(value: string): value is Page {
@@ -52,6 +54,7 @@ function isPage(value: string): value is Page {
     value === "admin" ||
     value === "sandboxes" ||
     value === "analytics" ||
+    value === "mail" ||
     value === "help"
   );
 }
@@ -120,13 +123,6 @@ const ICONS = {
       <path d="M8 20v-5h8v5" />
     </svg>
   ),
-  import: (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3v12" />
-      <path d="M7 10l5 5 5-5" />
-      <path d="M4 19h16" />
-    </svg>
-  ),
   mass: (
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3l9 5-9 5-9-5 9-5z" />
@@ -169,6 +165,12 @@ const ICONS = {
       <path d="M12 16V8" />
       <path d="M16 16v-3" />
       <path d="M8 7h.01M12 5h.01M16 9h.01" />
+    </svg>
+  ),
+  mail: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M3 7l9 7 9-7" />
     </svg>
   ),
   help: (
@@ -239,8 +241,9 @@ export function App() {
   const canWrite = permissions.includes("events:write");
   const canRef = permissions.includes("ref:read");
   const canAdmin = permissions.includes("admin:users") || permissions.includes("admin:roles");
+  const canMail = permissions.includes("mail:send") || permissions.includes("admin:mail");
 
-  return <AppShell me={me} permissions={permissions} page={page} setPage={setPage} canEvents={canEvents} canWrite={canWrite} canRef={canRef} canAdmin={canAdmin} />;
+  return <AppShell me={me} permissions={permissions} page={page} setPage={setPage} canEvents={canEvents} canWrite={canWrite} canRef={canRef} canAdmin={canAdmin} canMail={canMail} />;
 }
 
 function AppShell(props: {
@@ -252,8 +255,9 @@ function AppShell(props: {
   canWrite: boolean;
   canRef: boolean;
   canAdmin: boolean;
+  canMail: boolean;
 }) {
-  const { me, permissions, page, setPage, canEvents, canWrite, canRef, canAdmin } = props;
+  const { me, permissions, page, setPage, canEvents, canWrite, canRef, canAdmin, canMail } = props;
   const isMobile = useIsMobile();
   const { active: activeSandbox } = useActiveSandbox();
   const inSandbox = Boolean(activeSandbox);
@@ -261,6 +265,18 @@ function AppShell(props: {
     canWrite || activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
 
   useEffect(() => installFourDigitDateYearLimit(), []);
+
+  const lastBulkTabRef = useRef<"import" | "mass">(page === "mass" ? "mass" : "import");
+  useEffect(() => {
+    if (page === "import" || page === "mass") lastBulkTabRef.current = page;
+  }, [page]);
+
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  useEffect(() => {
+    reportPageView(page);
+  }, [page]);
+  useEffect(() => installPresenceTracker(() => pageRef.current), []);
 
   useEffect(() => {
     if (!isMobile) return;
@@ -299,11 +315,17 @@ function AppShell(props: {
               </>
             ) : null}
 
+            {!isMobile && canMail ? (
+              <NavIcon active={page === "mail"} onClick={() => setPage("mail")} label="Рассылка" icon={ICONS.mail} />
+            ) : null}
+
             {!isMobile && canWriteInActiveContext ? (
-              <>
-                <NavIcon active={page === "import"} onClick={() => setPage("import")} label="Импорт событий" icon={ICONS.import} />
-                <NavIcon active={page === "mass"} onClick={() => setPage("mass")} label="Массовое планирование" icon={ICONS.mass} />
-              </>
+              <NavIcon
+                active={page === "import" || page === "mass"}
+                onClick={() => setPage(lastBulkTabRef.current)}
+                label="Импорт/План"
+                icon={ICONS.mass}
+              />
             ) : null}
 
             {!isMobile && canRef ? (
@@ -339,13 +361,15 @@ function AppShell(props: {
       <main className="content">
         {page === "gantt" && <GanttView />}
         {page === "hangar" && <HangarView />}
-        {!isMobile && page === "import" && <EventImportView />}
-        {!isMobile && page === "mass" && <MassPlanView />}
+        {!isMobile && (page === "import" || page === "mass") && (
+          <BulkEventsView tab={page === "mass" ? "mass" : "import"} onTab={(tab) => setPage(tab)} />
+        )}
         {!isMobile && page === "ref" && <ReferenceView />}
         {page === "profile" && <ProfileView me={me} />}
         {!isMobile && page === "admin" && <AdminView permissions={permissions} me={me} />}
         {page === "sandboxes" && <SandboxesView />}
         {page === "analytics" && <AnalyticsView />}
+        {!isMobile && page === "mail" && canMail ? <MailDigestView /> : null}
         {page === "help" && <HelpView permissions={permissions} onNavigate={(p) => setPage(p as Page)} />}
       </main>
     </div>

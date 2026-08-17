@@ -6,6 +6,7 @@ import { EventAuditAction, EventStatus, PlanningLevel } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { UserMsg } from "../../lib/userErrors.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 
 function assertCanWrite(req: any) {
@@ -995,19 +996,19 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         towBlocksStand: z.boolean().optional().default(false),
         dryRun: z.boolean().optional()
       })
-      .refine((v) => Number.isFinite(v.startFrom.getTime()), { message: "startFrom must be a valid date" })
-      .refine((v) => Number.isFinite(v.endTo.getTime()), { message: "endTo must be a valid date" })
-      .refine((v) => v.endTo >= v.startFrom, { message: "endTo must be >= startFrom" })
+      .refine((v) => Number.isFinite(v.startFrom.getTime()), { message: UserMsg.INVALID_DATE })
+      .refine((v) => Number.isFinite(v.endTo.getTime()), { message: UserMsg.INVALID_DATE })
+      .refine((v) => v.endTo >= v.startFrom, { message: UserMsg.END_AFTER_START })
       .refine((v) => v.scheduleMode !== "fixedCadence" || (v.cadenceHours ?? 0) > 0, {
-        message: "cadenceHours is required for fixedCadence"
+        message: UserMsg.CADENCE_REQUIRED
       })
-      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: "budget period must have both dates" })
+      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: UserMsg.BUDGET_BOTH_DATES })
       .refine((v) => !v.budgetStartAt || !v.budgetEndAt || v.budgetEndAt > v.budgetStartAt, {
-        message: "budgetEndAt must be after budgetStartAt"
+        message: UserMsg.BUDGET_END_AFTER_START
       })
-      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: "actual period must have both dates" })
+      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: UserMsg.ACTUAL_BOTH_DATES })
       .refine((v) => !v.actualStartAt || !v.actualEndAt || v.actualEndAt > v.actualStartAt, {
-        message: "actualEndAt must be after actualStartAt"
+        message: UserMsg.ACTUAL_END_AFTER_START
       })
       .parse(req.body);
 
@@ -1486,11 +1487,11 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         scheduleMode: z.enum(["compact", "sequential", "fixedCadence"]).optional().default("compact"),
         cadenceHours: z.number().positive().max(8760).optional()
       })
-      .refine((v) => Number.isFinite(v.startFrom.getTime()), { message: "item.startFrom must be a valid date" })
-      .refine((v) => Number.isFinite(v.endTo.getTime()), { message: "item.endTo must be a valid date" })
-      .refine((v) => v.endTo >= v.startFrom, { message: "item.endTo must be >= item.startFrom" })
+      .refine((v) => Number.isFinite(v.startFrom.getTime()), { message: UserMsg.INVALID_DATE })
+      .refine((v) => Number.isFinite(v.endTo.getTime()), { message: UserMsg.INVALID_DATE })
+      .refine((v) => v.endTo >= v.startFrom, { message: UserMsg.END_AFTER_START })
       .refine((v) => v.scheduleMode !== "fixedCadence" || (v.cadenceHours ?? 0) > 0, {
-        message: "item.cadenceHours is required for fixedCadence"
+        message: UserMsg.CADENCE_REQUIRED
       });
 
     const body = z
@@ -1508,13 +1509,13 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         solverMode: z.enum(["ortools", "hybrid", "heuristic"]).optional().default("ortools"),
         dryRun: z.boolean().optional()
       })
-      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: "budget period must have both dates" })
+      .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: UserMsg.BUDGET_BOTH_DATES })
       .refine((v) => !v.budgetStartAt || !v.budgetEndAt || v.budgetEndAt > v.budgetStartAt, {
-        message: "budgetEndAt must be after budgetStartAt"
+        message: UserMsg.BUDGET_END_AFTER_START
       })
-      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: "actual period must have both dates" })
+      .refine((v) => Boolean(v.actualStartAt) === Boolean(v.actualEndAt), { message: UserMsg.ACTUAL_BOTH_DATES })
       .refine((v) => !v.actualStartAt || !v.actualEndAt || v.actualEndAt > v.actualStartAt, {
-        message: "actualEndAt must be after actualStartAt"
+        message: UserMsg.ACTUAL_END_AFTER_START
       })
       .parse(req.body);
 

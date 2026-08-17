@@ -261,10 +261,7 @@ export function ProfileView(props: { me: AuthedUser }) {
                   <span className="profileInlineSuccess">Пароль обновлён</span>
                 ) : changeM.data && !changeM.data.ok ? (
                   <span className="error">
-                    Ошибка:{" "}
-                    {changeM.data.error === "OLD_PASSWORD_INVALID"
-                      ? "неверный текущий пароль"
-                      : changeM.data.error}
+                    Ошибка: {changeM.data.message || (changeM.data.error === "OLD_PASSWORD_INVALID" ? "неверный текущий пароль" : changeM.data.error)}
                   </span>
                 ) : null}
               </div>

@@ -3,6 +3,7 @@ import { ReportShareRole } from "@prisma/client";
 import { z } from "zod";
 
 import { assertPermission } from "../lib/rbac.js";
+import { UserMsg } from "../lib/userErrors.js";
 import {
   EVENT_COUNT_FIELD,
   applyGroupAggregates,
@@ -261,7 +262,7 @@ const zReportConfig = z.object({
 })
   .superRefine((value, ctx) => {
     if (!value.fields.length && !value.groupBy.length && !value.aggregates.length) {
-      ctx.addIssue({ code: "custom", message: "FIELDS_OR_SUMMARY_REQUIRED", path: ["fields"] });
+      ctx.addIssue({ code: "custom", message: UserMsg.FIELDS_OR_SUMMARY_REQUIRED, path: ["fields"] });
     }
   });
 

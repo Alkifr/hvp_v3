@@ -3,6 +3,7 @@ import { EventStatus } from "@prisma/client";
 import { z } from "zod";
 
 import { assertPermission } from "../../lib/rbac.js";
+import { UserMsg } from "../../lib/userErrors.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { canWriteInContext, sandboxFilter } from "../../plugins/sandbox.js";
 
@@ -523,7 +524,7 @@ export const hangarPlanningRoutes: FastifyPluginAsync = async (app) => {
       })
     ]);
 
-    if (!event) throw app.httpErrors.notFound("Event not found");
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     if ((event.placements?.length ?? 0) > 1) {
       throw app.httpErrors.badRequest("Многоэтапное событие размещается только через карточку события");
     }

@@ -10,7 +10,7 @@ export type SmtpConfig = {
   mailFrom?: string | null;
 };
 
-export function smtpConfigFromSettings(s: MailDigestSettings): SmtpConfig | null {
+export function smtpConfigFromSettings(s: Pick<MailDigestSettings, "smtpHost" | "smtpPort" | "smtpSecure" | "smtpUser" | "smtpPass" | "mailFrom">): SmtpConfig | null {
   const host = s.smtpHost?.trim();
   if (!host) return null;
   return {

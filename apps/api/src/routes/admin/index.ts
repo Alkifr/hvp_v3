@@ -7,6 +7,8 @@ import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { logUserActivity } from "../../lib/userActivity.js";
 import { queryActivityFeed } from "../../lib/activityFeed.js";
+import { UserMsg } from "../../lib/userErrors.js";
+import { queryPresenceHeatmap } from "../../lib/userPresence.js";
 import { mailDigestRoutes } from "./mailDigest.js";
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
@@ -163,9 +165,35 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
   app.get("/users", async (req) => {
     assertPermission(req as any, "admin:users");
     return await app.prisma.user.findMany({
-      include: { roles: { include: { role: true } } },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        isActive: true,
+        mustChangePassword: true,
+        createdAt: true,
+        lastLoginAt: true,
+        lastSeenAt: true,
+        roles: { include: { role: true } }
+      },
       orderBy: [{ isActive: "desc" }, { email: "asc" }]
     });
+  });
+
+  app.get("/users/:id/presence", async (req) => {
+    assertPermission(req as any, "admin:users");
+    const id = zUuid.parse((req.params as any).id);
+    const user = await app.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, email: true, displayName: true }
+    });
+    if (!user) {
+      const err: any = new Error("USER_NOT_FOUND");
+      err.statusCode = 404;
+      throw err;
+    }
+    const heatmap = await queryPresenceHeatmap(app.prisma, { userId: user.id, email: user.email });
+    return { ok: true as const, user: { id: user.id, email: user.email, displayName: user.displayName }, ...heatmap };
   });
 
   app.post("/users", async (req) => {
@@ -279,7 +307,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       ? await app.prisma.user.findUnique({ where: { id: currentUserId }, select: { id: true, email: true, passwordHash: true, isActive: true } })
       : null;
     if (!currentUser || !currentUser.isActive) {
-      throw app.httpErrors.unauthorized("UNAUTHORIZED");
+      throw app.httpErrors.unauthorized(UserMsg.UNAUTHORIZED);
     }
 
     const passwordOk = await argon2.verify(currentUser.passwordHash, body.password);

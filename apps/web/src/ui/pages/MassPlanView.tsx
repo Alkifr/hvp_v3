@@ -361,7 +361,7 @@ function exportSolverDiagnosticsXlsx(diagnostics: SolverDiagnostics) {
   XLSX.writeFile(wb, `mass-plan-solver-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`);
 }
 
-export function MassPlanView() {
+export function MassPlanView(props: { hideHero?: boolean }) {
   const qc = useQueryClient();
   const { active: activeSandbox } = useActiveSandbox();
   const [tatHours, setTatHours] = useState(72);
@@ -632,21 +632,23 @@ export function MassPlanView() {
 
   return (
     <div className="massPage">
-      <section className="massHero">
-        <div className="massHeroText">
-          <div className="massEyebrow">Планирование серий событий</div>
-          <h1>Массовое планирование</h1>
-          <p>
-            Создавайте пачки виртуальных бортов, проверяйте размещение в предпросмотре и переносите результат в текущий контур.
-            Непоместившиеся события будут сохранены черновиками без места.
-          </p>
-        </div>
-        <div className="massHeroStats" aria-label="Текущие параметры">
-          <span><b>{inputMode === "batch" ? batchRows.reduce((sum, row) => sum + row.count, 0) : count}</b> событий</span>
-          <span><b>{inputMode === "batch" ? batchRows.length : tatHours}</b> {inputMode === "batch" ? "строк" : "ч TAT"}</span>
-          <span><b>{scheduleLabel(scheduleMode)}</b></span>
-        </div>
-      </section>
+      {props.hideHero ? null : (
+        <section className="massHero">
+          <div className="massHeroText">
+            <div className="massEyebrow">Планирование серий событий</div>
+            <h1>Массовое планирование</h1>
+            <p>
+              Создавайте пачки виртуальных бортов, проверяйте размещение в предпросмотре и переносите результат в текущий контур.
+              Непоместившиеся события будут сохранены черновиками без места.
+            </p>
+          </div>
+          <div className="massHeroStats" aria-label="Текущие параметры">
+            <span><b>{inputMode === "batch" ? batchRows.reduce((sum, row) => sum + row.count, 0) : count}</b> событий</span>
+            <span><b>{inputMode === "batch" ? batchRows.length : tatHours}</b> {inputMode === "batch" ? "строк" : "ч TAT"}</span>
+            <span><b>{scheduleLabel(scheduleMode)}</b></span>
+          </div>
+        </section>
+      )}
 
       <div className="massCard">
         <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>

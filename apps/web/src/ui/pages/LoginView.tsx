@@ -36,8 +36,18 @@ export function LoginView() {
   });
 
   const canChangePassword = newPassword.length >= 8 && newPassword === newPassword2;
-  const loginError = loginM.data && !loginM.data.ok ? loginM.data.message : null;
-  const changeError = changePasswordM.data && !changePasswordM.data.ok ? changePasswordM.data.message : null;
+  const loginError =
+    loginM.data && !loginM.data.ok
+      ? loginM.data.message
+      : loginM.isError
+        ? String((loginM.error as Error)?.message ?? "Не удалось войти")
+        : null;
+  const changeError =
+    changePasswordM.data && !changePasswordM.data.ok
+      ? changePasswordM.data.message
+      : changePasswordM.isError
+        ? String((changePasswordM.error as Error)?.message ?? "Не удалось сменить пароль")
+        : null;
 
   return (
     <div className="authShell">

@@ -1,6 +1,8 @@
 import fp from "fastify-plugin";
 import { Prisma, PrismaClient } from "@prisma/client";
 
+import { errorBody } from "../lib/userErrors.js";
+
 declare module "fastify" {
   interface FastifyInstance {
     prisma: PrismaClient;
@@ -97,11 +99,7 @@ export const prismaPlugin = fp(async (app) => {
   app.addHook("preHandler", async (req, reply) => {
     if (!req.url.startsWith("/api")) return;
     if (app.db.connected) return;
-    reply.code(503).send({
-      ok: false,
-      error: "DB_NOT_CONNECTED",
-      detail: app.db.lastError ?? "No connection"
-    });
+    reply.code(503).send(errorBody("DB_NOT_CONNECTED"));
   });
 
   app.addHook("onClose", async (instance) => {

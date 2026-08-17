@@ -3,6 +3,8 @@ import { z } from "zod";
 import argon2 from "argon2";
 
 import { queryActivityFeed } from "../lib/activityFeed.js";
+import { errorBody } from "../lib/userErrors.js";
+import { recordLogin } from "../lib/userPresence.js";
 
 async function requireAuthUser(app: any, req: FastifyRequest, reply: FastifyReply) {
   try {
@@ -13,12 +15,12 @@ async function requireAuthUser(app: any, req: FastifyRequest, reply: FastifyRepl
     });
     if (!user || !user.isActive) {
       app.clearAuthCookie(reply, req);
-      reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+      reply.code(401).send(errorBody("UNAUTHORIZED"));
       return null;
     }
     return user;
   } catch {
-    reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+    reply.code(401).send(errorBody("UNAUTHORIZED"));
     return null;
   }
 }
@@ -34,15 +36,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
     const user = await app.prisma.user.findUnique({ where: { email: body.email } });
     if (!user || !user.isActive) {
-      return reply.code(401).send({ ok: false, error: "INVALID_CREDENTIALS" });
+      return reply.code(401).send(errorBody("INVALID_CREDENTIALS"));
     }
 
     const ok = await argon2.verify(user.passwordHash, body.password);
     if (!ok) {
-      return reply.code(401).send({ ok: false, error: "INVALID_CREDENTIALS" });
+      return reply.code(401).send(errorBody("INVALID_CREDENTIALS"));
     }
 
     await app.setAuthCookie(reply, req, user.id);
+    await recordLogin(app.prisma, user.id).catch((err) => {
+      req.log.warn({ err }, "failed to record login presence");
+    });
     return { ok: true, mustChangePassword: user.mustChangePassword };
   });
 
@@ -62,7 +67,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!user || !user.isActive) {
         app.clearAuthCookie(reply, req);
-        return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+        return reply.code(401).send(errorBody("UNAUTHORIZED"));
       }
       type UserRoleJoin = { role: { code: string; permissions: Array<{ permission: { code: string } }> } };
       const roles = user.roles.map((ur: UserRoleJoin) => ur.role.code);
@@ -86,7 +91,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         }
       };
     } catch {
-      return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+      return reply.code(401).send(errorBody("UNAUTHORIZED"));
     }
   });
 
@@ -107,16 +112,16 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       });
     } catch {
       app.clearAuthCookie(reply, req);
-      return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+      return reply.code(401).send(errorBody("UNAUTHORIZED"));
     }
 
     if (!user || !user.isActive) {
       app.clearAuthCookie(reply, req);
-      return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+      return reply.code(401).send(errorBody("UNAUTHORIZED"));
     }
 
     const ok = await argon2.verify(user.passwordHash, body.oldPassword);
-    if (!ok) return reply.code(400).send({ ok: false, error: "OLD_PASSWORD_INVALID" });
+    if (!ok) return reply.code(400).send(errorBody("OLD_PASSWORD_INVALID"));
 
     const passwordHash = await argon2.hash(body.newPassword);
     await app.prisma.user.update({

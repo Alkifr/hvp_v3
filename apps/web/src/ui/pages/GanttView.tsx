@@ -42,6 +42,15 @@ import { useActiveSandbox } from "../components/SandboxSwitcher";
 import { ToolbarPopover } from "../components/ToolbarPopover";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { useIsMobile } from "../hooks/useIsMobile";
+import {
+  clipRange,
+  EMPTY_GANTT_VIRT,
+  GANTT_BAR_SLOP_PX,
+  measureGanttVisibleY,
+  nextGanttVirtState,
+  rangesOverlap,
+  type GanttVirtState
+} from "../../lib/ganttVirtualize";
 
 dayjs.extend(utc);
 
@@ -1441,18 +1450,30 @@ function buildGanttTicks(from: dayjs.Dayjs, to: dayjs.Dayjs, majorScale: TimeSca
   return out;
 }
 
-function TodayLine(props: { from: dayjs.Dayjs; to: dayjs.Dayjs; canvasWidth: number; currentMinute: dayjs.Dayjs; timeMode: TimelineTimeMode }) {
+function TodayLine(props: {
+  from: dayjs.Dayjs;
+  to: dayjs.Dayjs;
+  canvasWidth: number;
+  currentMinute: dayjs.Dayjs;
+  timeMode: TimelineTimeMode;
+  offsetX?: number;
+  paneWidth?: number;
+}) {
   const now = props.currentMinute;
   if (now.valueOf() < props.from.valueOf() || now.valueOf() >= props.to.valueOf()) return null;
   const totalDays = Math.max(1 / 1440, props.to.diff(props.from, "day", true));
   const x = (now.diff(props.from, "day", true) / totalDays) * props.canvasWidth;
+  const offsetX = props.offsetX ?? 0;
+  const paneWidth = props.paneWidth ?? props.canvasWidth;
+  if (x < offsetX - 2 || x > offsetX + paneWidth + 2) return null;
   return (
     <div
+      className="ganttTodayLine"
       style={{
         position: "absolute",
         top: 0,
         bottom: 0,
-        left: x,
+        left: x - offsetX,
         width: 2,
         background: "rgba(220, 38, 38, 0.35)",
         zIndex: 5,
@@ -1881,6 +1902,9 @@ export function GanttView() {
   const bottomScrollRef = useRef<HTMLDivElement | null>(null);
   const ganttFiltersStickyRef = useRef<HTMLDivElement | null>(null);
   const ganttPageMainRef = useRef<HTMLDivElement | null>(null);
+  const ganttHeaderRowRef = useRef<HTMLDivElement | null>(null);
+  const ganttStickyFooterRef = useRef<HTMLDivElement | null>(null);
+  const paneLeftRef = useRef(0);
 
   const ptrPreviewRef = useRef<null | DndPtrPreview>(null);
   const ptrTargetRef = useRef<
@@ -2544,6 +2568,13 @@ export function GanttView() {
     return out;
   }, [canvasWidth, dayWidth, from, majorScale, ticks]);
 
+  const [ganttVirt, setGanttVirt] = useState<GanttVirtState>(EMPTY_GANTT_VIRT);
+  const ganttVirtRef = useRef(ganttVirt);
+  ganttVirtRef.current = ganttVirt;
+  const virtMeasureRafRef = useRef<number | null>(null);
+  const virtInputRef = useRef({ canvasWidth: 1, rowCount: 0, rowHeight: 44, enabled: true });
+  const scheduleGanttVirtRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     // Высота закреплённого блока фильтров — для sticky шкалы Гантта и высоты таблицы.
     const el = ganttFiltersStickyRef.current;
@@ -2664,7 +2695,40 @@ export function GanttView() {
     requestAnimationFrame(() => {
       scrollSyncLockRef.current = false;
     });
+    scheduleGanttVirtRef.current();
   }, []);
+
+  const flushGanttVirt = useCallback(() => {
+    virtMeasureRafRef.current = null;
+    const input = virtInputRef.current;
+    if (!input.enabled) return;
+    const body = bodyScrollRef.current;
+    const y = measureGanttVisibleY({
+      main: ganttPageMainRef.current,
+      body,
+      headerH: ganttHeaderRowRef.current?.getBoundingClientRect().height ?? 0,
+      footerH: ganttStickyFooterRef.current?.getBoundingClientRect().height ?? 0
+    });
+    const next = nextGanttVirtState(ganttVirtRef.current, {
+      scrollLeft: body?.scrollLeft ?? 0,
+      viewportW: body?.clientWidth ?? 0,
+      firstVisibleY: y.firstVisibleY,
+      viewportH: y.viewportH,
+      canvasWidth: input.canvasWidth,
+      rowCount: input.rowCount,
+      rowHeight: input.rowHeight
+    });
+    if (next !== ganttVirtRef.current) {
+      ganttVirtRef.current = next;
+      setGanttVirt(next);
+    }
+  }, []);
+
+  const scheduleGanttVirt = useCallback(() => {
+    if (virtMeasureRafRef.current != null) return;
+    virtMeasureRafRef.current = requestAnimationFrame(flushGanttVirt);
+  }, [flushGanttVirt]);
+  scheduleGanttVirtRef.current = scheduleGanttVirt;
 
   const syncGanttScrollLeft = useCallback(
     (scrollLeft: number, source?: "body" | "bottom") => {
@@ -2689,8 +2753,24 @@ export function GanttView() {
   useEffect(() => {
     return () => {
       if (scrollRafRef.current != null) cancelAnimationFrame(scrollRafRef.current);
+      if (virtMeasureRafRef.current != null) cancelAnimationFrame(virtMeasureRafRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (panelView !== "DIAGRAM") return;
+    const body = bodyScrollRef.current;
+    const main = ganttPageMainRef.current;
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => scheduleGanttVirt()) : null;
+    if (body) ro?.observe(body);
+    if (main) ro?.observe(main);
+    window.addEventListener("resize", scheduleGanttVirt);
+    scheduleGanttVirt();
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", scheduleGanttVirt);
+    };
+  }, [panelView, scheduleGanttVirt, fitLayoutEpoch]);
 
   // Только при переключении «по ширине»: remount слоёв скролла + принудительный пересчёт overflow.
   const prevFitWidthRef = useRef(fitWidth);
@@ -2903,13 +2983,14 @@ export function GanttView() {
           const next = Math.max(0, Math.min(max, body.scrollLeft - dx));
           if (next !== body.scrollLeft) {
             body.scrollLeft = next;
-            applyGanttScrollLeft(next, "body");
+            syncGanttScrollLeft(next, "body");
           }
         }
         if (dy !== 0) {
           const main = ganttPageMainRef.current;
           if (main) main.scrollTop -= dy;
           else window.scrollBy(0, -dy);
+          scheduleGanttVirt();
         }
         ev.preventDefault();
       };
@@ -2930,7 +3011,7 @@ export function GanttView() {
         window.removeEventListener("pointercancel", onUp, true);
       };
     },
-    [panelView, applyGanttScrollLeft, setGanttPanClass, endGanttPanSession]
+    [panelView, syncGanttScrollLeft, scheduleGanttVirt, setGanttPanClass, endGanttPanSession]
   );
 
   // редактор
@@ -4675,7 +4756,7 @@ export function GanttView() {
       return (
         <span
           className={`exitTimeLabel${targetIsFact ? " exitTimeLabelFact" : ""}`}
-          style={{ left: labelLeft, top, width: EXIT_TIME_LABEL_WIDTH }}
+          style={{ left: labelLeft - paneLeftRef.current, top, width: EXIT_TIME_LABEL_WIDTH }}
           title={exitTimeTitle(ev, timelineTimeMode)}
         >
           {exitTimeLabel(ev, timelineTimeMode)}
@@ -4696,7 +4777,7 @@ export function GanttView() {
       return (
         <span
           className={`entryTimeLabel${targetIsFact ? " entryTimeLabelFact" : ""}`}
-          style={{ left: labelLeft, top, width: ENTRY_TIME_LABEL_WIDTH }}
+          style={{ left: labelLeft - paneLeftRef.current, top, width: ENTRY_TIME_LABEL_WIDTH }}
           title={entryTimeTitle(ev, timelineTimeMode)}
         >
           {entryTimeLabel(ev, timelineTimeMode)}
@@ -4736,6 +4817,25 @@ export function GanttView() {
     ],
     [visibleEvents, cancelledAircraftRows, hangarMetaById, preferAxisCodes]
   );
+
+  const ganttDiagramRows = groupMode === "AIRCRAFT" ? aircraftRows : hangarStandRows;
+  virtInputRef.current = {
+    canvasWidth,
+    rowCount: ganttDiagramRows.length,
+    rowHeight: ganttRowHeight,
+    enabled: panelView === "DIAGRAM"
+  };
+
+  useLayoutEffect(() => {
+    virtInputRef.current = {
+      canvasWidth,
+      rowCount: ganttDiagramRows.length,
+      rowHeight: ganttRowHeight,
+      enabled: panelView === "DIAGRAM"
+    };
+    ganttVirtRef.current = EMPTY_GANTT_VIRT;
+    flushGanttVirt();
+  }, [canvasWidth, ganttRowHeight, ganttDiagramRows.length, panelView, fitLayoutEpoch, groupMode, flushGanttVirt]);
 
   const aircraftTypeById = useMemo(() => {
     const m = new Map<string, AircraftTypeRef>();
@@ -5253,6 +5353,46 @@ export function GanttView() {
       };
     });
   };
+
+  const ganttRowCount = ganttDiagramRows.length;
+  const virtRowStart = Math.max(0, Math.min(ganttVirt.rows.startIdx, ganttRowCount));
+  const virtRowEnd = Math.max(virtRowStart, Math.min(ganttVirt.rows.endIdx, ganttRowCount));
+  const visibleDiagramRows = ganttDiagramRows.slice(virtRowStart, virtRowEnd);
+  const paneLeft = ganttVirt.x.left;
+  const paneWidth = Math.max(1, ganttVirt.x.width);
+  const paneRight = paneLeft + paneWidth;
+  paneLeftRef.current = paneLeft;
+  const ganttBodyHeight = ganttRowCount * ganttRowHeight;
+  const virtPaneTop = virtRowStart * ganttRowHeight;
+  const virtPaneHeight = Math.max(0, (virtRowEnd - virtRowStart) * ganttRowHeight);
+  const barInPane = (x: number, w: number) =>
+    rangesOverlap(x, x + w, paneLeft - GANTT_BAR_SLOP_PX, paneRight + GANTT_BAR_SLOP_PX);
+  const toPaneX = (x: number) => x - paneLeft;
+  const visibleTickCells = ticks.flatMap((t, i) => {
+    const nextAt = ticks[i + 1]?.at ?? to;
+    const leftRaw = t.at.diff(from, "day", true) * dayWidth;
+    const rightRaw = nextAt.diff(from, "day", true) * dayWidth;
+    const cellLeft = Math.max(0, leftRaw);
+    const cellWidth = Math.max(1, rightRaw - cellLeft);
+    if (!rangesOverlap(cellLeft, cellLeft + cellWidth, paneLeft, paneRight)) return [];
+    const majorIdx = majorSegments.findIndex((candidate) => candidate.key === t.majorKey);
+    return [{ t, i, left: cellLeft, width: cellWidth, majorIdx }];
+  });
+  const visibleMajorCells = majorSegments.flatMap((m) => {
+    const clipped = clipRange(m.left, m.width, paneLeft, paneWidth);
+    if (!clipped) return [];
+    return [{ ...m, paneLeft: clipped.left, paneWidth: clipped.width }];
+  });
+  const visibleHistogramBuckets = slotHistogram.flatMap((b) => {
+    const clipped = clipRange(b.left, Math.max(2, b.width - 1), paneLeft, paneWidth);
+    if (!clipped) return [];
+    return [{ ...b, paneLeft: clipped.left, paneWidth: clipped.width }];
+  });
+  const visiblePaneLinks = visiblePlacementLinks.filter(
+    (l) =>
+      rangesOverlap(Math.min(l.x1, l.x2), Math.max(l.x1, l.x2), paneLeft - 24, paneRight + 24) &&
+      rangesOverlap(Math.min(l.y1, l.y2), Math.max(l.y1, l.y2), virtPaneTop - 8, virtPaneTop + virtPaneHeight + 8)
+  );
 
   return (
     <div className="ganttPage">
@@ -5915,7 +6055,7 @@ export function GanttView() {
 
       </div>
 
-      <div className="ganttPageMain" ref={ganttPageMainRef}>
+      <div className="ganttPageMain" ref={ganttPageMainRef} onScroll={scheduleGanttVirt}>
       {panelView === "TABLE" ? (
         <div className="card ganttTableCard">
           <GanttEventsTable
@@ -5942,7 +6082,7 @@ export function GanttView() {
         </div>
       ) : (
       <div className={`ganttGrid${copySelectMode ? " ganttPickMode" : ""}`}>
-        <div className="ganttHeaderRow">
+        <div className="ganttHeaderRow" ref={ganttHeaderRowRef}>
           <div
             className="ganttLabel ganttAxisLabel"
             style={ganttLabelColStyle}
@@ -5973,31 +6113,33 @@ export function GanttView() {
               }}
               title="ПКМ — шкала времени (Major / Minor / по ширине)"
             >
-              <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} timeMode={timelineTimeMode} />
+              <div className="ganttVirtPane" style={{ left: paneLeft, width: paneWidth, top: 0, height: 44 }}>
+              <TodayLine
+                from={from}
+                to={to}
+                canvasWidth={canvasWidth}
+                currentMinute={currentMinute}
+                timeMode={timelineTimeMode}
+                offsetX={paneLeft}
+                paneWidth={paneWidth}
+              />
               <div className="ganttTimelineMinorRow">
-                {ticks.map((t, i) => {
-                  const nextAt = ticks[i + 1]?.at ?? to;
-                  const leftRaw = t.at.diff(from, "day", true) * dayWidth;
-                  const rightRaw = nextAt.diff(from, "day", true) * dayWidth;
-                  const left = Math.max(0, leftRaw);
-                  const width = Math.max(1, rightRaw - left);
-                  const majorIdx = majorSegments.findIndex((candidate) => candidate.key === t.majorKey);
-                  return (
+                {visibleTickCells.map((cell) => (
                     <div
-                      key={i}
+                      key={cell.i}
                       style={{
                         position: "absolute",
-                        left,
-                        width,
+                        left: toPaneX(cell.left),
+                        width: cell.width,
                         top: 0,
                         bottom: 0,
                         borderRight: "1px solid rgba(148,163,184,0.18)",
-                        background: majorIdx % 2 ? "rgba(148, 163, 184, 0.08)" : "transparent",
+                        background: cell.majorIdx % 2 ? "rgba(148, 163, 184, 0.08)" : "transparent",
                         padding: minorScale === "hour" ? "2px 1px" : "2px 4px",
                         overflow: "hidden",
                         boxSizing: "border-box"
                       }}
-                      title={`${majorLabelForScale(startOfScale(t.at, majorScale), majorScale)} • ${t.minorLabel}`}
+                      title={`${majorLabelForScale(startOfScale(cell.t.at, majorScale), majorScale)} • ${cell.t.minorLabel}`}
                     >
                       <div
                         style={{
@@ -6008,23 +6150,23 @@ export function GanttView() {
                           textAlign: minorScale === "hour" ? "center" : "left"
                         }}
                       >
-                        {t.minorLabel}
+                        {cell.t.minorLabel}
                       </div>
                     </div>
-                  );
-                })}
+                ))}
               </div>
               <div className="ganttTimelineMajorRow">
-                {majorSegments.map((m) => (
+                {visibleMajorCells.map((m) => (
                   <div
                     key={m.key}
                     className={`ganttTimelineMajorCell${m.alt ? " ganttTimelineMajorCellAlt" : ""}`}
-                    style={{ left: m.left, width: m.width }}
+                    style={{ left: m.paneLeft, width: m.paneWidth }}
                     title={m.label}
                   >
                     {m.label}
                   </div>
                 ))}
+              </div>
               </div>
             </div>
           </div>
@@ -6114,37 +6256,35 @@ export function GanttView() {
 
         <div className="ganttBody">
           <div className="ganttLeftCol" style={ganttLabelColStyle} ref={ganttLeftColRef}>
-            {groupMode === "AIRCRAFT"
-              ? aircraftRows.map((r, rowIdx) => (
-                  <div
-                    className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}`}
-                    key={r.key}
-                    style={{ height: ganttRowHeight }}
-                    title={(r as any).title || undefined}
-                  >
-                    <div>
-                      <strong>{r.label}</strong>
-                    </div>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {r.subLabel}
-                    </div>
+            {virtRowStart > 0 ? <div className="ganttVirtSpacer" style={{ height: virtRowStart * ganttRowHeight }} aria-hidden="true" /> : null}
+            {visibleDiagramRows.map((r, i) => {
+              const rowIdx = virtRowStart + i;
+              const hangarBoundary = groupMode !== "AIRCRAFT" && isHangarBoundaryRow(rowIdx);
+              return (
+                <div
+                  className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}${hangarBoundary ? " ganttHangarBoundary" : ""}`}
+                  key={r.key}
+                  style={{ height: ganttRowHeight }}
+                  title={
+                    groupMode === "AIRCRAFT"
+                      ? (r as any).title || undefined
+                      : (r as any).title && (r as any).title !== r.label
+                        ? (r as any).title
+                        : undefined
+                  }
+                >
+                  <div>
+                    <strong>{r.label}</strong>
                   </div>
-                ))
-              : hangarStandRows.map((r, rowIdx) => (
-                  <div
-                    className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}${isHangarBoundaryRow(rowIdx) ? " ganttHangarBoundary" : ""}`}
-                    key={r.key}
-                    style={{ height: ganttRowHeight }}
-                    title={(r as any).title && (r as any).title !== r.label ? (r as any).title : undefined}
-                  >
-                    <div>
-                      <strong>{r.label}</strong>
-                    </div>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {(r as any).subLabel ?? ""}
-                    </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {groupMode === "AIRCRAFT" ? r.subLabel : ((r as any).subLabel ?? "")}
                   </div>
-                ))}
+                </div>
+              );
+            })}
+            {virtRowEnd < ganttRowCount ? (
+              <div className="ganttVirtSpacer" style={{ height: (ganttRowCount - virtRowEnd) * ganttRowHeight }} aria-hidden="true" />
+            ) : null}
           </div>
 
           <div className="ganttRightCol">
@@ -6152,21 +6292,23 @@ export function GanttView() {
               <div
                 key={`gantt-inner-${fitLayoutEpoch}`}
                 className="ganttRightInner"
-                style={{ width: canvasWidth, minWidth: canvasWidth }}
+                style={{ width: canvasWidth, minWidth: canvasWidth, height: ganttBodyHeight }}
                 onPointerDown={onGanttPanPointerDown}
                 onDragStart={(e) => e.preventDefault()}
                 onAuxClick={(e) => {
                   if (e.button === 1) e.preventDefault();
                 }}
               >
-                {groupMode === "HANGAR_STAND" && visiblePlacementLinks.length > 0 ? (
+                {groupMode === "HANGAR_STAND" && visiblePaneLinks.length > 0 ? (
                   <svg
                     className="placementLinkLayer placementLinkLayerActive"
-                    width={canvasWidth}
-                    height={Math.max(ganttRowHeight, hangarStandRows.length * ganttRowHeight)}
+                    width={paneWidth}
+                    height={Math.max(ganttRowHeight, virtPaneHeight)}
+                    viewBox={`${paneLeft} ${virtPaneTop} ${paneWidth} ${Math.max(ganttRowHeight, virtPaneHeight)}`}
+                    style={{ left: paneLeft, top: virtPaneTop, width: paneWidth, height: Math.max(ganttRowHeight, virtPaneHeight) }}
                     aria-hidden="true"
                   >
-                    {visiblePlacementLinks.map((l) => (
+                    {visiblePaneLinks.map((l) => (
                       <g key={l.key} className="placementLink">
                         <path d={l.d} className="placementLinkHalo" />
                         <path d={l.d} className="placementLinkStroke" stroke={l.color} />
@@ -6176,22 +6318,34 @@ export function GanttView() {
                     ))}
                   </svg>
                 ) : null}
+                <div className="ganttVirtPane" style={{ left: paneLeft, top: virtPaneTop, width: paneWidth, height: virtPaneHeight }}>
+                <TodayLine
+                  from={from}
+                  to={to}
+                  canvasWidth={canvasWidth}
+                  currentMinute={currentMinute}
+                  timeMode={timelineTimeMode}
+                  offsetX={paneLeft}
+                  paneWidth={paneWidth}
+                />
                 {groupMode === "AIRCRAFT"
-                  ? aircraftRows.map((r, rowIdx) => (
-                      <div className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ width: canvasWidth, minHeight: ganttRowHeight }}>
-                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} timeMode={timelineTimeMode} />
+                  ? aircraftRows.slice(virtRowStart, virtRowEnd).map((r, i) => {
+                      const rowIdx = virtRowStart + i;
+                      return (
+                      <div className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ width: paneWidth, height: ganttRowHeight, minHeight: ganttRowHeight }}>
                         {r.events.map((p) => {
                           const ev = p.ev;
                           const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
                           const g = calcBarXW({ startAt: displayPeriod.startAt, endAt: displayPeriod.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
                           if (!g) return null;
-                          const { x, w } = g;
-                          const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
-                          const visual = barVisualStyle(ev.status, color);
                           const actualSeg =
                             ganttDisplayMode === "PLAN_FACT" && ev.actualStartAt && ev.actualEndAt
                               ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode })
                               : null;
+                          if (!barInPane(g.x, g.w) && !(actualSeg && barInPane(actualSeg.x, actualSeg.w))) return null;
+                          const { x, w } = g;
+                          const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
+                          const visual = barVisualStyle(ev.status, color);
                           const actualTone = factTone(ev);
                           const overrunLabel = factTatLabel(ev);
                           const exitTargetIsFact = Boolean(actualSeg) || displayPeriod.source === "Факт";
@@ -6205,7 +6359,7 @@ export function GanttView() {
                               <div
                                 className={`bar${ganttDisplayMode === "PLAN_FACT" ? " barPlanFactPlan" : ""}${displayPeriod.source === "Факт" ? " barCurrentFact" : ""}${isEditorFocused ? " barEditing" : ""}`}
                                 style={{
-                                  left: x,
+                                  left: toPaneX(x),
                                   width: w,
                                   cursor: "pointer",
                                   ...visual,
@@ -6232,7 +6386,7 @@ export function GanttView() {
                               {actualSeg ? (
                                 <div
                                   className={`factBar factBar${actualTone[0].toUpperCase()}${actualTone.slice(1)}${isEditorFocused ? " factBarEditing" : ""}`}
-                                  style={{ left: actualSeg.x, width: actualSeg.w }}
+                                  style={{ left: toPaneX(actualSeg.x), width: actualSeg.w }}
                                   title={`${factToneLabel(actualTone)}: ${formatTimelineDate(ev.actualStartAt, timelineTimeMode)} – ${formatTimelineDate(ev.actualEndAt, timelineTimeMode)}${
                                     overrunLabel ? `\n${overrunLabel}` : ""
                                   }`}
@@ -6248,13 +6402,17 @@ export function GanttView() {
                           );
                         })}
                       </div>
-                    ))
-                  : hangarStandRows.map((r, rowIdx) => (
+                    );
+                    })
+                  : hangarStandRows.slice(virtRowStart, virtRowEnd).map((r, i) => {
+                      const rowIdx = virtRowStart + i;
+                      return (
                       <div
                         className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}${isHangarBoundaryRow(rowIdx) ? " ganttHangarBoundary" : ""}`}
                         key={r.key}
                         style={{
-                          width: canvasWidth,
+                          width: paneWidth,
+                          height: ganttRowHeight,
                           minHeight: ganttRowHeight,
                           outline:
                             dndActive && dndHoverKey === r.key && dndHoverIntent === "move"
@@ -6266,19 +6424,18 @@ export function GanttView() {
                         data-row-key={r.key}
                         data-hangar-id={r.hangarId ?? ""}
                       >
-                        <TodayLine from={from} to={to} canvasWidth={canvasWidth} currentMinute={currentMinute} timeMode={timelineTimeMode} />
                         {dndActive && ptrPreview && ptrTarget?.rowKey === r.key ? (
                           <div className="ganttDndGhostLayer" aria-hidden="true">
                             {(ptrPreview.bars.length > 1 ? ptrPreview.bars : []).map((bar, idx) => (
                               <div
                                 key={`${bar.startAt}-${bar.endAt}-${idx}`}
                                 className="ganttDndGhostItem"
-                                style={{ left: bar.x, width: bar.w }}
+                                style={{ left: toPaneX(bar.x), width: bar.w }}
                               />
                             ))}
                             <div
                               className="ganttDndGhostEnvelope"
-                              style={{ left: ptrPreview.envelopeX, width: ptrPreview.envelopeW }}
+                              style={{ left: toPaneX(ptrPreview.envelopeX), width: ptrPreview.envelopeW }}
                               title={`Предпросмотр: ${formatTimelineDate(ptrPreview.envelopeStartAt, timelineTimeMode)} – ${formatTimelineDate(
                                 ptrPreview.envelopeEndAt,
                                 timelineTimeMode
@@ -6298,13 +6455,14 @@ export function GanttView() {
                           const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
                           const g = calcBarXW({ startAt: displayPeriod.startAt, endAt: displayPeriod.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
                           if (!g) return null;
-                          const { x, w } = g;
-                          const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
-                          const visual = barVisualStyle(ev.status, color);
                           const actualSeg =
                             ganttDisplayMode === "PLAN_FACT" && ev.actualStartAt && ev.actualEndAt
                               ? calcBarXW({ startAt: ev.actualStartAt, endAt: ev.actualEndAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode })
                               : null;
+                          if (!barInPane(g.x, g.w) && !(actualSeg && barInPane(actualSeg.x, actualSeg.w))) return null;
+                          const { x, w } = g;
+                          const color = aircraftTypeMarkColor(ev, aircraftPaletteMap);
+                          const visual = barVisualStyle(ev.status, color);
                           const actualTone = factTone(ev);
                           const overrunLabel = factTatLabel(ev);
                           const exitTargetIsFact = Boolean(actualSeg) || displayPeriod.source === "Факт";
@@ -6330,7 +6488,7 @@ export function GanttView() {
                               <div
                               className={`bar${ganttDisplayMode === "PLAN_FACT" ? " barPlanFactPlan" : ""}${displayPeriod.source === "Факт" ? " barCurrentFact" : ""}${ev.placementOrigin === "AUTO_GAP" ? " barAutoGap" : ""}${isEditorFocused ? " barEditing" : ""}${isPlacementDimmed ? " barDimmed" : ""}`}
                               style={{
-                                left: x,
+                                left: toPaneX(x),
                                 width: w,
                                 cursor: dndActive ? (isMultiPlacementDndBlocked ? "not-allowed" : "grab") : "pointer",
                                 ...visual,
@@ -6434,21 +6592,21 @@ export function GanttView() {
                             {bridge?.prevLabel ? (
                               <div
                                 className={`placementBridgeMark placementBridgeMarkIn${isPlacementDimmed ? " placementBridgeMarkDimmed" : ""}`}
-                                style={{ left: x, top: bridgeMarkTop }}
+                                style={{ left: toPaneX(x), top: bridgeMarkTop }}
                                 aria-hidden="true"
                               />
                             ) : null}
                             {bridge?.nextLabel ? (
                               <div
                                 className={`placementBridgeMark placementBridgeMarkOut${isPlacementDimmed ? " placementBridgeMarkDimmed" : ""}`}
-                                style={{ left: x + w, top: bridgeMarkTop }}
+                                style={{ left: toPaneX(x + w), top: bridgeMarkTop }}
                                 aria-hidden="true"
                               />
                             ) : null}
                             {actualSeg ? (
                               <div
                                 className={`factBar factBar${actualTone[0].toUpperCase()}${actualTone.slice(1)}${isEditorFocused ? " factBarEditing" : ""}${isPlacementDimmed ? " barDimmed" : ""}`}
-                                style={{ left: actualSeg.x, width: actualSeg.w }}
+                                style={{ left: toPaneX(actualSeg.x), width: actualSeg.w }}
                                 title={`${factToneLabel(actualTone)}: ${formatTimelineDate(ev.actualStartAt, timelineTimeMode)} – ${formatTimelineDate(ev.actualEndAt, timelineTimeMode)}${
                                   overrunLabel ? `\n${overrunLabel}` : ""
                                 }`}
@@ -6464,7 +6622,9 @@ export function GanttView() {
                           );
                         })}
                       </div>
-                    ))}
+                    );
+                    })}
+                </div>
               </div>
             </div>
           </div>
@@ -6481,7 +6641,7 @@ export function GanttView() {
           </div>
         ) : null}
       {!isMobile ? (
-        <div className="ganttStickyFooter" aria-label="Нижняя панель диаграммы">
+        <div className="ganttStickyFooter" ref={ganttStickyFooterRef} aria-label="Нижняя панель диаграммы">
           <div className="ganttBottomScrollRow" aria-hidden="true">
             <div className="ganttBottomScrollSpacer" style={ganttLabelColStyle} />
             <div className="ganttBottomScrollViewport" ref={bottomScrollRef} onScroll={onBottomScroll}>
@@ -6500,18 +6660,19 @@ export function GanttView() {
               </div>
               <div className="ganttSlotHistogramViewport" ref={histogramViewportRef}>
                 <div key={`gantt-hist-${fitLayoutEpoch}`} className="ganttSlotHistogramCanvas" style={{ width: canvasWidth, minWidth: canvasWidth }}>
+                  <div className="ganttVirtPane" style={{ left: paneLeft, width: paneWidth, top: 0, height: 76 }}>
                   {slotHistogram.length > 0 ? (
-                    slotHistogram.map((b) => {
+                    visibleHistogramBuckets.map((b) => {
                       const occupiedPct = b.occupied > 0 ? (b.occupied / slotHistogramMaxOccupied) * 100 : 0;
                       return (
                         <div
                           className="slotBucket"
                           key={b.key}
-                          style={{ left: b.left, width: Math.max(2, b.width - 1) }}
+                          style={{ left: b.paneLeft, width: b.paneWidth }}
                           title={`${b.label}: событий ${b.occupied}`}
                         >
                           <div className="slotBucketOccupied" style={{ height: `${occupiedPct}%` }} />
-                          {b.occupied > 0 && b.width >= 22 ? (
+                          {b.occupied > 0 && b.paneWidth >= 22 ? (
                             <span className="slotBucketValue" style={{ bottom: `calc(${occupiedPct}% + 3px)` }}>
                               {b.occupied}
                             </span>
@@ -6522,6 +6683,7 @@ export function GanttView() {
                   ) : (
                   <div className="slotHistogramEmpty">Нет событий в выбранном диапазоне</div>
                   )}
+                  </div>
                 </div>
               </div>
             </div>

@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
+import { UserMsg } from "../../lib/userErrors.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 
 const PLAN_STATUS = ["DRAFT", "IN_REVIEW", "READY", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"] as const;
@@ -76,8 +77,8 @@ async function getStepInContext(app: any, req: any, stepId: string) {
   });
 }
 
-function assertPeriod(start?: Date | null, end?: Date | null, label = "period") {
-  if (start && end && end <= start) throw new Error(`${label} end must be after start`);
+function assertPeriod(start?: Date | null, end?: Date | null, label = "период") {
+  if (start && end && end <= start) throw new Error(`Окончание периода «${label}» должно быть позже начала`);
 }
 
 const zPlanPatch = z.object({
@@ -117,10 +118,10 @@ const zStepBase = z.object({
 
 function refineStepPeriods(v: { plannedStartAt?: Date | null; plannedEndAt?: Date | null; actualStartAt?: Date | null; actualEndAt?: Date | null }, ctx: z.RefinementCtx) {
     if (v.plannedStartAt && v.plannedEndAt && v.plannedEndAt <= v.plannedStartAt) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "plannedEndAt must be after plannedStartAt", path: ["plannedEndAt"] });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: UserMsg.END_AFTER_START, path: ["plannedEndAt"] });
     }
     if (v.actualStartAt && v.actualEndAt && v.actualEndAt <= v.actualStartAt) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "actualEndAt must be after actualStartAt", path: ["actualEndAt"] });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: UserMsg.ACTUAL_END_AFTER_START, path: ["actualEndAt"] });
     }
 }
 
@@ -247,8 +248,8 @@ export const technicalPlansRoutes: FastifyPluginAsync = async (app) => {
     const planId = zUuid.parse((req.params as any).planId);
     const body = zStepInput.parse(req.body);
     const plan = await getPlanInContext(app, req, planId);
-    assertPeriod(body.plannedStartAt, body.plannedEndAt, "planned");
-    assertPeriod(body.actualStartAt, body.actualEndAt, "actual");
+    assertPeriod(body.plannedStartAt, body.plannedEndAt, "план");
+    assertPeriod(body.actualStartAt, body.actualEndAt, "факт");
     return await app.prisma.eventTechnicalStep.create({
       data: { ...body, planId, sandboxId: plan.sandboxId ?? sandboxIdFor(req as any) }
     });
@@ -259,8 +260,8 @@ export const technicalPlansRoutes: FastifyPluginAsync = async (app) => {
     const stepId = zUuid.parse((req.params as any).stepId);
     const body = zStepPatch.parse(req.body);
     const existing = await getStepInContext(app, req, stepId);
-    assertPeriod(body.plannedStartAt ?? existing.plannedStartAt, body.plannedEndAt ?? existing.plannedEndAt, "planned");
-    assertPeriod(body.actualStartAt ?? existing.actualStartAt, body.actualEndAt ?? existing.actualEndAt, "actual");
+    assertPeriod(body.plannedStartAt ?? existing.plannedStartAt, body.plannedEndAt ?? existing.plannedEndAt, "план");
+    assertPeriod(body.actualStartAt ?? existing.actualStartAt, body.actualEndAt ?? existing.actualEndAt, "факт");
     return await app.prisma.eventTechnicalStep.update({ where: { id: stepId }, data: body });
   });
 
@@ -281,7 +282,7 @@ export const technicalPlansRoutes: FastifyPluginAsync = async (app) => {
     const predecessors = predecessorIds.length
       ? await app.prisma.eventTechnicalStep.findMany({ where: { id: { in: predecessorIds }, planId: step.planId, ...sandboxFilter(req as any) } })
       : [];
-    if (predecessors.length !== predecessorIds.length) throw new Error("Some predecessor steps are not in the same plan");
+    if (predecessors.length !== predecessorIds.length) throw new Error(UserMsg.STEP_DEPENDENCY_INVALID);
 
     await app.prisma.$transaction([
       app.prisma.eventTechnicalStepDependency.deleteMany({ where: { successorStepId: stepId } }),

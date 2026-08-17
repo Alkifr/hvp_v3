@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPostBlob } from "../../lib/api";
 import { buildPrimaryHeaderPlan } from "../../lib/primaryTableHeaders";
+import { parseExcelColRange, resolveFieldPick, suggestFieldPick } from "../../lib/reportFieldPick";
 import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
 
 type ReportDataset =
@@ -287,6 +288,11 @@ export function ReportBuilderPanel(props: Props) {
     "source" | "fields" | "filters" | "summary" | "sort" | "access"
   >("source");
   const [fieldSearch, setFieldSearch] = useState("");
+  const [fieldPick, setFieldPick] = useState("");
+  const [fieldPickOpen, setFieldPickOpen] = useState(false);
+  const [fieldPickIndex, setFieldPickIndex] = useState(0);
+  const [fieldPickError, setFieldPickError] = useState<string | null>(null);
+  const fieldPickRef = useRef<HTMLDivElement | null>(null);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -332,6 +338,26 @@ export function ReportBuilderPanel(props: Props) {
     [visibleFields]
   );
 
+  const fieldPickSuggestions = useMemo(
+    () => suggestFieldPick(fieldPick, currentMeta?.fields ?? [], config.fields),
+    [fieldPick, currentMeta?.fields, config.fields]
+  );
+
+  useEffect(() => {
+    setFieldPickIndex(0);
+  }, [fieldPick]);
+
+  useEffect(() => {
+    if (!fieldPickOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const el = fieldPickRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && !el.contains(e.target)) setFieldPickOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [fieldPickOpen]);
+
   const primaryPreviewHeader = useMemo(() => {
     if (!runResult || config.dataset !== "primary_events" || runResult.mode === "summary") return null;
     const fieldByKey = new Map((currentMeta?.fields ?? []).map((f) => [f.key, f]));
@@ -368,6 +394,8 @@ export function ReportBuilderPanel(props: Props) {
     setRunError(null);
     setDirty(false);
     setFieldSearch("");
+    setFieldPick("");
+    setFieldPickError(null);
     setConstructorTab("source");
     setPage(1);
   };
@@ -380,6 +408,8 @@ export function ReportBuilderPanel(props: Props) {
     setRunError(null);
     setDirty(true);
     setFieldSearch("");
+    setFieldPick("");
+    setFieldPickError(null);
     setConstructorTab("source");
     setPage(1);
   };
@@ -389,10 +419,50 @@ export function ReportBuilderPanel(props: Props) {
     setDirty(true);
   };
 
+  const addFieldsToReport = (keys: string[], unmatched: string[] = []) => {
+    const known = new Set((currentMeta?.fields ?? []).map((f) => f.key));
+    let added = 0;
+    setConfig((prev) => {
+      const add = keys.filter((key) => known.has(key) && !prev.fields.includes(key));
+      added = add.length;
+      if (!add.length) return prev;
+      return { ...prev, fields: [...prev.fields, ...add] };
+    });
+    if (added) {
+      setDirty(true);
+      setFieldPick("");
+      setFieldPickOpen(false);
+    }
+    setFieldPickError(unmatched.length ? `Не найдены: ${unmatched.join(", ")}` : null);
+  };
+
+  const submitFieldPick = (fromSuggestion = false) => {
+    if (!canEdit) return;
+    const suggestion = fromSuggestion
+      ? fieldPickSuggestions[fieldPickIndex]
+      : fieldPickSuggestions[0];
+    const { keys, unmatched } = resolveFieldPick(fieldPick, currentMeta?.fields ?? []);
+    if (fromSuggestion && suggestion) {
+      addFieldsToReport([suggestion.key]);
+      return;
+    }
+    if (keys.length) {
+      addFieldsToReport(keys, unmatched);
+      return;
+    }
+    if (suggestion) {
+      addFieldsToReport([suggestion.key]);
+      return;
+    }
+    if (unmatched.length) addFieldsToReport([], unmatched);
+  };
+
   const applyDataset = (id: string) => {
     const d = datasets.find((item) => item.id === id);
     if (!d) return;
     setFieldSearch("");
+    setFieldPick("");
+    setFieldPickError(null);
     patchConfig({
       dataset: d.id,
       fields: d.defaultFields,
@@ -807,13 +877,97 @@ export function ReportBuilderPanel(props: Props) {
 
           {constructorTab === "fields" ? (
             <div className="reportBuilderSection">
-              <p className="muted small">Отметьте поля и задайте порядок вывода.</p>
+              <p className="muted small">
+                Наберите поля с клавиатуры (название, ключ или колонка Excel) или отметьте их в каталоге. Порядок — справа.
+              </p>
               <div className="reportFieldsToolbar">
+                <div className="reportFieldPick" ref={fieldPickRef}>
+                  <input
+                    className="evInput reportFieldsSearch"
+                    value={fieldPick}
+                    disabled={!canEdit}
+                    placeholder="Набрать: A, B-D, борт… Enter добавляет"
+                    onFocus={() => setFieldPickOpen(true)}
+                    onChange={(e) => {
+                      setFieldPick(e.target.value);
+                      setFieldPickOpen(true);
+                      setFieldPickError(null);
+                    }}
+                    onPaste={(e) => {
+                      const text = e.clipboardData.getData("text");
+                      if (!text || (!/[,;\n]/.test(text) && !parseExcelColRange(text.trim()))) {
+                        return;
+                      }
+                      e.preventDefault();
+                      const { keys, unmatched } = resolveFieldPick(text, currentMeta?.fields ?? []);
+                      addFieldsToReport(keys, unmatched);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowDown") {
+                        if (!fieldPickSuggestions.length) return;
+                        e.preventDefault();
+                        setFieldPickOpen(true);
+                        setFieldPickIndex((i) => (i + 1) % fieldPickSuggestions.length);
+                        return;
+                      }
+                      if (e.key === "ArrowUp") {
+                        if (!fieldPickSuggestions.length) return;
+                        e.preventDefault();
+                        setFieldPickOpen(true);
+                        setFieldPickIndex((i) => (i - 1 + fieldPickSuggestions.length) % fieldPickSuggestions.length);
+                        return;
+                      }
+                      if (e.key === "Escape") {
+                        setFieldPickOpen(false);
+                        return;
+                      }
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        const useSuggestion =
+                          fieldPickOpen &&
+                          fieldPickSuggestions.length > 0 &&
+                          !/[,;\n]/.test(fieldPick) &&
+                          !parseExcelColRange(fieldPick.trim());
+                        submitFieldPick(useSuggestion);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!canEdit || !fieldPick.trim()}
+                    onClick={() => submitFieldPick(false)}
+                  >
+                    Добавить
+                  </button>
+                  {fieldPickOpen && fieldPickSuggestions.length > 0 ? (
+                    <div className="reportFieldPickMenu" role="listbox">
+                      {fieldPickSuggestions.map((f, idx) => (
+                        <button
+                          key={f.key}
+                          type="button"
+                          role="option"
+                          aria-selected={idx === fieldPickIndex}
+                          className={`reportFieldPickOption${idx === fieldPickIndex ? " reportFieldPickOptionOn" : ""}`}
+                          onMouseEnter={() => setFieldPickIndex(idx)}
+                          onClick={() => addFieldsToReport([f.key])}
+                        >
+                          <span>{f.label}</span>
+                          <span className="muted small">
+                            {f.excelColumn ? `${f.excelColumn} · ` : ""}
+                            {f.key}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                {fieldPickError ? <div className="muted small">{fieldPickError}</div> : null}
                 <input
                   className="evInput reportFieldsSearch"
                   type="search"
                   value={fieldSearch}
-                  placeholder="Поиск: название, группа, Excel-колонка…"
+                  placeholder="Поиск в каталоге: название, группа, Excel-колонка…"
                   onChange={(e) => setFieldSearch(e.target.value)}
                 />
                 <div className="reportFieldsToolbarActions">

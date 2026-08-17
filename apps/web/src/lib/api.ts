@@ -80,30 +80,76 @@ function humanizeFetchFailure(err: unknown): string {
   return msg;
 }
 
+const ERROR_CODE_TEXT: Record<string, string> = {
+  UNAUTHORIZED: "Требуется авторизация",
+  INVALID_CREDENTIALS: "Неверный email или пароль",
+  OLD_PASSWORD_INVALID: "Текущий пароль указан неверно",
+  FORBIDDEN: "Недостаточно прав для выполнения операции",
+  SANDBOX_NOT_FOUND: "Песочница не найдена",
+  SANDBOX_ACCESS_DENIED: "Нет доступа к песочнице",
+  SANDBOX_READ_ONLY: "Нет прав на запись в песочнице",
+  SANDBOX_WRITE_DENIED: "Нет прав на запись в песочнице",
+  USER_NOT_FOUND: "Пользователь не найден",
+  CANNOT_ADD_SELF: "Нельзя добавить самого себя",
+  CANNOT_SHARE_SELF: "Нельзя поделиться с самим собой",
+  REPORT_NOT_FOUND: "Отчёт не найден",
+  REPORT_ACCESS_DENIED: "Нет доступа к отчёту",
+  REPORT_EDIT_DENIED: "Недостаточно прав, чтобы изменить отчёт",
+  REPORT_DELETE_DENIED: "Недостаточно прав, чтобы удалить отчёт",
+  REPORT_SHARE_DENIED: "Недостаточно прав, чтобы поделиться отчётом",
+  CONFIG_REQUIRED: "Заполните конфигурацию отчёта",
+  COMPARE_SIDES_REQUIRED: "Для сравнения нужно выбрать обе стороны",
+  TABLE_VIEW_NAME_TAKEN: "Представление с таким именем уже есть",
+  TABLE_VIEW_NOT_FOUND: "Представление таблицы не найдено",
+  PRIMARY_FIELDS_REQUIRED: "Выберите хотя бы одно поле таблицы",
+  INVALID_CURSOR: "Некорректный курсор постраничной загрузки. Обновите таблицу.",
+  EVENT_NOT_FOUND: "Событие не найдено",
+  EVENTS_NOT_FOUND: "События не найдены",
+  NOTIFICATION_NOT_FOUND: "Уведомление не найдено",
+  PLAN_LINE_NOT_FOUND: "Строка плана не найдена",
+  ACTUAL_LINE_NOT_FOUND: "Строка факта не найдена",
+  DB_NOT_CONNECTED: "Нет соединения с базой данных. Повторите попытку позже или обратитесь к администратору.",
+  VALIDATION: "Проверьте заполненные поля",
+  INTERNAL: "Не удалось выполнить операцию. Если ошибка повторяется, обратитесь к администратору.",
+  RECORD_NOT_FOUND: "Запись не найдена",
+  RECORD_CONFLICT: "Такая запись уже существует",
+  RECORD_IN_USE: "Нельзя изменить запись: она связана с другими данными",
+  NOT_FOUND: "Запись не найдена",
+  CONFLICT: "Конфликт данных. Обновите страницу и повторите.",
+  BAD_REQUEST: "Проверьте заполненные поля"
+};
+
+function looksLikeErrorCode(text: string): boolean {
+  return /^[A-Z][A-Z0-9_]{2,}$/.test(text.trim());
+}
+
+function userTextFromCodeOrMessage(code?: unknown, message?: unknown): string | null {
+  const msg = message != null ? String(message).trim() : "";
+  const err = code != null ? String(code).trim() : "";
+  if (msg && ERROR_CODE_TEXT[msg]) return ERROR_CODE_TEXT[msg];
+  if (/^internal server error$/i.test(msg)) return ERROR_CODE_TEXT.INTERNAL;
+  if (msg && !looksLikeErrorCode(msg) && !msg.startsWith("[")) return msg;
+  if (err && ERROR_CODE_TEXT[err]) return ERROR_CODE_TEXT[err];
+  if (msg) return msg;
+  return null;
+}
+
 function formatApiErrorBody(text: string, status?: number): string {
   const trimmed = String(text ?? "").trim();
   if (trimmed) {
     try {
       const j = JSON.parse(trimmed);
-      if (j?.error === "DB_NOT_CONNECTED") {
-        return `Нет соединения с БД (проверьте DATABASE_CLOUD_URL). ${j?.detail ?? ""}`.trim();
-      }
-      if (j?.error === "SANDBOX_NOT_FOUND") return "Песочница не найдена";
-      if (j?.error === "SANDBOX_ACCESS_DENIED") return "Нет доступа к песочнице";
-      if (j?.error === "SANDBOX_READ_ONLY") return "Нет прав на запись в песочнице";
-      if (j?.error === "FORBIDDEN") return "Недостаточно прав для выполнения операции";
-      if (j?.message) {
-        const msg = String(j.message);
-        // Иногда Fastify/Zod отдаёт message как JSON-массив issues
-        if (msg.trim().startsWith("[")) {
+      const fromFields = userTextFromCodeOrMessage(j?.error, j?.message);
+      if (fromFields) {
+        if (String(j?.message ?? "").trim().startsWith("[")) {
           try {
-            const issues = JSON.parse(msg);
+            const issues = JSON.parse(String(j.message));
             if (Array.isArray(issues)) return formatZodIssuesMessage(issues);
           } catch {
-            /* keep original */
+            /* keep mapped text */
           }
         }
-        return msg;
+        return fromFields;
       }
       if (Array.isArray(j)) return formatZodIssuesMessage(j);
     } catch {
@@ -122,6 +168,8 @@ function formatApiErrorBody(text: string, status?: number): string {
     return `Прокси или шлюз вернул страницу ошибки${status ? ` (HTTP ${status})` : ""}. Повторите попытку; если сообщение повторяется, проверьте сеть.`;
   }
   if (trimmed) {
+    const asCode = ERROR_CODE_TEXT[trimmed];
+    if (asCode) return asCode;
     return trimmed.length > MAX_RAW_ERROR ? `${trimmed.slice(0, MAX_RAW_ERROR)}…` : trimmed;
   }
   return status ? `Ошибка запроса (HTTP ${status})` : "Ошибка запроса";

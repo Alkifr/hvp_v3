@@ -2,6 +2,17 @@ import type { PrismaClient } from "@prisma/client";
 import { EventAuditAction, EventStatus } from "@prisma/client";
 import dayjs from "dayjs";
 
+import {
+  aircraftDisplayCode,
+  aircraftDisplayName,
+  aircraftTypeDisplayCode,
+  aircraftTypeDisplayName,
+  digestCellText,
+  digestColumnLabel,
+  parseDigestColumns,
+  type DigestColumnKey
+} from "./mailDigestColumns.js";
+
 const OPERATOR_LABEL: Record<string, string> = {
   AFL: "АФЛ",
   AKR: "АКР"
@@ -31,8 +42,10 @@ export type DigestRow = {
   kind: DigestKind;
   operatorCode: string;
   operatorLabel: string;
-  aircraftTypeLabel: string;
-  aircraftNumber: string;
+  aircraftTypeName: string;
+  aircraftTypeCode: string;
+  aircraftName: string;
+  aircraftCode: string;
   title: string;
   detail: string;
   period: string;
@@ -55,8 +68,10 @@ type EventCtx = {
   endAt: Date;
   operatorCode: string;
   operatorLabel: string;
-  aircraftNumber: string;
-  aircraftTypeLabel: string;
+  aircraftName: string;
+  aircraftCode: string;
+  aircraftTypeName: string;
+  aircraftTypeCode: string;
 };
 
 type FieldCollapse = {
@@ -92,33 +107,6 @@ function formatRange(start: Date, end: Date): string {
 
 function operatorDisplay(code: string): string {
   return OPERATOR_LABEL[code] ?? code;
-}
-
-function aircraftNumberFrom(opts: {
-  serialNumber?: string | null;
-  tailNumber?: string | null;
-  virtualLabel?: string | null;
-}): string {
-  const serial = opts.serialNumber?.trim();
-  if (serial) return serial;
-  const tail = opts.tailNumber?.trim();
-  if (tail) {
-    const digits = tail.replace(/^RA-?/i, "").replace(/[^\d]/g, "");
-    if (digits) return digits;
-    return tail;
-  }
-  const label = opts.virtualLabel?.trim();
-  if (label) {
-    const digits = label.replace(/[^\d]/g, "");
-    if (digits) return digits;
-    return label;
-  }
-  return "?";
-}
-
-function typeLabel(type: { name?: string | null; icaoType?: string | null } | null | undefined): string {
-  if (!type) return "";
-  return (type.icaoType?.trim() || type.name?.trim() || "").trim();
 }
 
 function escapeHtml(s: string): string {
@@ -167,24 +155,31 @@ function buildEventCtx(
   if (!event) return null;
 
   let operatorCode = "UNKNOWN";
-  let aircraftNumber = "?";
-  let aircraftTypeLabel = "";
+  let aircraftName = "?";
+  let aircraftCode = "";
+  let aircraftTypeName = "";
+  let aircraftTypeCode = "";
 
   if (event.aircraft) {
     operatorCode = event.aircraft.operator?.code ?? "UNKNOWN";
-    aircraftNumber = aircraftNumberFrom({
-      serialNumber: event.aircraft.serialNumber,
-      tailNumber: event.aircraft.tailNumber
+    aircraftName = aircraftDisplayName({
+      tailNumber: event.aircraft.tailNumber,
+      serialNumber: event.aircraft.serialNumber
     });
-    aircraftTypeLabel = typeLabel(event.aircraft.type);
+    aircraftCode = aircraftDisplayCode({ serialNumber: event.aircraft.serialNumber });
+    aircraftTypeName = aircraftTypeDisplayName(event.aircraft.type);
+    aircraftTypeCode = aircraftTypeDisplayCode(event.aircraft.type);
   } else if (isPlainObject(event.virtualAircraft)) {
     const va = event.virtualAircraft as Record<string, unknown>;
     const opId = typeof va.operatorId === "string" ? va.operatorId : null;
     const typeId = typeof va.aircraftTypeId === "string" ? va.aircraftTypeId : null;
     const label = typeof va.label === "string" ? va.label : null;
     if (opId && operatorsById.has(opId)) operatorCode = operatorsById.get(opId)!.code;
-    if (typeId && typesById.has(typeId)) aircraftTypeLabel = typeLabel(typesById.get(typeId)!);
-    aircraftNumber = aircraftNumberFrom({ virtualLabel: label });
+    if (typeId && typesById.has(typeId)) {
+      aircraftTypeName = aircraftTypeDisplayName(typesById.get(typeId)!);
+      aircraftTypeCode = aircraftTypeDisplayCode(typesById.get(typeId)!);
+    }
+    aircraftName = aircraftDisplayName({ virtualLabel: label });
   }
 
   return {
@@ -194,8 +189,10 @@ function buildEventCtx(
     endAt: new Date(event.endAt),
     operatorCode,
     operatorLabel: operatorDisplay(operatorCode),
-    aircraftNumber,
-    aircraftTypeLabel
+    aircraftName,
+    aircraftCode,
+    aircraftTypeName,
+    aircraftTypeCode
   };
 }
 
@@ -208,8 +205,10 @@ function rowFromCtx(
     kind,
     operatorCode: ctx.operatorCode,
     operatorLabel: ctx.operatorLabel,
-    aircraftTypeLabel: ctx.aircraftTypeLabel,
-    aircraftNumber: ctx.aircraftNumber,
+    aircraftTypeName: ctx.aircraftTypeName,
+    aircraftTypeCode: ctx.aircraftTypeCode,
+    aircraftName: ctx.aircraftName,
+    aircraftCode: ctx.aircraftCode,
     title: ctx.title,
     detail: opts.detail,
     period: opts.period,
@@ -219,7 +218,8 @@ function rowFromCtx(
 
 const KIND_ORDER: DigestKind[] = ["added", "moved", "cancelled"];
 
-function formatText(rows: DigestRow[]): string {
+function formatText(rows: DigestRow[], columns: DigestColumnKey[]): string {
+  const cols = columns.length ? columns : parseDigestColumns(null);
   const byOp = new Map<string, { label: string; rows: DigestRow[] }>();
   for (const row of rows) {
     const g = byOp.get(row.operatorCode) ?? { label: row.operatorLabel, rows: [] };
@@ -235,9 +235,11 @@ function formatText(rows: DigestRow[]): string {
       if (!subset.length) continue;
       lines.push(`  ${KIND_STYLE[kind].label}:`);
       for (const r of subset) {
-        const ac = [r.aircraftTypeLabel, r.aircraftNumber].filter(Boolean).join(" ");
-        const parts = [ac, r.title, r.detail || r.period].filter(Boolean);
-        const prev = r.previous ? ` (ранее ${r.previous})` : "";
+        const parts = cols
+          .filter((key) => key !== "kind")
+          .map((key) => digestCellText(r, key).trim())
+          .filter(Boolean);
+        const prev = r.previous && !cols.includes("previous") ? ` (ранее ${r.previous})` : "";
         lines.push(`  - ${parts.join(" ")}${prev}`);
       }
     }
@@ -246,8 +248,9 @@ function formatText(rows: DigestRow[]): string {
   return lines.join("\n").trim();
 }
 
-function formatHtml(rows: DigestRow[]): string {
+function formatHtml(rows: DigestRow[], columns: DigestColumnKey[]): string {
   if (!rows.length) return "";
+  const cols = columns.length ? columns : parseDigestColumns(null);
 
   const byOp = new Map<string, { label: string; rows: DigestRow[] }>();
   for (const row of rows) {
@@ -263,32 +266,40 @@ function formatHtml(rows: DigestRow[]): string {
     const bodyRows = sorted
       .map((r) => {
         const st = KIND_STYLE[r.kind];
-        return `<tr>
-  <td style="padding:8px 10px;border:1px solid ${st.border};background:${st.bg};color:${st.fg};font-weight:600;white-space:nowrap;">${escapeHtml(st.label)}</td>
-  <td style="padding:8px 10px;border:1px solid #e5e7eb;background:${st.bg};">${escapeHtml(r.aircraftTypeLabel || "—")}</td>
-  <td style="padding:8px 10px;border:1px solid #e5e7eb;background:${st.bg};font-weight:600;">${escapeHtml(r.aircraftNumber || "—")}</td>
-  <td style="padding:8px 10px;border:1px solid #e5e7eb;background:${st.bg};">${escapeHtml(r.title || "—")}</td>
-  <td style="padding:8px 10px;border:1px solid #e5e7eb;background:${st.bg};">${escapeHtml(r.detail || r.period || "—")}</td>
-  <td style="padding:8px 10px;border:1px solid #e5e7eb;background:${st.bg};color:#6b7280;">${escapeHtml(r.previous || "—")}</td>
-</tr>`;
+        const cells = cols
+          .map((key) => {
+            const extra =
+              key === "kind"
+                ? `color:${st.fg};font-weight:600;white-space:nowrap;`
+                : key === "aircraft"
+                  ? "font-weight:600;"
+                  : key === "previous"
+                    ? "color:#6b7280;"
+                    : "";
+            return `<td style="padding:8px 10px;border:1px solid ${key === "kind" ? st.border : "#e5e7eb"};background:${st.bg};${extra}">${escapeHtml(digestCellText(r, key) || "—")}</td>`;
+          })
+          .join("\n  ");
+        return `<tr>\n  ${cells}\n</tr>`;
       })
       .join("\n");
+
+    const headCells = cols
+      .map(
+        (key) =>
+          `<th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">${escapeHtml(digestColumnLabel(key))}</th>`
+      )
+      .join("\n      ");
 
     sections.push(`
 <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:900px;margin:0 0 24px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.4;">
   <thead>
     <tr>
-      <th colspan="6" style="padding:10px 12px;text-align:left;background:#1f2937;color:#fff;font-size:15px;border:1px solid #111827;">
+      <th colspan="${cols.length}" style="padding:10px 12px;text-align:left;background:#1f2937;color:#fff;font-size:15px;border:1px solid #111827;">
         ${escapeHtml(g.label)}
       </th>
     </tr>
     <tr>
-      <th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">Тип</th>
-      <th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">Тип ВС</th>
-      <th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">Борт</th>
-      <th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">Работы</th>
-      <th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">Период / изменение</th>
-      <th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">Ранее</th>
+      ${headCells}
     </tr>
   </thead>
   <tbody>
@@ -324,9 +335,10 @@ function emptyResult(audits = 0): ChangeDigestResult {
 
 export async function buildChangeDigest(
   prisma: PrismaClient,
-  params: { from: Date; to: Date }
+  params: { from: Date; to: Date; columns?: unknown }
 ): Promise<ChangeDigestResult> {
   const { from, to } = params;
+  const columns = parseDigestColumns(params.columns);
   if (!(to > from)) return emptyResult();
 
   const audits = await prisma.maintenanceEventAudit.findMany({
@@ -456,8 +468,8 @@ export async function buildChangeDigest(
   const operatorCodes = new Set(rows.map((r) => r.operatorCode));
 
   return {
-    text: formatText(rows),
-    html: formatHtml(rows),
+    text: formatText(rows, columns),
+    html: formatHtml(rows, columns),
     rows,
     stats: {
       operators: operatorCodes.size,

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 
 import { zDateTime, zUuid } from "../lib/zod.js";
 import { isSystemAdmin } from "../lib/rbac.js";
+import { UserMsg } from "../lib/userErrors.js";
 import { copyPlanToSandbox, eventFingerprint, resolveOriginEventId } from "../lib/sandboxCopy.js";
 import { logUserActivity } from "../lib/userActivity.js";
 
@@ -150,7 +151,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
                 if (val.source === "sandbox" && !val.sandboxId) {
                   ctx.addIssue({
                     code: z.ZodIssueCode.custom,
-                    message: "sandboxId required when source is sandbox",
+                    message: UserMsg.SANDBOX_SOURCE_REQUIRED,
                     path: ["sandboxId"]
                   });
                 }
@@ -748,7 +749,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
           .max(5000),
         deleteProdInRange: z.boolean().default(false)
       })
-      .refine((v) => v.to > v.from, { message: "to must be after from" })
+      .refine((v) => v.to > v.from, { message: UserMsg.END_AFTER_START })
       .parse(req.body);
 
     const actor = getActor(req);

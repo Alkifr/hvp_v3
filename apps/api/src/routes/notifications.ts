@@ -1,7 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
-import { assertPermission } from "../lib/rbac.js";
+import { assertPermission, isSystemAdmin } from "../lib/rbac.js";
+import { KIND_USER_ERROR } from "../lib/adminErrorNotify.js";
+import { UserMsg } from "../lib/userErrors.js";
 import { zUuid } from "../lib/zod.js";
 
 /** Только рабочий контур (sandboxId = null). Песочницы в колокольчик не попадают. */
@@ -23,9 +25,14 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.query ?? {});
 
+    const adminOnly = isSystemAdmin((req as any).auth?.roles);
     const items = await app.prisma.appNotification.findMany({
       where: {
-        AND: [PROD_SCOPE, { reads: { none: { userId } } }]
+        AND: [
+          PROD_SCOPE,
+          { reads: { none: { userId } } },
+          adminOnly ? {} : { kind: { not: KIND_USER_ERROR } }
+        ]
       },
       orderBy: [{ createdAt: "desc" }],
       take: query.limit,
@@ -81,7 +88,10 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
 
     const note = await app.prisma.appNotification.findUnique({ where: { id } });
     if (!note || note.sandboxId != null) {
-      throw app.httpErrors.notFound("Notification not found");
+      throw app.httpErrors.notFound(UserMsg.NOTIFICATION_NOT_FOUND);
+    }
+    if (note.kind === KIND_USER_ERROR && !isSystemAdmin((req as any).auth?.roles)) {
+      throw app.httpErrors.notFound(UserMsg.NOTIFICATION_NOT_FOUND);
     }
 
     await app.prisma.appNotificationRead.upsert({
@@ -102,9 +112,14 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
       throw err;
     }
 
+    const adminOnly = isSystemAdmin((req as any).auth?.roles);
     const unread = await app.prisma.appNotification.findMany({
       where: {
-        AND: [PROD_SCOPE, { reads: { none: { userId } } }]
+        AND: [
+          PROD_SCOPE,
+          { reads: { none: { userId } } },
+          adminOnly ? {} : { kind: { not: KIND_USER_ERROR } }
+        ]
       },
       select: { id: true },
       take: 500

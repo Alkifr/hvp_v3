@@ -20,7 +20,8 @@ export async function authMe(): Promise<MeResponse> {
 export type AuthLoginResponse = { ok: true; mustChangePassword: boolean } | { ok: false; error: string; message: string };
 export type AuthActionResponse = { ok: true } | { ok: false; error: string; message: string };
 
-function authErrorMessage(error: string): string {
+function authErrorMessage(error: string, fallback?: string): string {
+  if (fallback && fallback.trim() && !/^[A-Z][A-Z0-9_]{2,}$/.test(fallback.trim())) return fallback;
   if (error === "INVALID_CREDENTIALS") return "Неверный email или пароль";
   if (error === "UNAUTHORIZED") return "Требуется авторизация";
   if (error === "OLD_PASSWORD_INVALID") return "Текущий пароль указан неверно";
@@ -38,7 +39,7 @@ export async function authLogin(email: string, password: string): Promise<AuthLo
   const data = (await res.json()) as any;
   if (!res.ok) {
     const error = data?.error ?? "LOGIN_FAILED";
-    return { ok: false, error, message: authErrorMessage(error) };
+    return { ok: false, error, message: authErrorMessage(error, data?.message) };
   }
   return { ok: true, mustChangePassword: Boolean(data?.mustChangePassword) };
 }
@@ -57,7 +58,7 @@ export async function authChangePassword(oldPassword: string, newPassword: strin
   const data = (await res.json()) as any;
   if (!res.ok) {
     const error = data?.error ?? "CHANGE_PASSWORD_FAILED";
-    return { ok: false, error, message: authErrorMessage(error) };
+    return { ok: false, error, message: authErrorMessage(error, data?.message) };
   }
   return { ok: true };
 }

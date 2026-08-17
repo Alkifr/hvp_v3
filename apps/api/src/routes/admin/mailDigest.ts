@@ -1,9 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
-import { zDateTime } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
-import { buildChangeDigest } from "../../lib/changeDigest.js";
 import { parseRecipients, sendMail, smtpConfigFromSettings } from "../../lib/mailer.js";
 
 const SETTINGS_ID = "default";
@@ -16,9 +14,7 @@ const zSettingsPut = z.object({
   smtpSecure: z.boolean().optional(),
   smtpUser: z.string().trim().max(200).nullable().optional(),
   smtpPass: z.string().max(500).nullable().optional(),
-  mailFrom: z.string().trim().max(200).nullable().optional(),
-  recipients: z.array(zEmail).max(200).optional(),
-  subjectTemplate: z.string().trim().min(1).max(300).optional()
+  mailFrom: z.string().trim().max(200).nullable().optional()
 });
 
 function serializeSettings(row: {
@@ -73,8 +69,6 @@ export const mailDigestRoutes: FastifyPluginAsync = async (app) => {
     if (body.smtpSecure !== undefined) data.smtpSecure = body.smtpSecure;
     if (body.smtpUser !== undefined) data.smtpUser = body.smtpUser?.trim() || null;
     if (body.mailFrom !== undefined) data.mailFrom = body.mailFrom?.trim() || null;
-    if (body.recipients !== undefined) data.recipients = body.recipients.map((e) => e.trim().toLowerCase());
-    if (body.subjectTemplate !== undefined) data.subjectTemplate = body.subjectTemplate.trim();
     if (body.smtpPass !== undefined) {
       // пустая строка / null — не менять пароль
       if (body.smtpPass !== null && body.smtpPass.length > 0) data.smtpPass = body.smtpPass;
@@ -85,61 +79,6 @@ export const mailDigestRoutes: FastifyPluginAsync = async (app) => {
       data
     });
     return serializeSettings(updated);
-  });
-
-  app.post("/mail-digest/preview", async (req) => {
-    assertPermission(req as any, "admin:mail");
-    const body = z
-      .object({
-        from: zDateTime,
-        to: zDateTime
-      })
-      .refine((v) => v.to > v.from, { message: "Дата окончания периода должна быть позже даты начала" })
-      .parse(req.body ?? {});
-
-    return await buildChangeDigest(app.prisma, { from: body.from, to: body.to });
-  });
-
-  app.post("/mail-digest/send", async (req) => {
-    assertPermission(req as any, "admin:mail");
-    const body = z
-      .object({
-        from: zDateTime,
-        to: zDateTime,
-        text: z.string().max(200_000).optional(),
-        html: z.string().max(500_000).optional()
-      })
-      .refine((v) => v.to > v.from, { message: "Дата окончания периода должна быть позже даты начала" })
-      .parse(req.body ?? {});
-
-    const settings = await ensureSettings(app.prisma);
-    const smtp = smtpConfigFromSettings(settings);
-    if (!smtp) throw app.httpErrors.badRequest("Не настроен SMTP host");
-    if (!settings.smtpPass) throw app.httpErrors.badRequest("Не задан SMTP пароль");
-
-    const recipients = parseRecipients(settings.recipients);
-    if (!recipients.length) throw app.httpErrors.badRequest("Список получателей пуст");
-
-    let text = body.text?.trim() ?? "";
-    let html = body.html?.trim() ?? "";
-    if (!text || !html) {
-      const digest = await buildChangeDigest(app.prisma, { from: body.from, to: body.to });
-      if (!text) text = digest.text.trim();
-      if (!html) html = digest.html.trim();
-    }
-    if (!text && !html) throw app.httpErrors.badRequest("Нет изменений за выбранный период — письмо не отправлено");
-
-    try {
-      const result = await sendMail(smtp, {
-        to: recipients,
-        subject: settings.subjectTemplate || "Изменения плана ТО",
-        text: text || "См. HTML-версию письма",
-        html: html || undefined
-      });
-      return { ok: true, messageId: result.messageId, recipients, subject: settings.subjectTemplate };
-    } catch (e: any) {
-      throw app.httpErrors.badRequest(`Ошибка отправки: ${e?.message ?? String(e)}`);
-    }
   });
 
   app.post("/mail-digest/test", async (req) => {

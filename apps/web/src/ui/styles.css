@@ -666,9 +666,50 @@ a {
 }
 
 .massPage,
-.eventImportPage {
+.eventImportPage,
+.massEventsPage {
   display: grid;
   gap: 16px;
+}
+
+.massEventsTabs {
+  display: inline-flex;
+  margin-top: 8px;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.massEventsTabs button {
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.78);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.massEventsTabs button:hover {
+  color: #fff;
+}
+
+.massEventsTabs button.isActive {
+  background: #fff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.16);
+}
+
+.massEventsPage .massPage,
+.massEventsPage .eventImportPage {
+  display: contents;
 }
 
 .eventImportProgress {
@@ -1298,11 +1339,13 @@ a {
     flex-direction: column;
   }
 
-  .massModeToggle {
+  .massModeToggle,
+  .massEventsTabs {
     width: 100%;
   }
 
-  .massModeToggle button {
+  .massModeToggle button,
+  .massEventsTabs button {
     flex: 1;
     text-align: center;
   }
@@ -1839,6 +1882,380 @@ a {
   max-height: 520px;
 }
 
+.mailDigestPage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 0 24px;
+}
+
+.mailDigestPage .card {
+  margin: 0;
+}
+
+.mailDigestHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.mailDigestTitleBlock {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.mailDigestName {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  padding: 0;
+}
+
+.mailDigestName:focus {
+  outline: none;
+}
+
+.mailDigestDesc {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  padding: 8px 10px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  color: #334155;
+}
+
+.mailStatusChip {
+  appearance: none;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mailStatusChipOn {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.mailStatusChipOff {
+  background: #f1f5f9;
+  color: #64748b;
+  border-color: #cbd5e1;
+}
+
+.mailWizardSteps {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.mailWizardStep {
+  appearance: none;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+
+.mailWizardStepActive {
+  color: #1d4ed8;
+}
+
+.mailWizardNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 12px;
+}
+
+.mailWizardStepActive .mailWizardNum {
+  background: #2563eb;
+  color: #fff;
+}
+
+.mailWizardLine {
+  width: 28px;
+  height: 1px;
+  margin-left: 6px;
+  background: #cbd5e1;
+}
+
+.mailWizardCard {
+  padding: 16px 18px 18px;
+}
+
+.mailWizardBody {
+  display: grid;
+  gap: 14px;
+}
+
+.mailPeriodGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.mailChoiceCard {
+  appearance: none;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.mailChoiceCard:hover:not(:disabled) {
+  border-color: #93c5fd;
+}
+
+.mailChoiceCardOn {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 1px #2563eb inset;
+}
+
+.mailChoiceCard:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mailChoiceTitle {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.mailSeg {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  width: fit-content;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.14);
+}
+
+.mailSegBtn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #475569;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mailSegBtnOn {
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.mailWeekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mailWeekday {
+  appearance: none;
+  min-width: 42px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: #fff;
+  color: #334155;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mailWeekdayOn {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.mailChipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 32px;
+  align-items: center;
+}
+
+.mailChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 4px 10px;
+  border-radius: 999px;
+  background: #e8eef8;
+  color: #1e3a8a;
+  font-size: 13px;
+}
+
+.mailChipRemove {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.mailChipRemove:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.mailColumnPick {
+  max-width: 640px;
+}
+
+.mailColumnPick .reportFieldPickMenu {
+  right: 0;
+}
+
+.mailHistoryWrap {
+  overflow: auto;
+}
+
+.mailHistoryTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.mailHistoryTable th,
+.mailHistoryTable td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  vertical-align: top;
+}
+
+.mailHistoryTable th {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.mailHistStatus {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mailHistStatus_SENT {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.mailHistStatus_FAILED {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.mailHistStatus_EMPTY {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.mailWizardFooter {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.mailWizardFooterLeft,
+.mailSendWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  position: relative;
+}
+
+.mailSendMenu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  display: grid;
+  min-width: 240px;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  z-index: 5;
+}
+
+.mailSendMenu button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mailSendMenu button:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
 .adminFieldGrow {
   flex: 1 1 220px;
 }
@@ -2351,6 +2768,206 @@ a {
   color: #b91c1c;
   border-color: #fecaca;
   background: #fef2f2;
+}
+
+.adminUserSeen {
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.adminPresencePanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.adminPresenceUserPick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 240px;
+}
+
+.adminPresenceStats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.adminPresenceStats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.adminHeatmap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.adminHeatmapMonths,
+.adminHeatmapGrid {
+  display: flex;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.adminHeatmapWeekLabel,
+.adminHeatmapWeekdays {
+  width: 22px;
+  flex: 0 0 22px;
+}
+
+.adminHeatmapWeekdays {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  line-height: 11px;
+  color: #64748b;
+}
+
+.adminHeatmapMonths {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: capitalize;
+}
+
+.adminHeatmapMonth {
+  width: 11px;
+  flex: 0 0 11px;
+  white-space: nowrap;
+  overflow: visible;
+}
+
+.adminHeatmapWeeks {
+  display: flex;
+  gap: 3px;
+}
+
+.adminHeatmapWeek {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.adminHeatmapCell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: #e2e8f0;
+}
+
+.adminHeatmapCell.lvlempty {
+  background: transparent;
+}
+
+.adminHeatmapCell.lvl0 { background: #e2e8f0; }
+.adminHeatmapCell.lvl1 { background: #bfdbfe; }
+.adminHeatmapCell.lvl2 { background: #60a5fa; }
+.adminHeatmapCell.lvl3 { background: #2563eb; }
+.adminHeatmapCell.lvl4 { background: #1e3a8a; }
+
+.adminHeatmapLegend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.adminPresenceToggle {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  color: #2563eb;
+  cursor: pointer;
+  padding: 0;
+  font-size: 13px;
+}
+
+.adminPresenceToggle:hover {
+  text-decoration: underline;
+}
+
+.adminHourmap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-x: auto;
+}
+
+.adminHourmapRow,
+.adminHourmapTicks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.adminHourmapLabel {
+  width: 22px;
+  flex: 0 0 22px;
+  font-size: 10px;
+  color: #64748b;
+}
+
+.adminHourmapCells,
+.adminHourmapTicks > div {
+  display: flex;
+  gap: 2px;
+}
+
+.adminHourmapTicks {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.adminHourmapTicks > div > span {
+  width: 11px;
+  flex: 0 0 11px;
+}
+
+.adminPresenceSplit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 20px;
+}
+
+.adminPresencePages,
+.adminPresenceRecent {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.adminPresencePages li,
+.adminPresenceRecent li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.adminPresencePages li {
+  justify-content: space-between;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 4px;
+}
+
+@media (max-width: 900px) {
+  .adminPresenceStats,
+  .adminPresenceSplit {
+    grid-template-columns: 1fr;
+  }
 }
 
 .adminUserDetailRow td {
@@ -4387,6 +5004,29 @@ textarea {
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
+  contain: layout style;
+}
+
+.ganttVirtPane {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  contain: layout paint;
+}
+
+.ganttVirtSpacer {
+  flex: none;
+  pointer-events: none;
+}
+
+.ganttTodayLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  pointer-events: none;
+  z-index: 5;
 }
 
 .ganttRightScroll.ganttPanReady {
@@ -4475,9 +5115,17 @@ textarea {
   position: relative;
   height: 76px;
   min-width: 0;
-  background:
-    linear-gradient(180deg, rgba(241, 245, 249, 0.6), rgba(255, 255, 255, 0.96)),
-    repeating-linear-gradient(90deg, rgba(148, 163, 184, 0.16) 0, rgba(148, 163, 184, 0.16) 1px, transparent 1px, transparent 24px);
+  background: linear-gradient(180deg, rgba(241, 245, 249, 0.6), rgba(255, 255, 255, 0.96));
+}
+
+.ganttSlotHistogramCanvas .ganttVirtPane {
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.16) 0,
+    rgba(148, 163, 184, 0.16) 1px,
+    transparent 1px,
+    transparent 24px
+  );
 }
 
 .slotBucket {
@@ -11035,6 +11683,57 @@ textarea.refInput {
 .reportFieldsSearch {
   width: 100%;
   max-width: 520px;
+}
+
+.reportFieldPick {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 720px;
+}
+
+.reportFieldPick .reportFieldsSearch {
+  flex: 1 1 auto;
+  max-width: none;
+}
+
+.reportFieldPickMenu {
+  position: absolute;
+  left: 0;
+  right: 88px;
+  top: calc(100% + 4px);
+  z-index: 8;
+  display: grid;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.reportFieldPickOption {
+  appearance: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.reportFieldPickOptionOn,
+.reportFieldPickOption:hover {
+  background: #eff6ff;
 }
 
 .reportFieldsToolbarActions {

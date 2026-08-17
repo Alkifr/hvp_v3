@@ -4,6 +4,8 @@ import fp from "fastify-plugin";
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 
+import { errorBody } from "../lib/userErrors.js";
+
 declare module "@fastify/jwt" {
   interface FastifyJWT {
     payload: { sub: string };
@@ -92,11 +94,11 @@ export const authPlugin = fp(async (app) => {
       const user = await loadUser(app, decoded.sub);
       if (!user) {
         reply.clearCookie(AUTH_COOKIE, cookieOptions(req));
-        return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+        return reply.code(401).send(errorBody("UNAUTHORIZED"));
       }
       req.auth = user;
     } catch {
-      return reply.code(401).send({ ok: false, error: "UNAUTHORIZED" });
+      return reply.code(401).send(errorBody("UNAUTHORIZED"));
     }
   });
 

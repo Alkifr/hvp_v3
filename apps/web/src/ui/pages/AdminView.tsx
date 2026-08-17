@@ -7,6 +7,7 @@ import { ActivityFeed } from "../components/ActivityFeed";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import type { SandboxSummary } from "../components/SandboxSwitcher";
 import { SwitchToggle } from "../components/SwitchToggle";
+import { formatPresenceWhen, UserPresencePanel } from "../components/UserPresencePanel";
 
 type Role = { id: string; code: string; name: string; isSystem: boolean; permissions: { permission: Permission }[] };
 type Permission = { id: string; code: string; name: string };
@@ -16,6 +17,8 @@ type User = {
   displayName?: string | null;
   isActive: boolean;
   mustChangePassword: boolean;
+  lastLoginAt?: string | null;
+  lastSeenAt?: string | null;
   roles: { role: { id: string; code: string; name: string } }[];
 };
 type EventTypeRef = { id: string; code: string; name: string };
@@ -42,34 +45,11 @@ type MailDigestSettings = {
   smtpUser: string | null;
   hasPassword: boolean;
   mailFrom: string | null;
-  recipients: string[];
-  subjectTemplate: string;
   updatedAt: string;
 };
 
-type MailDigestPreview = {
-  text: string;
-  html: string;
-  stats: {
-    operators: number;
-    prolonged: number;
-    cancelled: number;
-    added: number;
-    otherChanges: number;
-    audits: number;
-  };
-};
-
-type AdminTab = "users" | "roles" | "activity" | "cleanup" | "mail";
+type AdminTab = "users" | "roles" | "activity" | "presence" | "cleanup" | "mail";
 type AdminUserFilter = "all" | "active" | "inactive" | "password";
-
-function defaultMailPeriod(): { from: string; to: string } {
-  const to = new Date();
-  const from = new Date(to);
-  from.setDate(from.getDate() - 7);
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-  return { from: iso(from), to: iso(to) };
-}
 
 type AdminUser = {
   email: string;
@@ -125,6 +105,16 @@ function IconTrash() {
   );
 }
 
+function IconHeat() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <rect x="3" y="8" width="3" height="8" rx="0.6" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="8.5" y="4" width="3" height="12" rx="0.6" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="14" y="10" width="3" height="6" rx="0.6" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
 function IconSearch() {
   return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -146,7 +136,8 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     if (canUsers) tabs.push({ id: "users", label: "Список пользователей" });
     if (canRoles) tabs.push({ id: "roles", label: "Роли" });
     if (canUsers) tabs.push({ id: "activity", label: "Журнал" });
-    if (canMail) tabs.push({ id: "mail", label: "Рассылка" });
+    if (canUsers) tabs.push({ id: "presence", label: "Присутствие" });
+    if (canMail) tabs.push({ id: "mail", label: "Почта SMTP" });
     if (canCleanup) tabs.push({ id: "cleanup", label: "Особые функции" });
     return tabs;
   }, [canUsers, canRoles, canCleanup, canMail]);
@@ -157,6 +148,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const [userRoleFilter, setUserRoleFilter] = useState("");
   const [userPage, setUserPage] = useState(0);
   const [userPageSize, setUserPageSize] = useState(10);
+  const [presenceUserId, setPresenceUserId] = useState<string | null>(null);
 
   const permsQ = useQuery({
     queryKey: ["admin", "permissions"],
@@ -211,21 +203,13 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const [cleanupReason, setCleanupReason] = useState("");
   const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null);
 
-  const mailPeriodDefaults = useMemo(() => defaultMailPeriod(), []);
   const [mailSmtpHost, setMailSmtpHost] = useState("smtp.yandex.ru");
   const [mailSmtpPort, setMailSmtpPort] = useState("465");
   const [mailSmtpSecure, setMailSmtpSecure] = useState(true);
   const [mailSmtpUser, setMailSmtpUser] = useState("");
   const [mailSmtpPass, setMailSmtpPass] = useState("");
   const [mailFrom, setMailFrom] = useState("");
-  const [mailRecipients, setMailRecipients] = useState("");
-  const [mailSubject, setMailSubject] = useState("Изменения плана ТО");
   const [mailHasPassword, setMailHasPassword] = useState(false);
-  const [mailFromDate, setMailFromDate] = useState(mailPeriodDefaults.from);
-  const [mailToDate, setMailToDate] = useState(mailPeriodDefaults.to);
-  const [mailPreviewText, setMailPreviewText] = useState("");
-  const [mailPreviewHtml, setMailPreviewHtml] = useState("");
-  const [mailPreviewStats, setMailPreviewStats] = useState<MailDigestPreview["stats"] | null>(null);
   const [mailTestTo, setMailTestTo] = useState("");
   const [mailSettingsHydrated, setMailSettingsHydrated] = useState(false);
 
@@ -243,27 +227,9 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     setMailSmtpSecure(s.smtpSecure);
     setMailSmtpUser(s.smtpUser ?? "");
     setMailFrom(s.mailFrom ?? "");
-    setMailRecipients(s.recipients.join("\n"));
-    setMailSubject(s.subjectTemplate || "Изменения плана ТО");
     setMailHasPassword(s.hasPassword);
     setMailSettingsHydrated(true);
   }, [mailSettingsQ.data, mailSettingsHydrated]);
-
-  const parseMailRecipients = () =>
-    mailRecipients
-      .split(/[\n,;]+/)
-      .map((x) => x.trim())
-      .filter(Boolean);
-
-  const mailPeriodPayload = () => {
-    if (!isValidDateInput(mailFromDate) || !isValidDateInput(mailToDate)) {
-      throw new Error("Укажите корректный период");
-    }
-    return {
-      from: new Date(`${mailFromDate}T00:00:00`).toISOString(),
-      to: new Date(`${mailToDate}T23:59:59.999`).toISOString()
-    };
-  };
 
   const saveMailSettingsM = useMutation({
     mutationFn: () =>
@@ -273,35 +239,13 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         smtpSecure: mailSmtpSecure,
         smtpUser: mailSmtpUser.trim() || null,
         smtpPass: mailSmtpPass.trim() || undefined,
-        mailFrom: mailFrom.trim() || null,
-        recipients: parseMailRecipients(),
-        subjectTemplate: mailSubject.trim() || "Изменения плана ТО"
+        mailFrom: mailFrom.trim() || null
       }),
     onSuccess: async (s) => {
       setMailSmtpPass("");
       setMailHasPassword(s.hasPassword);
-      setMailRecipients(s.recipients.join("\n"));
-      setMailSubject(s.subjectTemplate);
       await qc.invalidateQueries({ queryKey: ["admin", "mail-digest", "settings"] });
     }
-  });
-
-  const mailPreviewM = useMutation({
-    mutationFn: () => apiPost<MailDigestPreview>("/api/admin/mail-digest/preview", mailPeriodPayload()),
-    onSuccess: (res) => {
-      setMailPreviewText(res.text);
-      setMailPreviewHtml(res.html);
-      setMailPreviewStats(res.stats);
-    }
-  });
-
-  const mailSendM = useMutation({
-    mutationFn: () =>
-      apiPost<{ ok: true; messageId: string; recipients: string[]; subject: string }>("/api/admin/mail-digest/send", {
-        ...mailPeriodPayload(),
-        text: mailPreviewText.trim() || undefined,
-        html: mailPreviewHtml.trim() || undefined
-      })
   });
 
   const mailTestM = useMutation({
@@ -746,13 +690,21 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         <ActivityFeed mode="admin" compact actors={activityActors} />
       ) : null}
 
+      {activeTab === "presence" && canUsers ? (
+        <UserPresencePanel
+          users={usersQ.data ?? []}
+          selectedUserId={presenceUserId}
+          onSelectUser={setPresenceUserId}
+        />
+      ) : null}
+
       {activeTab === "mail" && canMail ? (
         <section className="card adminPanel">
           <div className="adminSectionHead">
             <div>
-              <strong>Email-рассылка изменений</strong>
+              <strong>Системные настройки почты</strong>
               <div className="muted adminHint">
-                Соберите текст изменений рабочего контура за период и отправьте по SMTP (например Yandex).
+                SMTP остаётся в админке. Состав рассылки, превью и отправку планировщик делает в разделе «Рассылка».
               </div>
             </div>
           </div>
@@ -796,24 +748,6 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
             </label>
           </div>
 
-          <div className="adminFormRow adminFormRowWrap">
-            <label className="adminField adminFieldGrow">
-              <span className="muted">Тема письма</span>
-              <input value={mailSubject} onChange={(e) => setMailSubject(e.target.value)} />
-            </label>
-          </div>
-
-          <label className="adminField adminFieldGrow">
-            <span className="muted">Получатели (по одному на строку или через запятую)</span>
-            <textarea
-              rows={4}
-              value={mailRecipients}
-              onChange={(e) => setMailRecipients(e.target.value)}
-              placeholder={"planner@company.com\nops@company.com"}
-              style={{ width: "100%", fontFamily: "inherit", resize: "vertical" }}
-            />
-          </label>
-
           <div className="adminFormRow" style={{ marginTop: 12 }}>
             <button className="btn btnPrimary" disabled={saveMailSettingsM.isPending} onClick={() => saveMailSettingsM.mutate()}>
               Сохранить настройки
@@ -836,72 +770,6 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           {saveMailSettingsM.isSuccess ? <div className="muted">Настройки сохранены</div> : null}
           {mailTestM.error ? <div className="error">{String(mailTestM.error.message || mailTestM.error)}</div> : null}
           {mailTestM.data ? <div className="muted">Тест отправлен на {mailTestM.data.to}</div> : null}
-
-          <div className="adminSectionHead" style={{ marginTop: 20 }}>
-            <strong>Дайджест</strong>
-            <span className="muted">только рабочий контур</span>
-          </div>
-          <div className="adminFormRow adminFormRowWrap">
-            <label className="adminField">
-              <span className="muted">с</span>
-              <input type="date" value={mailFromDate} onChange={(e) => setMailFromDate(e.target.value)} />
-            </label>
-            <label className="adminField">
-              <span className="muted">по</span>
-              <input type="date" value={mailToDate} onChange={(e) => setMailToDate(e.target.value)} />
-            </label>
-            <button className="btn" disabled={mailPreviewM.isPending} onClick={() => mailPreviewM.mutate()}>
-              Превью
-            </button>
-            <button
-              className="btn btnPrimary"
-              disabled={mailSendM.isPending || (!mailPreviewHtml.trim() && !mailPreviewText.trim())}
-              onClick={() => {
-                if (!confirm("Отправить письмо всем получателям из настроек?")) return;
-                mailSendM.mutate();
-              }}
-            >
-              Отправить
-            </button>
-          </div>
-          {mailPreviewM.error ? <div className="error">{String(mailPreviewM.error.message || mailPreviewM.error)}</div> : null}
-          {mailSendM.error ? <div className="error">{String(mailSendM.error.message || mailSendM.error)}</div> : null}
-          {mailSendM.data ? (
-            <div className="muted">
-              Отправлено ({mailSendM.data.recipients.length}): {mailSendM.data.recipients.join(", ")}
-            </div>
-          ) : null}
-          {mailPreviewStats ? (
-            <div className="muted">
-              Аудит: {mailPreviewStats.audits}; операторов: {mailPreviewStats.operators}; продлений:{" "}
-              {mailPreviewStats.prolonged}; отмен: {mailPreviewStats.cancelled}; добавлено: {mailPreviewStats.added};
-              прочих сдвигов: {mailPreviewStats.otherChanges}
-            </div>
-          ) : null}
-          {mailPreviewHtml ? (
-            <div className="adminMailPreview">
-              <div className="muted" style={{ marginBottom: 8 }}>
-                Превью письма (как уйдёт в почту)
-              </div>
-              <div
-                className="adminMailPreviewFrame"
-                dangerouslySetInnerHTML={{ __html: mailPreviewHtml }}
-              />
-            </div>
-          ) : (
-            <div className="muted">Нажмите «Превью», чтобы собрать изменения…</div>
-          )}
-          {mailPreviewText ? (
-            <label className="adminField adminFieldGrow" style={{ marginTop: 12 }}>
-              <span className="muted">Текстовая версия (fallback)</span>
-              <textarea
-                rows={8}
-                value={mailPreviewText}
-                onChange={(e) => setMailPreviewText(e.target.value)}
-                style={{ width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", resize: "vertical" }}
-              />
-            </label>
-          ) : null}
         </section>
       ) : null}
 
@@ -1190,6 +1058,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               <div className="adminUserMeta">
                 <div className="adminUserName">{props.u.displayName ?? props.u.email}</div>
                 <div className="muted adminUserEmail">{props.u.email}</div>
+                <div className="muted adminUserSeen">в системе: {formatPresenceWhen(props.u.lastSeenAt)}</div>
                 {props.u.mustChangePassword ? <div className="adminUserWarn">нужна смена пароля</div> : null}
               </div>
             </div>
@@ -1221,6 +1090,18 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           </td>
           <td className="adminTdActions">
             <div className="adminIconActions">
+              <button
+                type="button"
+                className="adminIconBtn"
+                title="Тепловая карта присутствия"
+                aria-label="Тепловая карта присутствия"
+                onClick={() => {
+                  setPresenceUserId(props.u.id);
+                  setTab("presence");
+                }}
+              >
+                <IconHeat />
+              </button>
               <button
                 type="button"
                 className={`adminIconBtn${editOpen ? " adminIconBtnActive" : ""}`}
