@@ -26,6 +26,7 @@ type PresenceResponse = {
 const PAGE_LABEL: Record<string, string> = {
   gantt: "План (Гантт)",
   hangar: "Ангар",
+  itp: "РМ ИТП",
   import: "Импорт/План · Импорт",
   mass: "Импорт/План · Планирование",
   ref: "Справочники",

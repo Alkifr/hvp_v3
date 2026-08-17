@@ -7,7 +7,8 @@ dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("DATABASE_CLOUD_URL:", process.env.DATABASE_CLOUD_URL);
+  const raw = process.env.DATABASE_CLOUD_URL ?? "";
+  console.log("DATABASE_CLOUD_URL:", raw.replace(/:([^:@/?#]+)@/, ":***@"));
 
   const counts = {
     operator: await prisma.operator.count(),

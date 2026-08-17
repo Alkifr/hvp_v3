@@ -6,6 +6,30 @@ import { queryActivityFeed } from "../lib/activityFeed.js";
 import { errorBody } from "../lib/userErrors.js";
 import { recordLogin } from "../lib/userPresence.js";
 
+const LOGIN_WINDOW_MS = 60_000;
+const LOGIN_MAX = 10;
+const loginHits = new Map<string, { n: number; resetAt: number }>();
+
+function loginClientKey(req: FastifyRequest): string {
+  return String(req.ip || req.headers["x-forwarded-for"] || "unknown");
+}
+
+function assertLoginRateLimit(req: FastifyRequest) {
+  const key = loginClientKey(req);
+  const now = Date.now();
+  const cur = loginHits.get(key);
+  if (!cur || now >= cur.resetAt) {
+    loginHits.set(key, { n: 1, resetAt: now + LOGIN_WINDOW_MS });
+    return;
+  }
+  cur.n += 1;
+  if (cur.n > LOGIN_MAX) {
+    const err: any = new Error("TOO_MANY_REQUESTS");
+    err.statusCode = 429;
+    throw err;
+  }
+}
+
 async function requireAuthUser(app: any, req: FastifyRequest, reply: FastifyReply) {
   try {
     const decoded = await req.jwtVerify<{ sub: string }>();
@@ -27,6 +51,7 @@ async function requireAuthUser(app: any, req: FastifyRequest, reply: FastifyRepl
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post("/login", async (req, reply) => {
+    assertLoginRateLimit(req);
     const body = z
       .object({
         email: z.string().trim().toLowerCase().email(),

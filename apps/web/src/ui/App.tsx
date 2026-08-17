@@ -12,6 +12,7 @@ import { AdminView } from "./pages/AdminView";
 import { SandboxesView } from "./pages/SandboxesView";
 import { AnalyticsView } from "./pages/AnalyticsView";
 import { MailDigestView } from "./pages/MailDigestView";
+import { RmItpView } from "./pages/RmItpView";
 import { HelpView } from "./pages/HelpView";
 import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { NotificationBell } from "./components/NotificationBell";
@@ -61,7 +62,6 @@ function isPage(value: string): value is Page {
 
 function resolvePageFromHash(hashRaw: string): Page {
   const { page } = parseHashPage(hashRaw);
-  if (page === "itp") return "gantt";
   if (isPage(page)) return page;
   return "gantt";
 }
@@ -78,7 +78,7 @@ function consumeEventDeepLinkFromHash() {
   }
   applyEventDeepLink(link);
 
-  const cleanPage = page === "itp" ? "gantt" : isPage(page) ? page : "gantt";
+  const cleanPage = isPage(page) ? page : "gantt";
   const next = `${location.pathname}${location.search}#${cleanPage}`;
   try {
     history.replaceState(null, "", next);
@@ -128,6 +128,13 @@ const ICONS = {
       <path d="M12 3l9 5-9 5-9-5 9-5z" />
       <path d="M3 13l9 5 9-5" />
       <path d="M3 17l9 5 9-5" />
+    </svg>
+  ),
+  itp: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 4h9l3 3v13H6z" />
+      <path d="M15 4v4h4" />
+      <path d="M9 12h6M9 16h4" />
     </svg>
   ),
   ref: (
@@ -197,11 +204,7 @@ export function App() {
   const [page, setPage] = useState<Page>(() => initial);
 
   useEffect(() => {
-    if (page === "itp") setPage("gantt");
-  }, [page]);
-
-  useEffect(() => {
-    const desired = page === "itp" ? "gantt" : page;
+    const desired = page;
     const { page: hashPage, query } = parseHashPage(location.hash);
     // Не затираем deep-link (`#gantt?event=...`), пока его не обработали.
     if (hashPage === desired && query.get("event")) return;
@@ -235,6 +238,10 @@ export function App() {
 
   if (!me) {
     return <LoginView />;
+  }
+
+  if (me.mustChangePassword) {
+    return <LoginView forcedEmail={me.email} />;
   }
 
   const canEvents = permissions.includes("events:read");
@@ -312,6 +319,9 @@ function AppShell(props: {
                 <NavIcon active={page === "gantt"} onClick={() => setPage("gantt")} label="План (Гантт)" icon={ICONS.gantt} />
                 <NavIcon active={page === "hangar"} onClick={() => setPage("hangar")} label="Ангар (схема)" icon={ICONS.hangar} />
                 <NavIcon active={page === "analytics"} onClick={() => setPage("analytics")} label="Аналитика" icon={ICONS.analytics} />
+                {!isMobile ? (
+                  <NavIcon active={page === "itp"} onClick={() => setPage("itp")} label="РМ ИТП" icon={ICONS.itp} />
+                ) : null}
               </>
             ) : null}
 
@@ -361,13 +371,14 @@ function AppShell(props: {
       <main className="content">
         {page === "gantt" && <GanttView />}
         {page === "hangar" && <HangarView />}
+        {!isMobile && page === "itp" && <RmItpView />}
         {!isMobile && (page === "import" || page === "mass") && (
           <BulkEventsView tab={page === "mass" ? "mass" : "import"} onTab={(tab) => setPage(tab)} />
         )}
         {!isMobile && page === "ref" && <ReferenceView />}
         {page === "profile" && <ProfileView me={me} />}
         {!isMobile && page === "admin" && <AdminView permissions={permissions} me={me} />}
-        {page === "sandboxes" && <SandboxesView />}
+        {page === "sandboxes" && <SandboxesView permissions={permissions} />}
         {page === "analytics" && <AnalyticsView />}
         {!isMobile && page === "mail" && canMail ? <MailDigestView /> : null}
         {page === "help" && <HelpView permissions={permissions} onNavigate={(p) => setPage(p as Page)} />}

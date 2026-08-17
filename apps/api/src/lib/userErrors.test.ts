@@ -8,6 +8,8 @@ test("maps error codes to Russian user text", () => {
   assert.equal(userMessageFor("FORBIDDEN"), UserMsg.FORBIDDEN);
   assert.equal(userMessageFor("SANDBOX_READ_ONLY"), UserMsg.SANDBOX_READ_ONLY);
   assert.equal(userMessageFor("EVENT_NOT_FOUND"), UserMsg.EVENT_NOT_FOUND);
+  assert.equal(userMessageFor("PROMOTE_DELETE_DENIED"), UserMsg.PROMOTE_DELETE_DENIED);
+  assert.equal(userMessageFor("MUST_CHANGE_PASSWORD"), UserMsg.MUST_CHANGE_PASSWORD);
 });
 
 test("maps English throw messages to Russian user text", () => {

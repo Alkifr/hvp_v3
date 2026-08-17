@@ -5,6 +5,7 @@ import { MSK_OFFSET_MINUTES } from "./localDate.js";
 export const PRESENCE_PAGES = [
   "gantt",
   "hangar",
+  "itp",
   "import",
   "mass",
   "ref",

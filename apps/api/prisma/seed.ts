@@ -16,7 +16,6 @@ function env(name: string) {
 
 async function main() {
   console.log("Seeding…");
-  console.log("DATABASE_URL:", process.env.DATABASE_URL);
 
   // --- RBAC/Users ---
   const permissionsSeed = [
@@ -108,6 +107,15 @@ async function main() {
   const adminEmail = env("ADMIN_EMAIL") || "admin@local.dev";
   const adminPassword = env("ADMIN_PASSWORD") || "admin";
   const adminName = env("ADMIN_NAME") || "Администратор";
+
+  if (process.env.NODE_ENV === "production") {
+    if (!env("ADMIN_EMAIL") || !env("ADMIN_PASSWORD")) {
+      throw new Error("ADMIN_EMAIL и ADMIN_PASSWORD обязательны в production");
+    }
+    if (adminPassword === "admin" || adminEmail.toLowerCase() === "admin@local.dev") {
+      throw new Error("В production нельзя сидить demo-админа admin@local.dev / admin");
+    }
+  }
 
   if (!env("ADMIN_EMAIL") || !env("ADMIN_PASSWORD")) {
     console.warn(

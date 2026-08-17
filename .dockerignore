@@ -1,0 +1,17 @@
+node_modules
+dist
+build
+.git
+.github
+.cursor
+*.log
+*.xlsx
+*.xls
+.env
+.env.*
+!.env.example
+apps/api/.env
+apps/web/dist
+**/*.tsbuildinfo
+.DS_Store
+deploy/.env

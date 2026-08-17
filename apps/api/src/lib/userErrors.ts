@@ -11,6 +11,9 @@ export const UserMsg = {
   SANDBOX_ACCESS_DENIED: "Нет доступа к песочнице",
   SANDBOX_READ_ONLY: "Нет прав на запись в песочнице",
   SANDBOX_WRITE_DENIED: "Нет прав на запись в песочнице",
+  PROMOTE_DELETE_DENIED: "Удаление событий рабочего контура при переносе доступно только главному администратору",
+  MUST_CHANGE_PASSWORD: "Сначала смените временный пароль",
+  TOO_MANY_REQUESTS: "Слишком много попыток входа. Подождите минуту и повторите",
   USER_NOT_FOUND: "Пользователь не найден",
   CANNOT_ADD_SELF: "Нельзя добавить самого себя",
   CANNOT_SHARE_SELF: "Нельзя поделиться с самим собой",
@@ -72,6 +75,9 @@ const CODE_STATUS: Partial<Record<UserErrorCode, number>> = {
   SANDBOX_ACCESS_DENIED: 403,
   SANDBOX_READ_ONLY: 403,
   SANDBOX_WRITE_DENIED: 403,
+  PROMOTE_DELETE_DENIED: 403,
+  MUST_CHANGE_PASSWORD: 403,
+  TOO_MANY_REQUESTS: 429,
   USER_NOT_FOUND: 404,
   CANNOT_ADD_SELF: 400,
   CANNOT_SHARE_SELF: 400,
@@ -151,7 +157,10 @@ const ENGLISH_TO_CODE: Array<{ pattern: RegExp; code: UserErrorCode }> = [
   { pattern: /end must be after start/i, code: "END_AFTER_START" },
   { pattern: /^some predecessor steps are not in the same plan$/i, code: "STEP_DEPENDENCY_INVALID" },
   { pattern: /^unauthorized$/i, code: "UNAUTHORIZED" },
-  { pattern: /^forbidden$/i, code: "FORBIDDEN" }
+  { pattern: /^forbidden$/i, code: "FORBIDDEN" },
+  { pattern: /^must_change_password$/i, code: "MUST_CHANGE_PASSWORD" },
+  { pattern: /^too_many_requests$/i, code: "TOO_MANY_REQUESTS" },
+  { pattern: /^promote_delete_denied$/i, code: "PROMOTE_DELETE_DENIED" }
 ];
 
 const FASTIFY_CODE_TO_USER: Record<string, UserErrorCode> = {

@@ -25,6 +25,8 @@ function authErrorMessage(error: string, fallback?: string): string {
   if (error === "INVALID_CREDENTIALS") return "Неверный email или пароль";
   if (error === "UNAUTHORIZED") return "Требуется авторизация";
   if (error === "OLD_PASSWORD_INVALID") return "Текущий пароль указан неверно";
+  if (error === "MUST_CHANGE_PASSWORD") return "Сначала смените временный пароль";
+  if (error === "TOO_MANY_REQUESTS") return "Слишком много попыток входа. Подождите минуту и повторите";
   if (error === "CHANGE_PASSWORD_FAILED") return "Не удалось сменить пароль";
   return error || "Ошибка авторизации";
 }

@@ -2,10 +2,13 @@ import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
 import Fastify from "fastify";
 
+import { parseCorsOrigins } from "./lib/bootEnv.js";
+
 import { prismaPlugin } from "./plugins/prisma.js";
 import { authPlugin } from "./plugins/auth.js";
 import { sandboxPlugin } from "./plugins/sandbox.js";
 import { errorHandlerPlugin } from "./plugins/errorHandler.js";
+import { registerWebStatic } from "./plugins/webStatic.js";
 import { sandboxRoutes } from "./routes/sandboxes.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
@@ -27,12 +30,13 @@ import { prunePresenceEvents } from "./lib/userPresence.js";
 export async function buildServer() {
   const app = Fastify({
     logger: true,
+    trustProxy: true,
     // Импорт событий/справочников шлёт JSON на сотни–тысячи строк; дефолт Fastify — 1 MiB.
     bodyLimit: 10 * 1024 * 1024
   });
 
   await app.register(cors, {
-    origin: true,
+    origin: parseCorsOrigins(process.env.CORS_ORIGINS, process.env.NODE_ENV ?? "development"),
     credentials: true
   });
 
@@ -56,6 +60,10 @@ export async function buildServer() {
   await app.register(mailDigestComposeRoutes, { prefix: "/api/mail-digest" });
   await app.register(adminRoutes, { prefix: "/api/admin" });
   await app.register(sandboxRoutes, { prefix: "/api/sandboxes" });
+  const webRoot = await registerWebStatic(app);
+  if (!webRoot) {
+    app.log.info("WEB_DIST not found — API-only (в dev фронт на Vite :3000)");
+  }
 
   // Автостатусы + уведомления о просрочке без факта (раз в минуту)
   let maintenanceBusy = false;

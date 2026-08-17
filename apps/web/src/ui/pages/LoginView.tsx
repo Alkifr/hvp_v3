@@ -1,13 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { authChangePassword, authLogin } from "../auth/authApi";
+import { authChangePassword, authLogin, authLogout } from "../auth/authApi";
 
-export function LoginView() {
+export function LoginView(props: { forcedEmail?: string } = {}) {
   const qc = useQueryClient();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(props.forcedEmail ?? "");
   const [password, setPassword] = useState("");
-  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [mustChangePassword, setMustChangePassword] = useState(Boolean(props.forcedEmail));
   const [newPassword, setNewPassword] = useState("");
   const [newPassword2, setNewPassword2] = useState("");
 
@@ -96,8 +96,17 @@ export function LoginView() {
         ) : (
           <>
             <div className="authNotice">
-              Вы вошли как <b>{email}</b>. Новый пароль должен быть не короче 8 символов.
+              Вы вошли как <b>{email || props.forcedEmail}</b>. Новый пароль должен быть не короче 8 символов.
             </div>
+            <label className="authField">
+              <span>Текущий пароль</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </label>
             <label className="authField">
               <span>Новый пароль</span>
               <input
@@ -120,12 +129,26 @@ export function LoginView() {
               />
             </label>
             {newPassword2 && newPassword !== newPassword2 ? <div className="error">Пароли не совпадают</div> : null}
-            <button className="btn btnPrimary authSubmit" onClick={() => changePasswordM.mutate()} disabled={!canChangePassword || changePasswordM.isPending}>
+            <button className="btn btnPrimary authSubmit" onClick={() => changePasswordM.mutate()} disabled={!canChangePassword || changePasswordM.isPending || !password}>
               {changePasswordM.isPending ? "Сохраняем…" : "Сменить пароль и войти"}
             </button>
-            <button className="btn" onClick={() => setMustChangePassword(false)} disabled={changePasswordM.isPending}>
-              Вернуться ко входу
-            </button>
+            {props.forcedEmail ? (
+              <button
+                className="btn"
+                onClick={() => {
+                  void authLogout().then(() => {
+                    void qc.invalidateQueries({ queryKey: ["auth", "me"] });
+                  });
+                }}
+                disabled={changePasswordM.isPending}
+              >
+                Выйти
+              </button>
+            ) : (
+              <button className="btn" onClick={() => setMustChangePassword(false)} disabled={changePasswordM.isPending}>
+                Вернуться ко входу
+              </button>
+            )}
             {changeError ? <div className="error">{changeError}</div> : null}
           </>
         )}

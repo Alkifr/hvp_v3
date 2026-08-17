@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import { buildChangeDigest, type ChangeDigestStats } from "./changeDigest.js";
 import { isScheduledDigestDue, parseDigestPeriodMode, resolveDigestPeriod } from "./mailDigestPeriod.js";
 import { parseRecipients, sendMail, smtpConfigFromSettings } from "./mailer.js";
+import { claimScheduledDigestSlot } from "./digestClaim.js";
 
 export type DigestSendTarget = "self" | "all" | "schedule";
 export type DigestSendStatus = "SENT" | "FAILED" | "EMPTY";
@@ -193,6 +194,9 @@ export async function runScheduledMailDigest(app: {
   if (!settings) return { sent: false, skipped: true };
   if (!isScheduledDigestDue(settings)) return { sent: false, skipped: true };
 
+  const claimed = await claimScheduledDigestSlot(app.prisma);
+  if (!claimed) return { sent: false, skipped: true };
+
   const periodMode = parseDigestPeriodMode(settings.periodMode);
   const period = resolveDigestPeriod({
     periodMode: periodMode === "custom" ? "last7" : periodMode,
@@ -210,13 +214,6 @@ export async function runScheduledMailDigest(app: {
     actorEmail: null
   });
 
-  if (result.status === "SENT" || result.status === "EMPTY") {
-    await app.prisma.mailDigestSettings.update({
-      where: { id: settings.id },
-      data: { lastAutoSentAt: new Date() }
-    });
-  }
-
   if (result.status === "SENT") {
     app.log.info({ recipients: result.recipients.length, subject: result.subject }, "mail digest scheduled send");
     return { sent: true, skipped: false, status: result.status };
@@ -225,7 +222,7 @@ export async function runScheduledMailDigest(app: {
     app.log.info({ subject: result.subject }, "mail digest scheduled skip empty");
     return { sent: false, skipped: false, status: result.status };
   }
-  app.log.warn({ error: result.error }, "mail digest scheduled send failed");
+  app.log.warn({ error: result.error }, "mail digest scheduled send failed (slot already claimed for today)");
   return { sent: false, skipped: false, status: result.status };
 }
 

@@ -24,7 +24,8 @@ function fromInputLocal(v: string): Date {
   return new Date(v);
 }
 
-export function SandboxesView() {
+export function SandboxesView(props: { permissions?: string[] }) {
+  const permissions = props.permissions ?? [];
   const qc = useQueryClient();
   const [tab, setTab] = useState<SandboxTab>("mine");
   const [createOpen, setCreateOpen] = useState(false);
@@ -165,7 +166,13 @@ export function SandboxesView() {
       ) : null}
       {currentShareFor ? <ShareSandboxModal sandbox={currentShareFor} onClose={() => setShareFor(null)} /> : null}
       {currentRenameFor ? <RenameSandboxModal sandbox={currentRenameFor} onClose={() => setRenameFor(null)} /> : null}
-      {currentPromoteFor ? <PromoteSandboxModal sandbox={currentPromoteFor} onClose={() => setPromoteFor(null)} /> : null}
+      {currentPromoteFor ? (
+        <PromoteSandboxModal
+          sandbox={currentPromoteFor}
+          canDeleteProd={permissions.includes("admin:cleanup")}
+          onClose={() => setPromoteFor(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -833,7 +840,15 @@ type DiffResponse = {
   items: DiffItem[];
 };
 
-function PromoteSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; onClose: () => void }) {
+function PromoteSandboxModal({
+  sandbox,
+  onClose,
+  canDeleteProd
+}: {
+  sandbox: SandboxSummary;
+  onClose: () => void;
+  canDeleteProd: boolean;
+}) {
   const qc = useQueryClient();
   const [from, setFrom] = useState<string>(() => toInputLocal(new Date()));
   const [to, setTo] = useState<string>(() => toInputLocal(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000)));
@@ -871,7 +886,7 @@ function PromoteSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; on
           from: fromInputLocal(from).toISOString(),
           to: fromInputLocal(to).toISOString(),
           items,
-          deleteProdInRange: deleteProd && deleteConfirmed
+          deleteProdInRange: canDeleteProd && deleteProd && deleteConfirmed
         }
       );
     },
@@ -980,21 +995,29 @@ function PromoteSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; on
             </div>
 
             <div className="sandboxPromoteDangerZone">
-              <SwitchToggle
-                checked={deleteProd}
-                onChange={(v) => {
-                  setDeleteProd(v);
-                  setDeleteConfirmed(false);
-                }}
-                label="Удалить события рабочего контура за период перед переносом"
-              />
-              {deleteProd ? (
-                <SwitchToggle
-                  checked={deleteConfirmed}
-                  onChange={setDeleteConfirmed}
-                  label={`Я понимаю, что это необратимо удалит ${diff.summary.prodEventsInRange} событий из прода.`}
-                />
-              ) : null}
+              {canDeleteProd ? (
+                <>
+                  <SwitchToggle
+                    checked={deleteProd}
+                    onChange={(v) => {
+                      setDeleteProd(v);
+                      setDeleteConfirmed(false);
+                    }}
+                    label="Удалить события рабочего контура за период перед переносом"
+                  />
+                  {deleteProd ? (
+                    <SwitchToggle
+                      checked={deleteConfirmed}
+                      onChange={setDeleteConfirmed}
+                      label={`Я понимаю, что это необратимо удалит ${diff.summary.prodEventsInRange} событий из прода.`}
+                    />
+                  ) : null}
+                </>
+              ) : (
+                <div className="muted small">
+                  Удаление событий рабочего контура за период доступно только главному администратору.
+                </div>
+              )}
             </div>
           </>
         ) : (

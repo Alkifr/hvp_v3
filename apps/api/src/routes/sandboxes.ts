@@ -4,7 +4,7 @@ import { EventAuditAction, EventStatus, Prisma, SandboxMemberRole, UserActivityA
 import { randomUUID } from "node:crypto";
 
 import { zDateTime, zUuid } from "../lib/zod.js";
-import { isSystemAdmin } from "../lib/rbac.js";
+import { isSystemAdmin, assertPermission, requirePermission } from "../lib/rbac.js";
 import { UserMsg } from "../lib/userErrors.js";
 import { copyPlanToSandbox, eventFingerprint, resolveOriginEventId } from "../lib/sandboxCopy.js";
 import { logUserActivity } from "../lib/userActivity.js";
@@ -726,6 +726,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/sandboxes/:id/promote — применить перенос в прод
   app.post("/:id/promote", async (req) => {
     const me = assertAuthed(req);
+    assertPermission(req, "events:write");
     const sandboxId = zUuid.parse((req.params as any).id);
     const role = await assertMember(app, sandboxId, me.id, me.roles);
     if (!canWriteRole(role)) {
@@ -751,6 +752,14 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       })
       .refine((v) => v.to > v.from, { message: UserMsg.END_AFTER_START })
       .parse(req.body);
+
+    if (body.deleteProdInRange) {
+      if (!requirePermission(req, "admin:cleanup")) {
+        const err: any = new Error("PROMOTE_DELETE_DENIED");
+        err.statusCode = 403;
+        throw err;
+      }
+    }
 
     const actor = getActor(req);
     const selectedIds = body.items.filter((i) => i.action === "add").map((i) => i.sandboxEventId);

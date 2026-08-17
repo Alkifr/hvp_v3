@@ -17,6 +17,10 @@ if (!cloudUrl) {
 const local = new PrismaClient({ datasources: { db: { url: localUrl } } });
 const cloud = new PrismaClient({ datasources: { db: { url: cloudUrl } } });
 
+function redactDbUrl(url: string): string {
+  return url.replace(/:([^:@/?#]+)@/, ":***@");
+}
+
 const COPY_ORDER = [
   ["Permission", () => local.permission.findMany(), (rows: any[]) => cloud.permission.createMany({ data: rows })],
   ["Role", () => local.role.findMany(), (rows: any[]) => cloud.role.createMany({ data: rows })],
@@ -74,8 +78,8 @@ async function createManyChunked(write: (rows: any[]) => Promise<{ count: number
 }
 
 async function main() {
-  console.log("Source DATABASE_URL:", localUrl);
-  console.log("Target DATABASE_CLOUD_URL:", cloudUrl);
+  console.log("Source DATABASE_URL:", redactDbUrl(localUrl));
+  console.log("Target DATABASE_CLOUD_URL:", redactDbUrl(cloudUrl));
 
   await local.$connect();
   await cloud.$connect();

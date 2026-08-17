@@ -42,3 +42,6 @@ venv/
 
 *.xlsx
 *.xls
+
+# DB dumps
+backups/

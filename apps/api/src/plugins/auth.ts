@@ -5,6 +5,7 @@ import fp from "fastify-plugin";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { errorBody } from "../lib/userErrors.js";
+import { resolveJwtSecret } from "../lib/bootEnv.js";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -27,20 +28,20 @@ declare module "fastify" {
 }
 
 const AUTH_COOKIE = "hp_token";
+const AUTH_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 function getJwtSecret() {
-  return (process.env.JWT_SECRET ?? "").trim() || "dev_insecure_jwt_secret_change_me";
+  return resolveJwtSecret(process.env.JWT_SECRET, process.env.NODE_ENV ?? "development");
 }
 
 function cookieOptions(_req: FastifyRequest) {
   const isProd = process.env.NODE_ENV === "production";
-  // В dev можно по http://localhost
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: isProd,
+    secure: isProd && process.env.COOKIE_SECURE !== "0",
     path: "/",
-    // чтобы работало и на localhost:3000 и на localhost:3001
+    maxAge: AUTH_MAX_AGE_MS,
     domain: undefined as string | undefined
   };
 }
@@ -81,10 +82,11 @@ export const authPlugin = fp(async (app) => {
   await app.register(cookie);
   await app.register(jwt, {
     secret: getJwtSecret(),
+    sign: { expiresIn: "12h" },
     cookie: { cookieName: AUTH_COOKIE, signed: false }
   });
 
-  // Вешаем пользователя на req.user для /api/**
+  // Вешаем пользователя на req.auth для /api/**
   app.addHook("preHandler", async (req, reply) => {
     if (!req.url.startsWith("/api")) return;
     if (req.url.startsWith("/api/auth/")) return;
@@ -95,6 +97,9 @@ export const authPlugin = fp(async (app) => {
       if (!user) {
         reply.clearCookie(AUTH_COOKIE, cookieOptions(req));
         return reply.code(401).send(errorBody("UNAUTHORIZED"));
+      }
+      if (user.mustChangePassword) {
+        return reply.code(403).send(errorBody("MUST_CHANGE_PASSWORD"));
       }
       req.auth = user;
     } catch {
