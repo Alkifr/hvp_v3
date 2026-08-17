@@ -9,6 +9,7 @@ pnpm-debug.log*
 dist/
 build/
 .turbo/
+*.tsbuildinfo
 
 # Vite
 .vite/
