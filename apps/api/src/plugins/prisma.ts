@@ -68,9 +68,14 @@ export const prismaPlugin = fp(async (app) => {
     markDisconnected
   });
 
+  let connectInFlight = false;
   const tryConnect = async () => {
+    if (connectInFlight) return false;
+    connectInFlight = true;
     try {
-      // Сброс пула после обрыва, иначе мёртвые сокеты могут висеть
+      // Сброс пула после обрыва, иначе мёртвые сокеты могут висеть.
+      // Только одна попытка за раз: параллельные $disconnect/$connect
+      // оставляют движок в "Engine is not yet connected" навсегда.
       await prisma.$disconnect().catch(() => undefined);
       await prisma.$connect();
       await prisma.$queryRaw`SELECT 1`;
@@ -83,6 +88,8 @@ export const prismaPlugin = fp(async (app) => {
       app.db.lastError = String(e?.message ?? e);
       app.log.warn({ err: app.db.lastError }, "PostgreSQL not connected (will retry)");
       return false;
+    } finally {
+      connectInFlight = false;
     }
   };
 
@@ -91,7 +98,7 @@ export const prismaPlugin = fp(async (app) => {
 
   // Быстрый ретрай: подключимся как только БД станет доступна
   const interval = setInterval(() => {
-    if (app.db.connected) return;
+    if (app.db.connected || connectInFlight) return;
     void tryConnect();
   }, 5000);
 
