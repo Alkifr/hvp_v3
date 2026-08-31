@@ -16,6 +16,8 @@
     "import:hangar-layouts": "tsx scripts/importHangarAircraftTypeLayouts.ts",
     "reselect:event-layouts": "tsx scripts/reselectEventLayoutsForAircraftTypeSchemes.ts",
     "demo:export": "tsx scripts/demoDataExport.ts",
+    "export:ref-data": "tsx scripts/exportRefData.ts",
+    "import:ref-data": "tsx scripts/importRefData.ts",
     "db:counts": "tsx scripts/dbCounts.ts",
     "db:clone:cloud": "tsx scripts/cloneToCloud.ts"
   },
