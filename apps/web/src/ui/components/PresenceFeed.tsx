@@ -15,8 +15,8 @@ function kindLabel(kind: string): string {
 
 export function PresenceFeed() {
   const [kind, setKind] = useState<KindFilter>("");
-  const [limit, setLimit] = useState(25);
   const [offset, setOffset] = useState(0);
+  const limit = 25;
 
   const q = useQuery({
     queryKey: ["me", "presence", kind, limit, offset],
