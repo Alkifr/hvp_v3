@@ -36,6 +36,7 @@ type SourceEvent = {
   hangarId: string | null;
   layoutId: string | null;
   workshopId?: string | null;
+  lineBase?: "LINE" | "BASE" | null;
   notes: string | null;
   originEventId?: string | null;
   sourceEventId?: string | null;
@@ -210,7 +211,9 @@ export async function copyPlanToSandbox(
       hangarId: src.hangarId,
       layoutId: src.layoutId,
       workshopId: (src as any).workshopId ?? null,
+      lineBase: (src as any).lineBase ?? null,
       notes: src.notes,
+      allowOverlap: Boolean((src as { allowOverlap?: boolean }).allowOverlap),
       originEventId,
       sourceEventId: src.id,
       sourceSandboxId

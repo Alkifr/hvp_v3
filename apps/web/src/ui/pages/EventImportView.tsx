@@ -190,10 +190,6 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
           <div className="massHeroText">
             <div className="massEyebrow">Загрузка данных</div>
             <h1>Импорт событий</h1>
-            <p>
-              Загружайте события из Excel/CSV, проверяйте сопоставления и конфликты в предпросмотре, затем переносите строки
-              в текущий рабочий контур или активную песочницу.
-            </p>
           </div>
           <div className="massHeroStats" aria-label="Параметры импорта">
             <span><b>{importRows?.length ?? 0}</b> строк</span>
@@ -210,19 +206,6 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
           Места назначаются только в активных вариантах расстановки.
           Даты без часового пояса и ячейки Excel трактуются как местное время (MSK).
         </div>
-        <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>
-          {activeSandbox ? (
-            <>
-              <strong>Режим песочницы:</strong> импорт создаст события и резервы только в песочнице <b>{activeSandbox.name}</b>.
-              Конфликты мест проверяются внутри этой песочницы, рабочий контур не изменится.
-            </>
-          ) : (
-            <>
-              <strong>Рабочий контур:</strong> импорт создаст события и резервы в основном плане.
-            </>
-          )}
-        </div>
-
         <div className="row" style={{ alignItems: "flex-end" }}>
           <label style={{ display: "grid", gap: 6 }}>
             <span className="muted">Файл (.xlsx/.csv)</span>

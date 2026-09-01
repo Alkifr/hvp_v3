@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
@@ -9,20 +10,24 @@ import {
   extraPrimaryFieldKeys,
   factoryColumnConfig,
   formatPrimaryCell,
+  isAlwaysPinnedLeft,
   isFullCatalogVisible,
   normalizeColOrder,
-  PINNED_LEFT_IDS,
+  resolvePinnedLeftIds,
   resolveVisibleIds,
   safeReadTableCols,
   safeWriteTableCols,
   shouldUseFactoryHidden,
   TABLE_KEY,
+  userPinnedLeftIds,
   type GanttTableColConfig,
   type GanttTableColDef,
   type GanttTableColId,
   type PrimaryCatalogField
 } from "../../lib/ganttTableColumns";
 import { FIELD_LABEL, resolveHistoryValue, type HistoryRefMaps } from "../../lib/eventHistoryFormat";
+import { eventAllowsOverlap } from "../../lib/eventSlotOverlap";
+import { formatLineBase, lineBaseAfterWorkshopChange, LINE_BASE_LABEL, parseLineBase } from "../../lib/lineBase";
 import {
   DEFAULT_EVENT_STATUS,
   overlayStatusCatalog,
@@ -96,6 +101,20 @@ function IconGrip() {
   );
 }
 
+function IconPin(props: { filled?: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill={props.filled ? "currentColor" : "none"} aria-hidden="true">
+      <path
+        d="M15.5 4.5 19.5 8.5 13 15l-1 4-4-4-4 1 4-4 6.5-6.5Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path d="m8 16-3.5 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function IconInfo() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -117,7 +136,7 @@ type Aircraft = {
 
 type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
 type EventType = { id: string; code: string; name: string; color?: string | null };
-type Workshop = { id: string; code?: string; name: string; isActive?: boolean };
+type Workshop = { id: string; code?: string; name: string; isActive?: boolean; defaultLineBase?: "LINE" | "BASE" | null };
 type Hangar = { id: string; name: string };
 type Layout = {
   id: string;
@@ -139,6 +158,8 @@ type Stand = {
 
 type EventPlacementRow = {
   id: string;
+  startAt?: string;
+  endAt?: string;
   hangarId?: string | null;
   layoutId?: string | null;
   standId?: string | null;
@@ -175,6 +196,8 @@ export type GanttTableEvent = {
   layout?: { id?: string; name: string; hangarId?: string } | null;
   reservation?: { stand?: { id?: string; code: string } | null } | null;
   placements?: EventPlacementRow[];
+  allowOverlap?: boolean;
+  lineBase?: "LINE" | "BASE" | null;
 };
 
 type RowDraft = {
@@ -197,6 +220,7 @@ type RowDraft = {
   layoutId: string;
   standId: string;
   allowOverlap: boolean;
+  lineBase: "LINE" | "BASE" | "";
   multiPlacement: boolean;
   hasVirtualAircraft: boolean;
 };
@@ -256,8 +280,48 @@ type SavedTableView = {
   config: GanttTableColConfig;
 };
 
-function draftFromEvent(ev: GanttTableEvent): RowDraft {
+type ColSettingsDraft = {
+  visibleIds: Set<TableColId>;
+  colOrder: TableColId[];
+  pinnedLeftIds: TableColId[];
+  factorySelected: boolean;
+  activeViewId: string | null;
+};
+
+function configFromColDraft(
+  draft: ColSettingsDraft,
+  columns: GanttTableColDef[],
+  widths: Record<string, number>
+): GanttTableColConfig {
+  const alwaysVisible = columns.filter((c) => c.hideable === false).map((c) => c.id);
+  const visible = Array.from(new Set([...alwaysVisible, ...draft.visibleIds]));
+  return {
+    widths,
+    visible,
+    hidden: columns.filter((c) => c.hideable !== false && !draft.visibleIds.has(c.id)).map((c) => c.id),
+    order: draft.colOrder,
+    pinnedLeft: userPinnedLeftIds(draft.pinnedLeftIds)
+  };
+}
+
+function factoryColDraft(columns: GanttTableColDef[]): ColSettingsDraft {
+  const factory = factoryColumnConfig(columns);
+  return {
+    visibleIds: new Set(factory.visible),
+    colOrder: normalizeColOrder(factory.order, columns, factory.pinnedLeft),
+    pinnedLeftIds: resolvePinnedLeftIds(factory.pinnedLeft, columns),
+    factorySelected: true,
+    activeViewId: null
+  };
+}
+
+function draftFromEvent(
+  ev: GanttTableEvent,
+  allEvents: GanttTableEvent[],
+  workshops: Workshop[]
+): RowDraft {
   const placements = ev.placements ?? [];
+  const workshopId = ev.workshop?.id ?? "";
   return {
     id: ev.id,
     title: ev.title,
@@ -274,10 +338,11 @@ function draftFromEvent(ev: GanttTableEvent): RowDraft {
     actualEndAtLocal: toInputLocal(ev.actualEndAt),
     notes: ev.notes ?? "",
     hangarId: ev.hangar?.id ?? "",
-    workshopId: ev.workshop?.id ?? "",
+    workshopId,
     layoutId: ev.layout?.id ?? "",
     standId: ev.reservation?.stand?.id ?? "",
-    allowOverlap: false,
+    allowOverlap: eventAllowsOverlap(ev, allEvents),
+    lineBase: parseLineBase(ev.lineBase) ?? lineBaseAfterWorkshopChange(workshopId, workshops, ""),
     multiPlacement: placements.length > 1,
     hasVirtualAircraft: !ev.aircraft?.id && !!ev.virtualAircraft
   };
@@ -302,7 +367,8 @@ function computeDiff(a: RowDraft, b: RowDraft) {
     "hangarId",
     "layoutId",
     "standId",
-    "allowOverlap"
+    "allowOverlap",
+    "lineBase"
   ];
   return keys
     .filter((k) => String(a[k] ?? "") !== String(b[k] ?? ""))
@@ -321,7 +387,7 @@ function ConfirmDrawer(props: {
   onConfirm: () => void;
 }) {
   if (!props.open) return null;
-  return (
+  return createPortal(
     <div className="drawerBackdrop">
       <div className="drawer drawerV2" role="dialog" aria-modal="true" aria-label="Подтверждение изменения">
         <header className="drawerHeader">
@@ -402,6 +468,402 @@ function ConfirmDrawer(props: {
           </div>
         </div>
       </div>
+    </div>,
+    document.body
+  );
+}
+
+function GanttTableColsSettingsModal(props: {
+  columns: GanttTableColDef[];
+  colById: Map<TableColId, TableColDef>;
+  initial: ColSettingsDraft;
+  views: SavedTableView[];
+  allowColumnReorder: boolean;
+  savePending?: boolean;
+  saveAsPending?: boolean;
+  deletePending?: boolean;
+  onApply: (draft: ColSettingsDraft) => void;
+  onClose: () => void;
+  onSave: (draft: ColSettingsDraft) => void;
+  onSaveAs: (name: string, draft: ColSettingsDraft) => void;
+  onDelete: (viewId: string) => void;
+}) {
+  const [draft, setDraft] = useState<ColSettingsDraft>(() => ({
+    visibleIds: new Set(props.initial.visibleIds),
+    colOrder: [...props.initial.colOrder],
+    pinnedLeftIds: [...props.initial.pinnedLeftIds],
+    factorySelected: props.initial.factorySelected,
+    activeViewId: props.initial.activeViewId
+  }));
+  const [colMenuQuery, setColMenuQuery] = useState("");
+  const [saveAsName, setSaveAsName] = useState("");
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [dragColId, setDragColId] = useState<TableColId | null>(null);
+  const infoRef = useRef<HTMLDivElement | null>(null);
+  const onClose = props.onClose;
+  const allowColumnReorder = props.allowColumnReorder;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (infoOpen) {
+        setInfoOpen(false);
+        return;
+      }
+      onClose();
+    };
+    const onDoc = (e: MouseEvent) => {
+      if (!infoOpen) return;
+      if (infoRef.current && e.target instanceof Node && !infoRef.current.contains(e.target)) {
+        setInfoOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDoc);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDoc);
+    };
+  }, [infoOpen, onClose]);
+
+  const orderedColumns = useMemo(
+    () => draft.colOrder.map((id) => props.colById.get(id)).filter((c): c is TableColDef => Boolean(c)),
+    [draft.colOrder, props.colById]
+  );
+  const draftView = draft.factorySelected
+    ? null
+    : props.views.find((v) => v.id === draft.activeViewId) ?? null;
+
+  const loadFactory = () => setDraft(factoryColDraft(props.columns));
+  const loadView = (view: SavedTableView) => {
+    setDraft({
+      visibleIds: new Set(resolveVisibleIds(view.config, props.columns, { allowShowAll: true })),
+      colOrder: normalizeColOrder(view.config.order, props.columns, view.config.pinnedLeft),
+      pinnedLeftIds: resolvePinnedLeftIds(view.config.pinnedLeft, props.columns),
+      factorySelected: false,
+      activeViewId: view.id
+    });
+  };
+
+  const toggleColVisible = (id: TableColId) => {
+    const def = props.colById.get(id);
+    if (!def || def.hideable === false) return;
+    setDraft((prev) => {
+      const next = new Set(prev.visibleIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { ...prev, visibleIds: next };
+    });
+  };
+
+  const togglePinnedLeft = (id: TableColId) => {
+    if (isAlwaysPinnedLeft(id)) return;
+    setDraft((prev) => {
+      const extra = userPinnedLeftIds(prev.pinnedLeftIds);
+      const already = extra.includes(id);
+      const nextExtra = already ? extra.filter((x) => x !== id) : [...extra, id];
+      const pinnedLeftIds = resolvePinnedLeftIds(nextExtra, props.columns, { fallbackToDefault: false });
+      const visibleIds = new Set(prev.visibleIds);
+      if (!already) visibleIds.add(id);
+      return {
+        ...prev,
+        pinnedLeftIds,
+        visibleIds,
+        colOrder: normalizeColOrder(prev.colOrder, props.columns, pinnedLeftIds)
+      };
+    });
+  };
+
+  const moveColumn = (fromId: TableColId, toId: TableColId) => {
+    if (fromId === toId || isAlwaysPinnedLeft(fromId) || isAlwaysPinnedLeft(toId)) return;
+    setDraft((prev) => {
+      const fromPinned = prev.pinnedLeftIds.includes(fromId);
+      const toPinned = prev.pinnedLeftIds.includes(toId);
+      if (fromPinned !== toPinned) return prev;
+      if (fromPinned && toPinned) {
+        const extra = userPinnedLeftIds(prev.pinnedLeftIds);
+        const from = extra.indexOf(fromId);
+        const to = extra.indexOf(toId);
+        if (from < 0 || to < 0) return prev;
+        extra.splice(from, 1);
+        extra.splice(to, 0, fromId);
+        const pinnedLeftIds = resolvePinnedLeftIds(extra, props.columns, { fallbackToDefault: false });
+        return {
+          ...prev,
+          pinnedLeftIds,
+          colOrder: normalizeColOrder(prev.colOrder, props.columns, pinnedLeftIds)
+        };
+      }
+      const next = [...prev.colOrder];
+      const from = next.indexOf(fromId);
+      const to = next.indexOf(toId);
+      if (from < 0 || to < 0) return prev;
+      next.splice(from, 1);
+      next.splice(to, 0, fromId);
+      return { ...prev, colOrder: normalizeColOrder(next, props.columns, prev.pinnedLeftIds) };
+    });
+  };
+
+  return (
+    <div
+      className="modalBackdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) {
+          setInfoOpen(false);
+          props.onClose();
+        }
+      }}
+    >
+      <div className="modalWindow ganttTableColsModal" role="dialog" aria-labelledby="ganttTableColsTitle">
+        <div className="modalHeader">
+          <div className="ganttTableSettingsTitle">
+            <div className="modalTitle" id="ganttTableColsTitle">
+              Настройки
+            </div>
+            <div className="ganttTableInfoWrap" ref={infoRef}>
+              <button
+                type="button"
+                className="ganttTableInfoBtn"
+                aria-label="Справка по таблице"
+                title="Справка по таблице"
+                onClick={() => setInfoOpen((v) => !v)}
+              >
+                <IconInfo />
+              </button>
+              {infoOpen ? (
+                <div className="ganttTableInfoPop ganttTableInfoPopModal" role="note">
+                  Редактирование: клик по строке → правки в черновике → сохранить. Чекбоксы слева — массовая смена
+                  статуса (панель под фильтрами). «Действия» всегда закреплены слева; остальные столбцы закрепляются в
+                  настройках (значок булавки). Порядок и закрепление применяются кнопкой «Применить». ПКМ по заголовку
+                  открывает эти настройки. Наборы хранятся на пользователе. Трудоёмкость ME / AV / INT / NDT / SHOP /
+                  CabRep (бюджет, MPS, факт) — только чтение; правка в карточке.
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="modalClose"
+            aria-label="Закрыть"
+            onClick={() => {
+              setInfoOpen(false);
+              props.onClose();
+            }}
+          >
+            ×
+          </button>
+        </div>
+        <div className="modalBody ganttTableColsModalBody">
+          <aside className="ganttTableColsPresets">
+            <div className="ganttTableColsPresetsTitle">Заготовки</div>
+            <button
+              type="button"
+              className={`ganttTableColsPreset${draftView ? "" : " isActive"}`}
+              onClick={loadFactory}
+            >
+              <span>По умолчанию</span>
+              <span className="muted">25 столбцов</span>
+            </button>
+            {props.views.map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                className={`ganttTableColsPreset${draftView?.id === v.id ? " isActive" : ""}`}
+                onClick={() => loadView(v)}
+              >
+                <span>{v.name}</span>
+                <span className="muted">
+                  {Array.isArray(v.config?.visible) && v.config.visible.length
+                    ? `${v.config.visible.length} столбцов`
+                    : "Сохранённый набор"}
+                </span>
+              </button>
+            ))}
+            {props.views.length === 0 ? (
+              <div className="muted ganttTableColsPresetsEmpty">Пока нет сохранённых наборов</div>
+            ) : null}
+          </aside>
+          <div className="ganttTableColsPicker">
+            <input
+              className="evInput ganttTableInput"
+              placeholder="Поиск по названию или группе"
+              value={colMenuQuery}
+              onChange={(e) => setColMenuQuery(e.target.value)}
+            />
+            {allowColumnReorder ? (
+              <div className="ganttTableColMenuHint muted">
+                Отметьте реквизиты и закрепите нужные столбцы. Перетащите строку, чтобы изменить порядок. Таблица
+                обновится по кнопке «Применить».
+              </div>
+            ) : (
+              <div className="ganttTableColMenuHint muted">
+                Отметьте реквизиты и закрепите нужные столбцы слева. Таблица обновится по кнопке «Применить».
+              </div>
+            )}
+            <div className="ganttTableColMenuList ganttTableColsPickerList">
+              {orderedColumns.map((col, index) => {
+                const q = colMenuQuery.trim().toLocaleLowerCase("ru");
+                if (q) {
+                  const hay = `${col.label} ${col.group ?? ""} ${col.subgroup ?? ""} ${col.id}`.toLocaleLowerCase("ru");
+                  if (!hay.includes(q)) return null;
+                }
+                const prev = orderedColumns
+                  .slice(0, index)
+                  .reverse()
+                  .find((c) => {
+                    if (!q) return true;
+                    const hay = `${c.label} ${c.group ?? ""} ${c.subgroup ?? ""} ${c.id}`.toLocaleLowerCase("ru");
+                    return hay.includes(q);
+                  });
+                const showGroup = col.group && col.group !== prev?.group;
+                const showSub = col.subgroup && (col.subgroup !== prev?.subgroup || col.group !== prev?.group);
+                const locked = col.hideable === false;
+                const checked = locked || draft.visibleIds.has(col.id);
+                const pinned = draft.pinnedLeftIds.includes(col.id);
+                const pinLocked = isAlwaysPinnedLeft(col.id);
+                const reorderLocked = !allowColumnReorder || pinLocked;
+                return (
+                  <div key={col.id}>
+                    {showGroup ? <div className="ganttTableColMenuGroup">{col.group}</div> : null}
+                    {showSub ? <div className="ganttTableColMenuSubgroup">{col.subgroup}</div> : null}
+                    <label
+                      className={`ganttTableColMenuItem${locked ? " ganttTableColMenuItemLocked" : ""}${
+                        dragColId === col.id ? " ganttTableColMenuItemDragging" : ""
+                      }`}
+                      draggable={!reorderLocked}
+                      onDragStart={(e) => {
+                        if (reorderLocked) {
+                          e.preventDefault();
+                          return;
+                        }
+                        setDragColId(col.id);
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", col.id);
+                      }}
+                      onDragOver={(e) => {
+                        if (reorderLocked || !dragColId || dragColId === col.id) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (!allowColumnReorder) return;
+                        const from = e.dataTransfer.getData("text/plain") || dragColId;
+                        if (from) moveColumn(from, col.id);
+                        setDragColId(null);
+                      }}
+                      onDragEnd={() => setDragColId(null)}
+                    >
+                      <span
+                        className={`ganttTableColMenuGrip${reorderLocked ? " ganttTableColMenuGripLocked" : ""}`}
+                        title={reorderLocked ? "Фиксированный столбец" : "Перетащить"}
+                      >
+                        <IconGrip />
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={locked}
+                        onChange={() => toggleColVisible(col.id)}
+                      />
+                      <span className="ganttTableColMenuLabel">{col.label || "Действия"}</span>
+                      <button
+                        type="button"
+                        className={`ganttTableColMenuPin${pinned ? " isPinned" : ""}`}
+                        disabled={pinLocked}
+                        title={
+                          pinLocked
+                            ? "Служебный столбец всегда закреплён"
+                            : pinned
+                              ? "Открепить столбец"
+                              : "Закрепить столбец слева"
+                        }
+                        aria-label={
+                          pinLocked
+                            ? "Служебный столбец всегда закреплён"
+                            : pinned
+                              ? `Открепить «${col.label || "Действия"}»`
+                              : `Закрепить «${col.label || "Действия"}» слева`
+                        }
+                        aria-pressed={pinned}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          togglePinnedLeft(col.id);
+                        }}
+                      >
+                        <IconPin filled={pinned} />
+                      </button>
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+        <div className="ganttTableColsModalFooter">
+          <input
+            className="evInput ganttTableInput"
+            placeholder="Название нового набора"
+            value={saveAsName}
+            onChange={(e) => setSaveAsName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const name = saveAsName.trim();
+                if (name) props.onSaveAs(name, draft);
+              }
+            }}
+          />
+          <button
+            className="btn"
+            type="button"
+            disabled={props.saveAsPending || !saveAsName.trim()}
+            onClick={() => {
+              const name = saveAsName.trim();
+              if (name) props.onSaveAs(name, draft);
+            }}
+          >
+            Сохранить как…
+          </button>
+          {draftView ? (
+            <button
+              className="btn"
+              type="button"
+              disabled={props.savePending}
+              onClick={() => props.onSave(draft)}
+            >
+              Сохранить
+            </button>
+          ) : null}
+          {draftView ? (
+            <button
+              className="btn"
+              type="button"
+              disabled={props.deletePending}
+              onClick={() => {
+                if (!window.confirm(`Удалить набор «${draftView.name}»?`)) return;
+                props.onDelete(draftView.id);
+              }}
+            >
+              Удалить
+            </button>
+          ) : null}
+          <button className="btn" type="button" onClick={loadFactory}>
+            По умолчанию
+          </button>
+          <button
+            className="btn btnPrimary"
+            type="button"
+            onClick={() => {
+              setInfoOpen(false);
+              props.onApply(draft);
+            }}
+          >
+            Применить
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -440,13 +902,9 @@ export function GanttEventsTable(props: {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [changeReason, setChangeReason] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
-  const [colMenuQuery, setColMenuQuery] = useState("");
-  const [saveAsName, setSaveAsName] = useState("");
-  const [infoOpen, setInfoOpen] = useState(false);
   const [factorySelected, setFactorySelected] = useState(false);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const appliedServerView = useRef(false);
-  const infoRef = useRef<HTMLDivElement | null>(null);
 
   const catalogQ = useQuery({
     queryKey: ["analytics", "primary-table", "meta"],
@@ -489,9 +947,11 @@ export function GanttEventsTable(props: {
     () => new Set(resolveVisibleIds(savedCols, buildGanttTableColumns(null)))
   );
   const [colOrder, setColOrder] = useState<TableColId[]>(() =>
-    normalizeColOrder(savedCols?.order, buildGanttTableColumns(null))
+    normalizeColOrder(savedCols?.order, buildGanttTableColumns(null), savedCols?.pinnedLeft)
   );
-  const [dragColId, setDragColId] = useState<TableColId | null>(null);
+  const [pinnedLeftIds, setPinnedLeftIds] = useState<TableColId[]>(() =>
+    resolvePinnedLeftIds(savedCols?.pinnedLeft, buildGanttTableColumns(null))
+  );
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const columnsReady = useRef(true);
 
@@ -505,7 +965,8 @@ export function GanttEventsTable(props: {
       if (!config) {
         setColWidths(factory.widths);
         setVisibleIds(new Set(factory.visible));
-        setColOrder(normalizeColOrder(factory.order, columns));
+        setPinnedLeftIds(resolvePinnedLeftIds(factory.pinnedLeft, columns));
+        setColOrder(normalizeColOrder(factory.order, columns, factory.pinnedLeft));
         return;
       }
       const nextWidths = { ...factory.widths };
@@ -515,7 +976,8 @@ export function GanttEventsTable(props: {
       }
       setColWidths(nextWidths);
       setVisibleIds(new Set(resolveVisibleIds(config, columns, opts)));
-      setColOrder(normalizeColOrder(config.order?.length ? config.order : factory.order, columns));
+      setPinnedLeftIds(resolvePinnedLeftIds(config.pinnedLeft, columns));
+      setColOrder(normalizeColOrder(config.order?.length ? config.order : factory.order, columns, config.pinnedLeft));
     },
     []
   );
@@ -524,8 +986,13 @@ export function GanttEventsTable(props: {
     if (!tableColumns.length) return;
     setColWidths((prev) => ({ ...defaultWidths(tableColumns), ...prev }));
     setVisibleIds((prev) => new Set(resolveVisibleIds({ visible: Array.from(prev), hidden: [], order: [], widths: {} }, tableColumns)));
-    setColOrder((prev) => normalizeColOrder(prev, tableColumns));
+    setPinnedLeftIds((prev) => resolvePinnedLeftIds(prev, tableColumns, { fallbackToDefault: false }));
   }, [tableColumns]);
+
+  useEffect(() => {
+    if (!tableColumns.length) return;
+    setColOrder((prev) => normalizeColOrder(prev, tableColumns, pinnedLeftIds));
+  }, [tableColumns, pinnedLeftIds]);
 
   useEffect(() => {
     if (appliedServerView.current || factorySelected || !viewsQ.data || !tableColumns.length) return;
@@ -552,10 +1019,15 @@ export function GanttEventsTable(props: {
     [colOrder, colById]
   );
 
-  const visibleColumns = useMemo(
-    () => orderedColumns.filter((c) => c.hideable === false || visibleIds.has(c.id)),
-    [orderedColumns, visibleIds]
-  );
+  const visibleColumns = useMemo(() => {
+    const pinnedSet = new Set(pinnedLeftIds);
+    return orderedColumns
+      .filter((c) => c.hideable === false || visibleIds.has(c.id))
+      .map((c) => ({
+        ...c,
+        sticky: c.id === "actions" || pinnedSet.has(c.id) ? ("left" as const) : undefined
+      }));
+  }, [orderedColumns, visibleIds, pinnedLeftIds]);
   const selectionEnabled = Boolean(props.canEdit && props.onSelectedIdsChange);
   const selectedIdSet = useMemo(() => new Set(props.selectedIds ?? []), [props.selectedIds]);
   const displayColumns = useMemo<TableColDef[]>(() => {
@@ -632,15 +1104,16 @@ export function GanttEventsTable(props: {
   }, [displayColumns]);
 
   const currentConfig = useMemo<GanttTableColConfig>(() => {
-    const pinned = tableColumns.filter((c) => c.hideable === false).map((c) => c.id);
-    const visible = Array.from(new Set([...pinned, ...visibleIds]));
+    const alwaysVisible = tableColumns.filter((c) => c.hideable === false).map((c) => c.id);
+    const visible = Array.from(new Set([...alwaysVisible, ...visibleIds]));
     return {
       widths: colWidths,
       visible,
       hidden: tableColumns.filter((c) => c.hideable !== false && !visibleIds.has(c.id)).map((c) => c.id),
-      order: colOrder
+      order: colOrder,
+      pinnedLeft: userPinnedLeftIds(pinnedLeftIds)
     };
-  }, [colWidths, visibleIds, colOrder, tableColumns]);
+  }, [colWidths, visibleIds, colOrder, tableColumns, pinnedLeftIds]);
 
   useEffect(() => {
     if (!columnsReady.current) return;
@@ -668,27 +1141,6 @@ export function GanttEventsTable(props: {
     };
   }, [localError, confirmOpen]);
 
-  useEffect(() => {
-    if (!infoOpen && !colPickerOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setInfoOpen(false);
-      setColPickerOpen(false);
-    };
-    const onDoc = (e: MouseEvent) => {
-      if (!infoOpen) return;
-      if (infoRef.current && e.target instanceof Node && !infoRef.current.contains(e.target)) {
-        setInfoOpen(false);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("mousedown", onDoc);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.removeEventListener("mousedown", onDoc);
-    };
-  }, [infoOpen, colPickerOpen, setColPickerOpen]);
-
   const startColResize = useCallback((col: TableColDef, e: ReactPointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -707,30 +1159,6 @@ export function GanttEventsTable(props: {
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
   }, [colWidths]);
-
-  const toggleColVisible = useCallback((id: TableColId) => {
-    const def = colById.get(id);
-    if (!def || def.hideable === false) return;
-    setVisibleIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, [colById]);
-
-  const moveColumn = useCallback((fromId: TableColId, toId: TableColId) => {
-    if (fromId === toId || PINNED_LEFT_IDS.includes(fromId) || PINNED_LEFT_IDS.includes(toId)) return;
-    setColOrder((prev) => {
-      const next = [...prev];
-      const from = next.indexOf(fromId);
-      const to = next.indexOf(toId);
-      if (from < 0 || to < 0) return prev;
-      next.splice(from, 1);
-      next.splice(to, 0, fromId);
-      return normalizeColOrder(next, tableColumns);
-    });
-  }, [tableColumns]);
 
   const colStyle = useCallback(
     (id: TableColId): CSSProperties => {
@@ -897,7 +1325,7 @@ export function GanttEventsTable(props: {
     if (editingId && editingId !== ev.id && isDirty) {
       if (!confirm("Есть несохранённые изменения в другой строке. Отменить их и перейти?")) return;
     }
-    const d = draftFromEvent(ev);
+    const d = draftFromEvent(ev, props.events, props.workshops);
     setEditingId(ev.id);
     setDraft(d);
     setOriginal(d);
@@ -996,6 +1424,7 @@ export function GanttEventsTable(props: {
         payload.placements = placementsPayload;
       }
       payload.workshopId = draft.workshopId || null;
+      payload.lineBase = parseLineBase(draft.lineBase);
 
       await apiPatch(`/api/events/${draft.id}`, payload);
 
@@ -1034,16 +1463,11 @@ export function GanttEventsTable(props: {
   });
 
   const views = viewsQ.data?.views ?? [];
-  const activeView = factorySelected
-    ? null
-    : (activeViewId ? views.find((v) => v.id === activeViewId) : null) ??
-      (appliedServerView.current ? views.find((v) => v.isActive) ?? null : null);
 
   const saveViewM = useMutation({
-    mutationFn: async () => {
-      if (!activeView) throw new Error("NO_ACTIVE_VIEW");
-      return apiPatch<{ ok: true; view: SavedTableView }>(`/api/table-views/${activeView.id}`, {
-        config: currentConfig
+    mutationFn: async (payload: { viewId: string; config: GanttTableColConfig }) => {
+      return apiPatch<{ ok: true; view: SavedTableView }>(`/api/table-views/${payload.viewId}`, {
+        config: payload.config
       });
     },
     onSuccess: async () => {
@@ -1053,11 +1477,11 @@ export function GanttEventsTable(props: {
   });
 
   const saveViewAsM = useMutation({
-    mutationFn: async (name: string) => {
+    mutationFn: async (payload: { name: string; config: GanttTableColConfig }) => {
       return apiPost<{ ok: true; view: SavedTableView }>("/api/table-views", {
         tableKey: TABLE_KEY,
-        name,
-        config: currentConfig,
+        name: payload.name,
+        config: payload.config,
         isActive: true
       });
     },
@@ -1065,22 +1489,6 @@ export function GanttEventsTable(props: {
       appliedServerView.current = true;
       setFactorySelected(false);
       setActiveViewId(res.view.id);
-      setSaveAsName("");
-      await qc.invalidateQueries({ queryKey: ["table-views", TABLE_KEY] });
-    },
-    onError: (e: any) => setLocalError(String(e?.message ?? e))
-  });
-
-  const activateViewM = useMutation({
-    mutationFn: async (view: SavedTableView) => {
-      await apiPatch(`/api/table-views/${view.id}`, { isActive: true });
-      return view;
-    },
-    onSuccess: async (view) => {
-      appliedServerView.current = true;
-      setFactorySelected(false);
-      setActiveViewId(view.id);
-      applyConfig(view.config, tableColumns, { allowShowAll: true });
       await qc.invalidateQueries({ queryKey: ["table-views", TABLE_KEY] });
     },
     onError: (e: any) => setLocalError(String(e?.message ?? e))
@@ -1110,34 +1518,32 @@ export function GanttEventsTable(props: {
     onError: (e: any) => setLocalError(String(e?.message ?? e))
   });
 
-  const selectFactoryDefault = () => {
-    const currentId = activeView?.id;
-    setFactorySelected(true);
-    setActiveViewId(null);
-    applyConfig(null, tableColumns);
-    if (currentId) deactivateViewM.mutate(currentId);
-  };
+  const applyColDraft = useCallback(
+    (next: ColSettingsDraft) => {
+      setVisibleIds(new Set(next.visibleIds));
+      setPinnedLeftIds(next.pinnedLeftIds);
+      setColOrder(normalizeColOrder(next.colOrder, tableColumns, next.pinnedLeftIds));
+      setFactorySelected(next.factorySelected);
+      setActiveViewId(next.activeViewId);
+    },
+    [tableColumns]
+  );
 
-  const promptSaveAs = () => {
-    const fallback = activeView ? `${activeView.name} (копия)` : "Мой набор";
-    const name = (saveAsName.trim() || window.prompt("Название набора столбцов", fallback) || "").trim();
-    if (!name) return;
-    saveViewAsM.mutate(name);
-  };
-
-  const onSaveView = () => {
-    if (!activeView) {
-      promptSaveAs();
-      return;
-    }
-    saveViewM.mutate();
-  };
-
-  const onDeleteView = () => {
-    if (!activeView) return;
-    if (!window.confirm(`Удалить набор «${activeView.name}»?`)) return;
-    deleteViewM.mutate(activeView.id);
-  };
+  const commitColSettings = useCallback(
+    (next: ColSettingsDraft) => {
+      applyColDraft(next);
+      if (next.factorySelected) {
+        if (activeViewId) deactivateViewM.mutate(activeViewId);
+      } else if (next.activeViewId && next.activeViewId !== activeViewId) {
+        void apiPatch(`/api/table-views/${next.activeViewId}`, { isActive: true }).then(() => {
+          appliedServerView.current = true;
+          void qc.invalidateQueries({ queryKey: ["table-views", TABLE_KEY] });
+        });
+      }
+      setColPickerOpen(false);
+    },
+    [activeViewId, applyColDraft, deactivateViewM, qc, setColPickerOpen]
+  );
 
   const resolveAircraftMeta = (ev: GanttTableEvent, d?: RowDraft | null) => {
     // Как в карточке: при выбранном борте в черновике — предпросмотр оператора/типа до сохранения.
@@ -1236,6 +1642,8 @@ export function GanttEventsTable(props: {
             {ev.workshop?.name ?? "—"}
           </span>
         );
+      case "lineBase":
+        return formatLineBase(ev.lineBase);
       case "startAtLocal":
         return formatCellDate(ev.startAt);
       case "endAtLocal":
@@ -1293,7 +1701,7 @@ export function GanttEventsTable(props: {
       case "standId":
         return ev.reservation?.stand?.code ?? "—";
       case "allowOverlap":
-        return "—";
+        return eventAllowsOverlap(ev, props.events) ? "да" : "—";
       case "notes":
         return (
           <span className="ganttTableNotes" title={ev.notes?.trim() || undefined}>
@@ -1438,7 +1846,12 @@ export function GanttEventsTable(props: {
           <select
             className="evInput ganttTableInput"
             value={d.workshopId}
-            onChange={(e) => patchDraft({ workshopId: e.target.value })}
+            onChange={(e) =>
+              patchDraft({
+                workshopId: e.target.value,
+                lineBase: lineBaseAfterWorkshopChange(e.target.value, props.workshops, d.lineBase)
+              })
+            }
           >
             <option value="">— не задан —</option>
             {props.workshops
@@ -1448,6 +1861,18 @@ export function GanttEventsTable(props: {
                   {w.code ? `${w.code} • ${w.name}` : w.name}
                 </option>
               ))}
+          </select>
+        );
+      case "lineBase":
+        return (
+          <select
+            className="evInput ganttTableInput"
+            value={d.lineBase}
+            onChange={(e) => patchDraft({ lineBase: parseLineBase(e.target.value) ?? "" })}
+          >
+            <option value="">— не задан —</option>
+            <option value="LINE">{LINE_BASE_LABEL.LINE}</option>
+            <option value="BASE">{LINE_BASE_LABEL.BASE}</option>
           </select>
         );
       case "startAtLocal":
@@ -1777,220 +2202,48 @@ export function GanttEventsTable(props: {
         </table>
       </div>
 
-      {colPickerOpen ? (
-        <div
-          className="modalBackdrop"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) {
-              setInfoOpen(false);
-              setColPickerOpen(false);
-            }
-          }}
-        >
-          <div className="modalWindow ganttTableColsModal" role="dialog" aria-labelledby="ganttTableColsTitle">
-            <div className="modalHeader">
-              <div className="ganttTableSettingsTitle">
-                <div className="modalTitle" id="ganttTableColsTitle">
-                  Настройки
-                </div>
-                <div className="ganttTableInfoWrap" ref={infoRef}>
-                  <button
-                    type="button"
-                    className="ganttTableInfoBtn"
-                    aria-label="Справка по таблице"
-                    title="Справка по таблице"
-                    onClick={() => setInfoOpen((v) => !v)}
-                  >
-                    <IconInfo />
-                  </button>
-                  {infoOpen ? (
-                    <div className="ganttTableInfoPop ganttTableInfoPopModal" role="note">
-                      Редактирование: клик по строке → правки в черновике → сохранить. Чекбоксы слева — массовая смена
-                      статуса (панель под фильтрами). Действия и «Форма ТО» закреплены слева. ПКМ по заголовку открывает
-                      эти настройки. Наборы хранятся на пользователе. Трудоёмкость ME / AV / INT / NDT / SHOP / CabRep
-                      (бюджет, MPS, факт) — только чтение; правка в карточке.
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="modalClose"
-                aria-label="Закрыть"
-                onClick={() => {
-                  setInfoOpen(false);
-                  setColPickerOpen(false);
-                }}
-              >
-                ×
-              </button>
-            </div>
-            <div className="modalBody ganttTableColsModalBody">
-              <aside className="ganttTableColsPresets">
-                <div className="ganttTableColsPresetsTitle">Заготовки</div>
-                <button
-                  type="button"
-                  className={`ganttTableColsPreset${activeView ? "" : " isActive"}`}
-                  onClick={selectFactoryDefault}
-                >
-                  <span>По умолчанию</span>
-                  <span className="muted">24 столбца</span>
-                </button>
-                {views.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    className={`ganttTableColsPreset${activeView?.id === v.id ? " isActive" : ""}`}
-                    onClick={() => activateViewM.mutate(v)}
-                  >
-                    <span>{v.name}</span>
-                    <span className="muted">
-                      {Array.isArray(v.config?.visible) && v.config.visible.length
-                        ? `${v.config.visible.length} столбцов`
-                        : "Сохранённый набор"}
-                    </span>
-                  </button>
-                ))}
-                {views.length === 0 ? (
-                  <div className="muted ganttTableColsPresetsEmpty">Пока нет сохранённых наборов</div>
-                ) : null}
-              </aside>
-              <div className="ganttTableColsPicker">
-                <input
-                  className="evInput ganttTableInput"
-                  placeholder="Поиск по названию или группе"
-                  value={colMenuQuery}
-                  onChange={(e) => setColMenuQuery(e.target.value)}
-                />
-                {allowColumnReorder ? (
-                  <div className="ganttTableColMenuHint muted">Отметьте реквизиты. Перетащите строку, чтобы изменить порядок.</div>
-                ) : (
-                  <div className="ganttTableColMenuHint muted">Отметьте реквизиты для текущего набора.</div>
-                )}
-                <div className="ganttTableColMenuList ganttTableColsPickerList">
-                  {orderedColumns.map((col, index) => {
-                    const q = colMenuQuery.trim().toLocaleLowerCase("ru");
-                    if (q) {
-                      const hay = `${col.label} ${col.group ?? ""} ${col.subgroup ?? ""} ${col.id}`.toLocaleLowerCase("ru");
-                      if (!hay.includes(q)) return null;
-                    }
-                    const prev = orderedColumns
-                      .slice(0, index)
-                      .reverse()
-                      .find((c) => {
-                        if (!q) return true;
-                        const hay = `${c.label} ${c.group ?? ""} ${c.subgroup ?? ""} ${c.id}`.toLocaleLowerCase("ru");
-                        return hay.includes(q);
-                      });
-                    const showGroup = col.group && col.group !== prev?.group;
-                    const showSub = col.subgroup && (col.subgroup !== prev?.subgroup || col.group !== prev?.group);
-                    const locked = col.hideable === false;
-                    const checked = locked || visibleIds.has(col.id);
-                    const reorderLocked = !allowColumnReorder || PINNED_LEFT_IDS.includes(col.id);
-                    return (
-                      <div key={col.id}>
-                        {showGroup ? <div className="ganttTableColMenuGroup">{col.group}</div> : null}
-                        {showSub ? <div className="ganttTableColMenuSubgroup">{col.subgroup}</div> : null}
-                        <label
-                          className={`ganttTableColMenuItem${locked ? " ganttTableColMenuItemLocked" : ""}${
-                            dragColId === col.id ? " ganttTableColMenuItemDragging" : ""
-                          }`}
-                          draggable={!reorderLocked}
-                          onDragStart={(e) => {
-                            if (reorderLocked) {
-                              e.preventDefault();
-                              return;
-                            }
-                            setDragColId(col.id);
-                            e.dataTransfer.effectAllowed = "move";
-                            e.dataTransfer.setData("text/plain", col.id);
-                          }}
-                          onDragOver={(e) => {
-                            if (reorderLocked || !dragColId || dragColId === col.id) return;
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = "move";
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            if (!allowColumnReorder) return;
-                            const from = e.dataTransfer.getData("text/plain") || dragColId;
-                            if (from) moveColumn(from, col.id);
-                            setDragColId(null);
-                          }}
-                          onDragEnd={() => setDragColId(null)}
-                        >
-                          <span
-                            className={`ganttTableColMenuGrip${reorderLocked ? " ganttTableColMenuGripLocked" : ""}`}
-                            title={reorderLocked ? "Фиксированный столбец" : "Перетащить"}
-                          >
-                            <IconGrip />
-                          </span>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={locked}
-                            onChange={() => toggleColVisible(col.id)}
-                          />
-                          <span>{col.label || "Действия"}</span>
-                        </label>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-            <div className="ganttTableColsModalFooter">
-              <input
-                className="evInput ganttTableInput"
-                placeholder="Название нового набора"
-                value={saveAsName}
-                onChange={(e) => setSaveAsName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    const name = saveAsName.trim();
-                    if (name) saveViewAsM.mutate(name);
-                  }
-                }}
-              />
-              <button
-                className="btn"
-                type="button"
-                disabled={saveViewAsM.isPending || !saveAsName.trim()}
-                onClick={() => {
-                  const name = saveAsName.trim();
-                  if (name) saveViewAsM.mutate(name);
-                }}
-              >
-                Сохранить как…
-              </button>
-              {activeView ? (
-                <button className="btn" type="button" disabled={saveViewM.isPending} onClick={onSaveView}>
-                  Сохранить
-                </button>
-              ) : null}
-              {activeView ? (
-                <button className="btn" type="button" disabled={deleteViewM.isPending} onClick={onDeleteView}>
-                  Удалить
-                </button>
-              ) : null}
-              <button className="btn" type="button" onClick={selectFactoryDefault}>
-                Сбросить к 24
-              </button>
-              <button
-                className="btn btnPrimary"
-                type="button"
-                onClick={() => {
-                  setInfoOpen(false);
-                  setColPickerOpen(false);
-                }}
-              >
-                Готово
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {colPickerOpen
+        ? createPortal(
+            <GanttTableColsSettingsModal
+              columns={tableColumns}
+              colById={colById}
+              initial={{
+                visibleIds,
+                colOrder,
+                pinnedLeftIds,
+                factorySelected,
+                activeViewId: factorySelected ? null : activeViewId
+              }}
+              views={views}
+              allowColumnReorder={allowColumnReorder}
+              savePending={saveViewM.isPending}
+              saveAsPending={saveViewAsM.isPending}
+              deletePending={deleteViewM.isPending}
+              onApply={commitColSettings}
+              onClose={() => setColPickerOpen(false)}
+              onSave={(next) => {
+                if (!next.activeViewId) return;
+                applyColDraft(next);
+                saveViewM.mutate({
+                  viewId: next.activeViewId,
+                  config: configFromColDraft(next, tableColumns, colWidths)
+                });
+              }}
+              onSaveAs={(name, next) => {
+                applyColDraft(next);
+                saveViewAsM.mutate({
+                  name,
+                  config: configFromColDraft(next, tableColumns, colWidths)
+                });
+              }}
+              onDelete={(id) => {
+                deleteViewM.mutate(id);
+                setColPickerOpen(false);
+              }}
+            />,
+            document.body
+          )
+        : null}
 
       <ConfirmDrawer
         open={confirmOpen}

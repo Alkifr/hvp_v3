@@ -10,7 +10,7 @@ export type HeaderPlanCell = {
 };
 
 export type PrimaryHeaderPlan = {
-  /** 1 группа / 2 подгруппа|label / 3 label / 4 номер колонки */
+  /** 1 группа / 2 подгруппа|label / 3 label / 4 номер колонки (если включена) */
   depth: 4;
   groupRow: HeaderPlanCell[];
   midRow: HeaderPlanCell[];
@@ -106,13 +106,50 @@ export function buildPrimaryHeaderPlan(columns: HeaderColumn[]): PrimaryHeaderPl
   return { depth: 4, groupRow, midRow, labelRow, indexRow };
 }
 
-/** Шапка первичной таблицы: 4 строки. */
-export function primaryExportHeaderDepth(_columns?: HeaderColumn[]): 4 {
-  return 4;
+export const REPORT_FREEZE_ROWS_MAX = 20;
+export const DEFAULT_PRIMARY_FREEZE_ROWS = 2;
+
+export type PrimaryHeaderWriteOptions = {
+  includeIndexRow?: boolean;
+};
+
+/** Шапка первичной таблицы: 3 строки или 4, если включена нумерация колонок. */
+export function primaryExportHeaderDepth(
+  _columns?: HeaderColumn[],
+  opts?: PrimaryHeaderWriteOptions
+): 3 | 4 {
+  return opts?.includeIndexRow === false ? 3 : 4;
+}
+
+export function clampFreezeRows(value: unknown, fallback = DEFAULT_PRIMARY_FREEZE_ROWS): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(REPORT_FREEZE_ROWS_MAX, Math.max(0, Math.round(n)));
+}
+
+/** Закрепляет первые N строк листа Excel (freeze panes). */
+export function applyFrozenRows(
+  worksheet: { views?: Array<Record<string, unknown>> },
+  freezeRows: number
+) {
+  const n = clampFreezeRows(freezeRows, 0);
+  if (n <= 0) {
+    worksheet.views = [];
+    return;
+  }
+  worksheet.views = [
+    {
+      state: "frozen",
+      xSplit: 0,
+      ySplit: n,
+      topLeftCell: `A${n + 1}`,
+      activeCell: `A${n + 1}`
+    }
+  ];
 }
 
 /**
- * Пишет 4 строки шапки: группа / подгруппа|label / label / номер колонки.
+ * Пишет шапку: группа / подгруппа|label / label / опционально номер колонки.
  * Важно для ExcelJS stream writer: merge до commit строк.
  * Возвращает номер следующей строки данных (1-based).
  */
@@ -125,7 +162,8 @@ export function writePrimaryTableHeaderRows(
     };
     mergeCells: (a: number, b: number, c: number, d: number) => void;
   },
-  columns: HeaderColumn[]
+  columns: HeaderColumn[],
+  opts?: PrimaryHeaderWriteOptions
 ): number {
   const styleHeader = (
     row: { getCell: (n: number) => any },
@@ -160,11 +198,16 @@ export function writePrimaryTableHeaderRows(
   const labelRowNumber = labelRow.number ?? midRowNumber + 1;
   styleHeader(labelRow, false);
 
-  // Строка как текст «1»…«N», чтобы Excel не применял формат даты колонки.
-  const indexValues = columns.map((_, index) => String(index + 1));
-  const indexRow = worksheet.addRow(indexValues);
-  const indexRowNumber = indexRow.number ?? labelRowNumber + 1;
-  styleHeader(indexRow, true, { size: 10, numFmt: "@" });
+  const includeIndexRow = opts?.includeIndexRow !== false;
+  let indexRow: { number?: number; commit: () => void; getCell: (n: number) => any } | null = null;
+  let indexRowNumber = labelRowNumber;
+  if (includeIndexRow) {
+    // Строка как текст «1»…«N», чтобы Excel не применял формат даты колонки.
+    const indexValues = columns.map((_, index) => String(index + 1));
+    indexRow = worksheet.addRow(indexValues);
+    indexRowNumber = indexRow.number ?? labelRowNumber + 1;
+    styleHeader(indexRow, true, { size: 10, numFmt: "@" });
+  }
 
   // Все merge до commit — иначе stream WorkbookWriter падает с "row has been committed".
   for (const range of contiguousRanges(groupValues)) {
@@ -189,7 +232,7 @@ export function writePrimaryTableHeaderRows(
   groupRow.commit();
   midRow.commit();
   labelRow.commit();
-  indexRow.commit();
+  indexRow?.commit();
 
   return indexRowNumber + 1;
 }

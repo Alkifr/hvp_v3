@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Самоподписанный TLS для https://hvp.atechnics.ru (браузер покажет предупреждение).
-# Запуск на srv-fin-02v от УЗ с sudo:
-#   sudo bash /opt/hvp_v3/deploy/setup-selfsigned-https.sh
+# Самоподписанный TLS. Браузер покажет предупреждение.
+#   sudo HVP_DOMAIN=planning.example.internal bash deploy/setup-selfsigned-https.sh
 set -euo pipefail
 
-DOMAIN="${HVP_DOMAIN:-hvp.atechnics.ru}"
+if [[ -z "${HVP_DOMAIN:-}" ]]; then
+  echo "Задайте HVP_DOMAIN (например planning.example.internal)" >&2
+  exit 1
+fi
+
+DOMAIN="$HVP_DOMAIN"
 CRT="/etc/ssl/certs/${DOMAIN}.crt"
 KEY="/etc/ssl/private/${DOMAIN}.key"
 NGINX_CONF="/etc/nginx/conf.d/${DOMAIN}.conf"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC_CONF="$ROOT/deploy/nginx-hvp.atechnics.ru.conf"
+SRC_CONF="$ROOT/deploy/nginx-https.conf.example"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Запустите через sudo" >&2
@@ -29,7 +33,7 @@ distinguished_name = dn
 x509_extensions = ext
 [dn]
 CN = ${DOMAIN}
-O = atechnics internal
+O = Internal
 [ext]
 subjectAltName = DNS:${DOMAIN}
 keyUsage = digitalSignature, keyEncipherment
@@ -49,11 +53,11 @@ else
 fi
 
 if [[ ! -f "$SRC_CONF" ]]; then
-  echo "Нет $SRC_CONF — сначала git pull в /opt/hvp_v3" >&2
+  echo "Нет $SRC_CONF" >&2
   exit 1
 fi
 
-cp "$SRC_CONF" "$NGINX_CONF"
+sed "s/__DOMAIN__/${DOMAIN}/g" "$SRC_CONF" > "$NGINX_CONF"
 if [[ -d /etc/nginx/sites-enabled ]]; then
   rm -f /etc/nginx/sites-enabled/default
 fi

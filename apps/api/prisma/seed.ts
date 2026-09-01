@@ -3,6 +3,7 @@ import argon2 from "argon2";
 import path from "node:path";
 import dotenv from "dotenv";
 
+import { PERMISSION_SEED } from "../src/lib/permissionCatalog.js";
 import { checkEventCountPresets, checkEventCountReportConfig } from "../src/lib/reportPresets.js";
 
 const prisma = new PrismaClient();
@@ -14,28 +15,25 @@ function env(name: string) {
   return (process.env[name] ?? "").trim();
 }
 
+function isProd() {
+  return env("NODE_ENV") === "production";
+}
+
+function isSeedDemo() {
+  const v = env("SEED_DEMO").toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
 async function main() {
   console.log("Seeding…");
 
+  const seedDemo = isSeedDemo();
+  if (isProd() && seedDemo) {
+    throw new Error("SEED_DEMO запрещён в production. Уберите флаг и задайте ADMIN_EMAIL / ADMIN_PASSWORD.");
+  }
+
   // --- RBAC/Users ---
-  const permissionsSeed = [
-    { code: "events:read", name: "Просмотр событий" },
-    { code: "events:write", name: "Редактирование событий" },
-    { code: "ref:read", name: "Просмотр справочников" },
-    { code: "ref:write", name: "Редактирование справочников" },
-    { code: "admin:users", name: "Администрирование пользователей" },
-    { code: "admin:roles", name: "Администрирование ролей/прав" },
-    { code: "admin:cleanup", name: "Очистка рабочего контура" },
-    { code: "admin:mail", name: "SMTP и системные настройки почты" },
-    { code: "mail:send", name: "Формирование и отправка email-рассылки" },
-    { code: "resources:read", name: "Просмотр ресурсов по событиям" },
-    { code: "resources:plan", name: "Планирование ресурсов по событиям" },
-    { code: "resources:actual", name: "Факт ресурсов по событиям" },
-    { code: "workforce:read", name: "Просмотр персонала/квалификаций/смен" },
-    { code: "workforce:write", name: "Редактирование персонала/квалификаций/смен" },
-    { code: "warehouse:read", name: "Просмотр материалов/складов/остатков" },
-    { code: "warehouse:write", name: "Редактирование материалов/складов/движений" }
-  ] as const;
+  const permissionsSeed = PERMISSION_SEED;
 
   const permissions = await Promise.all(
     permissionsSeed.map((p) =>
@@ -71,7 +69,6 @@ async function main() {
 
   const setRolePerms = async (roleId: string, permCodes: string[]) => {
     const permIds = permCodes.map((c) => permByCode.get(c)!.id);
-    // idempotent: ensure each link exists
     await Promise.all(
       permIds.map((permissionId) =>
         prisma.rolePermission.upsert({
@@ -92,6 +89,13 @@ async function main() {
   }
   await setRolePerms(roleSuperAdmin.id, permissionsSeed.map((p) => p.code) as unknown as string[]);
   await setRolePerms(rolePlanner.id, [
+    "gantt:read",
+    "gantt:write",
+    "hangar:read",
+    "hangar:write",
+    "analytics:read",
+    "itp:read",
+    "import:write",
     "events:read",
     "events:write",
     "ref:read",
@@ -102,13 +106,23 @@ async function main() {
     "workforce:read",
     "warehouse:read"
   ]);
-  await setRolePerms(roleViewer.id, ["events:read", "ref:read", "resources:read", "workforce:read", "warehouse:read"]);
+  await setRolePerms(roleViewer.id, [
+    "gantt:read",
+    "hangar:read",
+    "analytics:read",
+    "itp:read",
+    "events:read",
+    "ref:read",
+    "resources:read",
+    "workforce:read",
+    "warehouse:read"
+  ]);
 
   const adminEmail = env("ADMIN_EMAIL") || "admin@local.dev";
   const adminPassword = env("ADMIN_PASSWORD") || "admin";
   const adminName = env("ADMIN_NAME") || "Администратор";
 
-  if (process.env.NODE_ENV === "production") {
+  if (isProd()) {
     if (!env("ADMIN_EMAIL") || !env("ADMIN_PASSWORD")) {
       throw new Error("ADMIN_EMAIL и ADMIN_PASSWORD обязательны в production");
     }
@@ -150,70 +164,6 @@ async function main() {
     create: { userId: admin.id, roleId: roleSuperAdmin.id }
   });
 
-  const ensureDemoUser = async (params: {
-    email: string;
-    displayName: string;
-    password: string;
-    roleId: string;
-  }) => {
-    const email = params.email.toLowerCase();
-    const existing = await prisma.user.findUnique({ where: { email } });
-    const user = existing
-      ? await prisma.user.update({
-          where: { id: existing.id },
-          data: { displayName: params.displayName, isActive: true }
-        })
-      : await prisma.user.create({
-          data: {
-            email,
-            displayName: params.displayName,
-            passwordHash: await argon2.hash(params.password),
-            isActive: true,
-            mustChangePassword: true
-          }
-        });
-
-    await prisma.userRole.deleteMany({ where: { userId: user.id } });
-    await prisma.userRole.create({ data: { userId: user.id, roleId: params.roleId } });
-    return user;
-  };
-
-  await ensureDemoUser({
-    email: "planner@local.dev",
-    displayName: "Планировщик",
-    password: "planner123",
-    roleId: rolePlanner.id
-  });
-  await ensureDemoUser({
-    email: "viewer@local.dev",
-    displayName: "Просмотрщик",
-    password: "viewer123",
-    roleId: roleViewer.id
-  });
-
-  // Справочники (минимальный набор для старта)
-  const operator = await prisma.operator.upsert({
-    where: { code: "DEMO" },
-    update: {},
-    create: { code: "DEMO", name: "Демо‑оператор" }
-  });
-
-  const typeA320 = await prisma.aircraftType.upsert({
-    where: { icaoType: "A320" },
-    update: {},
-    create: { icaoType: "A320", name: "Airbus A320", manufacturer: "Airbus" }
-  });
-
-  const aircraft = await prisma.aircraft.upsert({
-    where: { tailNumber: "RA-00000" },
-    update: {},
-    create: {
-      tailNumber: "RA-00000",
-      operatorId: operator.id,
-      typeId: typeA320.id
-    }
-  });
-
   await prisma.eventStatusCatalog.createMany({
     data: [
       { code: EventStatus.PENDING_EXECUTOR_APPROVAL, name: "На согласовании с исполнителем", color: "#FFC182", sortOrder: 10, selectable: true, allowsAutoInProgress: false, manualOnly: true },
@@ -228,271 +178,326 @@ async function main() {
     skipDuplicates: true
   });
 
-  const aCheck = await prisma.eventType.upsert({
-    where: { code: "A_CHECK" },
-    update: {},
-    create: { code: "A_CHECK", name: "A‑check", color: "#3b82f6" }
-  });
+  if (!seedDemo) {
+    console.log("Демо-данные пропущены. Для локальной разработки: SEED_DEMO=1 npm run prisma:seed -w apps/api");
+  } else {
+    const ensureDemoUser = async (params: {
+      email: string;
+      displayName: string;
+      password: string;
+      roleId: string;
+    }) => {
+      const email = params.email.toLowerCase();
+      const existing = await prisma.user.findUnique({ where: { email } });
+      const user = existing
+        ? await prisma.user.update({
+            where: { id: existing.id },
+            data: { displayName: params.displayName, isActive: true }
+          })
+        : await prisma.user.create({
+            data: {
+              email,
+              displayName: params.displayName,
+              passwordHash: await argon2.hash(params.password),
+              isActive: true,
+              mustChangePassword: true
+            }
+          });
 
-  const cCheck = await prisma.eventType.upsert({
-    where: { code: "C_CHECK" },
-    update: {},
-    create: { code: "C_CHECK", name: "C‑check", color: "#f97316" }
-  });
+      await prisma.userRole.deleteMany({ where: { userId: user.id } });
+      await prisma.userRole.create({ data: { userId: user.id, roleId: params.roleId } });
+      return user;
+    };
 
-  await prisma.workshop.upsert({
-    where: { code: "SHOP1" },
-    update: {},
-    create: { code: "SHOP1", name: "Цех 1" }
-  });
+    await ensureDemoUser({
+      email: "planner@local.dev",
+      displayName: "Планировщик",
+      password: "planner123",
+      roleId: rolePlanner.id
+    });
+    await ensureDemoUser({
+      email: "viewer@local.dev",
+      displayName: "Просмотрщик",
+      password: "viewer123",
+      roleId: roleViewer.id
+    });
 
-  await prisma.workshop.upsert({
-    where: { code: "SHOP2" },
-    update: {},
-    create: { code: "SHOP2", name: "Цех 2" }
-  });
+    const operator = await prisma.operator.upsert({
+      where: { code: "DEMO" },
+      update: {},
+      create: { code: "DEMO", name: "Демо‑оператор" }
+    });
 
-  // 5 ангаров (как в текущем описании)
-  const hangars = await Promise.all(
-    [1, 2, 3, 4, 5].map(async (n) =>
-      prisma.hangar.upsert({
-        where: { code: `H${n}` },
-        update: {},
-        create: { code: `H${n}`, name: `Ангар ${n}` }
-      })
-    )
-  );
+    const typeA320 = await prisma.aircraftType.upsert({
+      where: { icaoType: "A320" },
+      update: {},
+      create: { icaoType: "A320", name: "Airbus A320", manufacturer: "Airbus" }
+    });
 
-  // По одному варианту расстановки на ангар для демо (дальше можно добавлять через UI)
-  const layouts = await Promise.all(
-    hangars.map(async (h) =>
-      prisma.hangarLayout.upsert({
-        where: { hangarId_code: { hangarId: h.id, code: "BASE" } },
-        update: {},
-        create: {
-          hangarId: h.id,
-          code: "BASE",
-          name: "Базовый вариант",
-          widthMeters: 60,
-          heightMeters: 40
-        }
-      })
-    )
-  );
+    const aircraft = await prisma.aircraft.upsert({
+      where: { tailNumber: "RA-00000" },
+      update: {},
+      create: {
+        tailNumber: "RA-00000",
+        operatorId: operator.id,
+        typeId: typeA320.id
+      }
+    });
 
-  // Несколько мест в первом ангаре/варианте, чтобы сразу увидеть визуализацию
-  const layout1 = layouts[0]!;
-  const stands = await Promise.all(
-    [
-      { code: "S1", name: "Место 1", x: 5, y: 5, w: 18, h: 10 },
-      { code: "S2", name: "Место 2", x: 25, y: 5, w: 18, h: 10 },
-      { code: "S3", name: "Место 3", x: 5, y: 20, w: 18, h: 10 }
-    ].map((s) =>
-      prisma.hangarStand.upsert({
-        where: { layoutId_code: { layoutId: layout1.id, code: s.code } },
-        update: {},
-        create: { ...s, layoutId: layout1.id }
-      })
-    )
-  );
+    const aCheck = await prisma.eventType.upsert({
+      where: { code: "A_CHECK" },
+      update: {},
+      create: { code: "A_CHECK", name: "A‑check", color: "#3b82f6" }
+    });
 
-  // Демо‑событие + резерв
-  const now = new Date();
-  const start = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const end = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const cCheck = await prisma.eventType.upsert({
+      where: { code: "C_CHECK" },
+      update: {},
+      create: { code: "C_CHECK", name: "C‑check", color: "#f97316" }
+    });
 
-  const existingEvent = await prisma.maintenanceEvent.findFirst({
-    where: {
-      aircraftId: aircraft.id,
-      eventTypeId: aCheck.id,
-      startAt: start,
-      endAt: end,
-      level: PlanningLevel.OPERATIONAL
-    }
-  });
+    await prisma.workshop.upsert({
+      where: { code: "SHOP1" },
+      update: {},
+      create: { code: "SHOP1", name: "Цех 1" }
+    });
 
-  const event =
-    existingEvent ??
-    (await prisma.maintenanceEvent.create({
-      data: {
-        level: PlanningLevel.OPERATIONAL,
-        status: EventStatus.PENDING_EXECUTOR_APPROVAL,
-        planningKind: "PLANNED",
-        title: "Демо: A‑check",
+    await prisma.workshop.upsert({
+      where: { code: "SHOP2" },
+      update: {},
+      create: { code: "SHOP2", name: "Цех 2" }
+    });
+
+    const hangars = await Promise.all(
+      [1, 2, 3, 4, 5].map(async (n) =>
+        prisma.hangar.upsert({
+          where: { code: `H${n}` },
+          update: {},
+          create: { code: `H${n}`, name: `Ангар ${n}` }
+        })
+      )
+    );
+
+    const layouts = await Promise.all(
+      hangars.map(async (h) =>
+        prisma.hangarLayout.upsert({
+          where: { hangarId_code: { hangarId: h.id, code: "BASE" } },
+          update: {},
+          create: {
+            hangarId: h.id,
+            code: "BASE",
+            name: "Базовый вариант",
+            widthMeters: 60,
+            heightMeters: 40
+          }
+        })
+      )
+    );
+
+    const layout1 = layouts[0]!;
+    const stands = await Promise.all(
+      [
+        { code: "S1", name: "Место 1", x: 5, y: 5, w: 18, h: 10 },
+        { code: "S2", name: "Место 2", x: 25, y: 5, w: 18, h: 10 },
+        { code: "S3", name: "Место 3", x: 5, y: 20, w: 18, h: 10 }
+      ].map((s) =>
+        prisma.hangarStand.upsert({
+          where: { layoutId_code: { layoutId: layout1.id, code: s.code } },
+          update: {},
+          create: { ...s, layoutId: layout1.id }
+        })
+      )
+    );
+
+    const now = new Date();
+    const start = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const end = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+    const existingEvent = await prisma.maintenanceEvent.findFirst({
+      where: {
         aircraftId: aircraft.id,
         eventTypeId: aCheck.id,
         startAt: start,
         endAt: end,
-        budgetStartAt: start,
-        budgetEndAt: end,
-        hangarId: hangars[0]!.id,
-        layoutId: layout1.id
+        level: PlanningLevel.OPERATIONAL
       }
-    }));
-
-  await prisma.standReservation.deleteMany({ where: { eventId: event.id } });
-  await prisma.eventPlacement.deleteMany({ where: { eventId: event.id } });
-  const placement = await prisma.eventPlacement.create({
-    data: {
-      eventId: event.id,
-      startAt: start,
-      endAt: end,
-      budgetStartAt: (event as any).budgetStartAt ?? null,
-      budgetEndAt: (event as any).budgetEndAt ?? null,
-      actualStartAt: (event as any).actualStartAt ?? null,
-      actualEndAt: (event as any).actualEndAt ?? null,
-      hangarId: hangars[0]!.id,
-      layoutId: layout1.id,
-      standId: stands[0]!.id,
-      sortOrder: 0
-    }
-  });
-  await prisma.standReservation.create({
-    data: {
-      eventId: event.id,
-      placementId: placement.id,
-      layoutId: layout1.id,
-      standId: stands[0]!.id,
-      startAt: start,
-      endAt: end
-    }
-  });
-
-  // Чтобы справочник не был пустым
-  void cCheck;
-
-  // --- Ресурсы (MVP) ---
-  const shiftDay = await prisma.shift.upsert({
-    where: { code: "DAY" },
-    update: { name: "Дневная", startMin: 8 * 60, endMin: 20 * 60, isActive: true },
-    create: { code: "DAY", name: "Дневная", startMin: 8 * 60, endMin: 20 * 60, isActive: true }
-  });
-  const shiftNight = await prisma.shift.upsert({
-    where: { code: "NIGHT" },
-    update: { name: "Ночная", startMin: 20 * 60, endMin: 8 * 60, isActive: true },
-    create: { code: "NIGHT", name: "Ночная", startMin: 20 * 60, endMin: 8 * 60, isActive: true }
-  });
-  void shiftNight;
-
-  const skillDefs = [
-    { code: "ME", name: "ME (Mechanic)" },
-    { code: "AV", name: "AV (Avionics)" },
-    { code: "INT", name: "INT (Interior)" },
-    { code: "NDT", name: "NDT / BORO" },
-    { code: "SHOP", name: "SHOP" },
-    { code: "CAB_REP", name: "CabRep" }
-  ] as const;
-  const skillsByCode: Record<string, { id: string }> = {};
-  for (const def of skillDefs) {
-    skillsByCode[def.code] = await prisma.skill.upsert({
-      where: { code: def.code },
-      update: { name: def.name, isActive: true },
-      create: { code: def.code, name: def.name, isActive: true }
     });
-  }
-  await prisma.skill.updateMany({
-    where: { code: { in: ["MECH", "AVIO"] } },
-    data: { isActive: false }
-  });
-  const skillMe = skillsByCode.ME!;
-  const skillAv = skillsByCode.AV!;
 
-  const p1 = await prisma.person.upsert({
-    where: { code: "P001" },
-    update: { name: "Иванов И.И.", isActive: true },
-    create: { code: "P001", name: "Иванов И.И.", isActive: true }
-  });
-  const p2 = await prisma.person.upsert({
-    where: { code: "P002" },
-    update: { name: "Петров П.П.", isActive: true },
-    create: { code: "P002", name: "Петров П.П.", isActive: true }
-  });
-
-  await prisma.personSkill.upsert({
-    where: { personId_skillId: { personId: p1.id, skillId: skillMe.id } },
-    update: { level: 5 },
-    create: { personId: p1.id, skillId: skillMe.id, level: 5 }
-  });
-  await prisma.personSkill.upsert({
-    where: { personId_skillId: { personId: p2.id, skillId: skillAv.id } },
-    update: { level: 4 },
-    create: { personId: p2.id, skillId: skillAv.id, level: 4 }
-  });
-
-  const wh = await prisma.warehouse.upsert({
-    where: { code: "MAIN" },
-    update: { name: "Основной склад", isActive: true },
-    create: { code: "MAIN", name: "Основной склад", isActive: true }
-  });
-
-  const matOil = await prisma.material.upsert({
-    where: { code: "OIL-01" },
-    update: { name: "Масло", uom: "L", isActive: true },
-    create: { code: "OIL-01", name: "Масло", uom: "L", isActive: true }
-  });
-  const matFilter = await prisma.material.upsert({
-    where: { code: "FLT-01" },
-    update: { name: "Фильтр", uom: "EA", isActive: true },
-    create: { code: "FLT-01", name: "Фильтр", uom: "EA", isActive: true }
-  });
-
-  // приход на склад (для демо остатков)
-  const ensureSeedIn = async (materialId: string, qty: number) => {
-    const exists = await prisma.stockMovement.findFirst({
-      where: { materialId, warehouseId: wh.id, type: "IN", notes: "Seed IN" }
-    });
-    if (exists) return;
-    await prisma.stockMovement.create({
-      data: { materialId, warehouseId: wh.id, type: "IN", qty, notes: "Seed IN" }
-    });
-  };
-  await ensureSeedIn(matOil.id, 100);
-  await ensureSeedIn(matFilter.id, 50);
-
-  // демо-план по событию: 2 дня по дневной смене
-  const startDayUtc = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate(), 0, 0, 0, 0));
-  await prisma.eventWorkPlanLine.upsert({
-    where: { eventId_date_shiftId_skillId: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillMe.id } },
-    update: { plannedMinutes: 8 * 60, notes: "План" },
-    create: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillMe.id, plannedMinutes: 8 * 60, notes: "План" }
-  });
-  await prisma.eventWorkPlanLine.upsert({
-    where: { eventId_date_shiftId_skillId: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillAv.id } },
-    update: { plannedMinutes: 4 * 60, notes: "План" },
-    create: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillAv.id, plannedMinutes: 4 * 60, notes: "План" }
-  });
-
-  // резерв материалов
-  await prisma.materialReservation.upsert({
-    where: { eventId_materialId_warehouseId_needByDate: { eventId: event.id, materialId: matOil.id, warehouseId: wh.id, needByDate: start } },
-    update: { qtyReserved: 10, notes: "План" },
-    create: { eventId: event.id, materialId: matOil.id, warehouseId: wh.id, qtyReserved: 10, needByDate: start, notes: "План" }
-  });
-  await prisma.materialReservation.upsert({
-    where: { eventId_materialId_warehouseId_needByDate: { eventId: event.id, materialId: matFilter.id, warehouseId: wh.id, needByDate: start } },
-    update: { qtyReserved: 2, notes: "План" },
-    create: { eventId: event.id, materialId: matFilter.id, warehouseId: wh.id, qtyReserved: 2, needByDate: start, notes: "План" }
-  });
-
-  for (const preset of checkEventCountPresets({ aCheck: aCheck.name, cCheck: cCheck.name })) {
-    const config = checkEventCountReportConfig(preset.eventTypeName);
-    const existing = await prisma.savedReport.findFirst({
-      where: { ownerId: admin.id, name: preset.name }
-    });
-    if (existing) {
-      await prisma.savedReport.update({
-        where: { id: existing.id },
-        data: { description: preset.description, config }
-      });
-    } else {
-      await prisma.savedReport.create({
+    const event =
+      existingEvent ??
+      (await prisma.maintenanceEvent.create({
         data: {
-          name: preset.name,
-          description: preset.description,
-          ownerId: admin.id,
-          config
+          level: PlanningLevel.OPERATIONAL,
+          status: EventStatus.PENDING_EXECUTOR_APPROVAL,
+          planningKind: "PLANNED",
+          title: "Демо: A‑check",
+          aircraftId: aircraft.id,
+          eventTypeId: aCheck.id,
+          startAt: start,
+          endAt: end,
+          budgetStartAt: start,
+          budgetEndAt: end,
+          hangarId: hangars[0]!.id,
+          layoutId: layout1.id
         }
+      }));
+
+    await prisma.standReservation.deleteMany({ where: { eventId: event.id } });
+    await prisma.eventPlacement.deleteMany({ where: { eventId: event.id } });
+    const placement = await prisma.eventPlacement.create({
+      data: {
+        eventId: event.id,
+        startAt: start,
+        endAt: end,
+        budgetStartAt: event.budgetStartAt ?? null,
+        budgetEndAt: event.budgetEndAt ?? null,
+        actualStartAt: event.actualStartAt ?? null,
+        actualEndAt: event.actualEndAt ?? null,
+        hangarId: hangars[0]!.id,
+        layoutId: layout1.id,
+        standId: stands[0]!.id,
+        sortOrder: 0
+      }
+    });
+    await prisma.standReservation.create({
+      data: {
+        eventId: event.id,
+        placementId: placement.id,
+        layoutId: layout1.id,
+        standId: stands[0]!.id,
+        startAt: start,
+        endAt: end
+      }
+    });
+
+    const shiftDay = await prisma.shift.upsert({
+      where: { code: "DAY" },
+      update: { name: "Дневная", startMin: 8 * 60, endMin: 20 * 60, isActive: true },
+      create: { code: "DAY", name: "Дневная", startMin: 8 * 60, endMin: 20 * 60, isActive: true }
+    });
+    await prisma.shift.upsert({
+      where: { code: "NIGHT" },
+      update: { name: "Ночная", startMin: 20 * 60, endMin: 8 * 60, isActive: true },
+      create: { code: "NIGHT", name: "Ночная", startMin: 20 * 60, endMin: 8 * 60, isActive: true }
+    });
+
+    const skillDefs = [
+      { code: "ME", name: "ME (Mechanic)" },
+      { code: "AV", name: "AV (Avionics)" },
+      { code: "INT", name: "INT (Interior)" },
+      { code: "NDT", name: "NDT / BORO" },
+      { code: "SHOP", name: "SHOP" },
+      { code: "CAB_REP", name: "CabRep" }
+    ] as const;
+    const skillsByCode: Record<string, { id: string }> = {};
+    for (const def of skillDefs) {
+      skillsByCode[def.code] = await prisma.skill.upsert({
+        where: { code: def.code },
+        update: { name: def.name, isActive: true },
+        create: { code: def.code, name: def.name, isActive: true }
       });
+    }
+    await prisma.skill.updateMany({
+      where: { code: { in: ["MECH", "AVIO"] } },
+      data: { isActive: false }
+    });
+    const skillMe = skillsByCode.ME!;
+    const skillAv = skillsByCode.AV!;
+
+    const p1 = await prisma.person.upsert({
+      where: { code: "P001" },
+      update: { name: "Иванов И.И.", isActive: true },
+      create: { code: "P001", name: "Иванов И.И.", isActive: true }
+    });
+    const p2 = await prisma.person.upsert({
+      where: { code: "P002" },
+      update: { name: "Петров П.П.", isActive: true },
+      create: { code: "P002", name: "Петров П.П.", isActive: true }
+    });
+
+    await prisma.personSkill.upsert({
+      where: { personId_skillId: { personId: p1.id, skillId: skillMe.id } },
+      update: { level: 5 },
+      create: { personId: p1.id, skillId: skillMe.id, level: 5 }
+    });
+    await prisma.personSkill.upsert({
+      where: { personId_skillId: { personId: p2.id, skillId: skillAv.id } },
+      update: { level: 4 },
+      create: { personId: p2.id, skillId: skillAv.id, level: 4 }
+    });
+
+    const wh = await prisma.warehouse.upsert({
+      where: { code: "MAIN" },
+      update: { name: "Основной склад", isActive: true },
+      create: { code: "MAIN", name: "Основной склад", isActive: true }
+    });
+
+    const matOil = await prisma.material.upsert({
+      where: { code: "OIL-01" },
+      update: { name: "Масло", uom: "L", isActive: true },
+      create: { code: "OIL-01", name: "Масло", uom: "L", isActive: true }
+    });
+    const matFilter = await prisma.material.upsert({
+      where: { code: "FLT-01" },
+      update: { name: "Фильтр", uom: "EA", isActive: true },
+      create: { code: "FLT-01", name: "Фильтр", uom: "EA", isActive: true }
+    });
+
+    const ensureSeedIn = async (materialId: string, qty: number) => {
+      const exists = await prisma.stockMovement.findFirst({
+        where: { materialId, warehouseId: wh.id, type: "IN", notes: "Seed IN" }
+      });
+      if (exists) return;
+      await prisma.stockMovement.create({
+        data: { materialId, warehouseId: wh.id, type: "IN", qty, notes: "Seed IN" }
+      });
+    };
+    await ensureSeedIn(matOil.id, 100);
+    await ensureSeedIn(matFilter.id, 50);
+
+    const startDayUtc = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate(), 0, 0, 0, 0));
+    await prisma.eventWorkPlanLine.upsert({
+      where: { eventId_date_shiftId_skillId: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillMe.id } },
+      update: { plannedMinutes: 8 * 60, notes: "План" },
+      create: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillMe.id, plannedMinutes: 8 * 60, notes: "План" }
+    });
+    await prisma.eventWorkPlanLine.upsert({
+      where: { eventId_date_shiftId_skillId: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillAv.id } },
+      update: { plannedMinutes: 4 * 60, notes: "План" },
+      create: { eventId: event.id, date: startDayUtc, shiftId: shiftDay.id, skillId: skillAv.id, plannedMinutes: 4 * 60, notes: "План" }
+    });
+
+    await prisma.materialReservation.upsert({
+      where: { eventId_materialId_warehouseId_needByDate: { eventId: event.id, materialId: matOil.id, warehouseId: wh.id, needByDate: start } },
+      update: { qtyReserved: 10, notes: "План" },
+      create: { eventId: event.id, materialId: matOil.id, warehouseId: wh.id, qtyReserved: 10, needByDate: start, notes: "План" }
+    });
+    await prisma.materialReservation.upsert({
+      where: { eventId_materialId_warehouseId_needByDate: { eventId: event.id, materialId: matFilter.id, warehouseId: wh.id, needByDate: start } },
+      update: { qtyReserved: 2, notes: "План" },
+      create: { eventId: event.id, materialId: matFilter.id, warehouseId: wh.id, qtyReserved: 2, needByDate: start, notes: "План" }
+    });
+
+    for (const preset of checkEventCountPresets({ aCheck: aCheck.name, cCheck: cCheck.name })) {
+      const config = checkEventCountReportConfig(preset.eventTypeName);
+      const existing = await prisma.savedReport.findFirst({
+        where: { ownerId: admin.id, name: preset.name }
+      });
+      if (existing) {
+        await prisma.savedReport.update({
+          where: { id: existing.id },
+          data: { description: preset.description, config }
+        });
+      } else {
+        await prisma.savedReport.create({
+          data: {
+            name: preset.name,
+            description: preset.description,
+            ownerId: admin.id,
+            config
+          }
+        });
+      }
     }
   }
 
@@ -528,4 +533,3 @@ main()
     await prisma.$disconnect();
     process.exit(1);
   });
-

@@ -3,12 +3,23 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
+import {
+  adminTabFromHash,
+  buildAdminHash,
+  parseHashPage,
+  type AdminHashTab
+} from "../../lib/eventDeepLink";
+import { permissionCodesFromIds, summarizeRolePermissions, previewNavLabels, nextCloneRoleCode } from "../../lib/permissionCatalog";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
+import { PermissionMatrix } from "../components/PermissionMatrix";
 import type { SandboxSummary } from "../components/SandboxSwitcher";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { formatPresenceWhen, UserPresencePanel } from "../components/UserPresencePanel";
 import { AdminAnnouncementsPanel } from "./AdminAnnouncementsPanel";
+import { AdminOverview } from "./AdminOverview";
+import { AdminReportsPanel } from "./AdminReportsPanel";
+import { AdminSandboxesPanel } from "./AdminSandboxesPanel";
 
 type Role = { id: string; code: string; name: string; isSystem: boolean; permissions: { permission: Permission }[] };
 type Permission = { id: string; code: string; name: string };
@@ -49,12 +60,56 @@ type MailDigestSettings = {
   updatedAt: string;
 };
 
-type AdminTab = "users" | "roles" | "activity" | "presence" | "announce" | "cleanup" | "mail";
+type AdminTab = AdminHashTab;
+type AdminGroup = "overview" | "people" | "access" | "comms" | "risk";
 type AdminUserFilter = "all" | "active" | "inactive" | "password";
+
+const TAB_META: Record<AdminTab, { label: string; group: AdminGroup; danger?: boolean }> = {
+  overview: { label: "Обзор", group: "overview" },
+  users: { label: "Пользователи", group: "people" },
+  activity: { label: "Журнал", group: "people" },
+  presence: { label: "Присутствие", group: "people" },
+  roles: { label: "Роли", group: "access" },
+  announce: { label: "Объявления", group: "comms" },
+  mail: { label: "SMTP", group: "comms" },
+  cleanup: { label: "Очистка", group: "risk", danger: true },
+  sandboxes: { label: "Песочницы", group: "risk" },
+  reports: { label: "Отчёты", group: "risk" }
+};
+
+const ADMIN_GROUPS: Array<{ id: AdminGroup; label: string; danger?: boolean }> = [
+  { id: "overview", label: "Обзор" },
+  { id: "people", label: "Люди" },
+  { id: "access", label: "Доступ" },
+  { id: "comms", label: "Коммуникации" },
+  { id: "risk", label: "Данные и риск", danger: true }
+];
+
+function writeAdminLocation(tab: AdminTab, invite: boolean) {
+  const next = `#${buildAdminHash(tab, { invite: invite && tab === "users" })}`;
+  const current = `#${(location.hash || "").replace(/^#/, "")}`;
+  if (current === next) return;
+  try {
+    history.replaceState(null, "", `${location.pathname}${location.search}${next}`);
+  } catch {
+    location.hash = next.slice(1);
+  }
+}
+
+function codesFromRoleIds(roleIds: Iterable<string>, catalog: Role[]): string[] {
+  const ids = new Set(roleIds);
+  return [
+    ...new Set(
+      catalog.filter((r) => ids.has(r.id)).flatMap((r) => r.permissions.map((p) => p.permission.code))
+    )
+  ];
+}
 
 type AdminUser = {
   email: string;
   displayName?: string | null;
+  roles?: string[];
+  writeBlocked?: boolean;
 };
 
 function userInitials(u: User): string {
@@ -125,6 +180,23 @@ function IconSearch() {
   );
 }
 
+function IconPlus() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10 4v12" />
+      <path d="M4 10h12" />
+    </svg>
+  );
+}
+
+function IconClose() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="M5 5l10 10M15 5L5 15" />
+    </svg>
+  );
+}
+
 export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const qc = useQueryClient();
   const canUsers = props.permissions.includes("admin:users");
@@ -133,19 +205,25 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const canMail = props.permissions.includes("admin:mail");
 
   const availableTabs = useMemo(() => {
-    const tabs: Array<{ id: AdminTab; label: string }> = [];
-    if (canUsers) tabs.push({ id: "users", label: "Список пользователей" });
-    if (canRoles) tabs.push({ id: "roles", label: "Роли" });
-    if (canUsers) tabs.push({ id: "activity", label: "Журнал" });
-    if (canUsers) tabs.push({ id: "presence", label: "Присутствие" });
-    if (canUsers) tabs.push({ id: "announce", label: "Уведомления" });
-    if (canMail) tabs.push({ id: "mail", label: "Почта SMTP" });
-    if (canCleanup) tabs.push({ id: "cleanup", label: "Особые функции" });
+    const tabs: Array<{ id: AdminTab; label: string; group: AdminGroup; danger?: boolean }> = [];
+    const add = (id: AdminTab) => tabs.push({ id, ...TAB_META[id] });
+    add("overview");
+    if (canUsers) add("users");
+    if (canUsers) add("activity");
+    if (canUsers) add("presence");
+    if (canRoles) add("roles");
+    if (canUsers) add("announce");
+    if (canMail) add("mail");
+    if (canCleanup) add("cleanup");
+    if (canUsers) add("sandboxes");
+    if (canUsers) add("reports");
     return tabs;
   }, [canUsers, canRoles, canCleanup, canMail]);
 
-  const [tab, setTab] = useState<AdminTab>(() => availableTabs[0]?.id ?? "users");
-  const [userSearch, setUserSearch] = useState("");
+  const [tab, setTab] = useState<AdminTab>(() => adminTabFromHash(location.hash) ?? "overview");
+  const [inviteOpen, setInviteOpen] = useState(() => parseHashPage(location.hash).query.get("invite") === "1");
+  const [createRoleOpen, setCreateRoleOpen] = useState(false);
+  const [listSearch, setListSearch] = useState("");
   const [userFilter, setUserFilter] = useState<AdminUserFilter>("all");
   const [userRoleFilter, setUserRoleFilter] = useState("");
   const [userPage, setUserPage] = useState(0);
@@ -218,7 +296,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const mailSettingsQ = useQuery({
     queryKey: ["admin", "mail-digest", "settings"],
     queryFn: () => apiGet<MailDigestSettings>("/api/admin/mail-digest/settings"),
-    enabled: canMail && tab === "mail"
+    enabled: canMail && (tab === "mail" || tab === "overview")
   });
 
   useEffect(() => {
@@ -317,6 +395,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
       setUName("");
       setUPass("");
       setURoleIds([]);
+      setInviteOpen(false);
       await qc.invalidateQueries({ queryKey: ["admin", "users"] });
     }
   });
@@ -331,6 +410,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
       setRCode("");
       setRName("");
       setRPermIds([]);
+      setCreateRoleOpen(false);
       await qc.invalidateQueries({ queryKey: ["admin", "roles"] });
       await qc.invalidateQueries({ queryKey: ["admin", "permissions"] });
     }
@@ -354,7 +434,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   );
 
   const filteredUsers = useMemo(() => {
-    const q = userSearch.trim().toLowerCase();
+    const q = listSearch.trim().toLowerCase();
     const list = usersQ.data ?? [];
     return list.filter((u) => {
       const hay = [
@@ -372,12 +452,69 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
       if (userFilter === "password" && !u.mustChangePassword) return false;
       return true;
     });
-  }, [usersQ.data, userSearch, userRoleFilter, userFilter]);
+  }, [usersQ.data, listSearch, userRoleFilter, userFilter]);
+
+  const filteredRoles = useMemo(() => {
+    const q = listSearch.trim().toLowerCase();
+    const list = rolesQ.data ?? [];
+    if (!q) return list;
+    return list.filter((r) => {
+      const codes = r.permissions.map((x) => x.permission.code);
+      const hay = [r.name, r.code, summarizeRolePermissions(codes)].join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+  }, [rolesQ.data, listSearch]);
+
+  const navGroups = useMemo(() => {
+    return ADMIN_GROUPS.map((group) => ({
+      ...group,
+      tabs: availableTabs.filter((t) => t.group === group.id)
+    })).filter((group) => group.tabs.length > 0);
+  }, [availableTabs]);
+
+  const activeTab = availableTabs.some((t) => t.id === tab) ? tab : availableTabs[0]?.id ?? "overview";
+  const activeGroup = TAB_META[activeTab].group;
+  const groupTabs = navGroups.find((g) => g.id === activeGroup)?.tabs ?? [];
+  const searchPlaceholder =
+    activeTab === "roles"
+      ? "Поиск ролей…"
+      : activeTab === "users" || activeTab === "presence"
+        ? "Поиск пользователей…"
+        : activeTab === "sandboxes"
+          ? "Поиск песочниц…"
+          : activeTab === "reports"
+            ? "Поиск отчётов…"
+            : "Поиск…";
+  const canCreateOnTab = (activeTab === "users" && canUsers) || (activeTab === "roles" && canRoles);
+  const createOpen = activeTab === "users" ? inviteOpen : activeTab === "roles" ? createRoleOpen : false;
+  const createLabel = activeTab === "roles" ? "Создать роль" : "Пригласить пользователя";
+
+  useEffect(() => {
+    if (tab !== "users") setInviteOpen(false);
+    if (tab !== "roles") setCreateRoleOpen(false);
+  }, [tab]);
+
+  useEffect(() => {
+    if (availableTabs.length === 0) return;
+    writeAdminLocation(activeTab, inviteOpen);
+  }, [activeTab, inviteOpen, availableTabs.length]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const parsed = adminTabFromHash(location.hash);
+      if (parsed && availableTabs.some((t) => t.id === parsed)) setTab(parsed);
+      setInviteOpen(parseHashPage(location.hash).query.get("invite") === "1");
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [availableTabs]);
 
   const userPageCount = Math.max(1, Math.ceil(filteredUsers.length / userPageSize));
   const safeUserPage = Math.min(userPage, userPageCount - 1);
   const pagedUsers = filteredUsers.slice(safeUserPage * userPageSize, (safeUserPage + 1) * userPageSize);
   const activeUsersCount = (usersQ.data ?? []).filter((u) => u.isActive).length;
+  const tempPasswordCount = (usersQ.data ?? []).filter((u) => u.mustChangePassword).length;
+  const canDeleteSandboxes = (props.me?.roles ?? []).some((code) => code === "ADMIN" || code === "SUPER_ADMIN");
 
   if (availableTabs.length === 0) {
     return (
@@ -389,15 +526,12 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     );
   }
 
-  const activeTab = availableTabs.some((t) => t.id === tab) ? tab : availableTabs[0]!.id;
-
   return (
     <div className="adminPage">
       <header className="adminHeader">
         <div className="adminHeaderMain">
           <div>
             <h1 className="adminTitle">Административная панель</h1>
-            <p className="adminSubtitle muted">Управление доступом, аудитом и системными операциями</p>
           </div>
           <div className="adminHeaderStats" aria-label="Сводка">
             <div className="adminHeaderStat">
@@ -415,21 +549,34 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           </div>
         </div>
         <div className="adminHeaderTools">
-          {activeTab === "users" ? (
-            <label className="adminHeaderSearch">
-              <IconSearch />
-              <input
-                type="search"
-                value={userSearch}
-                onChange={(e) => {
-                  setUserSearch(e.target.value);
-                  setUserPage(0);
-                }}
-                placeholder="Поиск пользователей…"
-                aria-label="Поиск пользователей"
-              />
-            </label>
+          {canCreateOnTab ? (
+            <button
+              type="button"
+              className="btn btnPrimary ganttIconBtn"
+              aria-pressed={createOpen}
+              aria-label={createLabel}
+              title={createLabel}
+              onClick={() => {
+                if (activeTab === "roles") setCreateRoleOpen((v) => !v);
+                else setInviteOpen((v) => !v);
+              }}
+            >
+              <IconPlus />
+            </button>
           ) : null}
+          <label className="adminHeaderSearch">
+            <IconSearch />
+            <input
+              type="search"
+              value={listSearch}
+              onChange={(e) => {
+                setListSearch(e.target.value);
+                setUserPage(0);
+              }}
+              placeholder={searchPlaceholder}
+              aria-label={searchPlaceholder}
+            />
+          </label>
           <div className="adminProfileChip" title={props.me?.email}>
             <span className="adminProfileAvatar" aria-hidden="true">
               {(props.me?.displayName ?? props.me?.email ?? "A").slice(0, 2).toUpperCase()}
@@ -442,23 +589,60 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         </div>
       </header>
 
-      <nav className="adminTabs" role="tablist" aria-label="Разделы админки">
-        {availableTabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === t.id}
-            className={`adminTab${activeTab === t.id ? " adminTabActive" : ""}${t.id === "cleanup" ? " adminTabDanger" : ""}`}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+      <nav className="adminNav" aria-label="Разделы админки">
+        <div className="adminNavGroups" role="tablist" aria-label="Группы">
+          {navGroups.map((group) => (
+            <button
+              key={group.id}
+              type="button"
+              role="tab"
+              aria-selected={activeGroup === group.id}
+              className={`adminNavGroup${activeGroup === group.id ? " adminNavGroupActive" : ""}${group.danger ? " adminNavGroupDanger" : ""}`}
+              onClick={() => {
+                if (activeGroup !== group.id) setListSearch("");
+                if (!group.tabs.some((t) => t.id === activeTab)) setTab(group.tabs[0]!.id);
+              }}
+            >
+              {group.label}
+            </button>
+          ))}
+        </div>
+        {groupTabs.length > 1 ? (
+          <div className="adminTabs" role="tablist" aria-label={navGroups.find((g) => g.id === activeGroup)?.label ?? "Вкладки"}>
+            {groupTabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === t.id}
+                className={`adminTab${activeTab === t.id ? " adminTabActive" : ""}${t.danger ? " adminTabDanger" : ""}`}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </nav>
+
+      {activeTab === "overview" ? (
+        <AdminOverview
+          canUsers={canUsers}
+          canRoles={canRoles}
+          canMail={canMail}
+          canRuntime={canUsers || canCleanup}
+          usersCount={usersQ.data?.length ?? 0}
+          activeUsersCount={activeUsersCount}
+          tempPasswordCount={tempPasswordCount}
+          rolesCount={roles.length}
+          writeBlocked={Boolean(props.me?.writeBlocked)}
+          onGo={(next) => setTab(next)}
+        />
+      ) : null}
 
       {activeTab === "users" && canUsers ? (
         <div className="adminUsersLayout">
+          {inviteOpen ? (
           <section className="card adminInviteCard">
             <div className="adminInviteHead">
               <div>
@@ -467,6 +651,14 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                   Создайте учётную запись с временным паролем. При первом входе потребуется смена пароля.
                 </div>
               </div>
+              <button
+                type="button"
+                className="btn ganttIconBtn adminInviteClose"
+                aria-label="Закрыть форму приглашения"
+                onClick={() => setInviteOpen(false)}
+              >
+                <IconClose />
+              </button>
             </div>
             <div className="adminInviteGrid">
               <label className="adminField">
@@ -486,10 +678,10 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                   placeholder="минимум 8 символов"
                 />
               </label>
-              <label className="adminField">
+              <div className="adminField">
                 <span className="muted">Роли</span>
                 <MultiSelectDropdown options={roleOptions} value={uRoleIds} onChange={setURoleIds} width={240} maxHeight={220} />
-              </label>
+              </div>
               <div className="adminInviteSubmit">
                 <button
                   className="btn btnPrimary"
@@ -504,6 +696,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               <div className="error">{String(createUserM.error.message || createUserM.error)}</div>
             ) : null}
           </section>
+          ) : null}
 
           <section className="card adminPanel">
             <div className="adminListToolbar">
@@ -511,7 +704,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                 <strong>Пользователи</strong>
                 <span className="muted adminHint">
                   {filteredUsers.length}
-                  {userSearch.trim() || userFilter !== "all" || userRoleFilter ? ` из ${usersQ.data?.length ?? 0}` : ""}
+                  {listSearch.trim() || userFilter !== "all" || userRoleFilter ? ` из ${usersQ.data?.length ?? 0}` : ""}
                 </span>
               </div>
               <div className="adminFilters">
@@ -545,12 +738,12 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                     ))}
                   </select>
                 </label>
-                {userFilter !== "all" || userRoleFilter || userSearch ? (
+                {userFilter !== "all" || userRoleFilter || listSearch ? (
                   <button
                     type="button"
                     className="adminFilterReset"
                     onClick={() => {
-                      setUserSearch("");
+                      setListSearch("");
                       setUserFilter("all");
                       setUserRoleFilter("");
                       setUserPage(0);
@@ -579,7 +772,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                     <tr>
                       <td colSpan={4}>
                         <div className="muted adminEmpty">
-                          {userSearch.trim() ? "Никого не найдено по запросу." : "Пользователей пока нет."}
+                          {listSearch.trim() ? "Никого не найдено по запросу." : "Пользователей пока нет."}
                         </div>
                       </td>
                     </tr>
@@ -637,30 +830,30 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
 
       {activeTab === "roles" && canRoles ? (
         <section className="card adminPanel">
+          {createRoleOpen ? (
           <div className="adminInviteCard adminInviteCardNested">
             <div className="adminInviteHead">
               <div>
                 <div className="adminInviteTitle">Новая роль</div>
               </div>
+              <button
+                type="button"
+                className="btn ganttIconBtn adminInviteClose"
+                aria-label="Закрыть форму новой роли"
+                onClick={() => setCreateRoleOpen(false)}
+              >
+                <IconClose />
+              </button>
             </div>
-            <div className="adminInviteGrid">
+            <div className="adminInviteGrid adminRolesCreateGrid">
               <label className="adminField">
                 <span className="muted">Код</span>
-                <input value={rCode} onChange={(e) => setRCode(e.target.value)} />
+                <input value={rCode} onChange={(e) => setRCode(e.target.value)} placeholder="PLANNER_EAST" />
+                <span className="muted adminHint">Латиница и цифры, стабильный id. После создания лучше не менять.</span>
               </label>
               <label className="adminField">
                 <span className="muted">Название</span>
                 <input value={rName} onChange={(e) => setRName(e.target.value)} />
-              </label>
-              <label className="adminField">
-                <span className="muted">Права</span>
-                <MultiSelectDropdown
-                  options={permissions.map((p) => ({ id: p.id, label: `${p.code} • ${p.name}` }))}
-                  value={rPermIds}
-                  onChange={setRPermIds}
-                  width={280}
-                  maxHeight={240}
-                />
               </label>
               <div className="adminInviteSubmit">
                 <button
@@ -672,18 +865,32 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                 </button>
               </div>
             </div>
+            <div className="adminRolesPermsField">
+              <span className="muted">Доступ к модулям</span>
+              <span className="adminRoleCardSummary">
+                {summarizeRolePermissions(permissionCodesFromIds(rPermIds, permissions))}
+              </span>
+              <PermissionMatrix catalog={permissions} value={rPermIds} onChange={setRPermIds} />
+            </div>
             {createRoleM.error ? (
               <div className="error">{String(createRoleM.error.message || createRoleM.error)}</div>
             ) : null}
           </div>
+          ) : null}
 
           {rolesQ.error ? <div className="error">{String(rolesQ.error.message || rolesQ.error)}</div> : null}
           {permsQ.error ? <div className="error">{String(permsQ.error.message || permsQ.error)}</div> : null}
 
           <div className="adminRoleList">
-            {(rolesQ.data ?? []).map((r) => (
-              <RoleCard key={r.id} role={r} permissions={permissions} />
-            ))}
+            {filteredRoles.length === 0 ? (
+              <div className="muted adminEmpty">
+                {listSearch.trim() ? "Ролей по запросу не найдено." : "Ролей пока нет."}
+              </div>
+            ) : (
+              filteredRoles.map((r) => (
+                <RoleCard key={r.id} role={r} permissions={permissions} users={usersQ.data ?? []} />
+              ))
+            )}
           </div>
         </section>
       ) : null}
@@ -694,7 +901,12 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
 
       {activeTab === "presence" && canUsers ? (
         <UserPresencePanel
-          users={usersQ.data ?? []}
+          users={(usersQ.data ?? []).filter((u) => {
+            const q = listSearch.trim().toLowerCase();
+            if (!q) return true;
+            const hay = `${u.email} ${u.displayName ?? ""}`.toLowerCase();
+            return hay.includes(q);
+          })}
           selectedUserId={presenceUserId}
           onSelectUser={setPresenceUserId}
         />
@@ -1008,6 +1220,12 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           ) : null}
         </section>
       ) : null}
+
+      {activeTab === "sandboxes" && canUsers ? (
+        <AdminSandboxesPanel canDelete={canDeleteSandboxes} search={listSearch} />
+      ) : null}
+
+      {activeTab === "reports" && canUsers ? <AdminReportsPanel search={listSearch} /> : null}
     </div>
   );
 
@@ -1050,6 +1268,13 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         await qc.invalidateQueries({ queryKey: ["admin", "users"] });
       }
     });
+    const revokeM = useMutation({
+      mutationFn: () => apiPost<{ ok: true }>(`/api/admin/users/${props.u.id}/revoke-sessions`, {}),
+      onSuccess: async () => {
+        await qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      }
+    });
+    const accessCodes = codesFromRoleIds(selRoles, props.roles);
 
     return (
       <Fragment>
@@ -1153,12 +1378,13 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           <tr className="adminUserDetailRow">
             <td colSpan={4}>
               {editOpen ? (
+                <div className="adminUserEditorWrap">
                 <div className="adminUserEditor">
                   <label className="adminField">
                     <span className="muted">Имя</span>
                     <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
                   </label>
-                  <label className="adminField adminUserEditorRoles">
+                  <div className="adminField adminUserEditorRoles">
                     <span className="muted">Роли</span>
                     <MultiSelectDropdown
                       options={props.roles.map((r) => ({ id: r.id, label: `${r.code} • ${r.name}` }))}
@@ -1167,11 +1393,27 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                       width={320}
                       maxHeight={220}
                     />
-                  </label>
+                  </div>
                   <button className="btn btnPrimary btnSmall" onClick={() => saveUserM.mutate()} disabled={saveUserM.isPending}>
                     <IconSave /> Сохранить
                   </button>
+                  <button
+                    type="button"
+                    className="btn btnSmall"
+                    disabled={revokeM.isPending}
+                    onClick={() => {
+                      if (!confirm(`Сбросить все сессии ${props.u.email}? Пользователю нужно будет войти снова.`)) return;
+                      revokeM.mutate();
+                    }}
+                  >
+                    Сбросить сессии
+                  </button>
                   <button className="btn btnSmall" onClick={() => setEditOpen(false)}>Отмена</button>
+                </div>
+                <div className="adminUserAccess">
+                  <div>{summarizeRolePermissions(accessCodes)}</div>
+                  <div className="muted">Меню: {previewNavLabels(accessCodes)}</div>
+                </div>
                 </div>
               ) : null}
               {resetOpen ? (
@@ -1201,6 +1443,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               {saveUserM.error ? <div className="error">{String(saveUserM.error.message || saveUserM.error)}</div> : null}
               {toggleActiveM.error ? <div className="error">{String(toggleActiveM.error.message || toggleActiveM.error)}</div> : null}
               {resetM.error ? <div className="error">{String(resetM.error.message || resetM.error)}</div> : null}
+              {revokeM.error ? <div className="error">{String(revokeM.error.message || revokeM.error)}</div> : null}
             </td>
           </tr>
         ) : null}
@@ -1208,9 +1451,15 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     );
   }
 
-  function RoleCard(props: { role: Role; permissions: Permission[] }) {
+  function RoleCard(props: { role: Role; permissions: Permission[]; users: User[] }) {
     const current = props.role.permissions.map((x) => x.permission.id);
     const [sel, setSel] = useState<string[]>(current);
+    const [open, setOpen] = useState(false);
+    const savedCodes = props.role.permissions.map((x) => x.permission.code);
+    const draftCodes = props.permissions.length ? permissionCodesFromIds(sel, props.permissions) : savedCodes;
+    const summary = summarizeRolePermissions(draftCodes);
+    const dirty = [...sel].sort().join(",") !== [...current].sort().join(",");
+    const members = props.users.filter((u) => u.roles.some((r) => r.role.id === props.role.id));
     const saveM = useMutation({
       mutationFn: () => apiPatch<Role>(`/api/admin/roles/${props.role.id}`, { permissionIds: sel }),
       onSuccess: async () => {
@@ -1218,30 +1467,66 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         await qc.invalidateQueries({ queryKey: ["admin", "permissions"] });
       }
     });
+    const cloneM = useMutation({
+      mutationFn: () =>
+        apiPost<Role>("/api/admin/roles", {
+          code: nextCloneRoleCode(props.role.code, (rolesQ.data ?? []).map((r) => r.code)),
+          name: `Копия: ${props.role.name}`.slice(0, 200),
+          permissionIds: sel
+        }),
+      onSuccess: async () => {
+        await qc.invalidateQueries({ queryKey: ["admin", "roles"] });
+        await qc.invalidateQueries({ queryKey: ["admin", "permissions"] });
+      }
+    });
 
     return (
-      <div className="adminRoleCard">
-        <div className="adminSectionHead">
-          <div>
-            <strong>{props.role.code}</strong>
-            <span className="muted"> · {props.role.name}</span>
-            {props.role.isSystem ? <span className="muted"> · system</span> : null}
-          </div>
-          <button className="btn btnSmall" onClick={() => saveM.mutate()} disabled={saveM.isPending}>
-            Сохранить
+      <div className={open ? "adminRoleCard adminRoleCardOpen" : "adminRoleCard"}>
+        <div className="adminSectionHead adminRoleCardBar">
+          <button type="button" className="adminRoleCardHead" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+            <span className={open ? "adminPermChevron adminPermChevronOpen" : "adminPermChevron"} aria-hidden="true">
+              ›
+            </span>
+            <span className="adminRoleCardTitle">
+              <strong>{props.role.name}</strong>
+              <span className="muted">
+                {props.role.code}
+                {props.role.isSystem ? " · system" : ""}
+                {dirty ? " · не сохранено" : ""}
+              </span>
+              <span className="adminRoleCardSummary">{summary}</span>
+              <span className="muted adminRoleCardMembers">
+                {members.length === 0
+                  ? "Никто не назначен"
+                  : `Назначено: ${members.map((u) => u.displayName ?? u.email).join(", ")}`}
+              </span>
+            </span>
           </button>
+          <button
+            type="button"
+            className="btn btnSmall"
+            disabled={cloneM.isPending}
+            onClick={() => cloneM.mutate()}
+          >
+            Клонировать
+          </button>
+          {open || dirty ? (
+            <button className="btn btnSmall" onClick={() => saveM.mutate()} disabled={saveM.isPending || !dirty}>
+              Сохранить
+            </button>
+          ) : null}
         </div>
-        <MultiSelectDropdown
-          options={props.permissions.map((p) => ({ id: p.id, label: `${p.code} • ${p.name}` }))}
-          value={sel}
-          onChange={setSel}
-          width={420}
-          maxHeight={220}
-        />
-        <div className="muted adminHint">
-          Сейчас: {props.role.permissions.map((x) => x.permission.code).join(", ") || "—"}
-        </div>
+        {open ? (
+          <div className="adminRoleCardBody">
+            <PermissionMatrix catalog={props.permissions} value={sel} onChange={setSel} />
+            <aside className="adminRoleMenuPreview">
+              <span className="muted">Как в меню</span>
+              <strong>{previewNavLabels(draftCodes)}</strong>
+            </aside>
+          </div>
+        ) : null}
         {saveM.error ? <div className="error">{String(saveM.error.message || saveM.error)}</div> : null}
+        {cloneM.error ? <div className="error">{String(cloneM.error.message || cloneM.error)}</div> : null}
       </div>
     );
   }

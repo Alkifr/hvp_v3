@@ -82,11 +82,6 @@ export function SandboxesView(props: { permissions?: string[] }) {
         <div className="massHeroText">
           <div className="massEyebrow">Сценарное планирование</div>
           <h1>Песочницы плана</h1>
-          <p>
-            Создавайте изолированные копии плана, проверяйте альтернативные сценарии, объединяйте ветки без дублей
-            и переносите готовые изменения обратно в рабочий контур. Архивные песочницы не мешают быстрому
-            переключению в меню слева.
-          </p>
         </div>
         <div className="massHeroStats" aria-label="Песочницы">
           <span><b>{mine.length}</b> мои</span>

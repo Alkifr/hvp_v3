@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 
+import { fitDropdownWidth } from "../../lib/fitDropdownWidth";
+
 export type MultiSelectOption = { id: string; label: string };
 
 export function MultiSelectDropdown(props: {
@@ -8,6 +10,8 @@ export function MultiSelectDropdown(props: {
   onChange: (next: string[]) => void;
   placeholder?: string;
   width?: number;
+  /** Подогнать ширину кнопки под самое длинное значение списка. */
+  autoWidth?: boolean;
   maxHeight?: number;
   searchable?: boolean;
   searchPlaceholder?: string;
@@ -75,8 +79,17 @@ export function MultiSelectDropdown(props: {
     e.stopPropagation();
   };
 
+  const autoWidth = useMemo(() => {
+    if (!props.autoWidth) return props.width;
+    return fitDropdownWidth([props.placeholder, ...props.options.map((o) => o.label)]);
+  }, [props.autoWidth, props.width, props.placeholder, props.options]);
+
   return (
-    <div ref={rootRef} className={`msdRoot${props.compact ? " msdCompact" : ""}`} style={{ width: props.width ? `${props.width}px` : undefined }}>
+    <div
+      ref={rootRef}
+      className={`msdRoot${props.compact ? " msdCompact" : ""}`}
+      style={{ width: autoWidth ? `${autoWidth}px` : undefined }}
+    >
       <button type="button" className="msdBtn" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="msdBtnText">{selectedLabel}</span>
         <span className="msdChevron">{open ? "▴" : "▾"}</span>

@@ -26,12 +26,14 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
       .parse(req.query ?? {});
 
     const adminOnly = isSystemAdmin((req as any).auth?.roles);
+    const muted = ((req as any).auth?.mutedNotificationKinds as string[] | undefined) ?? [];
     const items = await app.prisma.appNotification.findMany({
       where: {
         AND: [
           PROD_SCOPE,
           { reads: { none: { userId } } },
-          adminOnly ? {} : { kind: { not: KIND_USER_ERROR } }
+          adminOnly ? {} : { kind: { not: KIND_USER_ERROR } },
+          muted.length ? { kind: { notIn: muted } } : {}
         ]
       },
       orderBy: [{ createdAt: "desc" }],
@@ -113,12 +115,14 @@ export const notificationsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const adminOnly = isSystemAdmin((req as any).auth?.roles);
+    const muted = ((req as any).auth?.mutedNotificationKinds as string[] | undefined) ?? [];
     const unread = await app.prisma.appNotification.findMany({
       where: {
         AND: [
           PROD_SCOPE,
           { reads: { none: { userId } } },
-          adminOnly ? {} : { kind: { not: KIND_USER_ERROR } }
+          adminOnly ? {} : { kind: { not: KIND_USER_ERROR } },
+          muted.length ? { kind: { notIn: muted } } : {}
         ]
       },
       select: { id: true },

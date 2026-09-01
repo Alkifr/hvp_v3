@@ -494,31 +494,6 @@ export function MailDigestView() {
         <div className="massHeroText">
           <div className="massEyebrow">Письма об изменениях плана</div>
           <h1>Рассылка</h1>
-          <p>
-            {pageTab === "history"
-              ? "Журнал ручных и автоматических отправок: статус, получатели, вариант и кто запускал письмо."
-              : "Храните несколько вариантов письма — у каждого свои колонки, получатели и расписание. SMTP настраивает администратор."}
-          </p>
-          <div className="massEventsTabs" role="tablist" aria-label="Разделы рассылки">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={pageTab === "variants"}
-              className={pageTab === "variants" ? "isActive" : undefined}
-              onClick={() => switchPageTab("variants")}
-            >
-              Варианты
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={pageTab === "history"}
-              className={pageTab === "history" ? "isActive" : undefined}
-              onClick={() => switchPageTab("history")}
-            >
-              История отправок
-            </button>
-          </div>
         </div>
         <div className="massHeroStats" aria-label="Сводка рассылки">
           <span>
@@ -540,6 +515,27 @@ export function MailDigestView() {
           </button>
         </div>
       </section>
+
+      <div className="sandboxesTabs" role="tablist" aria-label="Разделы рассылки">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pageTab === "variants"}
+          className={pageTab === "variants" ? "sandboxesTab active" : "sandboxesTab"}
+          onClick={() => switchPageTab("variants")}
+        >
+          Варианты
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pageTab === "history"}
+          className={pageTab === "history" ? "sandboxesTab active" : "sandboxesTab"}
+          onClick={() => switchPageTab("history")}
+        >
+          История отправок
+        </button>
+      </div>
 
       {!smtpReady && listQ.data ? (
         <div className="error">Почта ещё не настроена. Попросите администратора указать SMTP в админке.</div>

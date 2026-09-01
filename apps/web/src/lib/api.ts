@@ -107,6 +107,7 @@ const ERROR_CODE_TEXT: Record<string, string> = {
   EVENTS_NOT_FOUND: "События не найдены",
   NOTIFICATION_NOT_FOUND: "Уведомление не найдено",
   ANNOUNCEMENT_NOT_FOUND: "Объявление не найдено",
+  WRITE_BLOCKED: "Контур в режиме только просмотр. Изменения недоступны.",
   PLAN_LINE_NOT_FOUND: "Строка плана не найдена",
   ACTUAL_LINE_NOT_FOUND: "Строка факта не найдена",
   DB_NOT_CONNECTED: "Нет соединения с базой данных. Повторите попытку позже или обратитесь к администратору.",

@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { authChangePassword, authLogin, authLogout } from "../auth/authApi";
+import { APPLY_HOME_KEY } from "../../lib/userPrefs";
 
 export function LoginView(props: { forcedEmail?: string } = {}) {
   const qc = useQueryClient();
@@ -19,6 +20,11 @@ export function LoginView(props: { forcedEmail?: string } = {}) {
         setMustChangePassword(true);
         return;
       }
+      try {
+        sessionStorage.setItem(APPLY_HOME_KEY, "1");
+      } catch {
+        /* ignore */
+      }
       await qc.invalidateQueries({ queryKey: ["auth", "me"] });
     }
   });
@@ -31,6 +37,11 @@ export function LoginView(props: { forcedEmail?: string } = {}) {
       setNewPassword("");
       setNewPassword2("");
       setMustChangePassword(false);
+      try {
+        sessionStorage.setItem(APPLY_HOME_KEY, "1");
+      } catch {
+        /* ignore */
+      }
       await qc.invalidateQueries({ queryKey: ["auth", "me"] });
     }
   });

@@ -42,6 +42,11 @@ async function main() {
   if (data.source !== "cloud-ref-only") {
     throw new Error(`${inPath} не похож на выгрузку справочников (source=${data.source})`);
   }
+  if ((process.env.CONFIRM_TRUNCATE ?? "").trim() !== "1") {
+    throw new Error(
+      "import:ref-data удаляет справочники (TRUNCATE). Повторно запустите с CONFIRM_TRUNCATE=1"
+    );
+  }
 
   await prisma.$executeRawUnsafe(`
 TRUNCATE TABLE

@@ -1,6 +1,7 @@
 import dayjs from "dayjs";
 
 import { STATUS_LABEL } from "./eventStatusCatalog";
+import { LINE_BASE_LABEL } from "./lineBase";
 
 export { STATUS_LABEL };
 
@@ -51,6 +52,7 @@ export const FIELD_LABEL: Record<string, string> = {
   layoutId: "Вариант размещения",
   standId: "Место",
   workshopId: "Цех",
+  lineBase: "L/B",
   allowOverlap: "Разрешить пересечение",
   multiPlacement: "Несколько размещений",
   virtualAircraft: "Виртуальный борт",
@@ -147,6 +149,7 @@ export function formatHistoryValue(v: unknown): string {
     if (v === "UNPLANNED") return "Внеплановое";
     if (STATUS_LABEL[v] || LEGACY_STATUS_LABEL[v]) return STATUS_LABEL[v] ?? LEGACY_STATUS_LABEL[v]!;
     if (LEVEL_LABEL[v]) return LEVEL_LABEL[v];
+    if (LINE_BASE_LABEL[v as keyof typeof LINE_BASE_LABEL]) return LINE_BASE_LABEL[v as keyof typeof LINE_BASE_LABEL];
     if (isUuidLike(v)) return v.slice(0, 8) + "…";
     return v.length > 80 ? v.slice(0, 77) + "…" : v;
   }
@@ -458,6 +461,7 @@ export function resolveHistoryValue(rawKey: string | undefined, v: unknown, maps
     }
     if (rawKey === "status") return maps?.statuses?.get(v) ?? STATUS_LABEL[v] ?? LEGACY_STATUS_LABEL[v] ?? formatHistoryValue(v);
     if (rawKey === "level") return LEVEL_LABEL[v] ?? formatHistoryValue(v);
+    if (rawKey === "lineBase") return LINE_BASE_LABEL[v as keyof typeof LINE_BASE_LABEL] ?? formatHistoryValue(v);
     if (rawKey === "planningKind") {
       return v === "PLANNED" ? "Плановое" : v === "UNPLANNED" ? "Внеплановое" : formatHistoryValue(v);
     }

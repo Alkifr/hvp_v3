@@ -67,6 +67,10 @@ export type ReportConfig = {
   groupBy?: string[];
   /** Показатели: сумма / среднее / количество / мин / макс. Поле `__count` — число строк. */
   aggregates?: ReportAggregateSpec[];
+  /** Сколько верхних строк закреплять в предпросмотре и Excel (0 — без закрепления). */
+  freezeRows?: number;
+  /** Строка порядковых номеров колонок 1…N, как в report_all_in. */
+  showColumnIndex?: boolean;
 };
 
 const DATASETS: Array<{ id: ReportDataset; label: string; description: string }> = [
@@ -258,13 +262,72 @@ const zReportConfig = z.object({
     )
     .max(20)
     .optional()
-    .default([])
+    .default([]),
+  freezeRows: z.coerce.number().int().min(0).max(20).optional(),
+  showColumnIndex: z.boolean().optional()
 })
   .superRefine((value, ctx) => {
     if (!value.fields.length && !value.groupBy.length && !value.aggregates.length) {
       ctx.addIssue({ code: "custom", message: UserMsg.FIELDS_OR_SUMMARY_REQUIRED, path: ["fields"] });
     }
   });
+
+/** Владелец > персональный share > общий доступ для всех. */
+function reportAccess(
+  report: { ownerId: string; sharedWithAllRole?: ReportShareRole | null },
+  shares: Array<{ userId: string; role: ReportShareRole }>,
+  userId: string
+) {
+  const isOwner = report.ownerId === userId;
+  const share = shares.find((s) => s.userId === userId);
+  const myRole = isOwner ? ("OWNER" as const) : share?.role ?? report.sharedWithAllRole ?? null;
+  return {
+    isOwner,
+    share,
+    myRole,
+    canEdit: isOwner || myRole === ReportShareRole.EDITOR
+  };
+}
+
+function serializeReport(
+  r: {
+    id: string;
+    name: string;
+    description: string | null;
+    config: unknown;
+    createdAt: Date;
+    updatedAt: Date;
+    ownerId: string;
+    sharedWithAllRole?: ReportShareRole | null;
+    owner: { id: string; email: string; displayName: string | null };
+    shares: Array<{
+      userId: string;
+      role: ReportShareRole;
+      user: { email: string; displayName: string | null };
+    }>;
+  },
+  userId: string
+) {
+  const access = reportAccess(r, r.shares, userId);
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    config: r.config,
+    createdAt: r.createdAt.toISOString(),
+    updatedAt: r.updatedAt.toISOString(),
+    owner: r.owner,
+    sharedWithAllRole: r.sharedWithAllRole ?? null,
+    myRole: access.myRole,
+    canEdit: access.canEdit,
+    shares: r.shares.map((s) => ({
+      userId: s.userId,
+      role: s.role,
+      email: s.user.email,
+      displayName: s.user.displayName
+    }))
+  };
+}
 
 function assertAuthed(req: any): { id: string } {
   const auth = req.auth as { id?: string } | undefined;
@@ -289,17 +352,16 @@ async function loadAccessibleReport(app: any, reportId: string, userId: string) 
     err.statusCode = 404;
     throw err;
   }
-  const share = report.shares.find((s: any) => s.userId === userId);
-  const isOwner = report.ownerId === userId;
-  if (!isOwner && !share) {
+  const access = reportAccess(report, report.shares, userId);
+  if (!access.myRole) {
     const err: any = new Error("REPORT_ACCESS_DENIED");
     err.statusCode = 403;
     throw err;
   }
   return {
     report,
-    myRole: isOwner ? ("OWNER" as const) : (share.role as ReportShareRole),
-    canEdit: isOwner || share?.role === ReportShareRole.EDITOR
+    myRole: access.myRole,
+    canEdit: access.canEdit
   };
 }
 
@@ -483,7 +545,7 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
     const me = assertAuthed(req);
     const reports = await app.prisma.savedReport.findMany({
       where: {
-        OR: [{ ownerId: me.id }, { shares: { some: { userId: me.id } } }]
+        OR: [{ ownerId: me.id }, { shares: { some: { userId: me.id } } }, { sharedWithAllRole: { not: null } }]
       },
       include: {
         owner: { select: { id: true, email: true, displayName: true } },
@@ -494,27 +556,7 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
 
     return {
       ok: true as const,
-      reports: reports.map((r: any) => {
-        const isOwner = r.ownerId === me.id;
-        const share = r.shares.find((s: any) => s.userId === me.id);
-        return {
-          id: r.id,
-          name: r.name,
-          description: r.description,
-          config: r.config,
-          createdAt: r.createdAt.toISOString(),
-          updatedAt: r.updatedAt.toISOString(),
-          owner: r.owner,
-          myRole: isOwner ? "OWNER" : share?.role ?? null,
-          canEdit: isOwner || share?.role === ReportShareRole.EDITOR,
-          shares: r.shares.map((s: any) => ({
-            userId: s.userId,
-            role: s.role,
-            email: s.user.email,
-            displayName: s.user.displayName
-          }))
-        };
-      })
+      reports: reports.map((r: any) => serializeReport(r, me.id))
     };
   });
 
@@ -544,26 +586,36 @@ export const reportRoutes: FastifyPluginAsync = async (app) => {
     assertPermission(req as any, "events:read");
     const me = assertAuthed(req);
     const id = zUuid.parse((req.params as any).id);
-    const { canEdit } = await loadAccessibleReport(app, id, me.id);
-    if (!canEdit) {
-      const err: any = new Error("REPORT_EDIT_DENIED");
-      err.statusCode = 403;
-      throw err;
-    }
+    const { report, canEdit } = await loadAccessibleReport(app, id, me.id);
     const body = z
       .object({
         name: z.string().trim().min(1).max(120).optional(),
         description: z.string().trim().max(500).optional().nullable(),
-        config: zReportConfig.optional()
+        config: zReportConfig.optional(),
+        sharedWithAllRole: z.nativeEnum(ReportShareRole).nullable().optional()
       })
       .parse(req.body);
 
+    if (body.sharedWithAllRole !== undefined && report.ownerId !== me.id) {
+      const err: any = new Error("REPORT_SHARE_DENIED");
+      err.statusCode = 403;
+      throw err;
+    }
+    if (
+      (body.name != null || body.description !== undefined || body.config) &&
+      !canEdit
+    ) {
+      const err: any = new Error("REPORT_EDIT_DENIED");
+      err.statusCode = 403;
+      throw err;
+    }
     const updated = await app.prisma.savedReport.update({
       where: { id },
       data: {
         ...(body.name != null ? { name: body.name } : {}),
         ...(body.description !== undefined ? { description: body.description } : {}),
-        ...(body.config ? { config: body.config } : {})
+        ...(body.config ? { config: body.config } : {}),
+        ...(body.sharedWithAllRole !== undefined ? { sharedWithAllRole: body.sharedWithAllRole } : {})
       }
     });
     return { ok: true as const, id: updated.id, updatedAt: updated.updatedAt.toISOString() };

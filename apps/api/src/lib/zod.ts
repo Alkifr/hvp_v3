@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export const zUuid = z.string().uuid();
 
+/** TEXT primary keys: часть исторических id (например mail:send) не является RFC UUID. */
+export const zId = z.string().trim().min(1).max(64);
+
 export const zDateTime = z
   .union([z.string().datetime({ offset: true }), z.string().datetime()])
   .transform((s) => new Date(s));

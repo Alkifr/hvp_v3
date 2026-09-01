@@ -17,14 +17,47 @@ export function buildEventShareUrl(params: {
   return `${base}#gantt?${q.toString()}`;
 }
 
-export function parseHashPage(hashRaw: string): { page: string; query: URLSearchParams } {
+export const ADMIN_HASH_TABS = [
+  "overview",
+  "users",
+  "roles",
+  "activity",
+  "presence",
+  "announce",
+  "cleanup",
+  "mail",
+  "sandboxes",
+  "reports"
+] as const;
+
+export type AdminHashTab = (typeof ADMIN_HASH_TABS)[number];
+
+export function isAdminHashTab(value: string): value is AdminHashTab {
+  return (ADMIN_HASH_TABS as readonly string[]).includes(value);
+}
+
+export function parseHashPage(hashRaw: string): { page: string; rest: string; query: URLSearchParams } {
   const hash = (hashRaw || "").replace(/^#/, "");
   const qIdx = hash.indexOf("?");
-  if (qIdx < 0) return { page: hash, query: new URLSearchParams() };
-  return {
-    page: hash.slice(0, qIdx),
-    query: new URLSearchParams(hash.slice(qIdx + 1))
-  };
+  const path = qIdx < 0 ? hash : hash.slice(0, qIdx);
+  const query = qIdx < 0 ? new URLSearchParams() : new URLSearchParams(hash.slice(qIdx + 1));
+  const slash = path.indexOf("/");
+  if (slash < 0) return { page: path, rest: "", query };
+  return { page: path.slice(0, slash), rest: path.slice(slash + 1), query };
+}
+
+export function adminTabFromHash(hashRaw: string): AdminHashTab | null {
+  const { page, rest } = parseHashPage(hashRaw);
+  if (page !== "admin") return null;
+  const tab = rest.split("/").filter(Boolean)[0] ?? "";
+  return isAdminHashTab(tab) ? tab : null;
+}
+
+export function buildAdminHash(tab: string, opts?: { invite?: boolean }): string {
+  const q = new URLSearchParams();
+  if (opts?.invite) q.set("invite", "1");
+  const qs = q.toString();
+  return `admin/${tab}${qs ? `?${qs}` : ""}`;
 }
 
 export function eventDeepLinkFromHashQuery(query: URLSearchParams): EventDeepLink | null {

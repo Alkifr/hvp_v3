@@ -18,6 +18,7 @@ export const workshopsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         code: z.string().trim().min(1).max(32),
         name: z.string().trim().min(1).max(200),
+        defaultLineBase: z.enum(["LINE", "BASE"]).nullable().optional(),
         isActive: z.boolean().optional()
       })
       .parse(req.body);
@@ -32,11 +33,19 @@ export const workshopsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         code: z.string().trim().min(1).max(32).optional(),
         name: z.string().trim().min(1).max(200).optional(),
+        defaultLineBase: z.enum(["LINE", "BASE"]).nullable().optional(),
         isActive: z.boolean().optional()
       })
       .parse(req.body);
 
-    return await app.prisma.workshop.update({ where: { id }, data: body });
+    const workshop = await app.prisma.workshop.update({ where: { id }, data: body });
+    if (body.defaultLineBase) {
+      await app.prisma.maintenanceEvent.updateMany({
+        where: { workshopId: id, lineBase: null },
+        data: { lineBase: body.defaultLineBase }
+      });
+    }
+    return workshop;
   });
 
   app.delete("/:id", async (req) => {

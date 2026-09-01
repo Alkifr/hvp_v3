@@ -12,6 +12,7 @@ import {
   sandboxFilter,
   sandboxIdFor
 } from "../../plugins/sandbox.js";
+import { eventHasExistingSlotOverlap, resolveAllowOverlap } from "../../lib/placementOverlap.js";
 
 function assertCanWrite(req: any) {
   if (!canWriteInContext(req)) {
@@ -168,7 +169,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         standId: zUuid,
         startAt: zDateTime.optional(),
         endAt: zDateTime.optional(),
-        allowOverlap: z.boolean().optional().default(false),
+        allowOverlap: z.boolean().optional(),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .parse(req.body);
@@ -192,7 +193,16 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(UserMsg.END_AFTER_START);
     }
 
-    if (!body.allowOverlap) {
+    const overlap = resolveAllowOverlap({
+      requested: body.allowOverlap,
+      stored: Boolean((event as { allowOverlap?: boolean }).allowOverlap),
+      existingOverlap: await eventHasExistingSlotOverlap(app.prisma, {
+        sandboxId: sandboxIdFor(req),
+        eventId
+      })
+    });
+
+    if (!overlap.skipChecks) {
       // Проверка конфликтов: любое пересечение по времени на том же месте
       const conflict = await app.prisma.standReservation.findFirst({
         where: {
@@ -223,7 +233,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!stand) throw app.httpErrors.badRequest(UserMsg.STAND_NOT_IN_LAYOUT);
 
-    if (!body.allowOverlap) {
+    if (!overlap.skipChecks) {
       const layoutConflict = await findLayoutConflict(app.prisma, {
         sandboxId: sandboxIdFor(req),
         eventId,
@@ -257,7 +267,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     // Подтянем layout/hangar в событие (для удобства фильтрации в Гантте)
     await app.prisma.maintenanceEvent.update({
       where: { id: eventId },
-      data: { layoutId: layout.id, hangarId: layout.hangarId }
+      data: { layoutId: layout.id, hangarId: layout.hangarId, allowOverlap: overlap.storedValue }
     });
 
     const changed =

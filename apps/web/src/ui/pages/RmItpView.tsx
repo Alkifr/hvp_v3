@@ -400,7 +400,6 @@ export function RmItpView() {
         <div className="massHeroText">
           <div className="massEyebrow">Рабочее место ИТП</div>
           <h1>Технологическая подготовка событий</h1>
-          <p>Выберите событие ТО, ведите потребности, ответственных, этапы и сетевой график выполнения работ.</p>
         </div>
         <div className="massHeroStats" aria-label="Сводка ИТП">
           <span><b>{events.length}</b> событий</span>
@@ -408,18 +407,6 @@ export function RmItpView() {
           <span><b>{stats.blockers}</b> блокеров</span>
         </div>
       </section>
-
-      <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>
-        {activeSandbox ? (
-          <>
-            <strong>Режим песочницы:</strong> техпланы ведутся внутри песочницы <b>{activeSandbox.name}</b>.
-          </>
-        ) : (
-          <>
-            <strong>Рабочий контур:</strong> изменения РМ ИТП относятся к основному плану.
-          </>
-        )}
-      </div>
 
       <section className="itpEventPicker card">
         <div className="itpPickerGrid">

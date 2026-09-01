@@ -1,20 +1,40 @@
-# Hangar Planning (v3)
+# Hangar Planning
 
-Планирование и расстановка ВС по ангарам. Node.js + React + PostgreSQL.
+Планирование технического обслуживания и расстановка воздушных судов по ангарам.
 
-В закрытом контуре Docker **не нужен**: один процесс Node раздаёт и API, и интерфейс на порту **3000**. Для адреса **https://hvp.atechnics.ru** (порт 443) ставится nginx из репозитория Astra — см. [deploy/README.md](deploy/README.md), раздел HTTPS.
+Стек: **Node.js 20+**, **React**, **PostgreSQL 16**.
+
+Один процесс Node раздаёт API и интерфейс на порту **3000**. Для HTTPS перед ним ставится reverse proxy (nginx) — см. [deploy/README.md](deploy/README.md).
 
 ---
 
-## Развёртывание в закрытом контуре (стенд)
+## Разработка
 
-На сервере: **Node 20+**, **PostgreSQL 16**, репозиторий.
+Vite на **:3000**, API на **:3001**, прокси `/api` → 3001.
+
+```bash
+cp .env.example .env
+# DATABASE_CLOUD_URL=postgresql://USER:PASSWORD@localhost:5432/hangar_planning?schema=public
+npm install
+npm run prisma:migrate:deploy -w apps/api
+npm run prisma:seed:demo -w apps/api
+npm run dev
+```
+
+Откройте http://localhost:3000
+
+`SEED_DEMO=1` создаёт демо-пользователей (`admin@local.dev` / `admin`, `planner@local.dev` / `planner123`, `viewer@local.dev` / `viewer123`) и минимальные справочники. Без флага seed заполняет только роли, права, статусы и администратора.
+
+---
+
+## Production
+
+На сервере: Node 20+, PostgreSQL 16.
 
 ### 1. База
 
 ```bash
 createdb hangar_planning
-# или: psql -c "CREATE DATABASE hangar_planning;"
 ```
 
 ### 2. Конфиг
@@ -23,7 +43,7 @@ createdb hangar_planning
 cp .env.example .env
 ```
 
-В `.env` минимум:
+Минимум в `.env`:
 
 ```bash
 DATABASE_CLOUD_URL="postgresql://USER:PASSWORD@127.0.0.1:5432/hangar_planning?schema=public"
@@ -31,16 +51,17 @@ DATABASE_URL="$DATABASE_CLOUD_URL"
 TZ="Europe/Moscow"
 NODE_ENV="production"
 JWT_SECRET="случайная_строка_не_короче_24_символов"
-COOKIE_SECURE=0
 CORS_ORIGINS=
-ADMIN_EMAIL="ваш.админ@компания.local"
+ADMIN_EMAIL="admin@example.com"
 ADMIN_PASSWORD="свой_пароль_не_admin"
 ```
 
-- `COOKIE_SECURE=0` — стенд по HTTP внутри контура (без TLS). Иначе браузер не сохранит cookie.
-- `CORS_ORIGINS` пустой — UI и API с одного адреса `http://сервер:3000`.
-- `PORT` в `.env` **не ставьте**: стенд сам слушает **3000**.
+- `CORS_ORIGINS` пустой — UI и API с одного адреса.
+- `PORT` **не ставьте**: процесс слушает **3000**.
+- `SEED_DEMO` в production **запрещён**.
 - Пароль `admin` и почта `admin@local.dev` в production seed **запрещены**.
+- Стенд по HTTP без TLS: добавьте `COOKIE_SECURE=0`, иначе браузер не сохранит cookie.
+- HTTPS за nginx: `HOST=127.0.0.1`, `COOKIE_SECURE=0` **не** задавать.
 
 ### 3. Сборка и первый запуск
 
@@ -52,13 +73,9 @@ npm run build
 npm start
 ```
 
-Откройте **http://IP-или-имя:3000**
+Откройте `http://хост:3000`. Проверка: `curl -sf http://127.0.0.1:3000/health/ready`.
 
-Проверка: `curl -sf http://127.0.0.1:3000/health/ready`
-
-Остановка: Ctrl+C. Для фона — `tmux` / `systemd` (пример ниже).
-
-### 4. Обновление версии
+### 4. Обновление
 
 ```bash
 git pull
@@ -81,8 +98,6 @@ pg_dump -Fc "$DATABASE_CLOUD_URL" > "backups/hvp-$(date +%Y%m%d-%H%M%S).dump"
 pg_restore --clean --if-exists --no-owner -d "$DATABASE_CLOUD_URL" backups/hvp-….dump
 ```
 
-Команда `db:clone:cloud` — не backup: она **затирает** приёмник.
-
 ### systemd (по желанию)
 
 `/etc/systemd/system/hvp.service`:
@@ -94,8 +109,8 @@ After=network.target postgresql.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/hvp_v3
-EnvironmentFile=/opt/hvp_v3/.env
+WorkingDirectory=/opt/hangar-planning
+EnvironmentFile=/opt/hangar-planning/.env
 ExecStart=/usr/bin/npm start
 Restart=on-failure
 User=hvp
@@ -103,27 +118,6 @@ User=hvp
 [Install]
 WantedBy=multi-user.target
 ```
-
-`EnvironmentFile` не подставляет `COOKIE_SECURE=0`, если его нет в `.env` — добавьте строку туда.
-
----
-
-## Разработка на машине разработчика
-
-Vite на **:3000**, API на **:3001**, прокси `/api` → 3001.
-
-```bash
-cp .env.example .env
-# DATABASE_CLOUD_URL=postgresql://USER:PASSWORD@localhost:5432/hangar_planning?schema=public
-# CORS_ORIGINS=http://localhost:3000
-# NODE_ENV=development
-npm install
-npm run prisma:migrate:deploy -w apps/api
-npm run prisma:seed -w apps/api
-npm run dev
-```
-
-Откройте http://localhost:3000
 
 ---
 
@@ -133,16 +127,20 @@ npm run dev
 |---|---|
 | `npm run dev` | разработка: UI :3000, API :3001 |
 | `npm run build` | сборка API + UI |
-| `npm start` | стенд: всё на :3000 (нужен `build`) |
+| `npm start` | production: всё на :3000 (нужен `build`) |
 | `npm test` / `npm run lint` | тесты / линт |
 | `npm run prisma:migrate:deploy -w apps/api` | миграции в `DATABASE_CLOUD_URL` |
+| `npm run prisma:seed -w apps/api` | роли, права, статусы, администратор |
+| `npm run prisma:seed:demo -w apps/api` | то же + демо-данные (`SEED_DEMO=1`) |
 
-## Публикация на GitHub
+`import:ref-data` затирает справочники и требует явного `CONFIRM_TRUNCATE=1`.
 
-Не коммитить `.env`. CI: `.github/workflows/ci.yml`.
+---
 
 ## Структура
 
 - `apps/api` — Fastify + Prisma
 - `apps/web` — React (Vite)
-- `packages/shared` — общие типы
+- `deploy/` — nginx, Docker, backup
+
+Не коммитить `.env`. CI: `.github/workflows/ci.yml`.

@@ -637,10 +637,6 @@ export function MassPlanView(props: { hideHero?: boolean }) {
           <div className="massHeroText">
             <div className="massEyebrow">Планирование серий событий</div>
             <h1>Массовое планирование</h1>
-            <p>
-              Создавайте пачки виртуальных бортов, проверяйте размещение в предпросмотре и переносите результат в текущий контур.
-              Непоместившиеся события будут сохранены черновиками без места.
-            </p>
           </div>
           <div className="massHeroStats" aria-label="Текущие параметры">
             <span><b>{inputMode === "batch" ? batchRows.reduce((sum, row) => sum + row.count, 0) : count}</b> событий</span>
@@ -651,20 +647,6 @@ export function MassPlanView(props: { hideHero?: boolean }) {
       )}
 
       <div className="massCard">
-        <div className={activeSandbox ? "contextNotice contextNoticeSandbox" : "contextNotice"}>
-          {activeSandbox ? (
-            <>
-              <strong>Режим песочницы:</strong> массовое планирование создаст события только в песочнице
-              {" "}
-              <b>{activeSandbox.name}</b>. Рабочий контур не изменится, а занятость мест проверяется только внутри этой песочницы.
-            </>
-          ) : (
-            <>
-              <strong>Рабочий контур:</strong> массовое планирование создаст события в основном плане.
-            </>
-          )}
-        </div>
-
         <form onSubmit={handlePreview} className="massForm">
           <section className="massSection">
             <div className="massSectionHead">

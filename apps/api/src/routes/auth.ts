@@ -4,7 +4,9 @@ import argon2 from "argon2";
 
 import { queryActivityFeed } from "../lib/activityFeed.js";
 import { errorBody } from "../lib/userErrors.js";
-import { recordLogin } from "../lib/userPresence.js";
+import { HOME_PAGES, NOTIFICATION_KINDS, parseHomePage, parseMutedNotificationKinds } from "../lib/userPrefs.js";
+import { queryMyPresence, recordLogin } from "../lib/userPresence.js";
+import { getRuntimeConfig } from "../lib/writeBlocked.js";
 
 const LOGIN_WINDOW_MS = 60_000;
 const LOGIN_MAX = 10;
@@ -30,14 +32,52 @@ function assertLoginRateLimit(req: FastifyRequest) {
   }
 }
 
+const ME_INCLUDE = {
+  roles: { include: { role: { include: { permissions: { include: { permission: true } } } } } }
+} as const;
+
+type UserRoleJoin = { role: { code: string; permissions: Array<{ permission: { code: string } }> } };
+
+function meUserPayload(user: {
+  id: string;
+  email: string;
+  displayName: string | null;
+  mustChangePassword: boolean;
+  lastLoginAt: Date | null;
+  lastSeenAt: Date | null;
+  homePage: string | null;
+  mutedNotificationKinds: unknown;
+  roles: UserRoleJoin[];
+}) {
+  const roles = user.roles.map((ur) => ur.role.code);
+  const permissions = Array.from(
+    new Set(user.roles.flatMap((ur) => ur.role.permissions.map((rp) => rp.permission.code)))
+  );
+  return {
+    ok: true as const,
+    user: {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      roles,
+      permissions,
+      mustChangePassword: user.mustChangePassword,
+      lastLoginAt: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
+      lastSeenAt: user.lastSeenAt ? user.lastSeenAt.toISOString() : null,
+      homePage: parseHomePage(user.homePage),
+      mutedNotificationKinds: parseMutedNotificationKinds(user.mutedNotificationKinds)
+    }
+  };
+}
+
 async function requireAuthUser(app: any, req: FastifyRequest, reply: FastifyReply) {
   try {
-    const decoded = await req.jwtVerify<{ sub: string }>();
+    const decoded = await req.jwtVerify<{ sub: string; ver?: number }>();
     const user = await app.prisma.user.findUnique({
       where: { id: decoded.sub },
-      select: { id: true, email: true, displayName: true, isActive: true }
+      select: { id: true, email: true, displayName: true, isActive: true, tokenVersion: true }
     });
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || (decoded.ver ?? 0) !== (user.tokenVersion ?? 0)) {
       app.clearAuthCookie(reply, req);
       reply.code(401).send(errorBody("UNAUTHORIZED"));
       return null;
@@ -83,41 +123,55 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/me", async (req, reply) => {
     try {
-      const decoded = await req.jwtVerify<{ sub: string }>();
+      const decoded = await req.jwtVerify<{ sub: string; ver?: number }>();
       const user = await app.prisma.user.findUnique({
         where: { id: decoded.sub },
-        include: {
-          roles: { include: { role: { include: { permissions: { include: { permission: true } } } } } }
-        }
+        include: ME_INCLUDE
       });
-      if (!user || !user.isActive) {
+      if (!user || !user.isActive || (decoded.ver ?? 0) !== (user.tokenVersion ?? 0)) {
         app.clearAuthCookie(reply, req);
         return reply.code(401).send(errorBody("UNAUTHORIZED"));
       }
-      type UserRoleJoin = { role: { code: string; permissions: Array<{ permission: { code: string } }> } };
-      const roles = user.roles.map((ur: UserRoleJoin) => ur.role.code);
-      const permissions = Array.from(
-        new Set(
-          user.roles.flatMap((ur: UserRoleJoin) =>
-            ur.role.permissions.map((rp: { permission: { code: string } }) => rp.permission.code)
-          )
-        )
-      );
-
-      return {
-        ok: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          displayName: user.displayName,
-          roles,
-          permissions,
-          mustChangePassword: user.mustChangePassword
-        }
-      };
+      const runtime = await getRuntimeConfig(app.prisma);
+      const payload = meUserPayload(user);
+      return { ...payload, user: { ...payload.user, writeBlocked: runtime.writeBlocked } };
     } catch {
       return reply.code(401).send(errorBody("UNAUTHORIZED"));
     }
+  });
+
+  app.patch("/me", async (req, reply) => {
+    const user = await requireAuthUser(app, req, reply);
+    if (!user) return;
+
+    const body = z
+      .object({
+        displayName: z.string().trim().min(1).max(200).optional(),
+        homePage: z.union([z.enum(HOME_PAGES), z.null()]).optional(),
+        mutedNotificationKinds: z.array(z.enum(NOTIFICATION_KINDS)).optional()
+      })
+      .parse(req.body);
+
+    if (body.displayName === undefined && body.homePage === undefined && body.mutedNotificationKinds === undefined) {
+      return reply.code(400).send(errorBody("VALIDATION"));
+    }
+
+    await app.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        displayName: body.displayName,
+        homePage: body.homePage === undefined ? undefined : body.homePage,
+        mutedNotificationKinds: body.mutedNotificationKinds === undefined ? undefined : body.mutedNotificationKinds
+      }
+    });
+
+    const next = await app.prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+      include: ME_INCLUDE
+    });
+    const runtime = await getRuntimeConfig(app.prisma);
+    const payload = meUserPayload(next);
+    return { ...payload, user: { ...payload.user, writeBlocked: runtime.writeBlocked } };
   });
 
   app.post("/change-password", async (req, reply) => {
@@ -128,13 +182,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(req.body);
 
-    let user: { id: string; passwordHash: string; isActive: boolean } | null = null;
+    let user: { id: string; passwordHash: string; isActive: boolean; tokenVersion: number } | null = null;
     try {
-      const decoded = await req.jwtVerify<{ sub: string }>();
+      const decoded = await req.jwtVerify<{ sub: string; ver?: number }>();
       user = await app.prisma.user.findUnique({
         where: { id: decoded.sub },
-        select: { id: true, passwordHash: true, isActive: true }
+        select: { id: true, passwordHash: true, isActive: true, tokenVersion: true }
       });
+      if (user && (decoded.ver ?? 0) !== (user.tokenVersion ?? 0)) user = null;
     } catch {
       app.clearAuthCookie(reply, req);
       return reply.code(401).send(errorBody("UNAUTHORIZED"));
@@ -149,10 +204,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     if (!ok) return reply.code(400).send(errorBody("OLD_PASSWORD_INVALID"));
 
     const passwordHash = await argon2.hash(body.newPassword);
-    await app.prisma.user.update({
+    const updated = await app.prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash, mustChangePassword: false }
+      data: { passwordHash, mustChangePassword: false, tokenVersion: { increment: 1 } }
     });
+    await app.setAuthCookie(reply, req, updated.id);
 
     return { ok: true };
   });
@@ -179,6 +235,26 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       offset: query.offset,
       action: query.action,
       q: query.q
+    });
+  });
+
+  app.get("/me/presence", async (req, reply) => {
+    const user = await requireAuthUser(app, req, reply);
+    if (!user) return;
+
+    const query = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+        kind: z.enum(["LOGIN", "PAGE"]).optional()
+      })
+      .parse(req.query);
+
+    return await queryMyPresence(app.prisma, {
+      userId: user.id,
+      limit: query.limit,
+      offset: query.offset,
+      kind: query.kind
     });
   });
 };

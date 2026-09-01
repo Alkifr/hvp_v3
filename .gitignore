@@ -23,7 +23,6 @@ build/
 !.env.example
 apps/api/.env
 apps/api/.env.*
-!apps/api/.env.example
 
 # Logs
 *.log
@@ -45,3 +44,4 @@ venv/
 
 # DB dumps
 backups/
+apps/api/prisma/demo-data.json

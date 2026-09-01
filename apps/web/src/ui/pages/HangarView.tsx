@@ -4,8 +4,10 @@ import dayjs from "dayjs";
 import * as XLSX from "xlsx";
 
 import { apiGet, apiPost, apiPut } from "../../lib/api";
+import { hasPermission } from "../../lib/permissionCatalog";
 import { isValidDateInput } from "../../lib/dateInput";
 import { authMe } from "../auth/authApi";
+import { FilterIndicator } from "../components/FilterIndicator";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 import { ToolbarPopover } from "../components/ToolbarPopover";
@@ -260,7 +262,7 @@ export function HangarView() {
   const { active: activeSandbox } = useActiveSandbox();
   const me = meQ.data && "ok" in meQ.data && meQ.data.ok ? meQ.data.user : null;
   const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
-  const canEditEvents = Boolean(me?.permissions?.includes("events:write") || canWriteSandbox);
+  const canEditEvents = Boolean(hasPermission(me?.permissions, "hangar:write") || canWriteSandbox);
   const savedUi = useMemo(() => safeReadHangarUi(), []);
   const initialFrom = useMemo(
     () => (isValidDateInput(String(savedUi?.fromDate ?? "")) ? String(savedUi.fromDate) : dayjs().format("YYYY-MM-DD")),
@@ -1101,16 +1103,12 @@ export function HangarView() {
 
   return (
     <div className="hangarPlanPage">
-      <section className="hangarHero">
-        <div>
+      <section className="massHero">
+        <div className="massHeroText">
           <div className="massEyebrow">Сценарное планирование</div>
           <h1>Ангары и схемы расстановки</h1>
-          <p>
-            Выберите схемы для ангаров, оцените загрузку за период или в конкретный момент и подготовьте размещение
-            событий. {activeSandbox ? <>Активна песочница <b>{activeSandbox.name}</b>.</> : <>Рабочий контур.</>}
-          </p>
         </div>
-        <div className="hangarHeroStats">
+        <div className="massHeroStats">
           <span>Событий: <b>{summary?.summary.events ?? 0}</b></span>
           <span>Без выбранной схемы/места: <b>{summary?.summary.unplaced ?? 0}</b></span>
           <span>Не подходят по типу: <b>{summary?.summary.incompatible ?? 0}</b></span>
@@ -1161,15 +1159,25 @@ export function HangarView() {
         </div>
 
         <div className="ganttToolbar">
+          <div className="ganttToolbarRow">
           <div className="ganttToolbarGroup">
             <span className="tgLabel">Вид</span>
-            <label className="tgField" title="Режим просмотра загрузки">
-              <span className="tgFieldLabel">Режим</span>
-              <select value={viewMode} onChange={(e) => setViewMode(e.target.value as ViewMode)}>
-                <option value="range">Диапазон</option>
-                <option value="moment">Момент времени</option>
-              </select>
-            </label>
+            <div className="tgIndicatorGroup" role="group" aria-label="Режим просмотра загрузки">
+              <FilterIndicator
+                label="Д"
+                title="Диапазон"
+                tone="range"
+                active={viewMode === "range"}
+                onClick={() => setViewMode("range")}
+              />
+              <FilterIndicator
+                label="М"
+                title="Момент времени"
+                tone="moment"
+                active={viewMode === "moment"}
+                onClick={() => setViewMode("moment")}
+              />
+            </div>
           </div>
 
           <div className="ganttToolbarGroup">
@@ -1291,6 +1299,7 @@ export function HangarView() {
                 compact
               />
             </label>
+          </div>
           </div>
         </div>
 

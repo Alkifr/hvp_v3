@@ -3,7 +3,8 @@ import { z } from "zod";
 import argon2 from "argon2";
 import { EventAuditAction, EventStatus, UserActivityAction } from "@prisma/client";
 
-import { zDateTime, zUuid } from "../../lib/zod.js";
+import { expandPermissionCodes } from "../../lib/permissionCatalog.js";
+import { zDateTime, zId, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { logUserActivity } from "../../lib/userActivity.js";
 import { queryActivityFeed } from "../../lib/activityFeed.js";
@@ -11,10 +12,29 @@ import { UserMsg } from "../../lib/userErrors.js";
 import { queryPresenceHeatmap } from "../../lib/userPresence.js";
 import { mailDigestRoutes } from "./mailDigest.js";
 import { announcementAdminRoutes } from "./announcements.js";
+import { runtimeAdminRoutes } from "./runtime.js";
+import { sandboxAdminRoutes } from "./sandboxes.js";
+import { reportAdminRoutes } from "./reports.js";
+
+async function expandRolePermissionIds(
+  app: { prisma: { permission: { findMany: () => Promise<Array<{ id: string; code: string }>> } } },
+  permissionIds: string[]
+): Promise<string[]> {
+  const rows = await app.prisma.permission.findMany();
+  const byId = new Map(rows.map((p) => [p.id, p.code]));
+  const byCode = new Map(rows.map((p) => [p.code, p.id]));
+  const codes = permissionIds.map((id) => byId.get(id)).filter((code): code is string => Boolean(code));
+  return expandPermissionCodes(codes)
+    .map((code) => byCode.get(code))
+    .filter((id): id is string => Boolean(id));
+}
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
   await app.register(mailDigestRoutes);
   await app.register(announcementAdminRoutes);
+  await app.register(runtimeAdminRoutes);
+  await app.register(sandboxAdminRoutes);
+  await app.register(reportAdminRoutes);
 
   // Журнал активности по всем пользователям (или фильтр по email)
   app.get("/activity", async (req) => {
@@ -115,16 +135,18 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       .object({
         code: z.string().trim().min(2).max(32),
         name: z.string().trim().min(1).max(200),
-        permissionIds: z.array(zUuid).default([])
+        permissionIds: z.array(zId).default([])
       })
       .parse(req.body);
+
+    const permissionIds = await expandRolePermissionIds(app, body.permissionIds);
 
     const role = await app.prisma.role.create({
       data: { code: body.code, name: body.name, isSystem: false }
     });
 
     await Promise.all(
-      body.permissionIds.map((permissionId) =>
+      permissionIds.map((permissionId) =>
         app.prisma.rolePermission.create({ data: { roleId: role.id, permissionId } })
       )
     );
@@ -141,16 +163,17 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     const body = z
       .object({
         name: z.string().trim().min(1).max(200).optional(),
-        permissionIds: z.array(zUuid).optional()
+        permissionIds: z.array(zId).optional()
       })
       .parse(req.body);
 
     const role = await app.prisma.role.update({ where: { id }, data: { name: body.name } });
 
     if (body.permissionIds) {
+      const permissionIds = await expandRolePermissionIds(app, body.permissionIds);
       await app.prisma.rolePermission.deleteMany({ where: { roleId: id } });
       await Promise.all(
-        body.permissionIds.map((permissionId) =>
+        permissionIds.map((permissionId) =>
           app.prisma.rolePermission.create({ data: { roleId: id, permissionId } })
         )
       );
@@ -272,9 +295,25 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     const passwordHash = await argon2.hash(body.newPassword);
     await app.prisma.user.update({
       where: { id },
-      data: { passwordHash, mustChangePassword: true }
+      data: { passwordHash, mustChangePassword: true, tokenVersion: { increment: 1 } }
     });
     return { ok: true };
+  });
+
+  app.post("/users/:id/revoke-sessions", async (req) => {
+    assertPermission(req as any, "admin:users");
+    const id = zUuid.parse((req.params as any).id);
+    const existing = await app.prisma.user.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) {
+      const err: any = new Error("USER_NOT_FOUND");
+      err.statusCode = 404;
+      throw err;
+    }
+    await app.prisma.user.update({
+      where: { id },
+      data: { tokenVersion: { increment: 1 } }
+    });
+    return { ok: true as const };
   });
 
   app.post("/cleanup/events/preview", async (req) => {

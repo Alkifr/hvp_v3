@@ -6,11 +6,13 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { errorBody } from "../lib/userErrors.js";
 import { resolveJwtSecret } from "../lib/bootEnv.js";
+import { getRuntimeConfig, isMutatingHttpMethod, isWriteBlockedExempt } from "../lib/writeBlocked.js";
+import { parseMutedNotificationKinds } from "../lib/userPrefs.js";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
-    payload: { sub: string };
-    user: { sub: string };
+    payload: { sub: string; ver?: number };
+    user: { sub: string; ver?: number };
   }
 }
 
@@ -23,6 +25,7 @@ declare module "fastify" {
       roles: string[];
       permissions: string[];
       mustChangePassword: boolean;
+      mutedNotificationKinds: string[];
     };
   }
 }
@@ -46,7 +49,7 @@ function cookieOptions(_req: FastifyRequest) {
   };
 }
 
-async function loadUser(app: any, userId: string) {
+async function loadUser(app: any, userId: string, tokenVer?: number) {
   const u = await app.prisma.user.findUnique({
     where: { id: userId },
     include: {
@@ -60,6 +63,7 @@ async function loadUser(app: any, userId: string) {
     }
   });
   if (!u || !u.isActive) return null;
+  if ((tokenVer ?? 0) !== (u.tokenVersion ?? 0)) return null;
 
   const roles = u.roles.map((ur: any) => ur.role.code);
   const permissions = Array.from(
@@ -74,7 +78,8 @@ async function loadUser(app: any, userId: string) {
     displayName: u.displayName,
     roles,
     permissions,
-    mustChangePassword: u.mustChangePassword
+    mustChangePassword: u.mustChangePassword,
+    mutedNotificationKinds: parseMutedNotificationKinds(u.mutedNotificationKinds)
   };
 }
 
@@ -92,8 +97,8 @@ export const authPlugin = fp(async (app) => {
     if (req.url.startsWith("/api/auth/")) return;
 
     try {
-      const decoded = await req.jwtVerify<{ sub: string }>();
-      const user = await loadUser(app, decoded.sub);
+      const decoded = await req.jwtVerify<{ sub: string; ver?: number }>();
+      const user = await loadUser(app, decoded.sub, decoded.ver);
       if (!user) {
         reply.clearCookie(AUTH_COOKIE, cookieOptions(req));
         return reply.code(401).send(errorBody("UNAUTHORIZED"));
@@ -102,13 +107,20 @@ export const authPlugin = fp(async (app) => {
         return reply.code(403).send(errorBody("MUST_CHANGE_PASSWORD"));
       }
       req.auth = user;
+      if (isMutatingHttpMethod(req.method) && !isWriteBlockedExempt(req.url, user.permissions)) {
+        const runtime = await getRuntimeConfig(app.prisma);
+        if (runtime.writeBlocked) {
+          return reply.code(403).send(errorBody("WRITE_BLOCKED"));
+        }
+      }
     } catch {
       return reply.code(401).send(errorBody("UNAUTHORIZED"));
     }
   });
 
   app.decorate("setAuthCookie", async (reply: FastifyReply, req: FastifyRequest, userId: string) => {
-    const token = await reply.jwtSign({ sub: userId });
+    const row = await app.prisma.user.findUnique({ where: { id: userId }, select: { tokenVersion: true } });
+    const token = await reply.jwtSign({ sub: userId, ver: row?.tokenVersion ?? 0 });
     reply.setCookie(AUTH_COOKIE, token, cookieOptions(req));
   });
 

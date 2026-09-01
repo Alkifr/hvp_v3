@@ -14,6 +14,9 @@ import {
   type PlacementDraft
 } from "../../lib/placementDraft";
 import { buildEventShareUrl, copyTextToClipboard } from "../../lib/eventDeepLink";
+import { eventAllowsOverlap } from "../../lib/eventSlotOverlap";
+import { hasPermission } from "../../lib/permissionCatalog";
+import { lineBaseAfterWorkshopChange, parseLineBase, LINE_BASE_LABEL, type LineBase } from "../../lib/lineBase";
 import {
   extractDiffEntries,
   formatActionLabel,
@@ -35,6 +38,7 @@ import { MSK_OFFSET_MINUTES, startOfMskDayIso } from "../../lib/localDate";
 import { authMe } from "../auth/authApi";
 import { EventPlacementsEditor } from "../components/EventPlacementsEditor";
 import { EventResourcesPanel } from "../components/EventResourcesPanel";
+import { FilterIndicator } from "../components/FilterIndicator";
 import { GanttEventsTable } from "../components/GanttEventsTable";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
@@ -74,6 +78,7 @@ const FIELD_LABEL: Record<string, string> = {
   notes: "Примечание",
   hangarId: "Ангар",
   workshopId: "Цех",
+  lineBase: "L/B",
   layoutId: "Вариант размещения",
   standId: "Место",
   multiPlacement: "Несколько ангаров",
@@ -91,6 +96,30 @@ const PLANNING_KIND_LABEL: Record<string, string> = {
   PLANNED: "Плановое",
   UNPLANNED: "Внеплановое"
 };
+
+function parseStoredPlanningKinds(saved: any): Array<"PLANNED" | "UNPLANNED"> {
+  const arr = saved?.filterPlanningKinds;
+  if (Array.isArray(arr)) {
+    return arr.filter((x: unknown): x is "PLANNED" | "UNPLANNED" => x === "PLANNED" || x === "UNPLANNED");
+  }
+  const one = saved?.filterPlanningKind;
+  if (one === "PLANNED" || one === "UNPLANNED") return [one];
+  return [];
+}
+
+function parseStoredLineBases(saved: any): LineBase[] {
+  const arr = saved?.filterLineBases;
+  if (Array.isArray(arr)) {
+    return arr.filter((x: unknown): x is LineBase => x === "LINE" || x === "BASE");
+  }
+  const one = saved?.filterLineBase;
+  if (one === "LINE" || one === "BASE") return [one];
+  return [];
+}
+
+function toggleIncluded<T extends string>(list: T[], value: T): T[] {
+  return list.includes(value) ? list.filter((x) => x !== value) : [...list, value];
+}
 
 function safeReadGanttUi(): any | null {
   try {
@@ -144,6 +173,8 @@ type EventRow = {
   reservation?: { stand?: { id?: string; code: string } | null } | null;
   placements?: EventPlacementRow[];
   towSegments?: Array<{ id: string; startAt: string; endAt: string }>;
+  allowOverlap?: boolean;
+  lineBase?: LineBase | null;
 };
 
 type EventPlacementRow = {
@@ -192,6 +223,10 @@ function eventEventTypeId(ev: EventRow): string {
 
 function eventWorkshopId(ev: EventRow): string {
   return String((ev.workshop as any)?.id ?? (ev as any).workshopId ?? "");
+}
+
+function eventLineBase(ev: EventRow): LineBase | "" {
+  return parseLineBase(ev.lineBase) ?? "";
 }
 
 function eventStatusId(ev: EventRow): string {
@@ -483,7 +518,6 @@ type DndStand = Stand & { hangarId: string; hangarName: string; hangarCode?: str
 type GroupMode = "AIRCRAFT" | "HANGAR_STAND";
 type GanttDisplayMode = "CURRENT" | "PLAN_FACT";
 type TimelineTimeMode = "UTC" | "LOCAL";
-type PlanningKindFilter = "ALL" | "PLANNED" | "UNPLANNED";
 type GanttPanelView = "DIAGRAM" | "TABLE";
 
 type GanttFilters = {
@@ -494,7 +528,8 @@ type GanttFilters = {
   eventTypeIds: string[];
   workshopIds: string[];
   statusIds: string[];
-  planningKind: PlanningKindFilter;
+  planningKinds: Array<"PLANNED" | "UNPLANNED">;
+  lineBases: LineBase[];
 };
 
 type GanttFilterKey = keyof GanttFilters;
@@ -557,6 +592,7 @@ type EditorDraft = {
   layoutId: string; // optional, "" means null
   standId: string; // optional, "" means no reservation
   allowOverlap: boolean;
+  lineBase: LineBase | "";
   multiPlacement: boolean;
   autoFillGapPlacements: boolean;
   placements: PlacementDraft[];
@@ -816,8 +852,14 @@ function eventMatchesGanttFilters(ev: EventRow, filters: GanttFilters, skip?: Ga
   if (skip !== "statusIds") {
     if (filters.statusIds.length > 0 && !filters.statusIds.includes(eventStatusId(ev))) return false;
   }
-  if (skip !== "planningKind") {
-    if (filters.planningKind !== "ALL" && eventPlanningKind(ev) !== filters.planningKind) return false;
+  if (skip !== "planningKinds") {
+    if (filters.planningKinds.length > 0 && !filters.planningKinds.includes(eventPlanningKind(ev))) return false;
+  }
+  if (skip !== "lineBases") {
+    if (filters.lineBases.length > 0) {
+      const lb = eventLineBase(ev);
+      if (!lb || !filters.lineBases.includes(lb)) return false;
+    }
   }
   return true;
 }
@@ -1887,12 +1929,12 @@ export function GanttView() {
   const { active: activeSandbox, activeId: activeSandboxId } = useActiveSandbox();
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
   const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
-  const canEditEvents = Boolean(me?.permissions?.includes("events:write") || canWriteSandbox);
+  const canEditEvents = Boolean(hasPermission(me?.permissions, "gantt:write") || canWriteSandbox);
   const canEditEventsEffective = canEditEvents && !isMobile;
   const canDnd = Boolean(
     !isMobile &&
       (canWriteSandbox ||
-        (me?.permissions?.includes("events:write") && (me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"))))
+        (hasPermission(me?.permissions, "gantt:write") && (me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"))))
   );
   const mobileUiAppliedRef = useRef(false);
 
@@ -2031,9 +2073,10 @@ export function GanttView() {
     if (Array.isArray(arr)) return arr.map(String).filter(Boolean);
     return [];
   });
-  const [filterPlanningKind, setFilterPlanningKind] = useState<PlanningKindFilter>(() =>
-    savedUi?.filterPlanningKind === "PLANNED" || savedUi?.filterPlanningKind === "UNPLANNED" ? savedUi.filterPlanningKind : "ALL"
+  const [filterPlanningKinds, setFilterPlanningKinds] = useState<Array<"PLANNED" | "UNPLANNED">>(() =>
+    parseStoredPlanningKinds(savedUi)
   );
+  const [filterLineBases, setFilterLineBases] = useState<LineBase[]>(() => parseStoredLineBases(savedUi));
 
   const aircraftTypesQ = useQuery({
     queryKey: ["ref", "aircraft-types"],
@@ -2120,7 +2163,7 @@ export function GanttView() {
 
   const workshopsQ = useQuery({
     queryKey: ["ref", "workshops"],
-    queryFn: () => apiGet<Array<{ id: string; code: string; name: string; isActive?: boolean }>>("/api/ref/workshops")
+    queryFn: () => apiGet<Array<{ id: string; code: string; name: string; isActive?: boolean; defaultLineBase?: LineBase | null }>>("/api/ref/workshops")
   });
 
   const hangarsQ = useQuery({
@@ -2165,7 +2208,8 @@ export function GanttView() {
     setFilterEventTypeIds([]);
     setFilterWorkshopIds([]);
     setFilterStatusIds([]);
-    setFilterPlanningKind("ALL");
+    setFilterPlanningKinds([]);
+    setFilterLineBases([]);
     setSelectedHangarIds([]);
     setDndHangarIds([]);
     setDndLayoutIds([]);
@@ -2299,7 +2343,8 @@ export function GanttView() {
       filterEventTypeIds,
       filterWorkshopIds,
       filterStatusIds,
-      filterPlanningKind,
+      filterPlanningKinds,
+      filterLineBases,
       ganttLabelWidth,
       fitWidth,
       showAllPlacementLinks,
@@ -2329,7 +2374,8 @@ export function GanttView() {
     filterEventTypeIds,
     filterWorkshopIds,
     filterStatusIds,
-    filterPlanningKind,
+    filterPlanningKinds,
+    filterLineBases,
     ganttLabelWidth,
     fitWidth,
     showAllPlacementLinks,
@@ -2366,9 +2412,10 @@ export function GanttView() {
       eventTypeIds: filterEventTypeIds,
       workshopIds: filterWorkshopIds,
       statusIds: filterStatusIds,
-      planningKind: filterPlanningKind
+      planningKinds: filterPlanningKinds,
+      lineBases: filterLineBases
     }),
-    [selectedHangarIds, filterOperatorIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds, filterWorkshopIds, filterStatusIds, filterPlanningKind]
+    [selectedHangarIds, filterOperatorIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds, filterWorkshopIds, filterStatusIds, filterPlanningKinds, filterLineBases]
   );
 
   const smartFilterOptions = useMemo(() => {
@@ -2380,6 +2427,7 @@ export function GanttView() {
     const workshopIdSet = new Set<string>();
     const statusIdSet = new Set<string>();
     const planningKindSet = new Set<"PLANNED" | "UNPLANNED">();
+    const lineBaseSet = new Set<LineBase>();
 
     for (const e of eventsForGantt) {
       if (eventMatchesGanttFilters(e, ganttFilters, "hangarIds")) {
@@ -2409,9 +2457,13 @@ export function GanttView() {
         const sid = eventStatusId(e);
         if (sid) statusIdSet.add(sid);
       }
-      if (eventMatchesGanttFilters(e, ganttFilters, "planningKind")) {
+      if (eventMatchesGanttFilters(e, ganttFilters, "planningKinds")) {
         const pk = String(e.planningKind ?? "").toUpperCase();
         if (pk === "PLANNED" || pk === "UNPLANNED") planningKindSet.add(pk);
+      }
+      if (eventMatchesGanttFilters(e, ganttFilters, "lineBases")) {
+        const lb = eventLineBase(e);
+        if (lb) lineBaseSet.add(lb);
       }
     }
 
@@ -2463,7 +2515,7 @@ export function GanttView() {
             .sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label, "ru"))
             .map(({ id, label }) => ({ id, label }));
 
-    return { hangars, operators, aircraftTypes, aircraft, eventTypes, workshops, statuses, planningKinds: planningKindSet };
+    return { hangars, operators, aircraftTypes, aircraft, eventTypes, workshops, statuses, planningKinds: planningKindSet, lineBases: lineBaseSet };
   }, [eventsForGantt, ganttFilters, hangarsQ.data, operatorsQ.data, aircraftTypesQ.data, aircraftQ.data, eventTypesQ.data, workshopsQ.data, showExternalMroOnGantt, statusCatalog, selectableStatusOptions]);
 
   useEffect(() => {
@@ -2499,9 +2551,11 @@ export function GanttView() {
     const nextStatuses = prune(filterStatusIds, statusAvail);
     if (nextStatuses.length !== filterStatusIds.length) setFilterStatusIds(nextStatuses);
 
-    if (filterPlanningKind !== "ALL" && !smartFilterOptions.planningKinds.has(filterPlanningKind)) {
-      setFilterPlanningKind("ALL");
-    }
+    const nextPlanning = filterPlanningKinds.filter((k) => smartFilterOptions.planningKinds.has(k));
+    if (nextPlanning.length !== filterPlanningKinds.length) setFilterPlanningKinds(nextPlanning);
+
+    const nextLineBases = filterLineBases.filter((k) => smartFilterOptions.lineBases.has(k));
+    if (nextLineBases.length !== filterLineBases.length) setFilterLineBases(nextLineBases);
   }, [
     smartFilterOptions,
     selectedHangarIds,
@@ -2511,7 +2565,8 @@ export function GanttView() {
     filterEventTypeIds,
     filterWorkshopIds,
     filterStatusIds,
-    filterPlanningKind
+    filterPlanningKinds,
+    filterLineBases
   ]);
 
   const fixedDayWidth = ZOOM_PX_PER_DAY[minorScale];
@@ -3153,6 +3208,7 @@ export function GanttView() {
       layoutId: "",
       standId: "",
       allowOverlap: false,
+      lineBase: "",
       multiPlacement: false,
       autoFillGapPlacements: true,
       placements: [
@@ -3203,7 +3259,14 @@ export function GanttView() {
       workshopId: (ev.workshop as any)?.id ?? (ev as any).workshopId ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
-      allowOverlap: false,
+      allowOverlap: eventAllowsOverlap(ev, events),
+      lineBase:
+        eventLineBase(ev) ||
+        lineBaseAfterWorkshopChange(
+          String((ev.workshop as any)?.id ?? (ev as any).workshopId ?? ""),
+          workshopsQ.data ?? [],
+          ""
+        ),
       multiPlacement: placements.length > 1,
       autoFillGapPlacements: true,
       placements
@@ -3246,6 +3309,13 @@ export function GanttView() {
       layoutId: (ev.layout as any)?.id ?? "",
       standId: (ev.reservation?.stand as any)?.id ?? "",
       allowOverlap: false,
+      lineBase:
+        eventLineBase(ev) ||
+        lineBaseAfterWorkshopChange(
+          String((ev.workshop as any)?.id ?? (ev as any).workshopId ?? ""),
+          workshopsQ.data ?? [],
+          ""
+        ),
       multiPlacement: placements.length > 1,
       autoFillGapPlacements: true,
       placements
@@ -3491,6 +3561,7 @@ export function GanttView() {
       "notes",
       "hangarId",
       "workshopId",
+      "lineBase",
       "layoutId",
       "standId",
       "multiPlacement",
@@ -3644,6 +3715,7 @@ export function GanttView() {
         actualEndAt,
         hangarId: draft.hangarId || null,
         workshopId: draft.workshopId || null,
+        lineBase: parseLineBase(draft.lineBase),
         layoutId: draft.layoutId || null,
         placements: placementsPayload,
         notes: draft.notes?.trim() ? draft.notes : null,
@@ -5138,9 +5210,10 @@ export function GanttView() {
       pick("Тип события", filterEventTypeIds, smartFilterOptions.eventTypes),
       pick("Цех", filterWorkshopIds, smartFilterOptions.workshops),
       pick("Статус", filterStatusIds, smartFilterOptions.statuses),
-      filterPlanningKind === "ALL"
-        ? null
-        : `Планирование: ${filterPlanningKind === "PLANNED" ? "плановые" : "внеплановые"}`,
+      filterPlanningKinds.length
+        ? `Планирование: ${filterPlanningKinds.map((k) => (k === "PLANNED" ? "плановые" : "внеплановые")).join(", ")}`
+        : null,
+      filterLineBases.length ? `L/B: ${filterLineBases.map((k) => LINE_BASE_LABEL[k]).join(", ")}` : null,
       showExternalMroOnGantt ? null : "без внешних MRO"
     ].filter((x): x is string => Boolean(x));
   }, [
@@ -5151,7 +5224,8 @@ export function GanttView() {
     filterEventTypeIds,
     filterWorkshopIds,
     filterStatusIds,
-    filterPlanningKind,
+    filterPlanningKinds,
+    filterLineBases,
     smartFilterOptions,
     showExternalMroOnGantt
   ]);
@@ -5165,7 +5239,8 @@ export function GanttView() {
     if (filterEventTypeIds.length) n += 1;
     if (filterWorkshopIds.length) n += 1;
     if (filterStatusIds.length) n += 1;
-    if (filterPlanningKind !== "ALL") n += 1;
+    if (filterPlanningKinds.length) n += 1;
+    if (filterLineBases.length) n += 1;
     return n;
   }, [
     selectedHangarIds,
@@ -5175,7 +5250,8 @@ export function GanttView() {
     filterEventTypeIds,
     filterWorkshopIds,
     filterStatusIds,
-    filterPlanningKind
+    filterPlanningKinds,
+    filterLineBases
   ]);
 
   const ganttHeaderMetaParts = useMemo(() => {
@@ -5527,7 +5603,7 @@ export function GanttView() {
         </div>
 
         {ganttToolbarOpen ? (
-        <div className="ganttToolbar">
+        <div className={`ganttToolbar${dndEnabled ? " ganttToolbarDnd" : ""}`}>
           <div className="ganttToolbarRow">
             <div className="ganttToolbarGroup ganttToolbarActionsGroup">
               <button
@@ -5579,6 +5655,46 @@ export function GanttView() {
                       <path d="M4 10h12" />
                     </svg>
                   </button>
+                  <button
+                    type="button"
+                    className={`btn ganttIconBtn${dndEnabled ? " ganttIconBtnDndActive" : ""}`}
+                    aria-pressed={dndEnabled}
+                    aria-label={dndEnabled ? "Drag&Drop включён" : "Drag&Drop выключен"}
+                    title={
+                      !canDnd
+                        ? activeSandbox
+                          ? "Drag&Drop доступен владельцу или редактору песочницы"
+                          : "Drag&Drop доступен только ADMIN / PLANNER"
+                        : dndEnabled
+                        ? "Drag&Drop включён — нажмите, чтобы заблокировать перетаскивание"
+                        : "Включить Drag&Drop"
+                    }
+                    disabled={!canDnd}
+                    onClick={() => {
+                      if (!canDnd) return;
+                      const v = !dndEnabled;
+                      setDndEnabled(v);
+                      if (v) {
+                        setPanelView("DIAGRAM");
+                        if (groupMode !== "HANGAR_STAND") setGroupMode("HANGAR_STAND");
+                      } else {
+                        setSelectedDndEventIds([]);
+                        setPtrDrag(null);
+                      }
+                    }}
+                  >
+                    {dndEnabled ? (
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <rect x="4" y="10" width="12" height="8" rx="2" />
+                        <path d="M7 10V7a3 3 0 0 1 6 0" />
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <rect x="4" y="10" width="12" height="8" rx="2" />
+                        <path d="M7 10V7a3 3 0 0 1 6 0v3" />
+                      </svg>
+                    )}
+                  </button>
                 </>
               ) : null}
             </div>
@@ -5612,6 +5728,50 @@ export function GanttView() {
               ) : (
                 <span className="tgLabel">Настройки диаграммы</span>
               )}
+              <div className="tgIndicatorRow" aria-label="Быстрые фильтры планирования и L/B">
+                <div className="tgIndicatorCluster">
+                  <span className="tgIndicatorCaption">План:</span>
+                  <div className="tgIndicatorGroup" role="group" aria-label="Вид планирования">
+                    <FilterIndicator
+                      label="П"
+                      title={PLANNING_KIND_LABEL.PLANNED}
+                      tone="plan"
+                      active={filterPlanningKinds.includes("PLANNED")}
+                      disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("PLANNED") && !filterPlanningKinds.includes("PLANNED")}
+                      onClick={() => setFilterPlanningKinds((list) => toggleIncluded(list, "PLANNED"))}
+                    />
+                    <FilterIndicator
+                      label="В"
+                      title={PLANNING_KIND_LABEL.UNPLANNED}
+                      tone="unplan"
+                      active={filterPlanningKinds.includes("UNPLANNED")}
+                      disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("UNPLANNED") && !filterPlanningKinds.includes("UNPLANNED")}
+                      onClick={() => setFilterPlanningKinds((list) => toggleIncluded(list, "UNPLANNED"))}
+                    />
+                  </div>
+                </div>
+                <div className="tgIndicatorCluster">
+                  <span className="tgIndicatorCaption">L/B:</span>
+                  <div className="tgIndicatorGroup" role="group" aria-label="Контур L/B">
+                    <FilterIndicator
+                      label="L"
+                      title={LINE_BASE_LABEL.LINE}
+                      tone="line"
+                      active={filterLineBases.includes("LINE")}
+                      disabled={events.length > 0 && !smartFilterOptions.lineBases.has("LINE") && !filterLineBases.includes("LINE")}
+                      onClick={() => setFilterLineBases((list) => toggleIncluded(list, "LINE"))}
+                    />
+                    <FilterIndicator
+                      label="B"
+                      title={LINE_BASE_LABEL.BASE}
+                      tone="base"
+                      active={filterLineBases.includes("BASE")}
+                      disabled={events.length > 0 && !smartFilterOptions.lineBases.has("BASE") && !filterLineBases.includes("BASE")}
+                      onClick={() => setFilterLineBases((list) => toggleIncluded(list, "BASE"))}
+                    />
+                  </div>
+                </div>
+              </div>
               {panelView === "DIAGRAM" ? (
                 <>
                   <div className="tgField" title="Как группировать строки диаграммы">
@@ -5653,46 +5813,6 @@ export function GanttView() {
                       label={showExternalMroOnGantt ? "Показывать" : "Скрыты"}
                     />
                   </div>
-                  {!isMobile ? (
-                  <button
-                    type="button"
-                    className={`tgLockBtn${dndEnabled ? " tgLockBtnActive" : ""}${!canDnd ? " tgLockBtnDisabled" : ""}`}
-                    aria-pressed={dndEnabled}
-                    aria-label={dndEnabled ? "Drag&Drop включён" : "Drag&Drop выключен"}
-                    title={
-                      !canDnd
-                        ? activeSandbox
-                          ? "Drag&Drop доступен владельцу или редактору песочницы"
-                          : "Drag&Drop доступен только ADMIN / PLANNER"
-                        : dndEnabled
-                        ? "Drag&Drop включён — нажмите, чтобы заблокировать перетаскивание"
-                        : "Перетаскивание заблокировано — нажмите, чтобы включить Drag&Drop"
-                    }
-                    disabled={!canDnd}
-                    onClick={() => {
-                      if (!canDnd) return;
-                      const v = !dndEnabled;
-                      setDndEnabled(v);
-                      if (v && groupMode !== "HANGAR_STAND") setGroupMode("HANGAR_STAND");
-                      if (!v) {
-                        setSelectedDndEventIds([]);
-                        setPtrDrag(null);
-                      }
-                    }}
-                  >
-                    {dndEnabled ? (
-                      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <rect x="4" y="10" width="12" height="8" rx="2" />
-                        <path d="M7 10V7a3 3 0 0 1 6 0" />
-                      </svg>
-                    ) : (
-                      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <rect x="4" y="10" width="12" height="8" rx="2" />
-                        <path d="M7 10V7a3 3 0 0 1 6 0v3" />
-                      </svg>
-                    )}
-                  </button>
-                  ) : null}
                 </>
               ) : null}
             </div>
@@ -5770,7 +5890,7 @@ export function GanttView() {
                   value={selectedHangarIds}
                   onChange={setSelectedHangarIds}
                   placeholder="все"
-                  width={150}
+                  autoWidth
                   maxHeight={320}
                   searchable
                   searchPlaceholder="Найти ангар"
@@ -5784,7 +5904,7 @@ export function GanttView() {
                   value={filterOperatorIds}
                   onChange={setFilterOperatorIds}
                   placeholder="все"
-                  width={160}
+                  autoWidth
                   maxHeight={360}
                   searchable
                   searchPlaceholder="Найти оператора"
@@ -5798,7 +5918,7 @@ export function GanttView() {
                   value={filterAircraftTypeIds}
                   onChange={setFilterAircraftTypeIds}
                   placeholder="все"
-                  width={150}
+                  autoWidth
                   maxHeight={360}
                   searchable
                   searchPlaceholder="Найти тип ВС"
@@ -5812,7 +5932,7 @@ export function GanttView() {
                   value={filterAircraftIds}
                   onChange={setFilterAircraftIds}
                   placeholder="все"
-                  width={140}
+                  autoWidth
                   maxHeight={360}
                   searchable
                   searchPlaceholder="Найти борт"
@@ -5826,7 +5946,7 @@ export function GanttView() {
                   value={filterEventTypeIds}
                   onChange={setFilterEventTypeIds}
                   placeholder="все"
-                  width={160}
+                  autoWidth
                   maxHeight={320}
                   searchable
                   searchPlaceholder="Найти тип события"
@@ -5840,7 +5960,7 @@ export function GanttView() {
                   value={filterWorkshopIds}
                   onChange={setFilterWorkshopIds}
                   placeholder="все"
-                  width={160}
+                  autoWidth
                   maxHeight={320}
                   searchable
                   searchPlaceholder="Найти цех"
@@ -5854,24 +5974,12 @@ export function GanttView() {
                   value={filterStatusIds}
                   onChange={setFilterStatusIds}
                   placeholder="все"
-                  width={200}
+                  autoWidth
                   maxHeight={360}
                   searchable
                   searchPlaceholder="Найти статус"
                   compact
                 />
-              </label>
-              <label className={`tgField${filterPlanningKind !== "ALL" ? " tgFieldActive" : ""}`}>
-                <span className="tgFieldLabel">Планирование</span>
-                <select value={filterPlanningKind} onChange={(e) => setFilterPlanningKind(e.target.value as PlanningKindFilter)}>
-                  <option value="ALL">все</option>
-                  <option value="PLANNED" disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("PLANNED")}>
-                    плановые
-                  </option>
-                  <option value="UNPLANNED" disabled={events.length > 0 && !smartFilterOptions.planningKinds.has("UNPLANNED")}>
-                    внеплановые
-                  </option>
-                </select>
               </label>
             </div>
           </div>
@@ -6930,25 +7038,49 @@ export function GanttView() {
                     </label>
                   </div>
 
-                  <div className="evField evWorkshopField">
-                    <span className="evFieldLabel">Ответственный цех</span>
-                    <SingleSelectDropdown
-                      className="evSelect"
-                      searchable
-                      searchPlaceholder="Введите код или название цеха"
-                      placeholder="— не задан —"
-                      emptyLabel="— не задан —"
-                      options={(workshopsQ.data ?? [])
-                        .filter((workshop) => workshop.isActive !== false || workshop.id === draft.workshopId)
-                        .map((workshop) => ({
-                          id: workshop.id,
-                          label: workshop.code ? `${workshop.code} • ${workshop.name}` : workshop.name
-                        }))}
-                      value={draft.workshopId}
-                      onChange={(workshopId) => setDraft({ ...draft, workshopId })}
-                      width="100%"
-                      maxHeight={280}
-                    />
+                  <div className="evMainInfoGroup" aria-label="Цех и контур">
+                    <div className="evField">
+                      <span className="evFieldLabel">Ответственный цех</span>
+                      <SingleSelectDropdown
+                        className="evSelect"
+                        searchable
+                        searchPlaceholder="Введите код или название цеха"
+                        placeholder="— не задан —"
+                        emptyLabel="— не задан —"
+                        options={(workshopsQ.data ?? [])
+                          .filter((workshop) => workshop.isActive !== false || workshop.id === draft.workshopId)
+                          .map((workshop) => ({
+                            id: workshop.id,
+                            label: workshop.code ? `${workshop.code} • ${workshop.name}` : workshop.name
+                          }))}
+                        value={draft.workshopId}
+                        onChange={(workshopId) =>
+                          setDraft({
+                            ...draft,
+                            workshopId,
+                            lineBase: lineBaseAfterWorkshopChange(workshopId, workshopsQ.data ?? [], draft.lineBase)
+                          })
+                        }
+                        width="100%"
+                        maxHeight={280}
+                      />
+                    </div>
+                    <div className="evField">
+                      <span className="evFieldLabel">L/B</span>
+                      <SingleSelectDropdown
+                        className="evSelect"
+                        allowEmpty
+                        placeholder="— не задан —"
+                        emptyLabel="— не задан —"
+                        options={[
+                          { id: "LINE", label: LINE_BASE_LABEL.LINE },
+                          { id: "BASE", label: LINE_BASE_LABEL.BASE }
+                        ]}
+                        value={draft.lineBase}
+                        onChange={(lineBase) => setDraft({ ...draft, lineBase: parseLineBase(lineBase) ?? "" })}
+                        width="100%"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -7150,7 +7282,7 @@ export function GanttView() {
                     label="Разрешить нахлёст при сохранении"
                     hint={
                       draft.allowOverlap
-                        ? "Сохранение не блокируется занятостью места или другой схемой ангара"
+                        ? "Нахлёст уже разрешён для этого события и сохраняется при следующих изменениях"
                         : "При конфликте места сохранение будет отклонено"
                     }
                   />

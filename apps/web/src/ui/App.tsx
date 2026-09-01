@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -27,8 +27,8 @@ import {
   eventDeepLinkFromHashQuery,
   parseHashPage
 } from "../lib/eventDeepLink";
-
-const MOBILE_HIDDEN_PAGES = new Set<Page>(["import", "mass", "ref", "admin", "itp", "mail"]);
+import { hasPermission } from "../lib/permissionCatalog";
+import { firstAllowedPage, APPLY_HOME_KEY, resolveStartPage } from "../lib/userPrefs";
 
 type Page =
   | "gantt"
@@ -61,10 +61,9 @@ function isPage(value: string): value is Page {
   );
 }
 
-function resolvePageFromHash(hashRaw: string): Page {
+function pageFromHash(hashRaw: string): Page | null {
   const { page } = parseHashPage(hashRaw);
-  if (isPage(page)) return page;
-  return "gantt";
+  return isPage(page) ? page : null;
 }
 
 function consumeEventDeepLinkFromHash() {
@@ -191,6 +190,7 @@ const ICONS = {
 } as const;
 
 export function App() {
+  const isMobile = useIsMobile();
   const meQ = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => authMe(),
@@ -200,18 +200,20 @@ export function App() {
   const me = meQ.data && meQ.data.ok ? meQ.data.user : null;
   const permissions = me?.permissions ?? [];
 
-  const initial = useMemo<Page>(() => resolvePageFromHash(location.hash), []);
-
-  const [page, setPage] = useState<Page>(() => initial);
+  const [page, setPage] = useState<Page | null>(() => pageFromHash(location.hash));
+  const resolvedPage: Page | null = page ?? (me ? resolveStartPage(me.homePage, permissions, isMobile) : null);
 
   useEffect(() => {
-    const desired = page;
+    if (resolvedPage == null) return;
+    const desired = resolvedPage;
     const { page: hashPage, query } = parseHashPage(location.hash);
     // Не затираем deep-link (`#gantt?event=...`), пока его не обработали.
     if (hashPage === desired && query.get("event")) return;
+    // Подпуть админки (`#admin/users`) пишет сам AdminView.
+    if (desired === "admin" && hashPage === "admin") return;
     if (hashPage === desired && !query.toString()) return;
     location.hash = desired;
-  }, [page]);
+  }, [resolvedPage]);
 
   useEffect(() => {
     const opened = consumeEventDeepLinkFromHash();
@@ -223,11 +225,25 @@ export function App() {
         setPage(openedFromHash);
         return;
       }
-      setPage(resolvePageFromHash(location.hash));
+      setPage(pageFromHash(location.hash));
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+
+  useEffect(() => {
+    if (!me) return;
+    let apply = false;
+    try {
+      apply = sessionStorage.getItem(APPLY_HOME_KEY) === "1";
+      if (apply) sessionStorage.removeItem(APPLY_HOME_KEY);
+    } catch {
+      apply = false;
+    }
+    if (!apply) return;
+    if (parseHashPage(location.hash).query.get("event")) return;
+    setPage(resolveStartPage(me.homePage, me.permissions, isMobile));
+  }, [me, isMobile]);
 
   if (meQ.isLoading) {
     return (
@@ -245,13 +261,41 @@ export function App() {
     return <LoginView forcedEmail={me.email} />;
   }
 
-  const canEvents = permissions.includes("events:read");
-  const canWrite = permissions.includes("events:write");
-  const canRef = permissions.includes("ref:read");
-  const canAdmin = permissions.includes("admin:users") || permissions.includes("admin:roles");
-  const canMail = permissions.includes("mail:send") || permissions.includes("admin:mail");
+  if (!resolvedPage) {
+    return (
+      <div className="content">
+        <div className="muted">Загрузка…</div>
+      </div>
+    );
+  }
 
-  return <AppShell me={me} permissions={permissions} page={page} setPage={setPage} canEvents={canEvents} canWrite={canWrite} canRef={canRef} canAdmin={canAdmin} canMail={canMail} />;
+  const canGantt = hasPermission(permissions, "gantt:read");
+  const canHangar = hasPermission(permissions, "hangar:read");
+  const canAnalytics = hasPermission(permissions, "analytics:read");
+  const canItp = hasPermission(permissions, "itp:read");
+  const canImport = hasPermission(permissions, "import:write");
+  const canRef = hasPermission(permissions, "ref:read");
+  const canAdmin = hasPermission(permissions, "admin:users") || hasPermission(permissions, "admin:roles");
+  const canMail = hasPermission(permissions, "mail:send") || hasPermission(permissions, "admin:mail");
+  const canNotify = canGantt || canHangar || hasPermission(permissions, "events:read");
+
+  return (
+    <AppShell
+      me={me}
+      permissions={permissions}
+      page={resolvedPage}
+      setPage={setPage}
+      canGantt={canGantt}
+      canHangar={canHangar}
+      canAnalytics={canAnalytics}
+      canItp={canItp}
+      canImport={canImport}
+      canRef={canRef}
+      canAdmin={canAdmin}
+      canMail={canMail}
+      canNotify={canNotify}
+    />
+  );
 }
 
 function AppShell(props: {
@@ -259,18 +303,36 @@ function AppShell(props: {
   permissions: string[];
   page: Page;
   setPage: (p: Page) => void;
-  canEvents: boolean;
-  canWrite: boolean;
+  canGantt: boolean;
+  canHangar: boolean;
+  canAnalytics: boolean;
+  canItp: boolean;
+  canImport: boolean;
   canRef: boolean;
   canAdmin: boolean;
   canMail: boolean;
+  canNotify: boolean;
 }) {
-  const { me, permissions, page, setPage, canEvents, canWrite, canRef, canAdmin, canMail } = props;
+  const {
+    me,
+    permissions,
+    page,
+    setPage,
+    canGantt,
+    canHangar,
+    canAnalytics,
+    canItp,
+    canImport,
+    canRef,
+    canAdmin,
+    canMail,
+    canNotify
+  } = props;
   const isMobile = useIsMobile();
   const { active: activeSandbox } = useActiveSandbox();
   const inSandbox = Boolean(activeSandbox);
-  const canWriteInActiveContext =
-    canWrite || activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
+  const sandboxCanWrite = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
+  const canImportInActiveContext = canImport || sandboxCanWrite;
 
   useEffect(() => installFourDigitDateYearLimit(), []);
 
@@ -287,9 +349,35 @@ function AppShell(props: {
   useEffect(() => installPresenceTracker(() => pageRef.current), []);
 
   useEffect(() => {
-    if (!isMobile) return;
-    if (MOBILE_HIDDEN_PAGES.has(page)) setPage("gantt");
-  }, [isMobile, page, setPage]);
+    const allowed: Record<Page, boolean> = {
+      gantt: canGantt,
+      hangar: canHangar,
+      analytics: canAnalytics,
+      itp: canItp && !isMobile,
+      import: canImportInActiveContext && !isMobile,
+      mass: canImportInActiveContext && !isMobile,
+      ref: canRef && !isMobile,
+      mail: canMail && !isMobile,
+      admin: canAdmin && !isMobile,
+      profile: true,
+      sandboxes: true,
+      help: true
+    };
+    if (!allowed[page]) setPage(firstAllowedPage(permissions, isMobile));
+  }, [
+    page,
+    setPage,
+    permissions,
+    isMobile,
+    canGantt,
+    canHangar,
+    canAnalytics,
+    canItp,
+    canImportInActiveContext,
+    canRef,
+    canMail,
+    canAdmin
+  ]);
 
   const shellClass = [
     "appShell",
@@ -315,22 +403,24 @@ function AppShell(props: {
 
         <div className="navScroll">
           <div className="navGroup">
-            {canEvents ? (
-              <>
-                <NavIcon active={page === "gantt"} onClick={() => setPage("gantt")} label="План (Гантт)" icon={ICONS.gantt} />
-                <NavIcon active={page === "hangar"} onClick={() => setPage("hangar")} label="Ангар (схема)" icon={ICONS.hangar} />
-                <NavIcon active={page === "analytics"} onClick={() => setPage("analytics")} label="Аналитика" icon={ICONS.analytics} />
-                {!isMobile ? (
-                  <NavIcon active={page === "itp"} onClick={() => setPage("itp")} label="РМ ИТП" icon={ICONS.itp} />
-                ) : null}
-              </>
+            {canGantt ? (
+              <NavIcon active={page === "gantt"} onClick={() => setPage("gantt")} label="План (Гантт)" icon={ICONS.gantt} />
+            ) : null}
+            {canHangar ? (
+              <NavIcon active={page === "hangar"} onClick={() => setPage("hangar")} label="Ангар (схема)" icon={ICONS.hangar} />
+            ) : null}
+            {canAnalytics ? (
+              <NavIcon active={page === "analytics"} onClick={() => setPage("analytics")} label="Аналитика" icon={ICONS.analytics} />
+            ) : null}
+            {!isMobile && canItp ? (
+              <NavIcon active={page === "itp"} onClick={() => setPage("itp")} label="РМ ИТП" icon={ICONS.itp} />
             ) : null}
 
             {!isMobile && canMail ? (
               <NavIcon active={page === "mail"} onClick={() => setPage("mail")} label="Рассылка" icon={ICONS.mail} />
             ) : null}
 
-            {!isMobile && canWriteInActiveContext ? (
+            {!isMobile && canImportInActiveContext ? (
               <NavIcon
                 active={page === "import" || page === "mass"}
                 onClick={() => setPage(lastBulkTabRef.current)}
@@ -347,7 +437,7 @@ function AppShell(props: {
           </div>
 
           <div className="navGroup navGroupBottom">
-            {canEvents ? (
+            {canNotify ? (
               <NotificationBell
                 enabled
                 onOpenEvent={(detail) => {
@@ -356,7 +446,7 @@ function AppShell(props: {
                   if ((targetSandbox || null) !== (current || null)) {
                     setActiveSandboxId(targetSandbox);
                   }
-                  setPage("gantt");
+                  setPage(canGantt ? "gantt" : canHangar ? "hangar" : firstAllowedPage(permissions, isMobile));
                 }}
               />
             ) : null}
@@ -370,19 +460,46 @@ function AppShell(props: {
       </aside>
 
       <main className="content">
-        {page === "gantt" && <GanttView />}
-        {page === "hangar" && <HangarView />}
-        {!isMobile && page === "itp" && <RmItpView />}
-        {!isMobile && (page === "import" || page === "mass") && (
+        {me.writeBlocked ? (
+          <div className="writeBlockedBanner" role="status">
+            Контур в режиме только просмотр. Изменения плана, ангара и справочников недоступны.
+          </div>
+        ) : null}
+        {page === "gantt" && canGantt ? <GanttView /> : null}
+        {page === "hangar" && canHangar ? <HangarView /> : null}
+        {!isMobile && page === "itp" && canItp ? <RmItpView /> : null}
+        {!isMobile && canImportInActiveContext && (page === "import" || page === "mass") ? (
           <BulkEventsView tab={page === "mass" ? "mass" : "import"} onTab={(tab) => setPage(tab)} />
-        )}
-        {!isMobile && page === "ref" && <ReferenceView />}
-        {page === "profile" && <ProfileView me={me} />}
-        {!isMobile && page === "admin" && <AdminView permissions={permissions} me={me} />}
-        {page === "sandboxes" && <SandboxesView permissions={permissions} />}
-        {page === "analytics" && <AnalyticsView />}
+        ) : null}
+        {!isMobile && page === "ref" && canRef ? <ReferenceView /> : null}
+        {page === "profile" ? (
+          <ProfileView
+            me={me}
+            onNavigate={(next) => {
+              setPage(next);
+            }}
+          />
+        ) : null}
+        {!isMobile && page === "admin" && canAdmin ? <AdminView permissions={permissions} me={me} /> : null}
+        {page === "sandboxes" ? <SandboxesView permissions={permissions} /> : null}
+        {page === "analytics" && canAnalytics ? <AnalyticsView /> : null}
         {!isMobile && page === "mail" && canMail ? <MailDigestView /> : null}
-        {page === "help" && <HelpView permissions={permissions} onNavigate={(p) => setPage(p as Page)} />}
+        {page === "help" ? (
+          <HelpView
+            permissions={permissions}
+            onNavigate={(p, hash) => {
+              if (hash) {
+                const next = hash.replace(/^#/, "");
+                try {
+                  history.replaceState(null, "", `${location.pathname}${location.search}#${next}`);
+                } catch {
+                  location.hash = next;
+                }
+              }
+              setPage(p as Page);
+            }}
+          />
+        ) : null}
       </main>
       <AnnouncementModal />
     </div>

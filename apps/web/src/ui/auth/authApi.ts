@@ -8,9 +8,14 @@ export type MeResponse =
         roles: string[];
         permissions: string[];
         mustChangePassword: boolean;
+        lastLoginAt?: string | null;
+        lastSeenAt?: string | null;
+        homePage?: string | null;
+        mutedNotificationKinds?: string[];
+        writeBlocked?: boolean;
       };
     }
-  | { ok: false; error: string };
+  | { ok: false; error: string; message?: string };
 
 export async function authMe(): Promise<MeResponse> {
   const res = await fetch("/api/auth/me", { credentials: "include" });
@@ -28,6 +33,7 @@ function authErrorMessage(error: string, fallback?: string): string {
   if (error === "MUST_CHANGE_PASSWORD") return "Сначала смените временный пароль";
   if (error === "TOO_MANY_REQUESTS") return "Слишком много попыток входа. Подождите минуту и повторите";
   if (error === "CHANGE_PASSWORD_FAILED") return "Не удалось сменить пароль";
+  if (error === "VALIDATION") return fallback?.trim() || "Проверьте заполненные поля";
   return error || "Ошибка авторизации";
 }
 
@@ -63,6 +69,25 @@ export async function authChangePassword(oldPassword: string, newPassword: strin
     return { ok: false, error, message: authErrorMessage(error, data?.message) };
   }
   return { ok: true };
+}
+
+export async function authUpdateProfile(body: {
+  displayName?: string;
+  homePage?: string | null;
+  mutedNotificationKinds?: string[];
+}): Promise<MeResponse> {
+  const res = await fetch("/api/auth/me", {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = (await res.json()) as MeResponse & { message?: string };
+  if (!res.ok || !data.ok) {
+    const error = !data.ok ? data.error : "VALIDATION";
+    return { ok: false, error, message: authErrorMessage(error, !data.ok ? data.message : undefined) };
+  }
+  return data;
 }
 
 export type MyActivityItem = {
@@ -156,5 +181,38 @@ export async function adminActivity(params: {
   actor?: string;
 } = {}): Promise<MyActivityResponse> {
   return fetchActivity("/api/admin/activity", params);
+}
+
+export type MyPresenceItem = {
+  id: string;
+  kind: "LOGIN" | "PAGE" | "ACTION" | "PING";
+  page: string | null;
+  detail: string | null;
+  createdAt: string;
+};
+
+export type MyPresenceResponse = {
+  ok: true;
+  total: number;
+  limit: number;
+  offset: number;
+  byKind: { LOGIN: number; PAGE: number };
+  items: MyPresenceItem[];
+};
+
+export async function authMyPresence(params: {
+  limit?: number;
+  offset?: number;
+  kind?: "LOGIN" | "PAGE";
+} = {}): Promise<MyPresenceResponse> {
+  const u = new URLSearchParams();
+  if (params.limit != null) u.set("limit", String(params.limit));
+  if (params.offset != null) u.set("offset", String(params.offset));
+  if (params.kind) u.set("kind", params.kind);
+  const res = await fetch(`/api/auth/me/presence?${u.toString()}`, { credentials: "include" });
+  if (!res.ok) {
+    return { ok: true, total: 0, limit: params.limit ?? 50, offset: params.offset ?? 0, byKind: { LOGIN: 0, PAGE: 0 }, items: [] };
+  }
+  return (await res.json()) as MyPresenceResponse;
 }
 

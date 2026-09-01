@@ -20,7 +20,6 @@ import { apiGet } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
 import { exportCompareExcel, exportTatExcel, exportUtilizationExcel } from "../../lib/analyticsExcel";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
-import { ToolbarPopover } from "../components/ToolbarPopover";
 import { sandboxIsArchived, useActiveSandbox, type SandboxSummary } from "../components/SandboxSwitcher";
 import { ReportBuilderPanel } from "./ReportBuilderPanel";
 
@@ -369,13 +368,6 @@ export function AnalyticsView() {
     }),
     [filterHangarIds, filterOperatorIds, filterAircraftTypeIds, filterAircraftIds, filterEventTypeIds]
   );
-  const filtersActive =
-    filterHangarIds.length > 0 ||
-    filterOperatorIds.length > 0 ||
-    filterAircraftTypeIds.length > 0 ||
-    filterAircraftIds.length > 0 ||
-    filterEventTypeIds.length > 0;
-
   useEffect(() => {
     safeWriteAnalyticsUi({
       fromDate: from,
@@ -540,36 +532,39 @@ export function AnalyticsView() {
         <div className="massHeroText">
           <div className="massEyebrow">Аналитика после факта</div>
           <h1>Отчёты плана</h1>
-          <p>
-            TAT variance, загрузка и эффективность ангаров, сравнение сценариев. TAT и utilization считаются в текущем
-            контуре{active ? ` («${active.name}»)` : " (рабочий контур)"}.
-          </p>
         </div>
       </section>
 
-      <div className="card hangarFilterPanel">
-        <div className="ganttPanelHeader">
-          <div className="ganttPanelTitle">
-            <strong>Фильтры</strong>
-            <span className="muted ganttPanelPeriod">
-              {periodChipLabel}
-              {filtersActive ? (
-                <>
-                  <span className="ganttPanelDot" aria-hidden="true">
-                    ·
-                  </span>
-                  фильтры
-                </>
-              ) : null}
-            </span>
-          </div>
-        </div>
+      <div className="sandboxesTabs">
+        <button type="button" className={tab === "tat" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("tat")}>
+          TAT variance
+        </button>
+        <button type="button" className={tab === "util" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("util")}>
+          Utilization
+        </button>
+        <button type="button" className={tab === "compare" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("compare")}>
+          Сценарии A vs B
+        </button>
+        <button type="button" className={tab === "builder" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("builder")}>
+          Конструктор отчётов
+        </button>
+      </div>
 
+      {tab !== "builder" ? (
+      <div className="card hangarFilterPanel analyticsFilterBar">
         <div className="ganttToolbar">
-          <div className="ganttToolbarGroup">
-            <span className="tgLabel">Период</span>
-            <ToolbarPopover label={periodChipLabel} title="Период отчёта" panelClassName="tbPopoverPeriod">
-              <div className="tbPopoverPeriodBody">
+          <div className="ganttToolbarRow">
+            <div className="ganttToolbarGroup">
+              <label className="tgField">
+                <span className="tgFieldLabel">с</span>
+                <input type="date" value={fromInput} onChange={(e) => setFromInput(e.target.value)} style={{ width: 150 }} />
+              </label>
+              <label className="tgField">
+                <span className="tgFieldLabel">по</span>
+                <input type="date" value={toInput} onChange={(e) => setToInput(e.target.value)} style={{ width: 150 }} />
+              </label>
+              <div className="tgField">
+                <span className="tgFieldLabel">пресет</span>
                 <div className="tgPresets" role="group" aria-label="Прошедший период">
                   {[
                     ["7 дн", 7],
@@ -586,160 +581,130 @@ export function AnalyticsView() {
                     </button>
                   ))}
                 </div>
-                <div className="tbPopoverPeriodDates">
-                  <label className="tgField">
-                    <span className="tgFieldLabel">с</span>
-                    <input type="date" value={fromInput} onChange={(e) => setFromInput(e.target.value)} style={{ width: 150 }} />
-                  </label>
-                  <label className="tgField">
-                    <span className="tgFieldLabel">по</span>
-                    <input type="date" value={toInput} onChange={(e) => setToInput(e.target.value)} style={{ width: 150 }} />
-                  </label>
-                </div>
-                {!periodOk ? <div className="error">Дата «по» должна быть позже «с»</div> : null}
               </div>
-            </ToolbarPopover>
-          </div>
-
-          <div className="ganttToolbarGroup">
-            <span className="tgLabel">Фильтры</span>
-            {tab !== "builder" ? (
-            <label className="tgField">
-              <span className="tgFieldLabel">Ангар</span>
-              <MultiSelectDropdown
-                options={filterOptions.hangars}
-                value={filterHangarIds}
-                onChange={setFilterHangarIds}
-                placeholder="все"
-                width={150}
-                maxHeight={320}
-                searchable
-                searchPlaceholder="Найти ангар"
-                compact
-              />
-            </label>
-            ) : (
-              <span className="muted small">Отбор задаётся в схеме отчёта</span>
-            )}
-            {tab !== "util" && tab !== "builder" ? (
-              <>
-                <label className="tgField">
-                  <span className="tgFieldLabel">Оператор</span>
-                  <MultiSelectDropdown
-                    options={filterOptions.operators}
-                    value={filterOperatorIds}
-                    onChange={setFilterOperatorIds}
-                    placeholder="все"
-                    width={160}
-                    maxHeight={320}
-                    searchable
-                    searchPlaceholder="Найти оператора"
-                    compact
-                  />
-                </label>
-                <label className="tgField">
-                  <span className="tgFieldLabel">Тип ВС</span>
-                  <MultiSelectDropdown
-                    options={filterOptions.aircraftTypes}
-                    value={filterAircraftTypeIds}
-                    onChange={setFilterAircraftTypeIds}
-                    placeholder="все"
-                    width={150}
-                    maxHeight={320}
-                    searchable
-                    searchPlaceholder="Найти тип ВС"
-                    compact
-                  />
-                </label>
-                <label className="tgField">
-                  <span className="tgFieldLabel">Борт</span>
-                  <MultiSelectDropdown
-                    options={filterOptions.aircraft}
-                    value={filterAircraftIds}
-                    onChange={setFilterAircraftIds}
-                    placeholder="все"
-                    width={140}
-                    maxHeight={320}
-                    searchable
-                    searchPlaceholder="Найти борт"
-                    compact
-                  />
-                </label>
-                <label className="tgField">
-                  <span className="tgFieldLabel">Тип события</span>
-                  <MultiSelectDropdown
-                    options={filterOptions.eventTypes}
-                    value={filterEventTypeIds}
-                    onChange={setFilterEventTypeIds}
-                    placeholder="все"
-                    width={160}
-                    maxHeight={320}
-                    searchable
-                    searchPlaceholder="Найти тип события"
-                    compact
-                  />
-                </label>
-              </>
-            ) : null}
-            {tab === "util" ? (
+              {tab === "compare" ? (
+                <>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">Сценарий A</span>
+                    <select value={compareA} onChange={(e) => setCompareA(e.target.value)} style={{ width: 200 }}>
+                      <option value="prod">Рабочий контур</option>
+                      {activeSandboxes.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">Сценарий B</span>
+                    <select value={compareB} onChange={(e) => setCompareB(e.target.value)} style={{ width: 200 }}>
+                      <option value="">— выберите —</option>
+                      <option value="prod">Рабочий контур</option>
+                      {activeSandboxes.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              ) : null}
               <label className="tgField">
-                <span className="tgFieldLabel">Детализация</span>
-                <select
-                  value={efficiencyGrain}
-                  onChange={(e) => setEfficiencyGrain(e.target.value as EfficiencyGrain)}
-                  style={{ width: 140 }}
-                  title="Уровень детализации интервалов"
-                >
-                  {(Object.keys(DETAIL_LEVEL_LABEL) as EfficiencyGrain[]).map((g) => (
-                    <option key={g} value={g}>
-                      {DETAIL_LEVEL_LABEL[g]}
-                    </option>
-                  ))}
-                </select>
+                <span className="tgFieldLabel">Ангар</span>
+                <MultiSelectDropdown
+                  options={filterOptions.hangars}
+                  value={filterHangarIds}
+                  onChange={setFilterHangarIds}
+                  placeholder="все"
+                  width={150}
+                  maxHeight={320}
+                  searchable
+                  searchPlaceholder="Найти ангар"
+                  compact
+                />
               </label>
-            ) : null}
+              {tab !== "util" ? (
+                <>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">Оператор</span>
+                    <MultiSelectDropdown
+                      options={filterOptions.operators}
+                      value={filterOperatorIds}
+                      onChange={setFilterOperatorIds}
+                      placeholder="все"
+                      width={160}
+                      maxHeight={320}
+                      searchable
+                      searchPlaceholder="Найти оператора"
+                      compact
+                    />
+                  </label>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">Тип ВС</span>
+                    <MultiSelectDropdown
+                      options={filterOptions.aircraftTypes}
+                      value={filterAircraftTypeIds}
+                      onChange={setFilterAircraftTypeIds}
+                      placeholder="все"
+                      width={150}
+                      maxHeight={320}
+                      searchable
+                      searchPlaceholder="Найти тип ВС"
+                      compact
+                    />
+                  </label>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">Борт</span>
+                    <MultiSelectDropdown
+                      options={filterOptions.aircraft}
+                      value={filterAircraftIds}
+                      onChange={setFilterAircraftIds}
+                      placeholder="все"
+                      width={140}
+                      maxHeight={320}
+                      searchable
+                      searchPlaceholder="Найти борт"
+                      compact
+                    />
+                  </label>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">Тип события</span>
+                    <MultiSelectDropdown
+                      options={filterOptions.eventTypes}
+                      value={filterEventTypeIds}
+                      onChange={setFilterEventTypeIds}
+                      placeholder="все"
+                      width={160}
+                      maxHeight={320}
+                      searchable
+                      searchPlaceholder="Найти тип события"
+                      compact
+                    />
+                  </label>
+                </>
+              ) : (
+                <label className="tgField">
+                  <span className="tgFieldLabel">Детализация</span>
+                  <select
+                    value={efficiencyGrain}
+                    onChange={(e) => setEfficiencyGrain(e.target.value as EfficiencyGrain)}
+                    style={{ width: 140 }}
+                    title="Уровень детализации интервалов"
+                  >
+                    {(Object.keys(DETAIL_LEVEL_LABEL) as EfficiencyGrain[]).map((g) => (
+                      <option key={g} value={g}>
+                        {DETAIL_LEVEL_LABEL[g]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
           </div>
-        </div>
-
-        <div className="hangarToolbarActions">
-          <button
-            type="button"
-            className="btn ganttIconBtn"
-            disabled={!filtersActive}
-            title="Сбросить фильтры"
-            aria-label="Сбросить фильтры"
-            onClick={() => {
-              setFilterHangarIds([]);
-              setFilterOperatorIds([]);
-              setFilterAircraftTypeIds([]);
-              setFilterAircraftIds([]);
-              setFilterEventTypeIds([]);
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M4 10a6 6 0 0 1 10.2-4.3" />
-              <path d="M14 2v4h-4" />
-              <path d="M16 10a6 6 0 0 1-10.2 4.3" />
-              <path d="M6 18v-4h4" />
-            </svg>
-          </button>
+          {!periodOk ? <div className="error">Дата «по» должна быть позже «с»</div> : null}
         </div>
       </div>
-
-      <div className="sandboxesTabs">
-        <button type="button" className={tab === "tat" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("tat")}>
-          TAT variance
-        </button>
-        <button type="button" className={tab === "util" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("util")}>
-          Utilization
-        </button>
-        <button type="button" className={tab === "compare" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("compare")}>
-          Сценарии A vs B
-        </button>
-        <button type="button" className={tab === "builder" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("builder")}>
-          Конструктор отчётов
-        </button>
-      </div>
+      ) : null}
 
       {tab === "tat" ? <TatPanel q={tatQ} filters={filters} periodLabel={periodChipLabel} /> : null}
       {tab === "util" ? (
@@ -757,8 +722,6 @@ export function AnalyticsView() {
           list={activeSandboxes}
           compareA={compareA}
           compareB={compareB}
-          setCompareA={setCompareA}
-          setCompareB={setCompareB}
           compareReady={compareReady}
           filters={filters}
           periodLabel={periodChipLabel}
@@ -1582,13 +1545,11 @@ function ComparePanel(props: {
   list: SandboxSummary[];
   compareA: string;
   compareB: string;
-  setCompareA: (v: string) => void;
-  setCompareB: (v: string) => void;
   compareReady: boolean;
   filters: AnalyticsFilters;
   periodLabel: string;
 }) {
-  const { q, list, compareA, compareB, setCompareA, setCompareB, compareReady, filters, periodLabel } = props;
+  const { q, list, compareA, compareB, compareReady, filters, periodLabel } = props;
   const [expandedHangarId, setExpandedHangarId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
@@ -1756,32 +1717,6 @@ function ComparePanel(props: {
           disabled={!compareReady || exporting || !q.data}
           title="Выгрузить сравнение A vs B в Excel (таблицы + график)"
         />
-      </div>
-
-      <div className="analyticsToolbar card">
-        <label className="analyticsField analyticsFieldGrow">
-          <span>Сценарий A</span>
-          <select className="evInput" value={compareA} onChange={(e) => setCompareA(e.target.value)}>
-            <option value="prod">Рабочий контур</option>
-            {list.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="analyticsField analyticsFieldGrow">
-          <span>Сценарий B</span>
-          <select className="evInput" value={compareB} onChange={(e) => setCompareB(e.target.value)}>
-            <option value="">— выберите —</option>
-            <option value="prod">Рабочий контур</option>
-            {list.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
 
       {!compareReady ? (

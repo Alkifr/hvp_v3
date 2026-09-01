@@ -10,7 +10,8 @@ const zConfig = z.object({
   order: z.array(z.string().trim().min(1).max(80)).max(250),
   hidden: z.array(z.string().trim().min(1).max(80)).max(250),
   visible: z.array(z.string().trim().min(1).max(80)).max(250).optional(),
-  widths: z.record(z.string().trim().min(1).max(80), z.number().finite().min(40).max(800))
+  widths: z.record(z.string().trim().min(1).max(80), z.number().finite().min(40).max(800)),
+  pinnedLeft: z.array(z.string().trim().min(1).max(80)).max(80).optional()
 });
 
 function assertAuthed(req: any): { id: string } {

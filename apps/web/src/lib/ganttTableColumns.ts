@@ -23,6 +23,7 @@ export type GanttCellKind =
   | "aircraftType"
   | "eventTypeId"
   | "workshopId"
+  | "lineBase"
   | "startAtLocal"
   | "endAtLocal"
   | "tatPlanDays"
@@ -60,6 +61,8 @@ export type GanttTableColConfig = {
   visible?: string[];
   hidden: string[];
   order: string[];
+  /** Пользовательские закреплённые слева столбцы (кроме служебных «Действия»). */
+  pinnedLeft?: string[];
 };
 
 export const TABLE_KEY = "gantt_events";
@@ -86,6 +89,7 @@ const LEGACY_COL_MAP: Record<string, GanttTableColId> = {
   aircraftType: "primary.h",
   eventTypeId: "primary.l",
   workshopId: "primary.ah",
+  lineBase: "lineBase",
   startAtLocal: "primary.y",
   endAtLocal: "primary.z",
   tatOper: "primary.ab",
@@ -113,6 +117,7 @@ const KIND_BY_ID: Record<string, GanttCellKind> = {
   "primary.h": "aircraftType",
   "primary.l": "eventTypeId",
   "primary.ah": "workshopId",
+  lineBase: "lineBase",
   "primary.y": "startAtLocal",
   "primary.z": "endAtLocal",
   "primary.x": "timeOfStart",
@@ -141,10 +146,14 @@ export const EVENT_NATIVE_COL_IDS = new Set<string>([
   "level",
   "layoutId",
   "allowOverlap",
+  "lineBase",
   ...Object.keys(KIND_BY_ID).filter((id) => id.startsWith("primary."))
 ]);
 
-export const PINNED_LEFT_IDS: GanttTableColId[] = ["actions", "primary.k"];
+/** Служебные столбцы, которые всегда прижаты слева и нельзя открепить. */
+export const ALWAYS_PINNED_LEFT_IDS: GanttTableColId[] = ["actions"];
+/** Заводское закрепление: «Форма ТО». Пользователь может открепить или закрепить другие. */
+export const DEFAULT_USER_PINNED_LEFT_IDS: GanttTableColId[] = ["primary.k"];
 
 export const DEFAULT_VISIBLE_IDS: GanttTableColId[] = [
   "actions",
@@ -157,6 +166,7 @@ export const DEFAULT_VISIBLE_IDS: GanttTableColId[] = [
   "primary.h",
   "primary.l",
   "primary.ah",
+  "lineBase",
   "primary.y",
   "primary.z",
   "primary.ab",
@@ -193,6 +203,15 @@ const EXTRA_COLUMNS: GanttTableColDef[] = [
     defaultWidth: 120,
     minWidth: 80,
     kind: "level"
+  },
+  {
+    id: "lineBase",
+    label: "L/B",
+    group: "План (Гантт)",
+    subgroup: null,
+    defaultWidth: 100,
+    minWidth: 72,
+    kind: "lineBase"
   },
   {
     id: "layoutId",
@@ -261,7 +280,6 @@ function primaryColDef(field: PrimaryCatalogField): GanttTableColDef {
     subgroup: field.subgroup ?? null,
     defaultWidth,
     minWidth,
-    sticky: field.key === "primary.k" ? "left" : undefined,
     hideable: field.key === "primary.k" ? false : undefined,
     kind: kindForId(field.key)
   };
@@ -291,7 +309,6 @@ export function buildGanttTableColumns(catalog: PrimaryCatalogField[] | null | u
       subgroup: null,
       defaultWidth: 180,
       minWidth: 100,
-      sticky: "left",
       hideable: false,
       kind: "title"
     });
@@ -334,20 +351,21 @@ export function defaultHiddenIds(columns: GanttTableColDef[]): GanttTableColId[]
 export function factoryVisibleIds(columns: GanttTableColDef[]): GanttTableColId[] {
   const known = new Set(columns.map((c) => c.id));
   const ids = DEFAULT_VISIBLE_IDS.filter((id) => known.has(id));
-  for (const id of PINNED_LEFT_IDS) {
+  for (const id of ALWAYS_PINNED_LEFT_IDS) {
     if (known.has(id) && !ids.includes(id)) ids.unshift(id);
   }
   return ids;
 }
 
-/** Заводской набор: исходные 24 столбца Ганта, остальные скрыты. */
+/** Заводской набор: исходные 25 столбцов Ганта, остальные скрыты. */
 export function factoryColumnConfig(columns: GanttTableColDef[]): GanttTableColConfig {
   const visible = factoryVisibleIds(columns);
   return {
     widths: defaultWidths(columns),
     visible,
     hidden: defaultHiddenIds(columns),
-    order: visible
+    order: visible,
+    pinnedLeft: DEFAULT_USER_PINNED_LEFT_IDS.filter((id) => columns.some((c) => c.id === id))
   };
 }
 
@@ -371,12 +389,12 @@ export function resolveVisibleIds(
 ): GanttTableColId[] {
   const known = new Set(columns.map((c) => c.id));
   const factory = factoryVisibleIds(columns);
-  const pinned = PINNED_LEFT_IDS.filter((id) => known.has(id));
+  const alwaysPinned = ALWAYS_PINNED_LEFT_IDS.filter((id) => known.has(id));
   if (Array.isArray(config?.visible) && config.visible.length > 0) {
     if (!opts?.allowShowAll && isFullCatalogVisible(config.visible, columns.length)) return factory;
     const seen = new Set<string>();
     const ids: string[] = [];
-    for (const id of [...pinned, ...config.visible]) {
+    for (const id of [...alwaysPinned, ...config.visible]) {
       if (!known.has(id) || seen.has(id)) continue;
       seen.add(id);
       ids.push(id);
@@ -398,24 +416,60 @@ export function defaultWidths(columns: GanttTableColDef[]): Record<string, numbe
   return Object.fromEntries(columns.map((c) => [c.id, c.defaultWidth]));
 }
 
-export function normalizeColOrder(order: unknown, columns: GanttTableColDef[]): GanttTableColId[] {
+export function isAlwaysPinnedLeft(id: string): boolean {
+  return ALWAYS_PINNED_LEFT_IDS.includes(id);
+}
+
+export function resolvePinnedLeftIds(
+  pinnedLeft: unknown,
+  columns: GanttTableColDef[],
+  opts?: { fallbackToDefault?: boolean }
+): GanttTableColId[] {
+  const known = new Set(columns.map((c) => c.id));
+  const always = ALWAYS_PINNED_LEFT_IDS.filter((id) => known.has(id));
+  const seen = new Set<GanttTableColId>(always);
+  const extra: GanttTableColId[] = [];
+  const source = Array.isArray(pinnedLeft)
+    ? pinnedLeft
+    : opts?.fallbackToDefault === false
+      ? []
+      : DEFAULT_USER_PINNED_LEFT_IDS;
+  for (const id of source) {
+    if (typeof id !== "string" || !known.has(id) || seen.has(id) || isAlwaysPinnedLeft(id)) continue;
+    seen.add(id);
+    extra.push(id);
+  }
+  return [...always, ...extra];
+}
+
+export function userPinnedLeftIds(pinnedLeft: string[]): GanttTableColId[] {
+  return pinnedLeft.filter((id) => !isAlwaysPinnedLeft(id));
+}
+
+export function normalizeColOrder(
+  order: unknown,
+  columns: GanttTableColDef[],
+  pinnedLeft?: unknown
+): GanttTableColId[] {
   const defaultOrder = columns.map((c) => c.id);
   const known = new Set(defaultOrder);
-  const seen = new Set<GanttTableColId>();
+  const pinned = resolvePinnedLeftIds(pinnedLeft, columns);
+  const pinnedSet = new Set(pinned);
+  const seen = new Set<GanttTableColId>(pinnedSet);
   const middle: GanttTableColId[] = [];
   if (Array.isArray(order)) {
     for (const id of order) {
       if (typeof id !== "string" || !known.has(id)) continue;
-      if (PINNED_LEFT_IDS.includes(id) || seen.has(id)) continue;
+      if (pinnedSet.has(id) || seen.has(id)) continue;
       seen.add(id);
       middle.push(id);
     }
   }
   for (const id of defaultOrder) {
-    if (PINNED_LEFT_IDS.includes(id) || seen.has(id)) continue;
+    if (pinnedSet.has(id) || seen.has(id)) continue;
     middle.push(id);
   }
-  return [...PINNED_LEFT_IDS.filter((id) => known.has(id)), ...middle];
+  return [...pinned.filter((id) => known.has(id)), ...middle];
 }
 
 function migrateLegacyId(id: string): string | null {
@@ -429,6 +483,7 @@ function migrateConfig(raw: {
   widths?: Record<string, number>;
   hidden?: string[];
   order?: string[];
+  pinnedLeft?: unknown;
 }): GanttTableColConfig {
   const widths: Record<string, number> = {};
   for (const [id, w] of Object.entries(raw.widths ?? {})) {
@@ -443,7 +498,10 @@ function migrateConfig(raw: {
       ))
     : undefined;
   const visible = visibleRaw && visibleRaw.length < 150 ? visibleRaw : undefined;
-  return { widths, hidden, order, visible };
+  const pinnedRaw = Array.isArray(raw.pinnedLeft)
+    ? raw.pinnedLeft.map((id) => (typeof id === "string" ? migrateLegacyId(id) : null)).filter((id): id is string => Boolean(id))
+    : undefined;
+  return { widths, hidden, order, visible, pinnedLeft: pinnedRaw };
 }
 
 export function safeReadTableCols(): GanttTableColConfig | null {

@@ -611,6 +611,7 @@ export function ReferenceView() {
   const [fStation, setFStation] = useState("");
   const [fIsActive, setFIsActive] = useState(true);
   const [fIsPhysical, setFIsPhysical] = useState(true);
+  const [fDefaultLineBase, setFDefaultLineBase] = useState<"" | "LINE" | "BASE">("");
   const [fIcaoType, setFIcaoType] = useState("");
   const [fManufacturer, setFManufacturer] = useState("");
   const [fTailNumber, setFTailNumber] = useState("");
@@ -727,6 +728,7 @@ export function ReferenceView() {
     } else if (k === "workshops") {
       setFCode("SHOP1");
       setFName("Цех");
+      setFDefaultLineBase("");
     } else if (k === "hangars") {
       setFCode("HNEW");
       setFName("Ангар");
@@ -787,6 +789,7 @@ export function ReferenceView() {
     setEditId(row.id);
     setFIsActive(Boolean(row.isActive ?? true));
     setFIsPhysical(row.isPhysical !== false);
+    setFDefaultLineBase(row.defaultLineBase === "LINE" || row.defaultLineBase === "BASE" ? row.defaultLineBase : "");
     setFCode(String(row.code ?? ""));
     setFName(String(row.name ?? ""));
     setFStation(String(row.station ?? ""));
@@ -929,7 +932,13 @@ export function ReferenceView() {
         allowsAutoInProgress: fAllowsAutoInProgress,
         manualOnly: fManualOnly
       };
-    if (kind === "workshops") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
+    if (kind === "workshops")
+      return {
+        code: fCode.trim(),
+        name: fName.trim(),
+        defaultLineBase: fDefaultLineBase === "LINE" || fDefaultLineBase === "BASE" ? fDefaultLineBase : null,
+        isActive: fIsActive
+      };
     if (kind === "hangars") {
       return {
         code: fCode.trim(),
@@ -1958,6 +1967,21 @@ export function ReferenceView() {
               </>
             ) : null}
 
+            {kind === "workshops" ? (
+              <label style={{ display: "grid", gap: 6 }}>
+                <span className="muted">Контур L/B по умолчанию</span>
+                <select
+                  value={fDefaultLineBase}
+                  onChange={(e) => setFDefaultLineBase(e.target.value === "LINE" || e.target.value === "BASE" ? e.target.value : "")}
+                  style={{ width: 220 }}
+                >
+                  <option value="">— не задан —</option>
+                  <option value="LINE">L (Line)</option>
+                  <option value="BASE">B (Base)</option>
+                </select>
+              </label>
+            ) : null}
+
             {kind === "hangars" ? (
               <>
                 <label className="tgField">
@@ -2137,6 +2161,11 @@ export function ReferenceView() {
                               Возраст ВС: <strong>{formatAircraftAge(row.manufactureDate) ?? "—"}</strong>
                             </span>
                           </>
+                        ) : null}
+                        {kind === "workshops" && (row.defaultLineBase === "LINE" || row.defaultLineBase === "BASE") ? (
+                          <span className="refLink">
+                            L/B: <strong>{row.defaultLineBase === "LINE" ? "L (Line)" : "B (Base)"}</strong>
+                          </span>
                         ) : null}
                         {kind === "hangars" && row.station ? (
                           <span className="refLink">

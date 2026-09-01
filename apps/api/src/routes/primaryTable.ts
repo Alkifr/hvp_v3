@@ -14,7 +14,11 @@ import {
   isTemporalPrimaryType,
   toExcelDateValue
 } from "../lib/primaryTable/dateFormat.js";
-import { writePrimaryTableHeaderRows } from "../lib/primaryTable/exportHeaders.js";
+import {
+  applyFrozenRows,
+  clampFreezeRows,
+  writePrimaryTableHeaderRows
+} from "../lib/primaryTable/exportHeaders.js";
 import { isSlotDurationColumn } from "../lib/primaryTable/formulaEngine.js";
 import { queryPrimaryTable } from "../lib/primaryTable/queryService.js";
 import type { PrimaryQueryInput } from "../lib/primaryTable/types.js";
@@ -239,7 +243,11 @@ export const primaryTableRoutes: FastifyPluginAsync = async (app) => {
   app.post("/export", async (req, reply) => {
     assertPermission(req as any, "events:read");
     const parsed = zQueryBody
-      .extend({ format: z.enum(["csv", "xlsx"]).optional().default("xlsx") })
+      .extend({
+        format: z.enum(["csv", "xlsx"]).optional().default("xlsx"),
+        freezeRows: z.coerce.number().int().min(0).max(20).optional().default(2),
+        showColumnIndex: z.boolean().optional().default(true)
+      })
       .parse(req.body);
     const input = toQueryInput({ ...parsed, limit: 500 }, { rawDates: true });
     const columns = parsed.fields
@@ -290,7 +298,8 @@ export const primaryTableRoutes: FastifyPluginAsync = async (app) => {
       // numFmt дат не вешаем на колонку целиком — иначе строка номеров (1,2,3…)
       // в шапке отображается как даты. Формат задаём только на ячейках данных.
     }));
-    writePrimaryTableHeaderRows(worksheet, columns);
+    writePrimaryTableHeaderRows(worksheet, columns, { includeIndexRow: parsed.showColumnIndex !== false });
+    applyFrozenRows(worksheet, clampFreezeRows(parsed.freezeRows, 2));
     do {
       const page = await queryPrimaryTable(app, sandboxIdFor(req), { ...input, cursor });
       for (const row of page.rows) {

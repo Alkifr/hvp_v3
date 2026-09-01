@@ -1,12 +1,21 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPostBlob } from "../../lib/api";
-import { buildPrimaryHeaderPlan } from "../../lib/primaryTableHeaders";
+import {
+  buildPrimaryHeaderPlan,
+  clampFreezeRows,
+  columnIndexLabels,
+  defaultReportFreezeRows,
+  defaultShowColumnIndex,
+  freezeHeaderRowStyle,
+  syncReportFrozenHeader
+} from "../../lib/primaryTableHeaders";
 import { parseExcelColRange, resolveFieldPick, suggestFieldPick } from "../../lib/reportFieldPick";
 import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
+import { SwitchToggle } from "../components/SwitchToggle";
 
 type ReportDataset =
   | "primary_events"
@@ -75,6 +84,8 @@ type ReportConfig = {
   periodTo?: string | null;
   groupBy?: string[];
   aggregates?: ReportAggregate[];
+  freezeRows?: number;
+  showColumnIndex?: boolean;
 };
 
 type DatasetMeta = {
@@ -95,6 +106,7 @@ type SavedReport = {
   owner: { id: string; email: string; displayName: string | null };
   myRole: "OWNER" | "VIEWER" | "EDITOR" | null;
   canEdit: boolean;
+  sharedWithAllRole: "VIEWER" | "EDITOR" | null;
   shares: Array<{ userId: string; role: string; email: string; displayName: string | null }>;
 };
 
@@ -165,7 +177,9 @@ function emptyConfig(dataset: ReportDataset, meta?: DatasetMeta[], periodDefault
     periodFrom: periodDefaults?.from ?? null,
     periodTo: periodDefaults?.to ?? null,
     groupBy: [],
-    aggregates: []
+    aggregates: [],
+    freezeRows: defaultReportFreezeRows(dataset),
+    showColumnIndex: defaultShowColumnIndex(dataset)
   };
 }
 
@@ -246,8 +260,27 @@ function normalizeConfig(
     periodFrom: raw.periodFrom ?? periodDefaults?.from ?? null,
     periodTo: raw.periodTo ?? periodDefaults?.to ?? null,
     groupBy: raw.groupBy ?? [],
-    aggregates: raw.aggregates ?? []
+    aggregates: raw.aggregates ?? [],
+    freezeRows: clampFreezeRows(raw.freezeRows, defaultReportFreezeRows(raw.dataset)),
+    showColumnIndex: raw.showColumnIndex ?? defaultShowColumnIndex(raw.dataset)
   };
+}
+
+function applySheetJsFreeze(ws: XLSX.WorkSheet, freezeRows: number) {
+  const n = clampFreezeRows(freezeRows, 0);
+  if (n <= 0) return;
+  const topLeft = XLSX.utils.encode_cell({ r: n, c: 0 });
+  const view = { state: "frozen", xSplit: 0, ySplit: n, topLeftCell: topLeft, activeCell: topLeft };
+  Object.assign(ws, { "!views": [view], "!freeze": { xSplit: 0, ySplit: n, topLeftCell: topLeft } });
+}
+
+function FrozenHeaderTr(props: { rowIndex: number; freezeRows: number; children: ReactNode }) {
+  const frozen = freezeHeaderRowStyle(props.rowIndex, props.freezeRows);
+  return (
+    <tr className={frozen.className || undefined} style={frozen.style as CSSProperties | undefined}>
+      {props.children}
+    </tr>
+  );
 }
 
 type Props = {
@@ -284,6 +317,7 @@ export function ReportBuilderPanel(props: Props) {
   );
   const [shareEmail, setShareEmail] = useState("");
   const [shareRole, setShareRole] = useState<"VIEWER" | "EDITOR">("VIEWER");
+  const [shareAllRole, setShareAllRole] = useState<"VIEWER" | "EDITOR">("VIEWER");
   const [constructorTab, setConstructorTab] = useState<
     "source" | "fields" | "filters" | "summary" | "sort" | "access"
   >("source");
@@ -293,6 +327,7 @@ export function ReportBuilderPanel(props: Props) {
   const [fieldPickIndex, setFieldPickIndex] = useState(0);
   const [fieldPickError, setFieldPickError] = useState<string | null>(null);
   const fieldPickRef = useRef<HTMLDivElement | null>(null);
+  const resultTableRef = useRef<HTMLTableElement | null>(null);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -305,6 +340,10 @@ export function ReportBuilderPanel(props: Props) {
   const canEdit = !selectedId || Boolean(selected?.canEdit);
   const conditions = config.filters.conditions ?? [];
   const filterableFields = (currentMeta?.fields ?? []).filter((f) => config.fields.includes(f.key));
+
+  useEffect(() => {
+    setShareAllRole(selected?.sharedWithAllRole ?? "VIEWER");
+  }, [selectedId, selected?.sharedWithAllRole]);
 
   const fieldSearchNorm = fieldSearch.trim().toLocaleLowerCase("ru");
   const visibleFields = useMemo(() => {
@@ -414,6 +453,16 @@ export function ReportBuilderPanel(props: Props) {
     setPage(1);
   };
 
+  const selectReport = (id: string) => {
+    if (!id) {
+      startNew();
+      return;
+    }
+    if (id === selectedId) return;
+    const next = (listQ.data?.reports ?? []).find((item) => item.id === id);
+    if (next) loadReport(next);
+  };
+
   const patchConfig = (patch: Partial<ReportConfig>) => {
     setConfig((prev) => ({ ...prev, ...patch }));
     setDirty(true);
@@ -470,6 +519,8 @@ export function ReportBuilderPanel(props: Props) {
       filters: { conditions: [] },
       groupBy: [],
       aggregates: [],
+      freezeRows: defaultReportFreezeRows(d.id),
+      showColumnIndex: defaultShowColumnIndex(d.id),
       periodFrom: config.periodFrom ?? periodDefaults.from,
       periodTo: config.periodTo ?? periodDefaults.to
     });
@@ -533,6 +584,16 @@ export function ReportBuilderPanel(props: Props) {
     }
   });
 
+  const shareAllMut = useMutation({
+    mutationFn: async (nextRole: "VIEWER" | "EDITOR" | null) => {
+      if (!selectedId) throw new Error("Сначала сохраните отчёт");
+      return apiPatch(`/api/reports/${selectedId}`, { sharedWithAllRole: nextRole });
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["reports", "list"] });
+    }
+  });
+
   const runMut = useMutation({
     mutationFn: async () => {
       setRunError(null);
@@ -585,6 +646,20 @@ export function ReportBuilderPanel(props: Props) {
       ]
     : (currentMeta?.fields ?? []).filter((f) => config.fields.includes(f.key));
   const hasEventCount = aggregates.some((spec) => spec.field === EVENT_COUNT_FIELD);
+  const freezeRows = clampFreezeRows(config.freezeRows, defaultReportFreezeRows(config.dataset));
+  const showColumnIndex = config.showColumnIndex ?? defaultShowColumnIndex(config.dataset);
+
+  useLayoutEffect(() => {
+    const table = resultTableRef.current;
+    if (!table) return;
+    const sync = () => syncReportFrozenHeader(table, freezeRows);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(table);
+    if (table.tHead) ro.observe(table.tHead);
+    for (const row of Array.from(table.tHead?.rows ?? [])) ro.observe(row);
+    return () => ro.disconnect();
+  }, [freezeRows, runResult, showColumnIndex, primaryPreviewHeader]);
 
   const totalRows = runResult?.rows.length ?? 0;
   const pageLimit = pageSize === "all" ? Math.max(totalRows, 1) : pageSize;
@@ -611,7 +686,9 @@ export function ReportBuilderPanel(props: Props) {
         filters: config.filters,
         sort: config.sort,
         format: "xlsx",
-        limit: 500
+        limit: 500,
+        freezeRows,
+        showColumnIndex
       });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -621,13 +698,12 @@ export function ReportBuilderPanel(props: Props) {
       URL.revokeObjectURL(url);
       return;
     }
-    const flat = runResult.rows.map((row) => {
-      const out: Record<string, any> = {};
-      for (const col of runResult.columns) {
-        out[col.label] = exportReportCell(row[col.key], col.type as ReportFieldDef["type"], col);
-      }
-      return out;
-    });
+    const headers = runResult.columns.map((col) => col.label);
+    const indexRow = showColumnIndex ? columnIndexLabels(runResult.columns.length) : null;
+    const dataRows = runResult.rows.map((row) =>
+      runResult.columns.map((col) => exportReportCell(row[col.key], col.type as ReportFieldDef["type"], col))
+    );
+    const aoa = [headers, ...(indexRow ? [indexRow] : []), ...dataRows];
     const wb = XLSX.utils.book_new();
     const periodText =
       config.periodFrom && config.periodTo
@@ -641,55 +717,62 @@ export function ReportBuilderPanel(props: Props) {
       { Параметр: "Выгружено", Значение: dayjs().format("DD.MM.YYYY HH:mm") }
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(meta), "Сводка");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat), "Данные");
+    const dataSheet = XLSX.utils.aoa_to_sheet(aoa);
+    applySheetJsFreeze(dataSheet, freezeRows);
+    XLSX.utils.book_append_sheet(wb, dataSheet, "Данные");
     XLSX.writeFile(wb, `report-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`, { cellDates: true });
   };
 
-  const mine = (listQ.data?.reports ?? []).filter((r) => r.myRole === "OWNER");
-  const shared = (listQ.data?.reports ?? []).filter((r) => r.myRole !== "OWNER");
+  const reportOptions = useMemo(
+    () =>
+      (listQ.data?.reports ?? []).map((r) => {
+        const owner = r.owner.displayName || r.owner.email;
+        const bits = [owner, r.sharedWithAllRole ? "для всех" : null].filter(Boolean);
+        return { id: r.id, label: r.name, description: bits.join(" · ") };
+      }),
+    [listQ.data?.reports]
+  );
   const saveEnabled = canEdit && dirty && Boolean(name.trim()) && !saveMut.isPending && (config.fields.length > 0 || summaryOn);
 
   return (
-    <div className="reportBuilder">
-      <aside className="reportBuilderSidebar card">
-        <div className="reportBuilderSidebarHead">
-          <strong>Отчёты</strong>
-          <button type="button" className="btn btnGhost" onClick={startNew}>
-            + Новый
-          </button>
+    <>
+      <div className="card hangarFilterPanel analyticsFilterBar">
+        <div className="ganttToolbar">
+          <div className="ganttToolbarRow">
+            <div className="ganttToolbarGroup">
+              <button
+                type="button"
+                className="btn btnPrimary ganttIconBtn"
+                onClick={startNew}
+                title="Новый отчёт"
+                aria-label="Новый отчёт"
+              >
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M10 4v12" />
+                  <path d="M4 10h12" />
+                </svg>
+              </button>
+              <label className="tgField reportPickField">
+                <span className="tgFieldLabel">Отчёт</span>
+                <SingleSelectDropdown
+                  searchable
+                  compact
+                  allowEmpty
+                  showReset={false}
+                  searchPlaceholder="Введите название отчёта"
+                  placeholder="Новый отчёт"
+                  emptyLabel="Новый отчёт"
+                  options={reportOptions}
+                  value={selectedId ?? ""}
+                  onChange={selectReport}
+                  width="100%"
+                  maxHeight={360}
+                />
+              </label>
+            </div>
+          </div>
         </div>
-        {listQ.isLoading ? <div className="muted">Загрузка…</div> : null}
-        <div className="reportBuilderListGroup">
-          <div className="muted small">Мои</div>
-          {mine.length === 0 ? <div className="muted small">Пока нет сохранённых</div> : null}
-          {mine.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              className={selectedId === r.id ? "reportBuilderListItem active" : "reportBuilderListItem"}
-              onClick={() => loadReport(r)}
-            >
-              <span>{r.name}</span>
-              <span className="muted small">{dayjs(r.updatedAt).format("DD.MM.YY")}</span>
-            </button>
-          ))}
-        </div>
-        <div className="reportBuilderListGroup">
-          <div className="muted small">Доступные мне</div>
-          {shared.length === 0 ? <div className="muted small">Нет расшаренных</div> : null}
-          {shared.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              className={selectedId === r.id ? "reportBuilderListItem active" : "reportBuilderListItem"}
-              onClick={() => loadReport(r)}
-            >
-              <span>{r.name}</span>
-              <span className="muted small">{r.owner.displayName || r.owner.email}</span>
-            </button>
-          ))}
-        </div>
-      </aside>
+      </div>
 
       <div className="reportBuilderMain">
         <section className="card analyticsCard reportBuilderForm">
@@ -1501,10 +1584,42 @@ export function ReportBuilderPanel(props: Props) {
                 <div className="muted">Сохраните отчёт, чтобы делиться им с коллегами.</div>
               ) : selected?.myRole !== "OWNER" ? (
                 <div className="muted">
-                  Владелец: {selected?.owner.displayName || selected?.owner.email}. Ваша роль: {selected?.myRole}.
+                  Владелец: {selected?.owner.displayName || selected?.owner.email}. Ваша роль:{" "}
+                  {selected?.myRole === "EDITOR" ? "редактор" : "просмотр"}.
+                  {selected?.sharedWithAllRole
+                    ? ` Отчёт открыт всем (${selected.sharedWithAllRole === "EDITOR" ? "редактирование" : "просмотр"}).`
+                    : null}
                 </div>
               ) : (
                 <>
+                  <div className="reportShareAll">
+                    <SwitchToggle
+                      checked={selected?.sharedWithAllRole != null}
+                      onChange={(enabled) => shareAllMut.mutate(enabled ? shareAllRole : null)}
+                      label="Поделиться со всеми"
+                      hint="Доступ получат все текущие и новые пользователи"
+                      disabled={shareAllMut.isPending}
+                    />
+                    <label className="tgField reportShareAllRole">
+                      <span className="tgFieldLabel">Роль для всех</span>
+                      <select
+                        value={shareAllRole}
+                        disabled={selected?.sharedWithAllRole == null || shareAllMut.isPending}
+                        onChange={(e) => {
+                          const nextRole = e.target.value as "VIEWER" | "EDITOR";
+                          setShareAllRole(nextRole);
+                          shareAllMut.mutate(nextRole);
+                        }}
+                      >
+                        <option value="VIEWER">Просмотр</option>
+                        <option value="EDITOR">Редактирование</option>
+                      </select>
+                    </label>
+                  </div>
+                  {shareAllMut.isError ? (
+                    <div className="error">{String((shareAllMut.error as any)?.message ?? shareAllMut.error)}</div>
+                  ) : null}
+                  <p className="muted small">Или выдайте доступ отдельным коллегам по email.</p>
                   <div className="reportShareForm">
                     <input
                       className="evInput"
@@ -1558,35 +1673,60 @@ export function ReportBuilderPanel(props: Props) {
                   : "Нажмите «Сформировать», чтобы получить таблицу по схеме отчёта"}
               </p>
             </div>
-            {runResult ? (
+            <div className="reportResultToolbar">
+              <SwitchToggle
+                compact
+                checked={showColumnIndex}
+                onChange={(next) => patchConfig({ showColumnIndex: next })}
+                label="Нумерация столбцов"
+              />
               <label className="reportPagerSize">
-                <span className="muted small">Строк на странице</span>
+                <span className="muted small">Закрепить строк</span>
                 <select
-                  value={String(pageSize)}
-                  onChange={(e) => {
-                    const next = e.target.value === "all" ? "all" : (Number(e.target.value) as PageSizeOption);
-                    setPageSize(next);
-                    setPage(1);
-                  }}
+                  value={String(freezeRows)}
+                  onChange={(e) => patchConfig({ freezeRows: clampFreezeRows(Number(e.target.value), freezeRows) })}
+                  title="Сколько верхних строк шапки закреплять при прокрутке и в Excel"
                 >
-                  {PAGE_SIZE_OPTIONS.map((option) => (
-                    <option key={String(option)} value={String(option)}>
-                      {option === "all" ? "Все" : option}
+                  {Array.from({ length: 11 }, (_, i) => (
+                    <option key={i} value={i}>
+                      {i === 0 ? "Нет" : String(i)}
                     </option>
                   ))}
                 </select>
               </label>
-            ) : null}
+              {runResult ? (
+                <label className="reportPagerSize">
+                  <span className="muted small">Строк на странице</span>
+                  <select
+                    value={String(pageSize)}
+                    onChange={(e) => {
+                      const next = e.target.value === "all" ? "all" : (Number(e.target.value) as PageSizeOption);
+                      setPageSize(next);
+                      setPage(1);
+                    }}
+                  >
+                    {PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={String(option)} value={String(option)}>
+                        {option === "all" ? "Все" : option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>
           </div>
           {runMut.isPending ? <div className="muted">Формирование…</div> : null}
           {runError ? <div className="error">{runError}</div> : null}
           {runResult ? (
             <div className="analyticsTableWrap">
-              <table className={`analyticsTable${primaryPreviewHeader ? " analyticsTableMultiHeader" : ""}`}>
+              <table
+                ref={resultTableRef}
+                className={`analyticsTable analyticsTableFreeze${primaryPreviewHeader ? " analyticsTableMultiHeader" : ""}`}
+              >
                 <thead>
                   {primaryPreviewHeader ? (
                     <>
-                      <tr>
+                      <FrozenHeaderTr rowIndex={0} freezeRows={freezeRows}>
                         {primaryPreviewHeader.groupRow.map((cell) => (
                           <th
                             key={cell.key}
@@ -1597,21 +1737,21 @@ export function ReportBuilderPanel(props: Props) {
                             {cell.label || "\u00A0"}
                           </th>
                         ))}
-                      </tr>
-                      <tr>
+                      </FrozenHeaderTr>
+                      <FrozenHeaderTr rowIndex={1} freezeRows={freezeRows}>
                         {primaryPreviewHeader.midRow.map((cell) => (
                           <th
                             key={cell.key}
                             className={cell.rowSpan > 1 ? "analyticsThLeaf" : "analyticsThSubgroup"}
                             colSpan={cell.colSpan}
-                            rowSpan={cell.rowSpan}
+                            rowSpan={primaryPreviewHeader.labelRow.length > 0 ? cell.rowSpan : 1}
                           >
                             {cell.label}
                           </th>
                         ))}
-                      </tr>
+                      </FrozenHeaderTr>
                       {primaryPreviewHeader.labelRow.length > 0 ? (
-                        <tr>
+                        <FrozenHeaderTr rowIndex={2} freezeRows={freezeRows}>
                           {primaryPreviewHeader.labelRow.map((cell) => (
                             <th
                               key={cell.key}
@@ -1622,27 +1762,43 @@ export function ReportBuilderPanel(props: Props) {
                               {cell.label}
                             </th>
                           ))}
-                        </tr>
+                        </FrozenHeaderTr>
                       ) : null}
-                      <tr>
-                        {primaryPreviewHeader.indexRow.map((cell) => (
-                          <th
-                            key={cell.key}
-                            className="analyticsThIndex"
-                            colSpan={cell.colSpan}
-                            rowSpan={cell.rowSpan}
-                          >
-                            {cell.label}
-                          </th>
-                        ))}
-                      </tr>
+                      {showColumnIndex ? (
+                        <FrozenHeaderTr
+                          rowIndex={primaryPreviewHeader.labelRow.length > 0 ? 3 : 2}
+                          freezeRows={freezeRows}
+                        >
+                          {primaryPreviewHeader.indexRow.map((cell) => (
+                            <th
+                              key={cell.key}
+                              className="analyticsThIndex"
+                              colSpan={cell.colSpan}
+                              rowSpan={cell.rowSpan}
+                            >
+                              {cell.label}
+                            </th>
+                          ))}
+                        </FrozenHeaderTr>
+                      ) : null}
                     </>
                   ) : (
-                    <tr>
-                      {runResult.columns.map((c) => (
-                        <th key={c.key}>{c.label}</th>
-                      ))}
-                    </tr>
+                    <>
+                      <FrozenHeaderTr rowIndex={0} freezeRows={freezeRows}>
+                        {runResult.columns.map((c) => (
+                          <th key={c.key}>{c.label}</th>
+                        ))}
+                      </FrozenHeaderTr>
+                      {showColumnIndex ? (
+                        <FrozenHeaderTr rowIndex={1} freezeRows={freezeRows}>
+                          {runResult.columns.map((c, i) => (
+                            <th key={`index:${c.key}`} className="analyticsThIndex">
+                              {i + 1}
+                            </th>
+                          ))}
+                        </FrozenHeaderTr>
+                      ) : null}
+                    </>
                   )}
                 </thead>
                 <tbody>
@@ -1691,6 +1847,6 @@ export function ReportBuilderPanel(props: Props) {
           ) : null}
         </section>
       </div>
-    </div>
+    </>
   );
 }

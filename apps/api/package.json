@@ -8,18 +8,16 @@
     "build": "prisma generate --schema prisma/schema.prisma && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint .",
-    "test": "node --import tsx --test src/lib/primaryTable/*.test.ts src/lib/placementGaps.test.ts src/lib/reportAggregates.test.ts src/lib/reportPresets.test.ts src/lib/userErrors.test.ts src/lib/userPresence.test.ts src/lib/mailDigestPeriod.test.ts src/lib/mailDigestColumns.test.ts src/lib/bootEnv.test.ts src/lib/primaryMetricDepartments.test.ts src/lib/digestClaim.test.ts src/lib/webDist.test.ts src/lib/announcements.test.ts",
+    "test": "node --import tsx --test src/lib/primaryTable/*.test.ts src/lib/placementGaps.test.ts src/lib/placementOverlap.test.ts src/lib/lineBase.test.ts src/lib/reportAggregates.test.ts src/lib/reportPresets.test.ts src/lib/userErrors.test.ts src/lib/userPresence.test.ts src/lib/mailDigestPeriod.test.ts src/lib/mailDigestColumns.test.ts src/lib/bootEnv.test.ts src/lib/primaryMetricDepartments.test.ts src/lib/digestClaim.test.ts src/lib/webDist.test.ts src/lib/announcements.test.ts src/lib/permissionCatalog.test.ts src/lib/userPrefs.test.ts src/lib/writeBlocked.test.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:seed:demo": "SEED_DEMO=1 tsx prisma/seed.ts",
     "import:hangar-layouts": "tsx scripts/importHangarAircraftTypeLayouts.ts",
     "reselect:event-layouts": "tsx scripts/reselectEventLayoutsForAircraftTypeSchemes.ts",
-    "demo:export": "tsx scripts/demoDataExport.ts",
     "export:ref-data": "tsx scripts/exportRefData.ts",
-    "import:ref-data": "tsx scripts/importRefData.ts",
-    "db:counts": "tsx scripts/dbCounts.ts",
-    "db:clone:cloud": "tsx scripts/cloneToCloud.ts"
+    "import:ref-data": "tsx scripts/importRefData.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

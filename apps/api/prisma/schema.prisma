@@ -28,6 +28,12 @@ enum EventPlanningKind {
   UNPLANNED
 }
 
+/// Контур ТО: L (Line) / B (Base)
+enum EventLineBase {
+  LINE
+  BASE
+}
+
 enum EventPlacementOrigin {
   MANUAL
   AUTO_GAP
@@ -430,6 +436,12 @@ model User {
   updatedAt          DateTime  @updatedAt
   lastLoginAt        DateTime?
   lastSeenAt         DateTime?
+  /// Инкремент инвалидирует все JWT этого пользователя.
+  tokenVersion       Int      @default(0)
+  /// Стартовый раздел SPA: gantt, hangar, analytics, …; пусто — первый доступный.
+  homePage           String?
+  /// kind[] колокольчика, которые пользователь скрыл: EVENT_OVERDUE_NO_FACT, …
+  mutedNotificationKinds Json @default("[]")
 
   roles UserRole[]
 
@@ -644,12 +656,14 @@ model EventStatusCatalog {
 }
 
 model Workshop {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  name      String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String         @id @default(uuid())
+  code            String         @unique
+  name            String
+  /// Дефолтный контур L/B для событий этого цеха
+  defaultLineBase EventLineBase?
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   events MaintenanceEvent[]
 
@@ -862,7 +876,13 @@ model MaintenanceEvent {
   // Цех (справочник) — одинарный выбор
   workshopId String?
 
+  /// Контур ТО L (Line) / B (Base). Авто из цеха, можно переопределить вручную.
+  lineBase EventLineBase?
+
   notes String?
+
+  /// Событие уже размещалось с нахлёстом: при следующих сохранениях конфликт слота не блокирует запись.
+  allowOverlap Boolean @default(false)
 
   // Lineage: связь копии с источником (для merge/dedup между песочницами)
   // originEventId — корень в рабочем контуре (null = событие создано с нуля или само является корнем в prod)
@@ -911,6 +931,7 @@ model MaintenanceEvent {
   @@index([hangarId])
   @@index([layoutId])
   @@index([workshopId])
+  @@index([lineBase])
   @@index([sandboxId])
   @@index([sandboxId, startAt, id])
   @@index([originEventId, sandboxId])
@@ -1422,7 +1443,9 @@ model SavedReport {
   name        String
   description String?
   ownerId     String
-  /// { dataset, fields[], filters, sort[], grain?, compareA?, compareB?, periodMode? }
+  /// NULL = только владелец и явно добавленные участники.
+  sharedWithAllRole ReportShareRole?
+  /// { dataset, fields[], filters, sort[], grain?, compareA?, compareB?, periodMode?, freezeRows?, showColumnIndex? }
   config      Json
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -1463,4 +1486,12 @@ model SavedTableView {
 
   @@unique([userId, tableKey, name])
   @@index([userId, tableKey])
+}
+
+/// Синглтон техрежима контура (id = default).
+model AppRuntimeConfig {
+  id           String   @id
+  writeBlocked Boolean  @default(false)
+  updatedAt    DateTime @updatedAt
+  updatedById  String?
 }

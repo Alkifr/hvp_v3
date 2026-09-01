@@ -1,9 +1,11 @@
 import type { FastifyRequest } from "fastify";
 
+import { hasPermission } from "./permissionCatalog.js";
+
 export function requirePermission(req: FastifyRequest, permission: string) {
   const u = (req as any).auth as { permissions?: string[] } | undefined;
   if (!u) return false;
-  return (u.permissions ?? []).includes(permission);
+  return hasPermission(u.permissions ?? [], permission);
 }
 
 export function assertPermission(req: FastifyRequest, permission: string) {

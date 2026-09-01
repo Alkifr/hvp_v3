@@ -153,6 +153,50 @@ export async function prunePresenceEvents(prisma: PrismaClient, now = new Date()
   return res.count;
 }
 
+export async function queryMyPresence(
+  prisma: PrismaClient,
+  params: { userId: string; limit: number; offset: number; kind?: "LOGIN" | "PAGE" }
+) {
+  const kindFilter = params.kind ? { kind: params.kind } : { kind: { in: ["LOGIN", "PAGE"] } };
+  const where = { userId: params.userId, ...kindFilter };
+
+  const [total, items, grouped] = await Promise.all([
+    prisma.userPresenceEvent.count({ where }),
+    prisma.userPresenceEvent.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: params.limit,
+      skip: params.offset,
+      select: { id: true, kind: true, page: true, detail: true, createdAt: true }
+    }),
+    prisma.userPresenceEvent.groupBy({
+      by: ["kind"],
+      where: { userId: params.userId, kind: { in: ["LOGIN", "PAGE"] } },
+      _count: { _all: true }
+    })
+  ]);
+
+  const byKind = { LOGIN: 0, PAGE: 0 };
+  for (const row of grouped) {
+    if (row.kind === "LOGIN" || row.kind === "PAGE") byKind[row.kind] = row._count._all;
+  }
+
+  return {
+    ok: true as const,
+    total,
+    limit: params.limit,
+    offset: params.offset,
+    byKind,
+    items: items.map((row) => ({
+      id: row.id,
+      kind: row.kind as "LOGIN" | "PAGE" | "ACTION" | "PING",
+      page: row.page,
+      detail: row.detail,
+      createdAt: row.createdAt.toISOString()
+    }))
+  };
+}
+
 export type PresenceHeatmap = {
   lastLoginAt: string | null;
   lastSeenAt: string | null;

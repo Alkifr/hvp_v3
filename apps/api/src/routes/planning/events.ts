@@ -4,6 +4,8 @@ import { EventAuditAction, EventPlacementOrigin, EventStatus, PlanningLevel, Pri
 
 import { parseImportDateTime } from "../../lib/localDate.js";
 import { normalizePlacementGaps } from "../../lib/placementGaps.js";
+import { loadWorkshopLineBase, resolveEventLineBase } from "../../lib/lineBase.js";
+import { eventHasExistingSlotOverlap, resolveAllowOverlap } from "../../lib/placementOverlap.js";
 import {
   DONE_SCHEDULE_LOCK_MESSAGE,
   isDoneScheduleLocked,
@@ -127,7 +129,10 @@ function diffEvent(before: any, after: any) {
     "hangarId",
     "layoutId",
     "notes",
-    "virtualAircraft"
+    "virtualAircraft",
+    "allowOverlap",
+    "workshopId",
+    "lineBase"
   ] as const;
 
   const changes: Record<string, { from: any; to: any }> = {};
@@ -621,7 +626,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         placements: z.array(zPlacementInput).min(1).max(50),
         changeReason: z.string().trim().min(1).max(1000).optional(),
-        allowOverlap: z.boolean().optional().default(false),
+        allowOverlap: z.boolean().optional(),
         autoFillGapPlacements: z.boolean().optional().default(true)
       })
       .parse(req.body);
@@ -638,6 +643,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const sbId = sandboxIdFor(req);
+    const overlap = resolveAllowOverlap({
+      requested: body.allowOverlap,
+      stored: Boolean((event as { allowOverlap?: boolean }).allowOverlap),
+      existingOverlap: await eventHasExistingSlotOverlap(app.prisma, { sandboxId: sbId, eventId })
+    });
     const before = event.placements.map((p) => ({
       startAt: p.startAt.toISOString(),
       endAt: p.endAt.toISOString(),
@@ -652,13 +662,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }));
 
     await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.maintenanceEvent.update({
+        where: { id: eventId },
+        data: { allowOverlap: overlap.storedValue }
+      });
       const normalizedPlacements = await replaceEventPlacements(tx, {
         eventId,
         sandboxId: sbId,
         eventStart: event.startAt,
         eventEnd: event.endAt,
         placements: body.placements,
-        allowOverlap: body.allowOverlap,
+        allowOverlap: overlap.skipChecks,
         autoFillGapPlacements: body.autoFillGapPlacements
       });
       await tx.maintenanceEventAudit.create({
@@ -1431,6 +1445,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         hangarId: zUuid.optional(),
         layoutId: zUuid.optional(),
         workshopId: zUuid.nullable().optional(),
+        lineBase: z.enum(["LINE", "BASE"]).nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional().default(false),
@@ -1449,7 +1464,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: UserMsg.AIRCRAFT_REQUIRED })
       .parse(req.body);
 
-    const { changeReason, placements, allowOverlap, autoFillGapPlacements, ...data } = body;
+    const { changeReason, placements, allowOverlap, autoFillGapPlacements, lineBase, ...data } = body;
+    const resolvedLineBase = resolveEventLineBase({
+      requestedProvided: lineBase !== undefined,
+      requested: lineBase ?? null,
+      workshopDefault: await loadWorkshopLineBase(app.prisma, data.workshopId)
+    });
     const sbId = sandboxIdFor(req);
     const planning = normalizeCreatePlanningPeriod({
       planningKind: data.planningKind,
@@ -1480,7 +1500,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           budgetEndAt: planning.budgetEndAt,
           sandboxId: sbId,
           aircraftId: data.aircraftId ?? (data.virtualAircraft ? null : undefined),
-          virtualAircraft: data.virtualAircraft ? (data.virtualAircraft as object) : undefined
+          virtualAircraft: data.virtualAircraft ? (data.virtualAircraft as object) : undefined,
+          allowOverlap,
+          lineBase: resolvedLineBase
         } as any
       });
 
@@ -1533,6 +1555,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               hangarId: event.hangarId ?? null,
               layoutId: event.layoutId ?? null,
               workshopId: (event as any).workshopId ?? null,
+              lineBase: (event as any).lineBase ?? null,
               placements: normalizedPlacements.map((p) => ({
                 startAt: p.startAt.toISOString(),
                 endAt: p.endAt.toISOString(),
@@ -1746,9 +1769,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         hangarId: zUuid.nullable().optional(),
         layoutId: zUuid.nullable().optional(),
         workshopId: zUuid.nullable().optional(),
+        lineBase: z.enum(["LINE", "BASE"]).nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
-        allowOverlap: z.boolean().optional().default(false),
+        allowOverlap: z.boolean().optional(),
         autoFillGapPlacements: z.boolean().optional().default(true),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
@@ -1765,7 +1789,24 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!existing) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
 
-    let { changeReason, placements, allowOverlap, autoFillGapPlacements, ...patch } = body;
+    let { changeReason, placements, allowOverlap, autoFillGapPlacements, lineBase, ...patch } = body;
+    const nextWorkshopId = body.workshopId !== undefined ? body.workshopId : existing.workshopId;
+    const workshopChanged = body.workshopId !== undefined && body.workshopId !== existing.workshopId;
+    const resolvedLineBase = resolveEventLineBase({
+      requestedProvided: lineBase !== undefined,
+      requested: lineBase ?? null,
+      workshopDefault: await loadWorkshopLineBase(app.prisma, nextWorkshopId),
+      stored: (existing as { lineBase?: "LINE" | "BASE" | null }).lineBase ?? null,
+      workshopChanged
+    });
+    const overlap = resolveAllowOverlap({
+      requested: allowOverlap,
+      stored: Boolean((existing as { allowOverlap?: boolean }).allowOverlap),
+      existingOverlap: await eventHasExistingSlotOverlap(app.prisma, {
+        sandboxId: sandboxIdFor(req),
+        eventId: id
+      })
+    });
     const scheduleLocked = isDoneScheduleLocked(existing.status, body.status);
     if (
       patchTouchesDoneScheduleLock(
@@ -1902,6 +1943,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     patchData = {
       ...patchData,
+      allowOverlap: overlap.storedValue,
+      lineBase: resolvedLineBase,
       status: statusReconciled.status,
       actualStartAt: statusReconciled.actualStartAt,
       actualEndAt: statusReconciled.actualEndAt
@@ -1930,7 +1973,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           eventStart: nextStart,
           eventEnd: nextEnd,
           placements: placements ?? [],
-          allowOverlap,
+          allowOverlap: overlap.skipChecks,
           autoFillGapPlacements
         });
       } else if (singlePlacementSyncNeeded) {
@@ -1954,7 +1997,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               sortOrder: 0
             }
           ],
-          allowOverlap,
+          allowOverlap: overlap.skipChecks,
           autoFillGapPlacements
         });
       }

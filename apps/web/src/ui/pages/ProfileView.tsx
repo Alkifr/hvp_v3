@@ -1,15 +1,31 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
   authChangePassword,
   authLogout,
+  authUpdateProfile,
   MeResponse
 } from "../auth/authApi";
+import { grantedGroupCount, hasPermission } from "../../lib/permissionCatalog";
+import {
+  allowedHomePageOptions,
+  NOTIFICATION_KIND_OPTIONS,
+  parseMutedNotificationKinds
+} from "../../lib/userPrefs";
 import { ActivityFeed } from "../components/ActivityFeed";
+import { PermissionMatrix } from "../components/PermissionMatrix";
+import { PresenceFeed } from "../components/PresenceFeed";
+import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
+import { SwitchToggle } from "../components/SwitchToggle";
+import { formatPresenceWhen } from "../components/UserPresencePanel";
+import { sandboxIsArchived, useActiveSandbox } from "../components/SandboxSwitcher";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 type AuthedUser = Extract<MeResponse, { ok: true }>["user"];
-type ProfileTab = "account" | "security" | "activity";
+type ProfileTab = "profile" | "access" | "prefs" | "security" | "activity";
+type ActivityPane = "edits" | "presence";
+type NavPage = "admin" | "sandboxes";
 
 const ROLE_LABEL: Record<string, string> = {
   ADMIN: "Администратор",
@@ -17,6 +33,12 @@ const ROLE_LABEL: Record<string, string> = {
   VIEWER: "Наблюдатель",
   PILOT: "Пилот",
   SUPER_ADMIN: "Супер-админ"
+};
+
+const SANDBOX_ROLE: Record<string, string> = {
+  OWNER: "владелец",
+  EDITOR: "редактор",
+  VIEWER: "просмотр"
 };
 
 function initialsFromUser(u: AuthedUser): string {
@@ -29,17 +51,75 @@ function initialsFromUser(u: AuthedUser): string {
   return base.slice(0, 2).toUpperCase();
 }
 
-export function ProfileView(props: { me: AuthedUser }) {
+function RoleBadges(props: { roles: string[] }) {
+  if (props.roles.length === 0) {
+    return <span className="profileRoleBadge profileRoleBadgeMuted">нет ролей</span>;
+  }
+  return (
+    <>
+      {props.roles.map((r) => (
+        <span key={r} className={`profileRoleBadge profileRoleBadge_${r}`}>
+          {ROLE_LABEL[r] ?? r}
+        </span>
+      ))}
+    </>
+  );
+}
+
+export function ProfileView(props: { me: AuthedUser; onNavigate: (page: NavPage) => void }) {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<ProfileTab>("account");
+  const isMobile = useIsMobile();
+  const { list: sandboxes, loading: sandboxesLoading } = useActiveSandbox();
+  const [tab, setTab] = useState<ProfileTab>(props.me.mustChangePassword ? "security" : "profile");
+  const [activityPane, setActivityPane] = useState<ActivityPane>("edits");
+  const [displayName, setDisplayName] = useState(props.me.displayName ?? "");
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [showNew, setShowNew] = useState(false);
+  const moduleCount = useMemo(() => grantedGroupCount(props.me.permissions), [props.me.permissions]);
+  const currentName = (props.me.displayName ?? "").trim();
+  const nextName = displayName.trim();
+  const nameDirty = nextName.length > 0 && nextName !== currentName;
+  const muted = parseMutedNotificationKinds(props.me.mutedNotificationKinds);
+  const isAdmin = props.me.roles.includes("ADMIN") || props.me.roles.includes("SUPER_ADMIN");
+  const canAdminUsers = hasPermission(props.me.permissions, "admin:users");
+  const canNotify =
+    hasPermission(props.me.permissions, "events:read") ||
+    hasPermission(props.me.permissions, "gantt:read") ||
+    hasPermission(props.me.permissions, "hangar:read");
+  const homeOptions = useMemo(
+    () => allowedHomePageOptions(props.me.permissions, isMobile).map((o) => ({ id: o.id, label: o.label })),
+    [props.me.permissions, isMobile]
+  );
+  const mySandboxes = useMemo(
+    () =>
+      sandboxes.filter(
+        (s) => !sandboxIsArchived(s) && (s.isOwner || s.members.some((m) => m.userId === props.me.id))
+      ),
+    [sandboxes, props.me.id]
+  );
+
+  useEffect(() => {
+    setDisplayName(props.me.displayName ?? "");
+  }, [props.me.displayName]);
 
   const logoutM = useMutation({
     mutationFn: () => authLogout(),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["auth", "me"] });
+    }
+  });
+
+  const patchM = useMutation({
+    mutationFn: (body: { displayName?: string; homePage?: string | null; mutedNotificationKinds?: string[] }) =>
+      authUpdateProfile(body),
+    onSuccess: async (r) => {
+      if (r.ok) {
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ["auth", "me"] }),
+          qc.invalidateQueries({ queryKey: ["notifications"] })
+        ]);
+      }
     }
   });
 
@@ -68,41 +148,83 @@ export function ProfileView(props: { me: AuthedUser }) {
   }, [newPassword]);
 
   const initials = initialsFromUser(props.me);
+  const titleName = props.me.displayName?.trim() || props.me.email;
+
+  const openAdminUsers = () => {
+    try {
+      history.replaceState(null, "", `${location.pathname}${location.search}#admin/users`);
+    } catch {
+      location.hash = "admin/users";
+    }
+    props.onNavigate("admin");
+  };
+
+  const setMutedKind = (kind: string, enabled: boolean) => {
+    const next = new Set(muted);
+    if (enabled) next.delete(kind);
+    else next.add(kind);
+    patchM.mutate({ mutedNotificationKinds: [...next] });
+  };
 
   return (
     <div className="profilePage">
-      <header className="profileDashboardHeader">
-        <div className="profileDashboardTitle">
-          <h1>Личный кабинет</h1>
-          <p>Профиль, права доступа и история действий</p>
-        </div>
-        <div className="profileDashboardIdentity">
+      <header className="profileHeroBar">
+        <div className="profileHeroIdentity">
           <div className="profileAvatar" aria-hidden="true">
             {initials}
           </div>
           <div className="profileHeroText">
-            <div className="profileHeroName">{props.me.displayName ?? props.me.email}</div>
-            <div className="profileHeroEmail">{props.me.email}</div>
+            <h1 className="profileHeroName">{titleName}</h1>
+            <div className="profileHeroMeta">
+              <span>{props.me.email}</span>
+              <span className="profileHeroDot" aria-hidden="true">
+                ·
+              </span>
+              <span>вход {formatPresenceWhen(props.me.lastLoginAt)}</span>
+              <span className="profileHeroDot" aria-hidden="true">
+                ·
+              </span>
+              <span>в системе {formatPresenceWhen(props.me.lastSeenAt)}</span>
+            </div>
+            <div className="profileHeroRoles">
+              <RoleBadges roles={props.me.roles} />
+            </div>
           </div>
-          <button
-            className="profileLogoutBtn"
-            onClick={() => logoutM.mutate()}
-            disabled={logoutM.isPending}
-            title="Выйти из системы"
-            aria-label="Выйти из системы"
-          >
-            <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <path d="M8 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8M12 6l4 4-4 4m4-4H8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span>Выйти</span>
-          </button>
         </div>
+        <button
+          className="profileLogoutBtn"
+          onClick={() => logoutM.mutate()}
+          disabled={logoutM.isPending}
+          title="Выйти из системы"
+          aria-label="Выйти из системы"
+        >
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M8 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8M12 6l4 4-4 4m4-4H8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>Выйти</span>
+        </button>
       </header>
+
+      {props.me.mustChangePassword ? (
+        <div className="profilePasswordBanner" role="status">
+          <div>
+            <strong>Требуется сменить пароль</strong>
+            <p>Задайте постоянный пароль на вкладке «Безопасность».</p>
+          </div>
+          {tab !== "security" ? (
+            <button type="button" className="btn btnPrimary" onClick={() => setTab("security")}>
+              Перейти к смене
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <nav className="profileTabs" role="tablist" aria-label="Разделы профиля">
         {(
           [
-            ["account", "Учётная запись"],
+            ["profile", "Профиль"],
+            ["access", "Доступ"],
+            ["prefs", "Предпочтения"],
             ["security", "Безопасность"],
             ["activity", "Активность"]
           ] as const
@@ -120,34 +242,88 @@ export function ProfileView(props: { me: AuthedUser }) {
         ))}
       </nav>
 
-      {tab === "account" ? (
-        <div className="profileAccountGrid">
+      {tab === "profile" ? (
+        <section className="card profileCard profileDashboardCard">
+          <header className="profileSectionHeader">
+            <div>
+              <h2>Учётная запись</h2>
+              <p>Имя можно изменить самостоятельно, email задаёт администратор</p>
+            </div>
+          </header>
+          <div className="profileCardBody profileInfoList">
+            <div className="profileKv">
+              <div className="profileKvKey">Имя</div>
+              <div className="profileKvVal">
+                <div className="profileNameEdit">
+                  <input
+                    className="profileInput"
+                    value={displayName}
+                    onChange={(e) => {
+                      setDisplayName(e.target.value);
+                      patchM.reset();
+                    }}
+                    maxLength={200}
+                    autoComplete="name"
+                    placeholder="Как к вам обращаться"
+                  />
+                  <button
+                    type="button"
+                    className="btn btnPrimary"
+                    disabled={!nameDirty || patchM.isPending}
+                    onClick={() => patchM.mutate({ displayName: nextName })}
+                  >
+                    {patchM.isPending ? "Сохраняем…" : "Сохранить"}
+                  </button>
+                </div>
+                {patchM.data?.ok && patchM.variables?.displayName ? (
+                  <span className="profileInlineSuccess">Имя обновлено</span>
+                ) : patchM.data && !patchM.data.ok && patchM.variables?.displayName ? (
+                  <span className="error">{patchM.data.message || patchM.data.error}</span>
+                ) : null}
+              </div>
+            </div>
+            <div className="profileKv">
+              <div className="profileKvKey">Email</div>
+              <div className="profileKvVal">
+                <div>{props.me.email}</div>
+                <div className="profileFieldHint">Меняет администратор</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {tab === "access" ? (
+        <div className="profileStack">
           <section className="card profileCard profileDashboardCard">
             <header className="profileSectionHeader">
               <div>
-                <h2>Основная информация</h2>
-                <p>Данные вашей учётной записи</p>
+                <h2>Доступ</h2>
+                <p>Роли и права по модулям. Назначает администратор</p>
               </div>
-              <span className="profileStatusBadge">Активна</span>
+              <span className="profileAccessCount" title="Модули с доступом">
+                {moduleCount}
+              </span>
             </header>
-            <div className="profileCardBody profileInfoList">
-              <div className="profileKv">
-                <div className="profileKvKey">Имя</div>
-                <div className="profileKvVal">{props.me.displayName ?? "Не указано"}</div>
-              </div>
-              <div className="profileKv">
-                <div className="profileKvKey">Email</div>
-                <div className="profileKvVal">{props.me.email}</div>
-              </div>
-              <div className="profileKv">
-                <div className="profileKvKey">Состояние пароля</div>
-                <div className="profileKvVal">
-                  {props.me.mustChangePassword ? (
-                    <span className="profileInlineWarning">Требуется сменить пароль</span>
-                  ) : (
-                    <span className="profileInlineSuccess">Пароль установлен</span>
-                  )}
+            <div className="profileCardBody profileAccessBody">
+              <div className="profileAccessGroup">
+                <div className="profileAccessLabel">Роли</div>
+                <div className="profileHeroRoles">
+                  <RoleBadges roles={props.me.roles} />
                 </div>
+              </div>
+              <div className="profileAccessGroup">
+                <div className="profileAccessLabel">Модули</div>
+                <PermissionMatrix readOnly permissions={props.me.permissions} />
+              </div>
+              <div className="profileAccessNote">
+                {canAdminUsers ? (
+                  <button type="button" className="profileTextLink" onClick={openAdminUsers}>
+                    Управление пользователями
+                  </button>
+                ) : (
+                  <span className="muted">Нужны другие права — обратитесь к администратору.</span>
+                )}
               </div>
             </div>
           </section>
@@ -155,40 +331,84 @@ export function ProfileView(props: { me: AuthedUser }) {
           <section className="card profileCard profileDashboardCard">
             <header className="profileSectionHeader">
               <div>
-                <h2>Доступ</h2>
-                <p>Назначенные роли и разрешения</p>
+                <h2>Песочницы</h2>
+                <p>Сценарии, где вы владелец или участник</p>
               </div>
-              <span className="profileAccessCount">{props.me.permissions.length}</span>
+              <button type="button" className="profileTextLink" onClick={() => props.onNavigate("sandboxes")}>
+                Открыть список
+              </button>
             </header>
-            <div className="profileCardBody profileAccessBody">
-              <div className="profileAccessGroup">
-                <div className="profileAccessLabel">Роли</div>
-                <div className="profileHeroRoles">
-                  {props.me.roles.length === 0 ? (
-                    <span className="profileRoleBadge profileRoleBadgeMuted">нет ролей</span>
-                  ) : (
-                    props.me.roles.map((r) => (
-                      <span key={r} className={`profileRoleBadge profileRoleBadge_${r}`}>
-                        {ROLE_LABEL[r] ?? r}
-                      </span>
-                    ))
-                  )}
-                </div>
+            <div className="profileCardBody">
+              {sandboxesLoading ? (
+                <div className="muted">Загрузка…</div>
+              ) : mySandboxes.length === 0 ? (
+                <div className="muted">Вы не состоите в песочницах.</div>
+              ) : (
+                <ul className="profileSandboxList">
+                  {mySandboxes.map((s) => (
+                    <li key={s.id}>
+                      <span className="profileSandboxName">{s.name}</span>
+                      <span className="muted">{SANDBOX_ROLE[s.myRole ?? ""] ?? s.myRole}</span>
+                      <span className="muted">{s.eventCount} соб.</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {tab === "prefs" ? (
+        <div className="profileStack">
+          <section className="card profileCard profileDashboardCard">
+            <header className="profileSectionHeader">
+              <div>
+                <h2>Стартовая страница</h2>
+                <p>Откроется при входе, если в адресе нет явного раздела</p>
               </div>
-              <div className="profileAccessGroup">
-                <div className="profileAccessLabel">Разрешения</div>
-                <div className="profileKvPerms">
-                  {props.me.permissions.length === 0 ? (
-                    <span className="muted">Нет назначенных разрешений</span>
-                  ) : (
-                    props.me.permissions.map((p) => (
-                      <code key={p} className="profilePerm">
-                        {p}
-                      </code>
-                    ))
-                  )}
-                </div>
+            </header>
+            <div className="profileCardBody">
+              <SingleSelectDropdown
+                options={homeOptions}
+                value={props.me.homePage ?? ""}
+                allowEmpty
+                emptyLabel="Автоматически (первый доступный)"
+                onChange={(next) => patchM.mutate({ homePage: next || null })}
+                width="100%"
+              />
+              {patchM.data && !patchM.data.ok && patchM.variables?.homePage !== undefined ? (
+                <span className="error">{patchM.data.message || patchM.data.error}</span>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="card profileCard profileDashboardCard">
+            <header className="profileSectionHeader">
+              <div>
+                <h2>Колокольчик</h2>
+                <p>Какие уведомления рабочего контура показывать</p>
               </div>
+            </header>
+            <div className="profileCardBody profilePrefToggles">
+              {!canNotify ? (
+                <div className="muted">Колокольчик недоступен при текущих правах.</div>
+              ) : (
+                NOTIFICATION_KIND_OPTIONS.filter((opt) => !opt.adminOnly || isAdmin).map((opt) => (
+                  <SwitchToggle
+                    key={opt.kind}
+                    compact
+                    checked={!muted.includes(opt.kind)}
+                    disabled={patchM.isPending}
+                    onChange={(on) => setMutedKind(opt.kind, on)}
+                    label={opt.label}
+                    hint={opt.hint}
+                  />
+                ))
+              )}
+              {patchM.data && !patchM.data.ok && patchM.variables?.mutedNotificationKinds ? (
+                <span className="error">{patchM.data.message || patchM.data.error}</span>
+              ) : null}
             </div>
           </section>
         </div>
@@ -267,6 +487,11 @@ export function ProfileView(props: { me: AuthedUser }) {
               </div>
             </div>
             <aside className="profileSecurityNote">
+              <strong>Сессия</strong>
+              <ul>
+                <li>Последний вход: {formatPresenceWhen(props.me.lastLoginAt)}</li>
+                <li>В системе: {formatPresenceWhen(props.me.lastSeenAt)}</li>
+              </ul>
               <strong>Рекомендации</strong>
               <ul>
                 <li>Не используйте пароль от других сервисов</li>
@@ -278,7 +503,31 @@ export function ProfileView(props: { me: AuthedUser }) {
         </section>
       ) : null}
 
-      {tab === "activity" ? <ActivityFeed mode="self" compact /> : null}
+      {tab === "activity" ? (
+        <div className="profileStack">
+          <div className="profileSubTabs" role="tablist" aria-label="Тип журнала">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activityPane === "edits"}
+              className={`profileSubTab${activityPane === "edits" ? " profileSubTabActive" : ""}`}
+              onClick={() => setActivityPane("edits")}
+            >
+              Правки плана
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activityPane === "presence"}
+              className={`profileSubTab${activityPane === "presence" ? " profileSubTabActive" : ""}`}
+              onClick={() => setActivityPane("presence")}
+            >
+              Входы
+            </button>
+          </div>
+          {activityPane === "edits" ? <ActivityFeed mode="self" compact /> : <PresenceFeed />}
+        </div>
+      ) : null}
     </div>
   );
 }

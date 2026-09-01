@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyFrozenRows,
   buildPrimaryHeaderPlan,
   contiguousRanges,
   primaryExportHeaderDepth,
@@ -92,4 +93,42 @@ test("writes group/subgroup merges before commit", () => {
   assert.ok(merges.includes("2,1:3,1"));
   assert.ok(merges.includes("2,2:3,2"));
   assert.equal(merges.includes("2,3:3,3"), false);
+});
+
+test("omits index row when numbering is disabled", () => {
+  assert.equal(primaryExportHeaderDepth([], { includeIndexRow: false }), 3);
+  const rows: unknown[][] = [];
+  let rowNumber = 0;
+  const worksheet = {
+    addRow(values: unknown[]) {
+      rowNumber += 1;
+      rows.push(values);
+      return {
+        number: rowNumber,
+        commit() {},
+        getCell() {
+          return { alignment: null as unknown, font: null as unknown };
+        }
+      };
+    },
+    mergeCells() {}
+  };
+  const next = writePrimaryTableHeaderRows(
+    worksheet,
+    [{ key: "a", label: "ME", group: "G", subgroup: null }],
+    { includeIndexRow: false }
+  );
+  assert.equal(next, 4);
+  assert.equal(rows.length, 3);
+  assert.notDeepEqual(rows[2], ["1"]);
+});
+
+test("applyFrozenRows sets Excel freeze panes", () => {
+  const ws: { views?: Array<Record<string, unknown>> } = {};
+  applyFrozenRows(ws, 2);
+  assert.deepEqual(ws.views, [
+    { state: "frozen", xSplit: 0, ySplit: 2, topLeftCell: "A3", activeCell: "A3" }
+  ]);
+  applyFrozenRows(ws, 0);
+  assert.deepEqual(ws.views, []);
 });
