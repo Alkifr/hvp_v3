@@ -77,10 +77,15 @@ npm start
 
 ### 4. Обновление
 
+Пошагово для корпоративного стенда (с интернетом и без) — [deploy/UPDATE.md](deploy/UPDATE.md).
+
+Кратко, если на сервере есть git и npm:
+
 ```bash
 git pull
-npm install
+npm ci
 npm run prisma:migrate:deploy -w apps/api
+npm run prisma:seed -w apps/api
 npm run build
 # перезапустить процесс npm start
 ```

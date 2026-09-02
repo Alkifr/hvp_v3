@@ -390,7 +390,7 @@ function AppShell(props: {
   return (
     <div className={shellClass}>
       <aside className="nav" aria-label="Навигация HVP">
-        <div className="navBrand" title="HVP — Hangar Visual Planning" aria-label="HVP">
+        <div className="navBrand" title="HVP — Hangar Visit Plan" aria-label="HVP — Hangar Visit Plan">
           <span className="navBrandIcon" aria-hidden="true">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 11c3-4 6-6 9-6s6 2 9 6" />

@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
+import { searchErTables } from "../../lib/erSchema";
 import { PERM_LABEL, PERMISSION_GROUPS, hasPermission } from "../../lib/permissionCatalog";
+import { HelpErDiagram } from "../components/HelpErDiagram";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 /**
@@ -13,6 +15,7 @@ import { useActiveSandbox } from "../components/SandboxSwitcher";
  *  - навигация по разделам (модули приложения, роли, сценарии, FAQ);
  *  - раскрывающиеся темы (аккордеон);
  *  - пошаговые интерактивные сценарии с кнопками перехода в нужный раздел;
+ *  - ER-диаграмма модели данных с поиском таблицы, колонками и связями;
  *  - подсказки о необходимых правах доступа с учётом прав текущего пользователя.
  */
 
@@ -148,6 +151,13 @@ const ICONS: Record<string, ReactNode> = {
       <path d="M4 5h10a4 4 0 0 1 4 4v10" />
       <path d="M4 5v10a4 4 0 0 0 4 4h10" />
       <path d="M8 9h6M8 13h8" />
+    </svg>
+  ),
+  er: (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <ellipse cx="12" cy="6" rx="7" ry="3" />
+      <path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6" />
+      <path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" />
     </svg>
   )
 };
@@ -1457,6 +1467,10 @@ const FAQ: { q: string; a: string }[] = [
   {
     q: "Как сообщить всем о техработах или обновлении?",
     a: "Администратор открывает «Админка» → «Коммуникации» → «Объявления», пишет заголовок и текст, при необходимости указывает период и публикует. У пользователей появится окно по центру экрана; его можно закрыть — повторно оно не покажется, пока объявление не изменят."
+  },
+  {
+    q: "Где посмотреть структуру таблиц и связи между ними?",
+    a: "В инструкции откройте раздел «Модель данных»: там ER-диаграмма всех таблиц. В поиске введите имя таблицы (например MaintenanceEvent или «Ангар») — отобразятся колонки с типами и связи с соседними объектами."
   }
 ];
 
@@ -1601,6 +1615,7 @@ export function HelpView(props: { permissions: string[]; onNavigate: (page: Help
   const NAV: { id: string; title: string; icon: ReactNode }[] = useMemo(
     () => [
       ...SECTIONS.map((s) => ({ id: s.id, title: s.title, icon: s.icon })),
+      { id: "er", title: "Модель данных", icon: ICONS.er },
       { id: "scenarios", title: "Сценарии", icon: ICONS.scenarios },
       { id: "faq", title: "Частые вопросы", icon: ICONS.faq }
     ],
@@ -1610,6 +1625,8 @@ export function HelpView(props: { permissions: string[]; onNavigate: (page: Help
   const [activeId, setActiveId] = useState<string>("start");
   const [query, setQuery] = useState("");
   const [openTopics, setOpenTopics] = useState<Record<string, boolean>>({});
+  const [erFocus, setErFocus] = useState<string | undefined>(undefined);
+  const [erNonce, setErNonce] = useState(0);
 
   const toggleTopic = (id: string) =>
     setOpenTopics((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -1638,6 +1655,24 @@ export function HelpView(props: { permissions: string[]; onNavigate: (page: Help
     }
     return out;
   }, [normalizedQuery]);
+
+  const erSearchHits = useMemo(() => {
+    if (!normalizedQuery) return [];
+    return searchErTables(normalizedQuery).filter((h) => !h.viaColumn).slice(0, 10);
+  }, [normalizedQuery]);
+
+  const erKeywordHit =
+    Boolean(normalizedQuery) &&
+    ["er", "диаграмм", "схема данных", "модель данных", "таблиц", "prisma", "postgres", "колонк"].some((k) =>
+      normalizedQuery.includes(k)
+    );
+
+  const openEr = (tableId?: string) => {
+    setErFocus(tableId);
+    setErNonce((n) => n + 1);
+    setActiveId("er");
+    setQuery("");
+  };
 
   const activeSection = SECTIONS.find((s) => s.id === activeId) ?? null;
 
@@ -1683,9 +1718,31 @@ export function HelpView(props: { permissions: string[]; onNavigate: (page: Help
           <div className="helpSectionIntro">
             Найдено тем: <b>{searchResults.length}</b> по запросу «{query}».
           </div>
-          {searchResults.length === 0 ? (
+          {erKeywordHit || erSearchHits.length ? (
+            <div className="card erSearchHit">
+              <div className="erSearchHitHead">
+                <div>
+                  <b>Модель данных</b>
+                  <div className="muted">ER-диаграмма таблиц, колонок и связей</div>
+                </div>
+                <button type="button" className="btn btnPrimary" onClick={() => openEr(erSearchHits[0]?.table.id)}>
+                  Открыть схему
+                </button>
+              </div>
+              {erSearchHits.length ? (
+                <div className="erSearchHitList">
+                  {erSearchHits.map((hit) => (
+                    <button key={hit.table.id} type="button" onClick={() => openEr(hit.table.id)}>
+                      {hit.table.id}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {searchResults.length === 0 && !erKeywordHit && erSearchHits.length === 0 ? (
             <div className="card muted">Ничего не найдено. Попробуйте другой запрос.</div>
-          ) : (
+          ) : searchResults.length === 0 ? null : (
             <div className="helpTopics">
               {searchResults.map(({ topic, sectionTitle }) => (
                 <TopicCard
@@ -1738,6 +1795,19 @@ export function HelpView(props: { permissions: string[]; onNavigate: (page: Help
                     />
                   ))}
                 </div>
+              </>
+            ) : null}
+
+            {activeId === "er" ? (
+              <>
+                <div className="helpSectionHead">
+                  <h2>Модель данных</h2>
+                  <p className="muted">
+                    Все таблицы приложения и связи между ними. Найдите таблицу — откроются наименование колонок, типы
+                    данных и линии к связанным объектам.
+                  </p>
+                </div>
+                <HelpErDiagram key={erNonce} focusTable={erFocus} />
               </>
             ) : null}
 

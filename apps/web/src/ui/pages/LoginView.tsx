@@ -4,6 +4,18 @@ import { useState } from "react";
 import { authChangePassword, authLogin, authLogout } from "../auth/authApi";
 import { APPLY_HOME_KEY } from "../../lib/userPrefs";
 
+function HangarMark() {
+  return (
+    <span className="authLogo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 11c3-4 6-6 9-6s6 2 9 6" />
+        <path d="M3 11v9h18v-9" />
+        <path d="M8 20v-5h8v5" />
+      </svg>
+    </span>
+  );
+}
+
 export function LoginView(props: { forcedEmail?: string } = {}) {
   const qc = useQueryClient();
   const [email, setEmail] = useState(props.forcedEmail ?? "");
@@ -63,24 +75,31 @@ export function LoginView(props: { forcedEmail?: string } = {}) {
   return (
     <div className="authShell">
       <div className="authCard">
-        <div className="authBrand">
-          <div className="authLogo">HP</div>
-          <div>
-            <div className="authEyebrow">Hangar Planning</div>
-            <h1>{mustChangePassword ? "Смените временный пароль" : "Вход в систему"}</h1>
-            <p>
-              {mustChangePassword
-                ? "Администратор выдал временный пароль. Задайте постоянный пароль перед продолжением."
-                : "Доступ выдаётся администратором. Самостоятельная регистрация отключена."}
-            </p>
+        <header className="authHero">
+          <HangarMark />
+          <div className="authHeroText">
+            <div className="massEyebrow">Hangar Visit Plan</div>
+            <h1>{mustChangePassword ? "Смените пароль" : "Вход"}</h1>
           </div>
-        </div>
+        </header>
 
         {!mustChangePassword ? (
-          <>
+          <form
+            className="authBody"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (email && password && !loginM.isPending) loginM.mutate();
+            }}
+          >
             <label className="authField">
               <span>Email</span>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
+                autoFocus
+              />
             </label>
             <label className="authField">
               <span>Пароль</span>
@@ -89,26 +108,31 @@ export function LoginView(props: { forcedEmail?: string } = {}) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && email && password && !loginM.isPending) loginM.mutate();
-                }}
               />
             </label>
 
-            <button className="btn btnPrimary authSubmit" onClick={() => loginM.mutate()} disabled={loginM.isPending || !email || !password}>
+            <button
+              type="submit"
+              className="btn btnPrimary authSubmit"
+              disabled={loginM.isPending || !email || !password}
+            >
               {loginM.isPending ? "Входим…" : "Войти"}
             </button>
 
-            <div className="authHint">
-              Нет учётной записи или забыли пароль? Обратитесь к администратору: он создаст пользователя или выдаст временный пароль.
-            </div>
             {loginError ? <div className="error">{loginError}</div> : null}
-          </>
+            <p className="authHint">Нет учётной записи или забыли пароль — обратитесь к администратору.</p>
+          </form>
         ) : (
-          <>
-            <div className="authNotice">
-              Вы вошли как <b>{email || props.forcedEmail}</b>. Новый пароль должен быть не короче 8 символов.
-            </div>
+          <form
+            className="authBody"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (canChangePassword && password && !changePasswordM.isPending) changePasswordM.mutate();
+            }}
+          >
+            <p className="authLead">
+              Вы вошли как <b>{email || props.forcedEmail}</b>. Задайте постоянный пароль — не короче 8 символов.
+            </p>
             <label className="authField">
               <span>Текущий пароль</span>
               <input
@@ -134,17 +158,19 @@ export function LoginView(props: { forcedEmail?: string } = {}) {
                 value={newPassword2}
                 onChange={(e) => setNewPassword2(e.target.value)}
                 autoComplete="new-password"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && canChangePassword && !changePasswordM.isPending) changePasswordM.mutate();
-                }}
               />
             </label>
             {newPassword2 && newPassword !== newPassword2 ? <div className="error">Пароли не совпадают</div> : null}
-            <button className="btn btnPrimary authSubmit" onClick={() => changePasswordM.mutate()} disabled={!canChangePassword || changePasswordM.isPending || !password}>
+            <button
+              type="submit"
+              className="btn btnPrimary authSubmit"
+              disabled={!canChangePassword || changePasswordM.isPending || !password}
+            >
               {changePasswordM.isPending ? "Сохраняем…" : "Сменить пароль и войти"}
             </button>
             {props.forcedEmail ? (
               <button
+                type="button"
                 className="btn"
                 onClick={() => {
                   void authLogout().then(() => {
@@ -156,15 +182,19 @@ export function LoginView(props: { forcedEmail?: string } = {}) {
                 Выйти
               </button>
             ) : (
-              <button className="btn" onClick={() => setMustChangePassword(false)} disabled={changePasswordM.isPending}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setMustChangePassword(false)}
+                disabled={changePasswordM.isPending}
+              >
                 Вернуться ко входу
               </button>
             )}
             {changeError ? <div className="error">{changeError}</div> : null}
-          </>
+          </form>
         )}
       </div>
     </div>
   );
 }
-
