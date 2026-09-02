@@ -2415,6 +2415,12 @@ a {
   color: #b45309;
 }
 
+.adminUserDbBadge {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #1d4ed8;
+}
+
 .adminThActions,
 .adminTdActions {
   width: 120px;
@@ -3430,6 +3436,12 @@ a {
 
 .adminUserEditorRoles {
   width: 320px !important;
+}
+
+.adminUserDbField {
+  flex: 1 1 100%;
+  width: auto !important;
+  max-width: 100%;
 }
 
 .adminUserEditor .btn {
@@ -9928,6 +9940,82 @@ textarea {
 
 .profileAccessNote {
   padding-top: 4px;
+}
+
+.profileDbBody {
+  display: grid;
+  gap: 0;
+}
+
+.profileDbRow {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  gap: 10px 12px;
+  align-items: start;
+  padding: 9px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.profileDbRow:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.profileDbLabel {
+  color: #64748b;
+  font-size: 12px;
+  padding-top: 3px;
+}
+
+.profileDbValue {
+  min-width: 0;
+}
+
+.profileDbCode {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.profileDbCodeSecret {
+  letter-spacing: 0.12em;
+}
+
+.profileDbActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.profileDbCopyBtn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.profileDbCopyBtn:hover {
+  color: #1e40af;
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .profileDbRow {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .profileDbActions {
+    justify-content: flex-start;
+  }
 }
 
 .profileTextLink {

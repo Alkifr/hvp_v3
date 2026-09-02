@@ -13,6 +13,15 @@ export type MeResponse =
         homePage?: string | null;
         mutedNotificationKinds?: string[];
         writeBlocked?: boolean;
+        dbAccess?: {
+          enabled: true;
+          host: string;
+          hostHint: string;
+          port: number;
+          database: string;
+          user: string;
+          password: string;
+        } | null;
       };
     }
   | { ok: false; error: string; message?: string };

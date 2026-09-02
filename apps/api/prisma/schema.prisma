@@ -442,6 +442,10 @@ model User {
   homePage           String?
   /// kind[] колокольчика, которые пользователь скрыл: EVENT_OVERDUE_NO_FACT, …
   mutedNotificationKinds Json @default("[]")
+  /// Админ выдал доступ к БД из DBeaver / SQL IDE (отдельная read-only роль Postgres).
+  dbAccessEnabled Boolean @default(false)
+  pgRoleName      String?
+  pgPassword      String?
 
   roles UserRole[]
 

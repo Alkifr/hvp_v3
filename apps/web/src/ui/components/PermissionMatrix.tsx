@@ -91,10 +91,7 @@ export function PermissionMatrix(props: PermissionMatrixProps) {
           <div className="adminPermActions">
             {actions.map((action) =>
               readOnly ? (
-                <span
-                  key={action.code}
-                  className={selectedCodes.has(action.code) ? "adminPermGranted" : "adminPermDenied"}
-                >
+                <span key={action.code} className="adminPermGranted">
                   {action.label}
                 </span>
               ) : (
@@ -115,18 +112,25 @@ export function PermissionMatrix(props: PermissionMatrixProps) {
     );
   };
 
+  const visibleGroups = PERMISSION_GROUPS.map((group) => {
+    const actions = group.actions.filter((a) => known.has(a.code));
+    if (actions.length === 0) return null;
+    const summary = summarizeGroupAccess(group, selectedCodes);
+    if (readOnly && summary === "нет доступа") return null;
+    const shownActions = readOnly ? actions.filter((a) => selectedCodes.has(a.code)) : actions;
+    if (shownActions.length === 0) return null;
+    return renderGroup(group.id, group.title, group.hint, shownActions, summary);
+  }).filter(Boolean);
+
   return (
     <div className="adminPermMatrix">
       <div className="muted adminHint">
         {readOnly
-          ? "Права назначает администратор. Раскройте модуль, чтобы увидеть состав доступа."
+          ? "Показаны только доступные модули. Права назначает администратор."
           : "Редактирование модуля включает просмотр. Раскройте модуль, чтобы изменить права."}
       </div>
-      {PERMISSION_GROUPS.map((group) => {
-        const actions = group.actions.filter((a) => known.has(a.code));
-        if (actions.length === 0) return null;
-        return renderGroup(group.id, group.title, group.hint, actions, summarizeGroupAccess(group, selectedCodes));
-      })}
+      {visibleGroups}
+      {readOnly && visibleGroups.length === 0 ? <div className="muted">Нет доступа к модулям</div> : null}
       {!readOnly && !hasModuleCatalog && (known.has(IMPLIED_DATA_PERMS.read) || known.has(IMPLIED_DATA_PERMS.write))
         ? renderGroup(
             "legacy-planning",

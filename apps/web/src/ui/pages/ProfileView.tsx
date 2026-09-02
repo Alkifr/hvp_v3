@@ -66,6 +66,53 @@ function RoleBadges(props: { roles: string[] }) {
   );
 }
 
+async function copyText(value: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function CopyField(props: { label: string; value: string; hint?: string; secret?: boolean; copyable?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const [show, setShow] = useState(false);
+  const copyable = props.copyable !== false && props.value.length > 0;
+  return (
+    <div className="profileDbRow">
+      <div className="profileDbLabel">{props.label}</div>
+      <div className="profileDbValue">
+        <code className={`profileDbCode${props.secret && !show ? " profileDbCodeSecret" : ""}`}>
+          {props.secret && !show ? "••••••••••••" : props.value || "—"}
+        </code>
+        {props.hint ? <div className="profileFieldHint">{props.hint}</div> : null}
+      </div>
+      <div className="profileDbActions">
+        {props.secret ? (
+          <button type="button" className="profileDbCopyBtn" onClick={() => setShow((v) => !v)}>
+            {show ? "скрыть" : "показать"}
+          </button>
+        ) : null}
+        {copyable ? (
+          <button
+            type="button"
+            className="profileDbCopyBtn"
+            onClick={async () => {
+              const ok = await copyText(props.value);
+              if (!ok) return;
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1600);
+            }}
+          >
+            {copied ? "скопировано" : "копировать"}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function ProfileView(props: { me: AuthedUser; onNavigate: (page: NavPage) => void }) {
   const qc = useQueryClient();
   const isMobile = useIsMobile();
@@ -327,6 +374,29 @@ export function ProfileView(props: { me: AuthedUser; onNavigate: (page: NavPage)
               </div>
             </div>
           </section>
+
+          {props.me.dbAccess ? (
+            <section className="card profileCard profileDashboardCard">
+              <header className="profileSectionHeader">
+                <div>
+                  <h2>Подключение к базе (DBeaver)</h2>
+                  <p>Только чтение. Пароль приложения для входа в интерфейс — другой.</p>
+                </div>
+              </header>
+              <div className="profileCardBody profileDbBody">
+                <CopyField
+                  label="Хост"
+                  value=""
+                  hint="Хост нужно уточнить у администратора"
+                  copyable={false}
+                />
+                <CopyField label="Порт" value={String(props.me.dbAccess.port)} />
+                <CopyField label="База" value={props.me.dbAccess.database} />
+                <CopyField label="Пользователь" value={props.me.dbAccess.user} />
+                <CopyField label="Пароль" value={props.me.dbAccess.password} secret />
+              </div>
+            </section>
+          ) : null}
 
           <section className="card profileCard profileDashboardCard">
             <header className="profileSectionHeader">

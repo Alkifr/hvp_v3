@@ -4,6 +4,7 @@ import argon2 from "argon2";
 
 import { queryActivityFeed } from "../lib/activityFeed.js";
 import { errorBody } from "../lib/userErrors.js";
+import { dbAccessPayload } from "../lib/pgAccess.js";
 import { HOME_PAGES, NOTIFICATION_KINDS, parseHomePage, parseMutedNotificationKinds } from "../lib/userPrefs.js";
 import { queryMyPresence, recordLogin } from "../lib/userPresence.js";
 import { getRuntimeConfig } from "../lib/writeBlocked.js";
@@ -47,6 +48,9 @@ function meUserPayload(user: {
   lastSeenAt: Date | null;
   homePage: string | null;
   mutedNotificationKinds: unknown;
+  dbAccessEnabled: boolean;
+  pgRoleName: string | null;
+  pgPassword: string | null;
   roles: UserRoleJoin[];
 }) {
   const roles = user.roles.map((ur) => ur.role.code);
@@ -65,7 +69,8 @@ function meUserPayload(user: {
       lastLoginAt: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
       lastSeenAt: user.lastSeenAt ? user.lastSeenAt.toISOString() : null,
       homePage: parseHomePage(user.homePage),
-      mutedNotificationKinds: parseMutedNotificationKinds(user.mutedNotificationKinds)
+      mutedNotificationKinds: parseMutedNotificationKinds(user.mutedNotificationKinds),
+      dbAccess: dbAccessPayload(user, process.env.DATABASE_CLOUD_URL)
     }
   };
 }

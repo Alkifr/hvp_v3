@@ -10,6 +10,7 @@ import { logUserActivity } from "../../lib/userActivity.js";
 import { queryActivityFeed } from "../../lib/activityFeed.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { queryPresenceHeatmap } from "../../lib/userPresence.js";
+import { syncUserDbAccess } from "../../lib/pgAccess.js";
 import { mailDigestRoutes } from "./mailDigest.js";
 import { announcementAdminRoutes } from "./announcements.js";
 import { runtimeAdminRoutes } from "./runtime.js";
@@ -186,21 +187,25 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  const USER_LIST_SELECT = {
+    id: true,
+    email: true,
+    displayName: true,
+    isActive: true,
+    mustChangePassword: true,
+    dbAccessEnabled: true,
+    pgRoleName: true,
+    createdAt: true,
+    lastLoginAt: true,
+    lastSeenAt: true,
+    roles: { include: { role: true } }
+  } as const;
+
   // users
   app.get("/users", async (req) => {
     assertPermission(req as any, "admin:users");
     return await app.prisma.user.findMany({
-      select: {
-        id: true,
-        email: true,
-        displayName: true,
-        isActive: true,
-        mustChangePassword: true,
-        createdAt: true,
-        lastLoginAt: true,
-        lastSeenAt: true,
-        roles: { include: { role: true } }
-      },
+      select: USER_LIST_SELECT,
       orderBy: [{ isActive: "desc" }, { email: "asc" }]
     });
   });
@@ -247,7 +252,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
     return await app.prisma.user.findUniqueOrThrow({
       where: { id: user.id },
-      include: { roles: { include: { role: true } } }
+      select: USER_LIST_SELECT
     });
   });
 
@@ -259,16 +264,44 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         displayName: z.string().trim().min(1).max(200).nullable().optional(),
         isActive: z.boolean().optional(),
         mustChangePassword: z.boolean().optional(),
+        dbAccessEnabled: z.boolean().optional(),
         roleIds: z.array(zUuid).optional()
       })
       .parse(req.body);
+
+    const current = await app.prisma.user.findUnique({
+      where: { id },
+      select: {
+        email: true,
+        isActive: true,
+        dbAccessEnabled: true,
+        pgRoleName: true,
+        pgPassword: true
+      }
+    });
+    if (!current) {
+      const err: any = new Error("USER_NOT_FOUND");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const accessTouched = body.dbAccessEnabled !== undefined || body.isActive !== undefined;
+    const dbAccess = accessTouched
+      ? await syncUserDbAccess(app.prisma, current, {
+          dbAccessEnabled: body.dbAccessEnabled,
+          isActive: body.isActive
+        })
+      : null;
 
     await app.prisma.user.update({
       where: { id },
       data: {
         displayName: body.displayName === undefined ? undefined : body.displayName,
         isActive: body.isActive,
-        mustChangePassword: body.mustChangePassword
+        mustChangePassword: body.mustChangePassword,
+        dbAccessEnabled: dbAccess?.dbAccessEnabled,
+        pgRoleName: dbAccess ? dbAccess.pgRoleName : undefined,
+        pgPassword: dbAccess ? dbAccess.pgPassword : undefined
       }
     });
 
@@ -279,7 +312,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
     return await app.prisma.user.findUniqueOrThrow({
       where: { id },
-      include: { roles: { include: { role: true } } }
+      select: USER_LIST_SELECT
     });
   });
 

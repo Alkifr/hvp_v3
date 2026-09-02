@@ -1,0 +1,3 @@
+ALTER TABLE "User" ADD COLUMN "dbAccessEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "User" ADD COLUMN "pgRoleName" TEXT;
+ALTER TABLE "User" ADD COLUMN "pgPassword" TEXT;

@@ -29,6 +29,8 @@ type User = {
   displayName?: string | null;
   isActive: boolean;
   mustChangePassword: boolean;
+  dbAccessEnabled?: boolean;
+  pgRoleName?: string | null;
   lastLoginAt?: string | null;
   lastSeenAt?: string | null;
   roles: { role: { id: string; code: string; name: string } }[];
@@ -1233,6 +1235,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     const roleIds = props.u.roles.map((x) => x.role.id);
     const [selRoles, setSelRoles] = useState<string[]>(roleIds);
     const [isActive, setIsActive] = useState(props.u.isActive);
+    const [dbAccess, setDbAccess] = useState(Boolean(props.u.dbAccessEnabled));
     const [displayName, setDisplayName] = useState(props.u.displayName ?? "");
     const [tempPassword, setTempPassword] = useState("");
     const [editOpen, setEditOpen] = useState(false);
@@ -1256,6 +1259,17 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         apiPatch<User>(`/api/admin/users/${props.u.id}`, { roleIds: selRoles, isActive: next }),
       onSuccess: async () => {
         await qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      }
+    });
+
+    const toggleDbAccessM = useMutation({
+      mutationFn: (next: boolean) =>
+        apiPatch<User>(`/api/admin/users/${props.u.id}`, { dbAccessEnabled: next }),
+      onSuccess: async () => {
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ["admin", "users"] }),
+          qc.invalidateQueries({ queryKey: ["auth", "me"] })
+        ]);
       }
     });
 
@@ -1289,6 +1303,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                 <div className="muted adminUserEmail">{props.u.email}</div>
                 <div className="muted adminUserSeen">в системе: {formatPresenceWhen(props.u.lastSeenAt)}</div>
                 {props.u.mustChangePassword ? <div className="adminUserWarn">нужна смена пароля</div> : null}
+                {props.u.dbAccessEnabled ? <div className="adminUserDbBadge">доступ к БД</div> : null}
               </div>
             </div>
           </td>
@@ -1394,6 +1409,19 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                       maxHeight={220}
                     />
                   </div>
+                  <div className="adminField adminUserDbField">
+                    <SwitchToggle
+                      compact
+                      checked={dbAccess}
+                      disabled={toggleDbAccessM.isPending}
+                      label="Доступ к БД"
+                      hint="DBeaver / SQL IDE, только чтение. Параметры появятся в профиле пользователя."
+                      onChange={(next) => {
+                        setDbAccess(next);
+                        toggleDbAccessM.mutate(next, { onError: () => setDbAccess(!next) });
+                      }}
+                    />
+                  </div>
                   <button className="btn btnPrimary btnSmall" onClick={() => saveUserM.mutate()} disabled={saveUserM.isPending}>
                     <IconSave /> Сохранить
                   </button>
@@ -1442,6 +1470,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               ) : null}
               {saveUserM.error ? <div className="error">{String(saveUserM.error.message || saveUserM.error)}</div> : null}
               {toggleActiveM.error ? <div className="error">{String(toggleActiveM.error.message || toggleActiveM.error)}</div> : null}
+              {toggleDbAccessM.error ? <div className="error">{String(toggleDbAccessM.error.message || toggleDbAccessM.error)}</div> : null}
               {resetM.error ? <div className="error">{String(resetM.error.message || resetM.error)}</div> : null}
               {revokeM.error ? <div className="error">{String(revokeM.error.message || revokeM.error)}</div> : null}
             </td>
