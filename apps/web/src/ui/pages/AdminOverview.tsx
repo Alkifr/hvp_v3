@@ -8,6 +8,7 @@ import type { AppAnnouncement } from "../components/AnnouncementModal";
 
 type MailDigestSettings = {
   smtpHost: string | null;
+  smtpUser: string | null;
   hasPassword: boolean;
   mailFrom: string | null;
 };
@@ -51,7 +52,7 @@ export function AdminOverview(props: {
     }
   });
 
-  const smtpReady = Boolean(mailQ.data?.smtpHost && mailQ.data.hasPassword);
+  const smtpReady = Boolean(mailQ.data?.smtpHost && (mailQ.data.mailFrom || mailQ.data.smtpUser));
   const activeNotice = (announceQ.data?.items ?? []).find((item) => item.status === "active");
 
   return (
@@ -106,7 +107,7 @@ export function AdminOverview(props: {
         {props.canMail ? (
           <button type="button" className="adminOverviewCard" onClick={() => props.onGo("mail")}>
             <span className="muted">SMTP</span>
-            <strong>{smtpReady ? "Задан" : mailQ.data?.smtpHost ? "Без пароля" : "Не задан"}</strong>
+            <strong>{smtpReady ? "Задан" : "Не задан"}</strong>
             <span>{mailQ.data?.mailFrom || mailQ.data?.smtpHost || "Настройки почты"}</span>
           </button>
         ) : null}

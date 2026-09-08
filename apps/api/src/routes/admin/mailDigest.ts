@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { assertPermission } from "../../lib/rbac.js";
-import { sendMail, smtpConfigFromSettings } from "../../lib/mailer.js";
+import { resolveFrom, sendMail, smtpConfigFromSettings } from "../../lib/mailer.js";
 
 const SETTINGS_ID = "default";
 
@@ -66,8 +66,8 @@ export const mailDigestRoutes: FastifyPluginAsync = async (app) => {
     if (body.smtpUser !== undefined) data.smtpUser = body.smtpUser?.trim() || null;
     if (body.mailFrom !== undefined) data.mailFrom = body.mailFrom?.trim() || null;
     if (body.smtpPass !== undefined) {
-      // пустая строка / null — не менять пароль
-      if (body.smtpPass !== null && body.smtpPass.length > 0) data.smtpPass = body.smtpPass;
+      if (body.smtpPass === null) data.smtpPass = null;
+      else if (body.smtpPass.length > 0) data.smtpPass = body.smtpPass;
     }
 
     const updated = await app.prisma.mailDigestSettings.update({
@@ -88,10 +88,14 @@ export const mailDigestRoutes: FastifyPluginAsync = async (app) => {
     const settings = await ensureSettings(app.prisma);
     const smtp = smtpConfigFromSettings(settings);
     if (!smtp) throw app.httpErrors.badRequest("Не настроен SMTP host");
-    if (!settings.smtpPass) throw app.httpErrors.badRequest("Не задан SMTP пароль");
+    try {
+      resolveFrom(smtp);
+    } catch (e: any) {
+      throw app.httpErrors.badRequest(e?.message ?? "Не указан адрес отправителя (From)");
+    }
 
     const to = body.to?.trim().toLowerCase() || settings.smtpUser?.trim().toLowerCase() || null;
-    if (!to) throw app.httpErrors.badRequest("Укажите адрес для теста или заполните SMTP user");
+    if (!to) throw app.httpErrors.badRequest("Укажите адрес для теста");
 
     const text = [
       "Тестовое письмо HVP — проверка SMTP для рассылки.",

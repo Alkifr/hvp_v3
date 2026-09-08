@@ -285,9 +285,9 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const [cleanupReason, setCleanupReason] = useState("");
   const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null);
 
-  const [mailSmtpHost, setMailSmtpHost] = useState("smtp.yandex.ru");
-  const [mailSmtpPort, setMailSmtpPort] = useState("465");
-  const [mailSmtpSecure, setMailSmtpSecure] = useState(true);
+  const [mailSmtpHost, setMailSmtpHost] = useState("");
+  const [mailSmtpPort, setMailSmtpPort] = useState("25");
+  const [mailSmtpSecure, setMailSmtpSecure] = useState(false);
   const [mailSmtpUser, setMailSmtpUser] = useState("");
   const [mailSmtpPass, setMailSmtpPass] = useState("");
   const [mailFrom, setMailFrom] = useState("");
@@ -304,8 +304,8 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   useEffect(() => {
     if (!mailSettingsQ.data || mailSettingsHydrated) return;
     const s = mailSettingsQ.data;
-    setMailSmtpHost(s.smtpHost ?? "smtp.yandex.ru");
-    setMailSmtpPort(String(s.smtpPort ?? 465));
+    setMailSmtpHost(s.smtpHost ?? "");
+    setMailSmtpPort(String(s.smtpPort ?? 25));
     setMailSmtpSecure(s.smtpSecure);
     setMailSmtpUser(s.smtpUser ?? "");
     setMailFrom(s.mailFrom ?? "");
@@ -314,13 +314,13 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   }, [mailSettingsQ.data, mailSettingsHydrated]);
 
   const saveMailSettingsM = useMutation({
-    mutationFn: () =>
+    mutationFn: (opts?: { clearPassword?: boolean }) =>
       apiPut<MailDigestSettings>("/api/admin/mail-digest/settings", {
         smtpHost: mailSmtpHost.trim() || null,
-        smtpPort: Number(mailSmtpPort) || 465,
+        smtpPort: Number(mailSmtpPort) || 25,
         smtpSecure: mailSmtpSecure,
         smtpUser: mailSmtpUser.trim() || null,
-        smtpPass: mailSmtpPass.trim() || undefined,
+        smtpPass: opts?.clearPassword ? null : mailSmtpPass.trim() || undefined,
         mailFrom: mailFrom.trim() || null
       }),
     onSuccess: async (s) => {
@@ -923,22 +923,24 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               <strong>Системные настройки почты</strong>
               <div className="muted adminHint">
                 SMTP остаётся в админке. Состав рассылки, превью и отправку планировщик делает в разделе «Рассылка».
+                Если админ выдал релей без авторизации — User и Password оставьте пустыми (или сотрите пароль). Обязательны
+                host и From: по From получатель и почтовые админы видят, что это рассылка и с какого сервиса.
               </div>
             </div>
           </div>
 
           <div className="adminSectionHead">
             <strong>SMTP</strong>
-            <span className="muted">Yandex: smtp.yandex.ru, порт 465, SSL</span>
+            <span className="muted">релей без логина: порт 25, SSL выкл.</span>
           </div>
           <div className="adminFormRow adminFormRowWrap">
             <label className="adminField">
               <span className="muted">Host</span>
-              <input value={mailSmtpHost} onChange={(e) => setMailSmtpHost(e.target.value)} placeholder="smtp.yandex.ru" />
+              <input value={mailSmtpHost} onChange={(e) => setMailSmtpHost(e.target.value)} placeholder="smtp.atechnics.ru" />
             </label>
             <label className="adminField">
               <span className="muted">Port</span>
-              <input value={mailSmtpPort} onChange={(e) => setMailSmtpPort(e.target.value)} placeholder="465" />
+              <input value={mailSmtpPort} onChange={(e) => setMailSmtpPort(e.target.value)} placeholder="25" />
             </label>
             <label className="adminField">
               <span className="muted">SSL/TLS</span>
@@ -948,7 +950,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
             </label>
             <label className="adminField">
               <span className="muted">User</span>
-              <input value={mailSmtpUser} onChange={(e) => setMailSmtpUser(e.target.value)} placeholder="user@yandex.ru" />
+              <input value={mailSmtpUser} onChange={(e) => setMailSmtpUser(e.target.value)} placeholder="не обязательно" />
             </label>
             <label className="adminField">
               <span className="muted">Password {mailHasPassword ? "(задан)" : ""}</span>
@@ -956,13 +958,17 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                 type="password"
                 value={mailSmtpPass}
                 onChange={(e) => setMailSmtpPass(e.target.value)}
-                placeholder={mailHasPassword ? "оставьте пустым, чтобы не менять" : "пароль приложения"}
+                placeholder={mailHasPassword ? "оставьте пустым, чтобы не менять" : "не обязательно"}
                 autoComplete="new-password"
               />
             </label>
             <label className="adminField">
               <span className="muted">From</span>
-              <input value={mailFrom} onChange={(e) => setMailFrom(e.target.value)} placeholder="user@yandex.ru" />
+              <input
+                value={mailFrom}
+                onChange={(e) => setMailFrom(e.target.value)}
+                placeholder={'HVP рассылка (prod) <hvp-prod@atechnics.ru>'}
+              />
             </label>
           </div>
 
@@ -970,12 +976,22 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
             <button className="btn btnPrimary" disabled={saveMailSettingsM.isPending} onClick={() => saveMailSettingsM.mutate()}>
               Сохранить настройки
             </button>
+            {mailHasPassword ? (
+              <button
+                className="btn"
+                type="button"
+                disabled={saveMailSettingsM.isPending}
+                onClick={() => saveMailSettingsM.mutate({ clearPassword: true })}
+              >
+                Сбросить пароль
+              </button>
+            ) : null}
             <label className="adminField">
               <span className="muted">Тест на адрес</span>
               <input
                 value={mailTestTo}
                 onChange={(e) => setMailTestTo(e.target.value)}
-                placeholder={mailSmtpUser || "email@…"}
+                placeholder="куда отправить тест"
               />
             </label>
             <button className="btn" disabled={mailTestM.isPending} onClick={() => mailTestM.mutate()}>

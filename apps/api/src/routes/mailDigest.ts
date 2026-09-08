@@ -4,7 +4,7 @@ import { z } from "zod";
 import { zDateTime } from "../lib/zod.js";
 import { assertAnyPermission } from "../lib/rbac.js";
 import { buildChangeDigest } from "../lib/changeDigest.js";
-import { parseRecipients } from "../lib/mailer.js";
+import { isSmtpReady, parseRecipients } from "../lib/mailer.js";
 import { UserMsg } from "../lib/userErrors.js";
 import {
   DIGEST_PERIOD_MODES,
@@ -41,8 +41,15 @@ async function ensureSettings(prisma: any) {
   });
 }
 
-function smtpReadyOf(row: { smtpHost: string | null; smtpPass: string | null }) {
-  return Boolean(row.smtpHost?.trim() && row.smtpPass);
+function smtpReadyOf(row: {
+  smtpHost: string | null;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser: string | null;
+  smtpPass: string | null;
+  mailFrom: string | null;
+}) {
+  return isSmtpReady(row);
 }
 
 function serializeVariant(row: {

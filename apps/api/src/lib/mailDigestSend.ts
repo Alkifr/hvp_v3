@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 
 import { buildChangeDigest, type ChangeDigestStats } from "./changeDigest.js";
 import { isScheduledDigestDue, parseDigestPeriodMode, resolveDigestPeriod } from "./mailDigestPeriod.js";
-import { parseRecipients, sendMail, smtpConfigFromSettings } from "./mailer.js";
+import { isSmtpReady, parseRecipients, sendMail, smtpConfigFromSettings } from "./mailer.js";
 import { claimScheduledDigestSlot } from "./digestClaim.js";
 
 export type DigestSendTarget = "self" | "all" | "schedule";
@@ -110,7 +110,7 @@ export async function dispatchChangeDigest(
   }
 
   const smtp = smtpConfigFromSettings(params.smtp);
-  if (!smtp || !params.smtp.smtpPass) {
+  if (!smtp || !isSmtpReady(params.smtp)) {
     const error = "Почта не настроена. Обратитесь к администратору.";
     await writeLog(prisma, { ...logBase, status: "FAILED", error });
     return { ok: false, status: "FAILED", messageId: null, recipients, subject, error };
@@ -167,7 +167,7 @@ export async function runScheduledMailDigest(app: {
   log: { info: (o: unknown, msg?: string) => void; warn: (o: unknown, msg?: string) => void };
 }): Promise<{ sent: number; empty: number; failed: number; skipped: boolean }> {
   const smtp = await app.prisma.mailDigestSettings.findUnique({ where: { id: "default" } });
-  if (!smtp || !smtpConfigFromSettings(smtp) || !smtp.smtpPass) {
+  if (!smtp || !isSmtpReady(smtp)) {
     return { sent: 0, empty: 0, failed: 0, skipped: true };
   }
 

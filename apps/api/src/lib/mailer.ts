@@ -15,12 +15,24 @@ export function smtpConfigFromSettings(s: Pick<MailDigestSettings, "smtpHost" | 
   if (!host) return null;
   return {
     smtpHost: host,
-    smtpPort: s.smtpPort || 465,
+    smtpPort: s.smtpPort || 25,
     smtpSecure: s.smtpSecure,
     smtpUser: s.smtpUser,
     smtpPass: s.smtpPass,
     mailFrom: s.mailFrom
   };
+}
+
+/** Host + From (или SMTP user как запасной From). Пароль не обязателен: корпоративный релей часто без AUTH. */
+export function isSmtpReady(s: Pick<MailDigestSettings, "smtpHost" | "smtpPort" | "smtpSecure" | "smtpUser" | "smtpPass" | "mailFrom">): boolean {
+  const cfg = smtpConfigFromSettings(s);
+  if (!cfg) return false;
+  try {
+    resolveFrom(cfg);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function parseRecipients(raw: unknown): string[] {
@@ -38,7 +50,7 @@ export function parseRecipients(raw: unknown): string[] {
   return out;
 }
 
-function resolveFrom(cfg: SmtpConfig): string {
+export function resolveFrom(cfg: SmtpConfig): string {
   const from = cfg.mailFrom?.trim();
   if (from) return from;
   const user = cfg.smtpUser?.trim();
@@ -58,7 +70,9 @@ export async function sendMail(
     host: cfg.smtpHost,
     port: cfg.smtpPort,
     secure: cfg.smtpSecure,
-    auth: user && pass ? { user, pass } : undefined
+    auth: user && pass ? { user, pass } : undefined,
+    // Порт 25 / STARTTLS на внутреннем реле часто с корпоративным сертификатом.
+    ...(!cfg.smtpSecure ? { tls: { rejectUnauthorized: false } } : {})
   });
 
   const info = await transport.sendMail({
