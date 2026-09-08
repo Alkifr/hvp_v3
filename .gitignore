@@ -17,6 +17,11 @@ build/
 # Prisma
 .prisma/
 
+# TLS secrets (закрытый ключ) — никогда не коммитить
+cert/
+*.key
+*.pfx
+
 # Env / secrets
 .env
 .env.*
