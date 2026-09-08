@@ -973,7 +973,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           </div>
 
           <div className="adminFormRow" style={{ marginTop: 12 }}>
-            <button className="btn btnPrimary" disabled={saveMailSettingsM.isPending} onClick={() => saveMailSettingsM.mutate()}>
+            <button className="btn btnPrimary" disabled={saveMailSettingsM.isPending} onClick={() => saveMailSettingsM.mutate({})}>
               Сохранить настройки
             </button>
             {mailHasPassword ? (
