@@ -3637,8 +3637,8 @@ export function GanttView() {
     }
     if (what === "event") {
       const virtualStatusError = virtualAircraftStatusError({
-        status: draft.status,
-        aircraftId: draft.aircraftId,
+        status: draft?.status,
+        aircraftId: draft?.aircraftId,
         hasVirtualAircraft: Boolean(selectedVirtualAircraft)
       });
       if (virtualStatusError) {
