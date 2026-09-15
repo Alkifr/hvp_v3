@@ -1173,7 +1173,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     });
 
     const titleBase = body.titleTemplate ?? eventType.name;
-    const virtualLabel = () => VIRTUAL_AIRCRAFT_LABEL;
+    const virtualLabel = (_i: number) => VIRTUAL_AIRCRAFT_LABEL;
 
     const { placements: placementsPreview, unplaced: unplacedPreview } = buildMassPlanPlacements({
       count: body.count,
