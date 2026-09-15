@@ -46,6 +46,24 @@ export function parseHashPage(hashRaw: string): { page: string; rest: string; qu
   return { page: path.slice(0, slash), rest: path.slice(slash + 1), query };
 }
 
+export function replaceLocationHash(hashWithoutHash: string) {
+  if (typeof window === "undefined") return;
+  const next = `${location.pathname}${location.search}#${hashWithoutHash}`;
+  const cur = `${location.pathname}${location.search}${location.hash}`;
+  if (cur === next) return;
+  try {
+    history.replaceState(null, "", next);
+  } catch {
+    location.hash = hashWithoutHash;
+  }
+}
+
+export function writePageHashQuery(page: string, query: URLSearchParams, rest = "") {
+  const path = rest ? `${page}/${rest}` : page;
+  const qs = query.toString();
+  replaceLocationHash(qs ? `${path}?${qs}` : path);
+}
+
 export function adminTabFromHash(hashRaw: string): AdminHashTab | null {
   const { page, rest } = parseHashPage(hashRaw);
   if (page !== "admin") return null;

@@ -21,6 +21,8 @@ import { isValidDateInput } from "../../lib/dateInput";
 import { exportCompareExcel, exportTatExcel, exportUtilizationExcel } from "../../lib/analyticsExcel";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { sandboxIsArchived, useActiveSandbox, type SandboxSummary } from "../components/SandboxSwitcher";
+import { parseHashPage } from "../../lib/eventDeepLink";
+import { parseAnalyticsViewShare, syncAnalyticsViewHash } from "../../lib/viewShareUrl";
 import { ReportBuilderPanel } from "./ReportBuilderPanel";
 
 ChartJS.register(
@@ -321,11 +323,27 @@ function matchFilters(row: FilterRow, filters: AnalyticsFilters, skip?: keyof An
 }
 
 export function AnalyticsView() {
-  const { active, list } = useActiveSandbox();
+  const { active, list, activeId: activeSandboxId } = useActiveSandbox();
   const activeSandboxes = useMemo(() => list.filter((s) => !sandboxIsArchived(s)), [list]);
-  const savedUi = useMemo(() => safeReadAnalyticsUi(), []);
+  const savedUi = useMemo(() => {
+    const ls = safeReadAnalyticsUi();
+    if (typeof window === "undefined") return ls;
+    const { page, query } = parseHashPage(location.hash);
+    if (page !== "analytics") return ls;
+    const share = parseAnalyticsViewShare(query);
+    if (!share) return ls;
+    return {
+      ...ls,
+      ...share,
+      fromDate: share.fromDate || ls?.fromDate,
+      toDate: share.toDate || ls?.toDate,
+      compareB: share.compareB || ls?.compareB
+    };
+  }, []);
 
-  const [tab, setTab] = useState<TabId>("tat");
+  const [tab, setTab] = useState<TabId>(() =>
+    ["tat", "util", "compare", "builder"].includes(String(savedUi?.tab)) ? (savedUi.tab as TabId) : "tat"
+  );
   const [fromInput, setFromInput] = useState(() =>
     isValidDateInput(String(savedUi?.fromDate ?? "")) ? String(savedUi.fromDate) : toInputDate(dayjs().subtract(30, "day"))
   );
@@ -370,6 +388,7 @@ export function AnalyticsView() {
   );
   useEffect(() => {
     safeWriteAnalyticsUi({
+      tab,
       fromDate: from,
       toDate: to,
       compareA,
@@ -382,6 +401,7 @@ export function AnalyticsView() {
       filterEventTypeIds
     });
   }, [
+    tab,
     from,
     to,
     compareA,
@@ -392,6 +412,36 @@ export function AnalyticsView() {
     filterAircraftTypeIds,
     filterAircraftIds,
     filterEventTypeIds
+  ]);
+
+  useEffect(() => {
+    syncAnalyticsViewHash({
+      tab,
+      fromDate: from,
+      toDate: to,
+      compareA,
+      compareB,
+      efficiencyGrain,
+      filterHangarIds,
+      filterOperatorIds,
+      filterAircraftTypeIds,
+      filterAircraftIds,
+      filterEventTypeIds,
+      sandboxId: activeSandboxId
+    });
+  }, [
+    tab,
+    from,
+    to,
+    compareA,
+    compareB,
+    efficiencyGrain,
+    filterHangarIds,
+    filterOperatorIds,
+    filterAircraftTypeIds,
+    filterAircraftIds,
+    filterEventTypeIds,
+    activeSandboxId
   ]);
 
   const hangarsQ = useQuery({

@@ -25,7 +25,8 @@ import { installFourDigitDateYearLimit } from "../lib/dateInput";
 import {
   applyEventDeepLink,
   eventDeepLinkFromHashQuery,
-  parseHashPage
+  parseHashPage,
+  replaceLocationHash
 } from "../lib/eventDeepLink";
 import { hasPermission } from "../lib/permissionCatalog";
 import { firstAllowedPage, APPLY_HOME_KEY, browserDocumentTitle, resolveStartPage } from "../lib/userPrefs";
@@ -66,8 +67,19 @@ function pageFromHash(hashRaw: string): Page | null {
   return isPage(page) ? page : null;
 }
 
+function applySandboxFromHashQuery(query: URLSearchParams) {
+  if (!query.has("sandbox")) return;
+  const raw = query.get("sandbox")?.trim() ?? "";
+  const target = raw.length > 0 ? raw : null;
+  const current = getActiveSandboxId();
+  if ((target || null) !== (current || null)) {
+    setActiveSandboxId(target);
+  }
+}
+
 function consumeEventDeepLinkFromHash() {
   const { page, query } = parseHashPage(location.hash);
+  applySandboxFromHashQuery(query);
   const link = eventDeepLinkFromHashQuery(query);
   if (!link) return null;
 
@@ -79,12 +91,9 @@ function consumeEventDeepLinkFromHash() {
   applyEventDeepLink(link);
 
   const cleanPage = isPage(page) ? page : "gantt";
-  const next = `${location.pathname}${location.search}#${cleanPage}`;
-  try {
-    history.replaceState(null, "", next);
-  } catch {
-    location.hash = cleanPage;
-  }
+  query.delete("event");
+  const qs = query.toString();
+  replaceLocationHash(qs ? `${cleanPage}?${qs}` : cleanPage);
   return cleanPage as Page;
 }
 
@@ -218,12 +227,11 @@ export function App() {
   useEffect(() => {
     if (resolvedPage == null) return;
     const desired = resolvedPage;
-    const { page: hashPage, query } = parseHashPage(location.hash);
-    // Не затираем deep-link (`#gantt?event=...`), пока его не обработали.
-    if (hashPage === desired && query.get("event")) return;
+    const { page: hashPage } = parseHashPage(location.hash);
     // Подпуть админки (`#admin/users`) пишет сам AdminView.
     if (desired === "admin" && hashPage === "admin") return;
-    if (hashPage === desired && !query.toString()) return;
+    // Не затираем query экрана (`#gantt?from=...`, `#gantt?event=...`).
+    if (hashPage === desired) return;
     location.hash = desired;
   }, [resolvedPage]);
 
@@ -253,7 +261,7 @@ export function App() {
       apply = false;
     }
     if (!apply) return;
-    if (parseHashPage(location.hash).query.get("event")) return;
+    if (parseHashPage(location.hash).query.toString()) return;
     setPage(resolveStartPage(me.homePage, me.permissions, isMobile));
   }, [me, isMobile]);
 

@@ -13,7 +13,8 @@ import {
   placementWarnings,
   type PlacementDraft
 } from "../../lib/placementDraft";
-import { buildEventShareUrl, copyTextToClipboard } from "../../lib/eventDeepLink";
+import { buildEventShareUrl, copyTextToClipboard, parseHashPage } from "../../lib/eventDeepLink";
+import { parseGanttViewShare, syncGanttViewHash } from "../../lib/viewShareUrl";
 import { eventAllowsOverlap } from "../../lib/eventSlotOverlap";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { lineBaseAfterWorkshopChange, parseLineBase, LINE_BASE_LABEL, type LineBase } from "../../lib/lineBase";
@@ -1993,7 +1994,23 @@ export function GanttView() {
   const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
   const initialFrom = useMemo(() => dayjs().add(-20, "day").format("YYYY-MM-DD"), []);
   const initialTo = useMemo(() => dayjs().add(30, "day").format("YYYY-MM-DD"), []);
-  const savedUi = useMemo(() => safeReadGanttUi(), []);
+  const savedUi = useMemo(() => {
+    const ls = safeReadGanttUi();
+    if (typeof window === "undefined") return ls;
+    const { page, query } = parseHashPage(location.hash);
+    if (page !== "gantt") return ls;
+    const share = parseGanttViewShare(query);
+    if (!share) return ls;
+    return {
+      ...ls,
+      ...share,
+      rangeFromApplied: share.rangeFromApplied || ls?.rangeFromApplied,
+      rangeToApplied: share.rangeToApplied || ls?.rangeToApplied,
+      rangeFromInput: share.rangeFromApplied || ls?.rangeFromInput || ls?.rangeFromApplied,
+      rangeToInput: share.rangeToApplied || ls?.rangeToInput || ls?.rangeToApplied,
+      timeModeMigratedToLocalDefault: true
+    };
+  }, []);
 
   // input* — то, что пользователь вводит (может быть временно невалидным)
   // applied* — последнее валидное значение, которое используется в вычислениях/запросах
@@ -2424,6 +2441,57 @@ export function GanttView() {
     showExternalMroOnGantt,
     showGanttNotes,
     isMobile,
+  ]);
+
+  useEffect(() => {
+    syncGanttViewHash({
+      rangeFromApplied,
+      rangeToApplied,
+      groupMode,
+      panelView: isMobile ? "DIAGRAM" : panelView,
+      ganttDisplayMode,
+      majorScale,
+      minorScale,
+      timelineTimeMode,
+      selectedHangarIds,
+      filterAircraftTypeIds,
+      filterOperatorIds,
+      filterAircraftIds,
+      filterEventTypeIds,
+      filterWorkshopIds,
+      filterStatusIds,
+      filterPlanningKinds,
+      filterLineBases,
+      fitWidth,
+      showAllPlacementLinks,
+      showExternalMroOnGantt,
+      showGanttNotes,
+      sandboxId: activeSandboxId
+    });
+  }, [
+    rangeFromApplied,
+    rangeToApplied,
+    groupMode,
+    panelView,
+    ganttDisplayMode,
+    majorScale,
+    minorScale,
+    timelineTimeMode,
+    selectedHangarIds,
+    filterAircraftTypeIds,
+    filterOperatorIds,
+    filterAircraftIds,
+    filterEventTypeIds,
+    filterWorkshopIds,
+    filterStatusIds,
+    filterPlanningKinds,
+    filterLineBases,
+    fitWidth,
+    showAllPlacementLinks,
+    showExternalMroOnGantt,
+    showGanttNotes,
+    isMobile,
+    activeSandboxId
   ]);
 
   const events = q.data ?? [];

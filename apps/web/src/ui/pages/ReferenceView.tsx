@@ -9,29 +9,13 @@ import {
   formatManufactureDateRu,
   toDateInputValue
 } from "../../lib/aircraftAge";
+import { parseHashPage } from "../../lib/eventDeepLink";
+import { parseRefViewShare, syncRefViewHash, type RefShareKind } from "../../lib/viewShareUrl";
 import { authMe } from "../auth/authApi";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { SwitchToggle } from "../components/SwitchToggle";
 
-type RefKind =
-  | "operators"
-  | "aircraft-types"
-  | "aircraft"
-  | "aircraft-type-palette"
-  | "event-types"
-  | "event-statuses"
-  | "workshops"
-  | "hangars"
-  | "layouts"
-  | "stands"
-  | "placement-priorities"
-  | "optimization-profiles"
-  | "optimization-score-rules"
-  | "skills"
-  | "persons"
-  | "shifts"
-  | "materials"
-  | "warehouses";
+type RefKind = RefShareKind;
 
 type RefGroup = { label: string; items: Array<{ kind: RefKind; title: string; hint?: string }> };
 
@@ -364,8 +348,14 @@ function LayoutSchemePreview(props: { detail?: LayoutDetail | null; selectedStan
 }
 
 export function ReferenceView() {
-  const [kind, setKind] = useState<RefKind>("operators");
-  const [search, setSearch] = useState<string>("");
+  const initialShare = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const { page, query } = parseHashPage(location.hash);
+    if (page !== "ref") return null;
+    return parseRefViewShare(query);
+  }, []);
+  const [kind, setKind] = useState<RefKind>(() => initialShare?.kind ?? "operators");
+  const [search, setSearch] = useState<string>(() => initialShare?.search ?? "");
   const qc = useQueryClient();
 
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0, staleTime: 60_000 });
@@ -391,9 +381,18 @@ export function ReferenceView() {
     queryFn: () => apiGet<OptimizationProfile[]>("/api/ref/optimization-profiles")
   });
 
-  const [filterHangarId, setFilterHangarId] = useState<string>("");
-  const [filterLayoutId, setFilterLayoutId] = useState<string>("");
+  const [filterHangarId, setFilterHangarId] = useState<string>(() => initialShare?.filterHangarId ?? "");
+  const [filterLayoutId, setFilterLayoutId] = useState<string>(() => initialShare?.filterLayoutId ?? "");
   const [feedback, setFeedback] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
+
+  useEffect(() => {
+    syncRefViewHash({
+      kind,
+      search,
+      filterHangarId,
+      filterLayoutId
+    });
+  }, [kind, search, filterHangarId, filterLayoutId]);
 
   const showFeedback = (type: "success" | "error" | "info", message: string) => {
     setFeedback({ type, message });

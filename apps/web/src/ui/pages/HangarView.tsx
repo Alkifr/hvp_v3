@@ -11,6 +11,8 @@ import { FilterIndicator } from "../components/FilterIndicator";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 import { ToolbarPopover } from "../components/ToolbarPopover";
+import { parseHashPage } from "../../lib/eventDeepLink";
+import { parseHangarViewShare, syncHangarViewHash } from "../../lib/viewShareUrl";
 
 const HANGAR_UI_LS_KEY = "hangarPlanning:hangarViewUi:v1";
 
@@ -259,11 +261,24 @@ function readStringArray(v: unknown): string[] {
 export function HangarView() {
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0 });
-  const { active: activeSandbox } = useActiveSandbox();
+  const { active: activeSandbox, activeId: activeSandboxId } = useActiveSandbox();
   const me = meQ.data && "ok" in meQ.data && meQ.data.ok ? meQ.data.user : null;
   const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
   const canEditEvents = Boolean(hasPermission(me?.permissions, "hangar:write") || canWriteSandbox);
-  const savedUi = useMemo(() => safeReadHangarUi(), []);
+  const savedUi = useMemo(() => {
+    const ls = safeReadHangarUi();
+    if (typeof window === "undefined") return ls;
+    const { page, query } = parseHashPage(location.hash);
+    if (page !== "hangar") return ls;
+    const share = parseHangarViewShare(query);
+    if (!share) return ls;
+    return {
+      ...ls,
+      ...share,
+      fromDate: share.fromDate || ls?.fromDate,
+      toDate: share.toDate || ls?.toDate
+    };
+  }, []);
   const initialFrom = useMemo(
     () => (isValidDateInput(String(savedUi?.fromDate ?? "")) ? String(savedUi.fromDate) : dayjs().format("YYYY-MM-DD")),
     [savedUi]
@@ -332,6 +347,34 @@ export function HangarView() {
     filterAircraftTypeIds,
     filterAircraftIds,
     filterEventTypeIds
+  ]);
+
+  useEffect(() => {
+    syncHangarViewHash({
+      fromDate: fromDateApplied,
+      toDate: toDateApplied,
+      viewMode,
+      minuteOffset: effectiveMinuteOffset,
+      layoutIdByHangarId,
+      filterHangarIds,
+      filterOperatorIds,
+      filterAircraftTypeIds,
+      filterAircraftIds,
+      filterEventTypeIds,
+      sandboxId: activeSandboxId
+    });
+  }, [
+    fromDateApplied,
+    toDateApplied,
+    viewMode,
+    effectiveMinuteOffset,
+    layoutIdByHangarId,
+    filterHangarIds,
+    filterOperatorIds,
+    filterAircraftTypeIds,
+    filterAircraftIds,
+    filterEventTypeIds,
+    activeSandboxId
   ]);
 
   const hangarsQ = useQuery({ queryKey: ["ref", "hangars"], queryFn: () => apiGet<Hangar[]>("/api/ref/hangars") });
