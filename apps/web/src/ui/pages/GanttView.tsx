@@ -34,6 +34,13 @@ import {
   type EventStatusCatalogItem,
   type EventStatusCode
 } from "../../lib/eventStatusCatalog";
+import {
+  statusAllowsVirtualAircraft,
+  VIRTUAL_AIRCRAFT_LABEL,
+  VIRTUAL_AIRCRAFT_NEEDS_REAL_MESSAGE,
+  virtualAircraftDisplayLabel,
+  virtualAircraftStatusError
+} from "../../lib/virtualAircraft";
 import { MSK_OFFSET_MINUTES, startOfMskDayIso } from "../../lib/localDate";
 import { authMe } from "../auth/authApi";
 import { EventPlacementsEditor } from "../components/EventPlacementsEditor";
@@ -50,6 +57,8 @@ import {
   clipRange,
   EMPTY_GANTT_VIRT,
   GANTT_BAR_SLOP_PX,
+  buildGanttRowOffsets,
+  ganttRowIndexAtY,
   measureGanttVisibleY,
   nextGanttVirtState,
   rangesOverlap,
@@ -197,7 +206,7 @@ type EventPlacementRow = {
 };
 
 function eventAircraftLabel(ev: EventRow): string {
-  return ev.aircraft?.tailNumber ?? ev.virtualAircraft?.label ?? "—";
+  return ev.aircraft?.tailNumber ?? (ev.virtualAircraft ? virtualAircraftDisplayLabel() : "—");
 }
 
 function eventOperatorId(ev: EventRow): string {
@@ -1135,8 +1144,33 @@ function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "LOCAL", catalog?: 
   const fact = ev.actualStartAt && ev.actualEndAt ? `\nФакт: ${formatTimelineDate(ev.actualStartAt, mode)} – ${formatTimelineDate(ev.actualEndAt, mode)}` : "";
   const planningKind = `\nТип: ${PLANNING_KIND_LABEL[eventPlanningKind(ev)]}`;
   const status = `\nСтатус: ${statusCatalogLabel(ev.status, catalog)}`;
+  const notes = ev.notes?.trim() ? `\nПримечание: ${ev.notes.trim()}` : "";
   const prefix = ev.placementOrigin === "AUTO_GAP" ? "Автоматический этап: без ангара\n" : ev.segmentKey ? `Этап: ${place}\n` : "";
-  return `${prefix}${base}\n${period}${planningKind}${status}${plan}${fact}`;
+  return `${prefix}${base}\n${period}${planningKind}${status}${plan}${fact}${notes}`;
+}
+
+const GANTT_NOTES_BAND = 20;
+
+function rowHasGanttNotes(events: Array<{ ev: EventRow }>): boolean {
+  return events.some((item) => Boolean(item.ev.notes?.trim()));
+}
+
+function GanttBarNotes(props: { text?: string | null; left: number; width: number; onClick?: () => void }) {
+  const text = props.text?.trim() ?? "";
+  if (!text) return null;
+  return (
+    <span
+      className="ganttBarNotes"
+      style={{ left: props.left, width: Math.max(props.width, 72) }}
+      title={text}
+      onClick={(e) => {
+        e.stopPropagation();
+        props.onClick?.();
+      }}
+    >
+      {text}
+    </span>
+  );
 }
 
 function eventSegmentsForHangarRows(ev: EventRow): EventRow[] {
@@ -1954,6 +1988,7 @@ export function GanttView() {
   >(null);
   const ptrDragRef = useRef<null | DndPtrDrag>(null);
   const hangarStandRowsRef = useRef<any[]>([]);
+  const ganttRowOffsetsRef = useRef<number[]>([0]);
   const autoScrollRafRef = useRef<number | null>(null);
   const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
   const initialFrom = useMemo(() => dayjs().add(-20, "day").format("YYYY-MM-DD"), []);
@@ -2197,6 +2232,7 @@ export function GanttView() {
   const [showExternalMroOnGantt, setShowExternalMroOnGantt] = useState<boolean>(
     () => savedUi?.showExternalMroOnGantt !== false
   );
+  const [showGanttNotes, setShowGanttNotes] = useState<boolean>(() => Boolean(savedUi?.showGanttNotes));
 
   const resetFilters = () => {
     const rf = dayjs().add(-20, "day").format("YYYY-MM-DD");
@@ -2354,6 +2390,7 @@ export function GanttView() {
       dndLayoutIds,
       dndZoneOnly,
       showExternalMroOnGantt,
+      showGanttNotes,
       zoom: minorScale
     });
   }, [
@@ -2385,6 +2422,7 @@ export function GanttView() {
     dndLayoutIds,
     dndZoneOnly,
     showExternalMroOnGantt,
+    showGanttNotes,
     isMobile,
   ]);
 
@@ -2579,7 +2617,7 @@ export function GanttView() {
   // Эпоха только при смене fit — remount внутренних слоёв скролла (Chromium иначе
   // не обновляет scrollWidth), без remount на каждый canvasWidth (это дёргало скролл).
   const [fitLayoutEpoch, setFitLayoutEpoch] = useState(0);
-  const ganttRowHeight = ganttDisplayMode === "PLAN_FACT" ? 56 : 44;
+  const ganttBarBandHeight = ganttDisplayMode === "PLAN_FACT" ? 56 : 44;
   const ticks = useMemo(() => buildGanttTicks(from, to, majorScale, minorScale), [from, to, majorScale, minorScale]);
   const showSlotHistogram = groupMode === "HANGAR_STAND";
   const ganttLabelColStyle = useMemo(() => ({ width: ganttLabelWidth, flexBasis: ganttLabelWidth }), [ganttLabelWidth]);
@@ -2627,7 +2665,7 @@ export function GanttView() {
   const ganttVirtRef = useRef(ganttVirt);
   ganttVirtRef.current = ganttVirt;
   const virtMeasureRafRef = useRef<number | null>(null);
-  const virtInputRef = useRef({ canvasWidth: 1, rowCount: 0, rowHeight: 44, enabled: true });
+  const virtInputRef = useRef({ canvasWidth: 1, rowCount: 0, rowHeight: 44, rowOffsets: [0] as number[], enabled: true });
   const scheduleGanttVirtRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -2771,7 +2809,8 @@ export function GanttView() {
       viewportH: y.viewportH,
       canvasWidth: input.canvasWidth,
       rowCount: input.rowCount,
-      rowHeight: input.rowHeight
+      rowHeight: input.rowHeight,
+      rowOffsets: input.rowOffsets
     });
     if (next !== ganttVirtRef.current) {
       ganttVirtRef.current = next;
@@ -3130,7 +3169,6 @@ export function GanttView() {
     const rest = opts.filter((o) => o.id !== selectedId);
     return [...selected, ...rest];
   }, [aircraftQ.data, draft?.aircraftId]);
-  const aircraftFieldEditable = draft?.status != null && AIRCRAFT_EDITABLE_STATUSES.has(draft.status);
   /** В статусе «Завершено» нельзя менять даты, тип планирования/события, ангар и буксировки. */
   const scheduleLockedByDone = draft?.status === "DONE";
   const selectedDraftEvent = useMemo(() => {
@@ -3147,7 +3185,7 @@ export function GanttView() {
     const aircraftLabel =
       selectedAircraft?.tailNumber ??
       selectedDraftEvent?.aircraft?.tailNumber ??
-      selectedDraftEvent?.virtualAircraft?.label ??
+      (selectedDraftEvent?.virtualAircraft ? virtualAircraftDisplayLabel() : null) ??
       "Борт не указан";
     const title = draft.title?.trim() || "Без названия";
     const fmt = (v: string) => {
@@ -3159,6 +3197,10 @@ export function GanttView() {
   }, [draft, eventTypesQ.data, selectedAircraft, selectedDraftEvent]);
 
   const selectedVirtualAircraft = selectedDraftEvent?.virtualAircraft ?? null;
+  const virtualNeedsRealAircraft = Boolean(selectedVirtualAircraft && !draft?.aircraftId);
+  const aircraftFieldEditable =
+    draft?.status != null &&
+    (AIRCRAFT_EDITABLE_STATUSES.has(draft.status) || virtualNeedsRealAircraft);
   const selectedVirtualOperatorName = selectedVirtualAircraft?.operatorId
     ? ((operatorsQ.data ?? []).find((operator) => operator.id === selectedVirtualAircraft.operatorId)?.name ?? "—")
     : "—";
@@ -3168,7 +3210,7 @@ export function GanttView() {
   const selectedAircraftTypeId = selectedAircraft?.typeId ?? selectedVirtualAircraft?.aircraftTypeId ?? "";
   const aircraftFieldLabel =
     selectedAircraft?.tailNumber ??
-    (selectedVirtualAircraft && !draft?.aircraftId ? selectedVirtualAircraft.label ?? "—" : "—");
+    (virtualNeedsRealAircraft ? VIRTUAL_AIRCRAFT_LABEL : "—");
 
   // подтверждение изменения
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -3593,6 +3635,17 @@ export function GanttView() {
       // нечего сохранять
       return;
     }
+    if (what === "event") {
+      const virtualStatusError = virtualAircraftStatusError({
+        status: draft.status,
+        aircraftId: draft.aircraftId,
+        hasVirtualAircraft: Boolean(selectedVirtualAircraft)
+      });
+      if (virtualStatusError) {
+        saveEventM.mutate();
+        return;
+      }
+    }
     if (activeSandbox) {
       if (what === "event") saveEventM.mutate();
       else reserveM.mutate();
@@ -3634,6 +3687,12 @@ export function GanttView() {
       if (!draft) throw new Error("Нет данных формы");
       if (!draft.eventTypeId) throw new Error("Заполните тип события");
       if (!draft.aircraftId && !selectedVirtualAircraft) throw new Error("Заполните борт");
+      const virtualStatusError = virtualAircraftStatusError({
+        status: draft.status,
+        aircraftId: draft.aircraftId,
+        hasVirtualAircraft: Boolean(selectedVirtualAircraft)
+      });
+      if (virtualStatusError) throw new Error(virtualStatusError);
       const startAt = dayjs(draft.startAtLocal).second(0).millisecond(0).toISOString();
       const endAt = dayjs(draft.endAtLocal).second(0).millisecond(0).toISOString();
       if (dayjs(endAt).valueOf() <= dayjs(startAt).valueOf()) throw new Error("Дата окончания должна быть позже начала");
@@ -3907,7 +3966,8 @@ export function GanttView() {
     if (right && rows.length > 0) {
       const rect = right.getBoundingClientRect();
       const y = clientY - rect.top + right.scrollTop;
-      const rowIdx = Math.max(0, Math.min(rows.length - 1, Math.floor(y / ganttRowHeight)));
+      const offsets = ganttRowOffsetsRef.current;
+      const rowIdx = Math.max(0, Math.min(rows.length - 1, ganttRowIndexAtY(offsets, y)));
       for (let dist = 0; dist < rows.length; dist++) {
         for (const idx of [rowIdx - dist, rowIdx + dist]) {
           if (idx < 0 || idx >= rows.length) continue;
@@ -3923,7 +3983,7 @@ export function GanttView() {
       return { hangarId: fallback.hangarId, rowKey: fallback.rowKey, intent: "move" as const };
     }
     return null;
-  }, [ganttRowHeight]);
+  }, []);
 
   const computePreviewAtClientX = useCallback(
     (clientX: number, d: NonNullable<typeof ptrDrag>): DndPtrPreview | null => {
@@ -4316,6 +4376,18 @@ export function GanttView() {
     }
     setBulkStatusNotice(null);
     bulkStatusM.reset();
+    if (!statusAllowsVirtualAircraft(bulkStatusTarget)) {
+      const blocked = selectedTableEventIds.filter((id) => {
+        const ev = events.find((row) => row.id === id);
+        return Boolean(ev && !ev.aircraft?.id && ev.virtualAircraft);
+      }).length;
+      if (blocked > 0) {
+        setBulkStatusNotice(
+          `${VIRTUAL_AIRCRAFT_NEEDS_REAL_MESSAGE} Затронуто событий: ${blocked}.`
+        );
+        return;
+      }
+    }
     setPendingSave("bulkStatus");
     setChangeReason("");
     if (activeSandbox) {
@@ -4657,7 +4729,11 @@ export function GanttView() {
       color: string;
       d: string;
     }> = [];
-    const rowH = ganttRowHeight;
+    const hangarOffsets = buildGanttRowOffsets(
+      hangarStandRows.map((row) =>
+        ganttBarBandHeight + (showGanttNotes && rowHasGanttNotes(row.events ?? []) ? GANTT_NOTES_BAND : 0)
+      )
+    );
     for (const ev of events) {
       const placements = ev.placements ?? [];
       if (placements.length < 2) continue;
@@ -4674,9 +4750,9 @@ export function GanttView() {
         const bg = calcBarXW({ startAt: b.startAt, endAt: b.endAt, from, dayWidth, canvasWidth, timeMode: timelineTimeMode });
         if (!ag || !bg) continue;
         const x1 = ag.x + ag.w;
-        const y1 = ar.rowIdx * rowH + rowH / 2;
+        const y1 = (hangarOffsets[ar.rowIdx] ?? 0) + ganttBarBandHeight / 2;
         const x2 = bg.x;
-        const y2 = br.rowIdx * rowH + rowH / 2;
+        const y2 = (hangarOffsets[br.rowIdx] ?? 0) + ganttBarBandHeight / 2;
         links.push({
           key: `${ak}->${bk}`,
           eventId: ev.id,
@@ -4690,7 +4766,7 @@ export function GanttView() {
       }
     }
     return links;
-  }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap, ganttRowHeight, timelineTimeMode]);
+  }, [groupMode, hangarStandRows, events, from, dayWidth, canvasWidth, aircraftPaletteMap, ganttBarBandHeight, showGanttNotes, timelineTimeMode]);
 
   /** Выбранное событие для связок: открытая карточка с id. */
   const selectedPlacementEventId = editorOpen && draft?.id ? draft.id : null;
@@ -4891,10 +4967,20 @@ export function GanttView() {
   );
 
   const ganttDiagramRows = groupMode === "AIRCRAFT" ? aircraftRows : hangarStandRows;
+  const ganttRowHeights = useMemo(
+    () =>
+      ganttDiagramRows.map((row) =>
+        ganttBarBandHeight + (showGanttNotes && rowHasGanttNotes(row.events ?? []) ? GANTT_NOTES_BAND : 0)
+      ),
+    [ganttDiagramRows, ganttBarBandHeight, showGanttNotes]
+  );
+  const ganttRowOffsets = useMemo(() => buildGanttRowOffsets(ganttRowHeights), [ganttRowHeights]);
+  ganttRowOffsetsRef.current = ganttRowOffsets;
   virtInputRef.current = {
     canvasWidth,
     rowCount: ganttDiagramRows.length,
-    rowHeight: ganttRowHeight,
+    rowHeight: ganttBarBandHeight,
+    rowOffsets: ganttRowOffsets,
     enabled: panelView === "DIAGRAM"
   };
 
@@ -4902,12 +4988,13 @@ export function GanttView() {
     virtInputRef.current = {
       canvasWidth,
       rowCount: ganttDiagramRows.length,
-      rowHeight: ganttRowHeight,
+      rowHeight: ganttBarBandHeight,
+      rowOffsets: ganttRowOffsets,
       enabled: panelView === "DIAGRAM"
     };
     ganttVirtRef.current = EMPTY_GANTT_VIRT;
     flushGanttVirt();
-  }, [canvasWidth, ganttRowHeight, ganttDiagramRows.length, panelView, fitLayoutEpoch, groupMode, flushGanttVirt]);
+  }, [canvasWidth, ganttBarBandHeight, ganttRowOffsets, ganttDiagramRows.length, panelView, fitLayoutEpoch, groupMode, showGanttNotes, flushGanttVirt]);
 
   const aircraftTypeById = useMemo(() => {
     const m = new Map<string, AircraftTypeRef>();
@@ -5438,9 +5525,11 @@ export function GanttView() {
   const paneWidth = Math.max(1, ganttVirt.x.width);
   const paneRight = paneLeft + paneWidth;
   paneLeftRef.current = paneLeft;
-  const ganttBodyHeight = ganttRowCount * ganttRowHeight;
-  const virtPaneTop = virtRowStart * ganttRowHeight;
-  const virtPaneHeight = Math.max(0, (virtRowEnd - virtRowStart) * ganttRowHeight);
+  const ganttBodyHeight = ganttRowOffsets[ganttRowCount] ?? 0;
+  const virtPaneTop = ganttRowOffsets[virtRowStart] ?? 0;
+  const virtPaneHeight = Math.max(0, (ganttRowOffsets[virtRowEnd] ?? ganttBodyHeight) - virtPaneTop);
+  const rowHAt = (idx: number) => ganttRowHeights[idx] ?? ganttBarBandHeight;
+  const rowNotesAt = (idx: number) => Boolean(showGanttNotes && (ganttRowHeights[idx] ?? 0) > ganttBarBandHeight);
   const barInPane = (x: number, w: number) =>
     rangesOverlap(x, x + w, paneLeft - GANTT_BAR_SLOP_PX, paneRight + GANTT_BAR_SLOP_PX);
   const toPaneX = (x: number) => x - paneLeft;
@@ -5811,6 +5900,18 @@ export function GanttView() {
                       checked={showExternalMroOnGantt}
                       onChange={setShowExternalMroOnGantt}
                       label={showExternalMroOnGantt ? "Показывать" : "Скрыты"}
+                    />
+                  </div>
+                  <div
+                    className="tgField"
+                    title="Показать текст примечания события под баром, чтобы не пропустить нерешённые моменты"
+                  >
+                    <span className="tgFieldLabel">Примечание</span>
+                    <SwitchToggle
+                      compact
+                      checked={showGanttNotes}
+                      onChange={setShowGanttNotes}
+                      label={showGanttNotes ? "Под баром" : "Скрыты"}
                     />
                   </div>
                 </>
@@ -6364,7 +6465,7 @@ export function GanttView() {
 
         <div className="ganttBody">
           <div className="ganttLeftCol" style={ganttLabelColStyle} ref={ganttLeftColRef}>
-            {virtRowStart > 0 ? <div className="ganttVirtSpacer" style={{ height: virtRowStart * ganttRowHeight }} aria-hidden="true" /> : null}
+            {virtRowStart > 0 ? <div className="ganttVirtSpacer" style={{ height: virtPaneTop }} aria-hidden="true" /> : null}
             {visibleDiagramRows.map((r, i) => {
               const rowIdx = virtRowStart + i;
               const hangarBoundary = groupMode !== "AIRCRAFT" && isHangarBoundaryRow(rowIdx);
@@ -6372,7 +6473,7 @@ export function GanttView() {
                 <div
                   className={`ganttLabel${rowIdx % 2 ? " ganttRowAlt" : ""}${hangarBoundary ? " ganttHangarBoundary" : ""}`}
                   key={r.key}
-                  style={{ height: ganttRowHeight }}
+                  style={{ height: rowHAt(rowIdx) }}
                   title={
                     groupMode === "AIRCRAFT"
                       ? (r as any).title || undefined
@@ -6391,7 +6492,7 @@ export function GanttView() {
               );
             })}
             {virtRowEnd < ganttRowCount ? (
-              <div className="ganttVirtSpacer" style={{ height: (ganttRowCount - virtRowEnd) * ganttRowHeight }} aria-hidden="true" />
+              <div className="ganttVirtSpacer" style={{ height: ganttBodyHeight - (ganttRowOffsets[virtRowEnd] ?? ganttBodyHeight) }} aria-hidden="true" />
             ) : null}
           </div>
 
@@ -6399,7 +6500,7 @@ export function GanttView() {
             <div className="ganttRightScroll" ref={bodyScrollRef} onScroll={onBodyScroll}>
               <div
                 key={`gantt-inner-${fitLayoutEpoch}`}
-                className="ganttRightInner"
+                className={`ganttRightInner${showGanttNotes ? " ganttNotesUnderBars" : ""}${ganttDisplayMode === "PLAN_FACT" ? " ganttNotesPlanFact" : ""}`}
                 style={{ width: canvasWidth, minWidth: canvasWidth, height: ganttBodyHeight }}
                 onPointerDown={onGanttPanPointerDown}
                 onDragStart={(e) => e.preventDefault()}
@@ -6411,9 +6512,9 @@ export function GanttView() {
                   <svg
                     className="placementLinkLayer placementLinkLayerActive"
                     width={paneWidth}
-                    height={Math.max(ganttRowHeight, virtPaneHeight)}
-                    viewBox={`${paneLeft} ${virtPaneTop} ${paneWidth} ${Math.max(ganttRowHeight, virtPaneHeight)}`}
-                    style={{ left: paneLeft, top: virtPaneTop, width: paneWidth, height: Math.max(ganttRowHeight, virtPaneHeight) }}
+                    height={Math.max(ganttBarBandHeight, virtPaneHeight)}
+                    viewBox={`${paneLeft} ${virtPaneTop} ${paneWidth} ${Math.max(ganttBarBandHeight, virtPaneHeight)}`}
+                    style={{ left: paneLeft, top: virtPaneTop, width: paneWidth, height: Math.max(ganttBarBandHeight, virtPaneHeight) }}
                     aria-hidden="true"
                   >
                     {visiblePaneLinks.map((l) => (
@@ -6440,7 +6541,7 @@ export function GanttView() {
                   ? aircraftRows.slice(virtRowStart, virtRowEnd).map((r, i) => {
                       const rowIdx = virtRowStart + i;
                       return (
-                      <div className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}`} key={r.key} style={{ width: paneWidth, height: ganttRowHeight, minHeight: ganttRowHeight }}>
+                      <div className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}${rowNotesAt(rowIdx) ? " ganttRowWithNotes" : ""}`} key={r.key} style={{ width: paneWidth, height: rowHAt(rowIdx), minHeight: rowHAt(rowIdx) }}>
                         {r.events.map((p) => {
                           const ev = p.ev;
                           const displayPeriod = dndActive ? { startAt: ev.startAt, endAt: ev.endAt, source: "Опер." as const } : displayPeriodForMode(ev, ganttDisplayMode);
@@ -6506,6 +6607,9 @@ export function GanttView() {
                               ) : null}
                               {renderEntryTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                               {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
+                              {showGanttNotes ? (
+                                <GanttBarNotes text={ev.notes} left={toPaneX(x)} width={w} onClick={() => pickEvent(ev)} />
+                              ) : null}
                             </Fragment>
                           );
                         })}
@@ -6516,12 +6620,12 @@ export function GanttView() {
                       const rowIdx = virtRowStart + i;
                       return (
                       <div
-                        className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}${isHangarBoundaryRow(rowIdx) ? " ganttHangarBoundary" : ""}`}
+                        className={`ganttCanvas${rowIdx % 2 ? " ganttRowAlt" : ""}${isHangarBoundaryRow(rowIdx) ? " ganttHangarBoundary" : ""}${rowNotesAt(rowIdx) ? " ganttRowWithNotes" : ""}`}
                         key={r.key}
                         style={{
                           width: paneWidth,
-                          height: ganttRowHeight,
-                          minHeight: ganttRowHeight,
+                          height: rowHAt(rowIdx),
+                          minHeight: rowHAt(rowIdx),
                           outline:
                             dndActive && dndHoverKey === r.key && dndHoverIntent === "move"
                               ? "2px solid rgba(37, 99, 235, 0.55)"
@@ -6726,6 +6830,9 @@ export function GanttView() {
                             ) : null}
                             {renderEntryTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                             {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
+                            {showGanttNotes ? (
+                              <GanttBarNotes text={ev.notes} left={toPaneX(x)} width={w} onClick={() => { if (!dndActive) pickEvent(ev); }} />
+                            ) : null}
                             </Fragment>
                           );
                         })}
@@ -6889,7 +6996,7 @@ export function GanttView() {
                     <>
                       <p>Идентификация события: название, статус, тип планирования, тип события, борт и ответственный цех.</p>
                       <ul>
-                        <li>Борт можно менять только в статусах «Черновик» и «Запланировано».</li>
+                        <li>Для события из массового планирования борт сначала VIRT: выберите реальный из справочника до согласования или завершения.</li>
                         <li>Оператор и тип ВС подставляются из справочника по выбранному борту.</li>
                         <li>Новые события создаются как оперативные; уровень на форме не выбирается.</li>
                       </ul>
@@ -6978,26 +7085,22 @@ export function GanttView() {
                   </div>
 
                   <div className="evMainInfoGroup" aria-label="Воздушное судно">
-                    <div className="evField">
+                    <div className={`evField${virtualNeedsRealAircraft ? " evFieldVirtualAircraft" : ""}`}>
                       <span className="evFieldLabel">Борт</span>
-                      {!aircraftFieldEditable || (selectedVirtualAircraft && !draft.aircraftId) ? (
+                      {!aircraftFieldEditable ? (
                         <input
                           className="evInput evInputReadonly"
                           value={aircraftFieldLabel}
                           readOnly
-                          title={
-                            !aircraftFieldEditable
-                              ? "Борт можно менять только в статусах «Черновик» и «Запланировано»"
-                              : undefined
-                          }
+                          title="Борт можно менять только на согласовании, либо пока не выбран реальный борт вместо VIRT"
                         />
                       ) : (
                         <SingleSelectDropdown
                           className="evSelect"
                           searchable
                           searchPlaceholder="Найти борт"
-                          placeholder="— выберите —"
-                          emptyLabel="— выберите —"
+                          placeholder={virtualNeedsRealAircraft ? `${VIRTUAL_AIRCRAFT_LABEL} — выберите из справочника` : "— выберите —"}
+                          emptyLabel={virtualNeedsRealAircraft ? `${VIRTUAL_AIRCRAFT_LABEL} — выберите из справочника` : "— выберите —"}
                           options={aircraftSelectOptions}
                           value={draft.aircraftId}
                           onChange={(aircraftId) => setDraft({ ...draft, aircraftId })}

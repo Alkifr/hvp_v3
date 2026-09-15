@@ -36,6 +36,11 @@ import {
   type EventStatusCatalogItem,
   type EventStatusCode
 } from "../../lib/eventStatusCatalog";
+import {
+  VIRTUAL_AIRCRAFT_LABEL,
+  virtualAircraftDisplayLabel,
+  virtualAircraftStatusError
+} from "../../lib/virtualAircraft";
 import { SingleSelectDropdown } from "./SingleSelectDropdown";
 import { useActiveSandbox } from "./SandboxSwitcher";
 
@@ -1614,7 +1619,7 @@ export function GanttEventsTable(props: {
       case "planningKind":
         return eventPlanningKind(ev) === "PLANNED" ? "Плановое" : "Внеплановое";
       case "aircraftId":
-        return ev.aircraft?.tailNumber ?? ev.virtualAircraft?.label ?? "—";
+        return ev.aircraft?.tailNumber ?? (ev.virtualAircraft ? virtualAircraftDisplayLabel() : "—");
       case "operator":
         return (
           <span className="ganttTableCellText" title={meta.operator}>
@@ -1744,7 +1749,7 @@ export function GanttEventsTable(props: {
       layoutOptions: Layout[];
       standOptions: Stand[];
       locationLocked: boolean;
-      aircraftLocked: boolean;
+      virtualAircraftPending: boolean;
       budgetDisabled: boolean;
     }
   ): ReactNode => {
@@ -1797,16 +1802,18 @@ export function GanttEventsTable(props: {
           </select>
         );
       case "aircraftId":
-        return ctx.aircraftLocked ? (
-          <input className="evInput ganttTableInput evInputReadonly" value={ev.virtualAircraft?.label ?? "—"} readOnly />
-        ) : (
+        return (
           <SingleSelectDropdown
-            className="ganttTableSelect"
+            className={`ganttTableSelect${ctx.virtualAircraftPending ? " ganttTableSelectVirtual" : ""}`}
             compact
             searchable
             searchPlaceholder="Найти борт"
-            placeholder="— выберите —"
-            emptyLabel="— выберите —"
+            placeholder={
+              ctx.virtualAircraftPending ? `${VIRTUAL_AIRCRAFT_LABEL} — выберите из справочника` : "— выберите —"
+            }
+            emptyLabel={
+              ctx.virtualAircraftPending ? `${VIRTUAL_AIRCRAFT_LABEL} — выберите из справочника` : "— выберите —"
+            }
             options={aircraftOptions}
             value={d.aircraftId}
             onChange={(aircraftId) => patchDraft({ aircraftId })}
@@ -2178,7 +2185,7 @@ export function GanttEventsTable(props: {
                   layoutOptions,
                   standOptions,
                   locationLocked: d.multiPlacement,
-                  aircraftLocked: d.hasVirtualAircraft && !d.aircraftId,
+                  virtualAircraftPending: d.hasVirtualAircraft && !d.aircraftId,
                   budgetDisabled: d.planningKind === "UNPLANNED"
                 };
 
@@ -2273,6 +2280,12 @@ function validateDraft(draft: RowDraft) {
   if (!draft.title.trim()) throw new Error("Заполните название");
   if (!draft.eventTypeId) throw new Error("Заполните тип события");
   if (!draft.aircraftId && !draft.hasVirtualAircraft) throw new Error("Заполните борт");
+  const virtualStatusError = virtualAircraftStatusError({
+    status: draft.status,
+    aircraftId: draft.aircraftId,
+    hasVirtualAircraft: draft.hasVirtualAircraft
+  });
+  if (virtualStatusError) throw new Error(virtualStatusError);
   const startAt = dayjs(draft.startAtLocal);
   const endAt = dayjs(draft.endAtLocal);
   if (!startAt.isValid() || !endAt.isValid()) throw new Error("Заполните оперативный период");

@@ -5,14 +5,17 @@ import {
   clipRange,
   EMPTY_GANTT_VIRT,
   ganttIndexWindow,
+  ganttIndexWindowFromOffsets,
   ganttIndexWindowNeedsRefresh,
   ganttPxWindow,
   ganttPxWindowNeedsRefresh,
+  ganttRowIndexAtY,
   ganttXHysteresis,
   ganttXOverscan,
   measureGanttVisibleY,
   nextGanttVirtState,
-  rangesOverlap
+  rangesOverlap,
+  buildGanttRowOffsets
 } from "./ganttVirtualize.ts";
 
 test("ganttPxWindow covers viewport plus overscan and clamps to canvas", () => {
@@ -28,6 +31,17 @@ test("ganttPxWindowNeedsRefresh keeps window until hysteresis is eaten", () => {
   assert.equal(ganttPxWindowNeedsRefresh(win, 1000, 800, 10_000, 200), false);
   assert.equal(ganttPxWindowNeedsRefresh(win, 1100, 800, 10_000, 200), true);
   assert.equal(ganttPxWindowNeedsRefresh(win, 0, 800, 1500, 200), true);
+});
+
+test("variable row offsets map Y to the taller notes row", () => {
+  const offsets = buildGanttRowOffsets([44, 64, 44, 44]);
+  assert.deepEqual(offsets, [0, 44, 108, 152, 196]);
+  assert.equal(ganttRowIndexAtY(offsets, 0), 0);
+  assert.equal(ganttRowIndexAtY(offsets, 43), 0);
+  assert.equal(ganttRowIndexAtY(offsets, 44), 1);
+  assert.equal(ganttRowIndexAtY(offsets, 100), 1);
+  assert.equal(ganttRowIndexAtY(offsets, 108), 2);
+  assert.deepEqual(ganttIndexWindowFromOffsets(30, 50, offsets, 0), { startIdx: 0, endIdx: 2 });
 });
 
 test("ganttIndexWindow slices rows with overscan", () => {

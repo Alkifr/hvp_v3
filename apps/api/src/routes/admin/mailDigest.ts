@@ -112,7 +112,9 @@ export const mailDigestRoutes: FastifyPluginAsync = async (app) => {
       });
       return { ok: true, messageId: result.messageId, to };
     } catch (e: any) {
-      throw app.httpErrors.badRequest(`Ошибка отправки: ${e?.message ?? String(e)}`);
+      const message = e?.message ?? String(e);
+      app.log.warn({ err: e, smtpHost: smtp.smtpHost, smtpPort: smtp.smtpPort }, "smtp test failed");
+      throw app.httpErrors.badRequest(`Ошибка отправки: ${message}`);
     }
   });
 };

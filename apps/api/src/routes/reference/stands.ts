@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertModelPermission } from "../../lib/rbac.js";
 
 const zBodyType = z.enum(["NARROW_BODY", "WIDE_BODY"]).optional().nullable();
 const zAircraftTypeIds = z.array(zUuid).optional();
@@ -30,7 +30,7 @@ const standInclude = {
 
 export const standsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "HangarStand", "view");
     const layoutId = zUuid.optional().parse((req.query as any)?.layoutId);
     const hangarId = zUuid.optional().parse((req.query as any)?.hangarId);
     const activeOnly = ["1", "true", "yes"].includes(String((req.query as any)?.activeOnly ?? "").toLowerCase());
@@ -47,7 +47,7 @@ export const standsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "HangarStand", "add");
     const body = z
       .object({
         layoutId: zUuid,
@@ -78,7 +78,7 @@ export const standsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "HangarStand", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -112,7 +112,7 @@ export const standsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "HangarStand", "delete");
     const id = zUuid.parse((req.params as any).id);
     const usage = await app.prisma.hangarStand.findUnique({
       where: { id },

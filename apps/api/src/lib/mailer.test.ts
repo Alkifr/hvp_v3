@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isSmtpReady, resolveFrom, smtpConfigFromSettings } from "./mailer.js";
+import { formatSmtpError, isSmtpReady, resolveFrom, smtpConfigFromSettings } from "./mailer.js";
 
 const base = {
   smtpHost: "smtp.atechnics.ru",
@@ -30,4 +30,12 @@ test("resolveFrom prefers mailFrom display name", () => {
   });
   assert.ok(cfg);
   assert.equal(resolveFrom(cfg), "HVP рассылка (prod) <hvp-prod@atechnics.ru>");
+});
+
+test("formatSmtpError explains connection timeout", () => {
+  const cfg = smtpConfigFromSettings({ ...base, mailFrom: "hvp-ml@atechnics.ru" });
+  assert.ok(cfg);
+  const text = formatSmtpError({ code: "ETIMEDOUT", message: "Connection timeout" }, cfg);
+  assert.match(text, /Таймаут SMTP smtp.atechnics.ru:25/);
+  assert.match(text, /файрвол/);
 });

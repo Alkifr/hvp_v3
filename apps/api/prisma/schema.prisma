@@ -447,7 +447,8 @@ model User {
   pgRoleName      String?
   pgPassword      String?
 
-  roles UserRole[]
+  roles                UserRole[]
+  permissionOverrides  UserPermission[]
 
   ownedSandboxes     Sandbox[]             @relation("SandboxOwner")
   sandboxMemberships SandboxMember[]
@@ -532,10 +533,19 @@ model Permission {
   id        String   @id @default(uuid())
   code      String   @unique
   name      String
+  /// Django content type: app_label
+  appLabel  String   @default("")
+  /// Django content type: model
+  model     String   @default("")
+  /// view | add | change | delete | custom
+  action    String   @default("")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   roles RolePermission[]
+  users UserPermission[]
+
+  @@index([appLabel, model])
 }
 
 model UserRole {
@@ -557,6 +567,24 @@ model RolePermission {
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+enum UserPermissionEffect {
+  GRANT
+  DENY
+}
+
+/// Индивидуальные отклонения от прав ролей: доп. выдача или запрет.
+model UserPermission {
+  userId       String
+  permissionId String
+  effect       UserPermissionEffect
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, permissionId])
   @@index([permissionId])
 }
 

@@ -2,16 +2,16 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertModelPermission } from "../../lib/rbac.js";
 
 export const skillsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "workforce:read");
+    assertModelPermission(req as any, "Skill", "view");
     return await app.prisma.skill.findMany({ orderBy: [{ isActive: "desc" }, { code: "asc" }] });
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "workforce:write");
+    assertModelPermission(req as any, "Skill", "add");
     const body = z
       .object({
         code: z.string().trim().min(2).max(32),
@@ -23,7 +23,7 @@ export const skillsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "workforce:write");
+    assertModelPermission(req as any, "Skill", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -36,7 +36,7 @@ export const skillsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "workforce:write");
+    assertModelPermission(req as any, "Skill", "delete");
     const id = zUuid.parse((req.params as any).id);
     await app.prisma.skill.delete({ where: { id } });
     return { ok: true };

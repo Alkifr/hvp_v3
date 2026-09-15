@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { EventStatus } from "@prisma/client";
 import { z } from "zod";
 
-import { assertPermission, assertSystemAdmin } from "../../lib/rbac.js";
+import { assertModelPermission, assertSystemAdmin } from "../../lib/rbac.js";
 import {
   ensureEventStatusCatalogRows,
   EVENT_STATUS_CATALOG,
@@ -20,7 +20,7 @@ function normalizeHexColor(raw: string | null | undefined) {
 
 export const eventStatusesRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "EventStatusCatalog", "view");
     await ensureEventStatusCatalogRows(app.prisma);
     const rows = await app.prisma.eventStatusCatalog.findMany({
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }]
@@ -43,7 +43,7 @@ export const eventStatusesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "EventStatusCatalog", "change");
     assertSystemAdmin(req as any);
     const code = z.nativeEnum(EventStatus).parse((req.params as any).id);
     const body = z

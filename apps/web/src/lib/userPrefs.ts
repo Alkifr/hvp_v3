@@ -77,6 +77,28 @@ export const PRESENCE_PAGE_LABEL: Record<string, string> = {
   help: "Инструкция"
 };
 
+/** Short section names for `document.title` (`HVP / Гантт`). */
+export const DOCUMENT_PAGE_TITLE: Record<string, string> = {
+  gantt: "Гантт",
+  hangar: "Ангар",
+  analytics: "Аналитика",
+  itp: "РМ ИТП",
+  import: "Импорт",
+  mass: "Планирование",
+  ref: "Справочники",
+  mail: "Рассылка",
+  sandboxes: "Песочницы",
+  help: "Инструкция",
+  profile: "Профиль",
+  admin: "Админка"
+};
+
+export function browserDocumentTitle(page: string | null | undefined): string {
+  if (!page) return "HVP";
+  const section = DOCUMENT_PAGE_TITLE[page];
+  return section ? `HVP / ${section}` : "HVP";
+}
+
 const HOME_SET = new Set<string>(HOME_PAGES);
 
 function hasAnyPerm(permissions: string[], perm: string | string[] | undefined): boolean {

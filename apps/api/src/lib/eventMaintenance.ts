@@ -4,6 +4,7 @@ import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
 import { isEventOverdueNoFact, reconcileEventStatus } from "./eventStatus.js";
 import { loadStatusAutomation } from "./eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "./eventStatusNotifications.js";
+import { isVirtualAircraftPlaceholder, statusAllowsVirtualAircraft, VIRTUAL_AIRCRAFT_LABEL } from "./virtualAircraft.js";
 
 const KIND_OVERDUE = "EVENT_OVERDUE_NO_FACT";
 
@@ -15,7 +16,7 @@ function aircraftLabel(ev: {
   const tail = ev.aircraft?.tailNumber;
   if (tail) return String(tail);
   const virt = ev.virtualAircraft as { label?: string } | null;
-  if (virt?.label) return String(virt.label);
+  if (virt) return VIRTUAL_AIRCRAFT_LABEL;
   return ev.title;
 }
 
@@ -53,6 +54,7 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
       actualStartAt: true,
       actualEndAt: true,
       sandboxId: true,
+      aircraftId: true,
       aircraft: { select: { tailNumber: true } },
       virtualAircraft: true
     },
@@ -74,13 +76,18 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
       autoInProgressStatuses: automation.autoInProgressStatuses
     });
 
-    const statusChanged = reconciled.status !== ev.status;
+    const wouldLeaveVirtual =
+      isVirtualAircraftPlaceholder(ev) && !statusAllowsVirtualAircraft(reconciled.status);
+
+    const statusChanged = !wouldLeaveVirtual && reconciled.status !== ev.status;
     const actualStartChanged =
+      !wouldLeaveVirtual &&
       (reconciled.actualStartAt?.valueOf() ?? null) !== (ev.actualStartAt?.valueOf() ?? null);
     const actualEndChanged =
+      !wouldLeaveVirtual &&
       (reconciled.actualEndAt?.valueOf() ?? null) !== (ev.actualEndAt?.valueOf() ?? null);
 
-    if (reconciled.statusChanged || reconciled.actualFilledFromOper || actualStartChanged || actualEndChanged) {
+    if (!wouldLeaveVirtual && (reconciled.statusChanged || reconciled.actualFilledFromOper || actualStartChanged || actualEndChanged)) {
       await app.prisma.maintenanceEvent.update({
         where: { id: ev.id },
         data: {
@@ -134,13 +141,13 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
     // Уведомления в колокольчик — только для рабочего контура (не для песочниц).
     if (ev.sandboxId != null) continue;
 
-    const statusForOverdue = reconciled.status;
+    const statusForOverdue = wouldLeaveVirtual ? ev.status : reconciled.status;
     if (
       isEventOverdueNoFact({
         status: statusForOverdue,
         endAt: ev.endAt,
-        actualStartAt: reconciled.actualStartAt,
-        actualEndAt: reconciled.actualEndAt,
+        actualStartAt: wouldLeaveVirtual ? ev.actualStartAt : reconciled.actualStartAt,
+        actualEndAt: wouldLeaveVirtual ? ev.actualEndAt : reconciled.actualEndAt,
         now,
         manualOnlyStatuses: automation.manualOnlyStatuses
       })

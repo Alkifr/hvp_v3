@@ -2,12 +2,12 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertModelPermission } from "../../lib/rbac.js";
 import { UserMsg } from "../../lib/userErrors.js";
 
 export const personsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "workforce:read");
+    assertModelPermission(req as any, "Person", "view");
     return await app.prisma.person.findMany({
       include: { skills: { include: { skill: true } } },
       orderBy: [{ isActive: "desc" }, { name: "asc" }]
@@ -15,7 +15,7 @@ export const personsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "workforce:write");
+    assertModelPermission(req as any, "Person", "add");
     const body = z
       .object({
         code: z.string().trim().min(1).max(32).optional(),
@@ -27,7 +27,7 @@ export const personsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "workforce:write");
+    assertModelPermission(req as any, "Person", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -41,7 +41,7 @@ export const personsRoutes: FastifyPluginAsync = async (app) => {
 
   // Перезаписать набор квалификаций сотрудника
   app.put("/:id/skills", async (req) => {
-    assertPermission(req as any, "workforce:write");
+    assertModelPermission(req as any, "Person", "change");
     const personId = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -81,7 +81,7 @@ export const personsRoutes: FastifyPluginAsync = async (app) => {
 
   // Добавить период недоступности (MVP)
   app.post("/:id/unavailability", async (req) => {
-    assertPermission(req as any, "workforce:write");
+    assertModelPermission(req as any, "Person", "add");
     const personId = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -98,7 +98,7 @@ export const personsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "workforce:write");
+    assertModelPermission(req as any, "Person", "delete");
     const id = zUuid.parse((req.params as any).id);
     await app.prisma.person.delete({ where: { id } });
     return { ok: true };

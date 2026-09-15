@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { EventStatus, Prisma } from "@prisma/client";
 
+import { VIRTUAL_AIRCRAFT_LABEL } from "./virtualAircraft.js";
+
 const KIND_IN_PROGRESS = "EVENT_STATUS_IN_PROGRESS";
 const KIND_DONE = "EVENT_STATUS_DONE";
 
@@ -12,7 +14,7 @@ function aircraftLabel(ev: {
   const tail = ev.aircraft?.tailNumber;
   if (tail) return String(tail);
   const virt = ev.virtualAircraft as { label?: string } | null;
-  if (virt?.label) return String(virt.label);
+  if (virt) return VIRTUAL_AIRCRAFT_LABEL;
   return ev.title;
 }
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  browserDocumentTitle,
   firstAllowedPage,
   isHomePageAllowed,
   parseHomePage,
@@ -33,4 +34,10 @@ test("resolveStartPage uses preferred when allowed, otherwise first available", 
 
 test("parseMutedNotificationKinds drops unknown kinds", () => {
   assert.deepEqual(parseMutedNotificationKinds(["EVENT_OVERDUE_NO_FACT", "x"]), ["EVENT_OVERDUE_NO_FACT"]);
+});
+
+test("browserDocumentTitle includes the current section", () => {
+  assert.equal(browserDocumentTitle("gantt"), "HVP / Гантт");
+  assert.equal(browserDocumentTitle("analytics"), "HVP / Аналитика");
+  assert.equal(browserDocumentTitle(null), "HVP");
 });

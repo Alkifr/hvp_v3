@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertModelPermission } from "../../lib/rbac.js";
 
 const zCategory = z.enum(["REWARD", "PENALTY", "LIMIT"]);
 const zScope = z.enum(["NEW_EVENT", "EXISTING_EVENT", "PLACEMENT", "LAYOUT", "STAND", "TOW", "PRIORITY"]);
@@ -14,7 +14,7 @@ const profileInclude = {
 
 export const optimizationProfilesRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "OptimizationProfile", "view");
     const activeOnly = ["1", "true", "yes"].includes(String((req.query as any)?.activeOnly ?? "").toLowerCase());
     return await app.prisma.optimizationProfile.findMany({
       where: activeOnly ? { isActive: true } : {},
@@ -24,7 +24,7 @@ export const optimizationProfilesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "OptimizationProfile", "add");
     const body = z
       .object({
         code: z.string().trim().min(1).max(64),
@@ -41,7 +41,7 @@ export const optimizationProfilesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "OptimizationProfile", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -59,7 +59,7 @@ export const optimizationProfilesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "OptimizationProfile", "delete");
     const id = zUuid.parse((req.params as any).id);
     await app.prisma.optimizationProfile.delete({ where: { id } });
     return { ok: true };
@@ -68,7 +68,7 @@ export const optimizationProfilesRoutes: FastifyPluginAsync = async (app) => {
 
 export const optimizationScoreRulesRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "OptimizationProfile", "view");
     const profileId = zUuid.optional().parse((req.query as any)?.profileId);
     const activeOnly = ["1", "true", "yes"].includes(String((req.query as any)?.activeOnly ?? "").toLowerCase());
     return await app.prisma.optimizationScoreRule.findMany({
@@ -82,7 +82,7 @@ export const optimizationScoreRulesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "OptimizationProfile", "add");
     const body = z
       .object({
         profileId: zUuid,
@@ -99,7 +99,7 @@ export const optimizationScoreRulesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "OptimizationProfile", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -117,7 +117,7 @@ export const optimizationScoreRulesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "OptimizationProfile", "delete");
     const id = zUuid.parse((req.params as any).id);
     await app.prisma.optimizationScoreRule.delete({ where: { id } });
     return { ok: true };

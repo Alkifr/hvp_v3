@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useMemo, useState } from "react";
 
-import { apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
 import {
   adminTabFromHash,
@@ -9,10 +9,10 @@ import {
   parseHashPage,
   type AdminHashTab
 } from "../../lib/eventDeepLink";
-import { permissionCodesFromIds, summarizeRolePermissions, previewNavLabels, nextCloneRoleCode } from "../../lib/permissionCatalog";
+import { permissionCodesFromIds, permissionIdsFromCodes, summarizeRolePermissions, previewNavLabels, nextCloneRoleCode, applyPermissionOverrides, diffPermissionOverrides } from "../../lib/permissionCatalog";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
-import { PermissionMatrix } from "../components/PermissionMatrix";
+import { DjangoPermissionPicker } from "../components/DjangoPermissionPicker";
 import type { SandboxSummary } from "../components/SandboxSwitcher";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { formatPresenceWhen, UserPresencePanel } from "../components/UserPresencePanel";
@@ -21,8 +21,16 @@ import { AdminOverview } from "./AdminOverview";
 import { AdminReportsPanel } from "./AdminReportsPanel";
 import { AdminSandboxesPanel } from "./AdminSandboxesPanel";
 
-type Role = { id: string; code: string; name: string; isSystem: boolean; permissions: { permission: Permission }[] };
-type Permission = { id: string; code: string; name: string };
+type Role = {
+  id: string;
+  code: string;
+  name: string;
+  isSystem: boolean;
+  permissions: { permission: Permission }[];
+  _count?: { users: number };
+};
+type Permission = { id: string; code: string; name: string; appLabel?: string | null; model?: string | null; action?: string | null };
+type PermissionOverride = { effect: "GRANT" | "DENY"; permission: Permission };
 type User = {
   id: string;
   email: string;
@@ -34,6 +42,7 @@ type User = {
   lastLoginAt?: string | null;
   lastSeenAt?: string | null;
   roles: { role: { id: string; code: string; name: string } }[];
+  permissionOverrides?: PermissionOverride[];
 };
 type EventTypeRef = { id: string; code: string; name: string };
 type AircraftTypeRef = { id: string; icaoType?: string | null; name: string };
@@ -71,7 +80,7 @@ const TAB_META: Record<AdminTab, { label: string; group: AdminGroup; danger?: bo
   users: { label: "Пользователи", group: "people" },
   activity: { label: "Журнал", group: "people" },
   presence: { label: "Присутствие", group: "people" },
-  roles: { label: "Роли", group: "access" },
+  roles: { label: "Группы", group: "access" },
   announce: { label: "Объявления", group: "comms" },
   mail: { label: "SMTP", group: "comms" },
   cleanup: { label: "Очистка", group: "risk", danger: true },
@@ -125,13 +134,19 @@ function userInitials(u: User): string {
 function IconSave(props: { size?: number }) {
   const s = props.size ?? 16;
   return (
-    <svg width={s} height={s} viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path
-        d="M4 4.5A1.5 1.5 0 0 1 5.5 3h7.379a1.5 1.5 0 0 1 1.06.44l1.621 1.62A1.5 1.5 0 0 1 16 6.122V15.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 15.5v-11Z"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-      <path d="M7 3.5V7h6V3.5M7 16.5v-4h6v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <svg width={s} height={s} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 4h10l2 2v10H4z" />
+      <path d="M7 4v4h7" />
+      <path d="M7 16v-5h6v5" />
+    </svg>
+  );
+}
+
+function IconCopy() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="10" height="12" rx="2" />
+      <path d="M7 17h8a2 2 0 0 0 2-2V7" />
     </svg>
   );
 }
@@ -235,7 +250,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const permsQ = useQuery({
     queryKey: ["admin", "permissions"],
     queryFn: () => apiGet<Permission[]>("/api/admin/permissions"),
-    enabled: canRoles
+    enabled: canRoles || canUsers
   });
   const rolesQ = useQuery({
     queryKey: ["admin", "roles"],
@@ -479,7 +494,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const groupTabs = navGroups.find((g) => g.id === activeGroup)?.tabs ?? [];
   const searchPlaceholder =
     activeTab === "roles"
-      ? "Поиск ролей…"
+      ? "Поиск групп…"
       : activeTab === "users" || activeTab === "presence"
         ? "Поиск пользователей…"
         : activeTab === "sandboxes"
@@ -489,7 +504,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
             : "Поиск…";
   const canCreateOnTab = (activeTab === "users" && canUsers) || (activeTab === "roles" && canRoles);
   const createOpen = activeTab === "users" ? inviteOpen : activeTab === "roles" ? createRoleOpen : false;
-  const createLabel = activeTab === "roles" ? "Создать роль" : "Пригласить пользователя";
+  const createLabel = activeTab === "roles" ? "Создать группу" : "Пригласить пользователя";
 
   useEffect(() => {
     if (tab !== "users") setInviteOpen(false);
@@ -779,7 +794,15 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                       </td>
                     </tr>
                   ) : (
-                    pagedUsers.map((u) => <UserRow key={u.id} u={u} roles={roles} />)
+                    pagedUsers.map((u) => (
+                      <UserRow
+                        key={u.id}
+                        u={u}
+                        roles={roles}
+                        permissions={permissions}
+                        users={usersQ.data ?? []}
+                      />
+                    ))
                   )}
                 </tbody>
               </table>
@@ -836,12 +859,12 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           <div className="adminInviteCard adminInviteCardNested">
             <div className="adminInviteHead">
               <div>
-                <div className="adminInviteTitle">Новая роль</div>
+                <div className="adminInviteTitle">Новая группа</div>
               </div>
               <button
                 type="button"
                 className="btn ganttIconBtn adminInviteClose"
-                aria-label="Закрыть форму новой роли"
+                aria-label="Закрыть форму новой группы"
                 onClick={() => setCreateRoleOpen(false)}
               >
                 <IconClose />
@@ -868,11 +891,11 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               </div>
             </div>
             <div className="adminRolesPermsField">
-              <span className="muted">Доступ к модулям</span>
+              <span className="muted">Права группы</span>
               <span className="adminRoleCardSummary">
                 {summarizeRolePermissions(permissionCodesFromIds(rPermIds, permissions))}
               </span>
-              <PermissionMatrix catalog={permissions} value={rPermIds} onChange={setRPermIds} />
+              <DjangoPermissionPicker catalog={permissions} value={rPermIds} onChange={setRPermIds} />
             </div>
             {createRoleM.error ? (
               <div className="error">{String(createRoleM.error.message || createRoleM.error)}</div>
@@ -886,7 +909,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           <div className="adminRoleList">
             {filteredRoles.length === 0 ? (
               <div className="muted adminEmpty">
-                {listSearch.trim() ? "Ролей по запросу не найдено." : "Ролей пока нет."}
+                {listSearch.trim() ? "Групп по запросу не найдено." : "Групп пока нет."}
               </div>
             ) : (
               filteredRoles.map((r) => (
@@ -1193,7 +1216,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                           <strong>{item.title}</strong>
                           <div className="muted adminMono">{item.id}</div>
                         </td>
-                        <td>{item.aircraft?.tailNumber ?? item.virtualAircraft?.label ?? "—"}</td>
+                        <td>{item.aircraft?.tailNumber ?? (item.virtualAircraft ? "VIRT" : "—")}</td>
                         <td>{item.eventType?.name ?? "—"}</td>
                         <td>
                           {new Date(item.startAt).toLocaleString("ru-RU")}
@@ -1247,7 +1270,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     </div>
   );
 
-  function UserRow(props: { u: User; roles: Role[] }) {
+  function UserRow(props: { u: User; roles: Role[]; permissions: Permission[]; users: User[] }) {
     const roleIds = props.u.roles.map((x) => x.role.id);
     const [selRoles, setSelRoles] = useState<string[]>(roleIds);
     const [isActive, setIsActive] = useState(props.u.isActive);
@@ -1256,12 +1279,23 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     const [tempPassword, setTempPassword] = useState("");
     const [editOpen, setEditOpen] = useState(false);
     const [resetOpen, setResetOpen] = useState(false);
+    const [copyFromId, setCopyFromId] = useState("");
+    const [selPerms, setSelPerms] = useState<string[]>(() =>
+      permissionIdsFromCodes(
+        applyPermissionOverrides(
+          codesFromRoleIds(roleIds, props.roles),
+          (props.u.permissionOverrides ?? []).map((row) => ({ code: row.permission.code, effect: row.effect }))
+        ),
+        props.permissions
+      )
+    );
 
     const saveUserM = useMutation({
       mutationFn: () =>
         apiPatch<User>(`/api/admin/users/${props.u.id}`, {
           displayName: displayName.trim() || null,
           roleIds: selRoles,
+          ...(props.permissions.length ? { permissionIds: selPerms } : {}),
           isActive
         }),
       onSuccess: async () => {
@@ -1304,7 +1338,53 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         await qc.invalidateQueries({ queryKey: ["admin", "users"] });
       }
     });
-    const accessCodes = codesFromRoleIds(selRoles, props.roles);
+    const copyAccessM = useMutation({
+      mutationFn: (fromUserId: string) =>
+        apiPost<User>(`/api/admin/users/${props.u.id}/copy-access`, { fromUserId }),
+      onSuccess: async () => {
+        setCopyFromId("");
+        await qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      }
+    });
+
+    useEffect(() => {
+      const nextRoles = props.u.roles.map((x) => x.role.id);
+      setSelRoles(nextRoles);
+      if (!props.permissions.length) return;
+      setSelPerms(
+        permissionIdsFromCodes(
+          applyPermissionOverrides(
+            codesFromRoleIds(nextRoles, props.roles),
+            (props.u.permissionOverrides ?? []).map((row) => ({ code: row.permission.code, effect: row.effect }))
+          ),
+          props.permissions
+        )
+      );
+    }, [
+      props.permissions.length,
+      props.u.id,
+      props.u.roles.map((r) => r.role.id).join(","),
+      (props.u.permissionOverrides ?? []).map((row) => `${row.permission.code}:${row.effect}`).join(",")
+    ]);
+
+    const changeRoles = (nextRoleIds: string[]) => {
+      const live = diffPermissionOverrides(
+        codesFromRoleIds(selRoles, props.roles),
+        permissionCodesFromIds(selPerms, props.permissions)
+      );
+      const nextCodes = applyPermissionOverrides(codesFromRoleIds(nextRoleIds, props.roles), live);
+      setSelRoles(nextRoleIds);
+      if (props.permissions.length) setSelPerms(permissionIdsFromCodes(nextCodes, props.permissions));
+    };
+
+    const accessCodes = props.permissions.length
+      ? permissionCodesFromIds(selPerms, props.permissions)
+      : applyPermissionOverrides(
+          codesFromRoleIds(selRoles, props.roles),
+          (props.u.permissionOverrides ?? []).map((row) => ({ code: row.permission.code, effect: row.effect }))
+        );
+    const hasOverrides = (props.u.permissionOverrides ?? []).length > 0;
+    const copySources = props.users.filter((u) => u.id !== props.u.id);
 
     return (
       <Fragment>
@@ -1320,6 +1400,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                 <div className="muted adminUserSeen">в системе: {formatPresenceWhen(props.u.lastSeenAt)}</div>
                 {props.u.mustChangePassword ? <div className="adminUserWarn">нужна смена пароля</div> : null}
                 {props.u.dbAccessEnabled ? <div className="adminUserDbBadge">доступ к БД</div> : null}
+                {hasOverrides ? <div className="adminUserDbBadge">индивидуальные права</div> : null}
               </div>
             </div>
           </td>
@@ -1420,7 +1501,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                     <MultiSelectDropdown
                       options={props.roles.map((r) => ({ id: r.id, label: `${r.code} • ${r.name}` }))}
                       value={selRoles}
-                      onChange={setSelRoles}
+                      onChange={changeRoles}
                       width={320}
                       maxHeight={220}
                     />
@@ -1458,6 +1539,49 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                   <div>{summarizeRolePermissions(accessCodes)}</div>
                   <div className="muted">Меню: {previewNavLabels(accessCodes)}</div>
                 </div>
+                {props.permissions.length ? (
+                  <div className="adminUserPermsField">
+                    <span className="muted">Индивидуальные права</span>
+                    <span className="muted adminHint">
+                      Поверх группы можно выдать или снять права на объекты модели только этому сотруднику.
+                    </span>
+                    <DjangoPermissionPicker catalog={props.permissions} value={selPerms} onChange={setSelPerms} />
+                  </div>
+                ) : null}
+                {copySources.length > 0 ? (
+                  <div className="adminUserCopyAccess">
+                    <label className="adminField adminUserCopySelect">
+                      <span className="muted">Скопировать права от</span>
+                      <select value={copyFromId} onChange={(e) => setCopyFromId(e.target.value)}>
+                        <option value="">Выберите сотрудника…</option>
+                        {copySources.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {(u.displayName ?? u.email).trim() || u.email}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btnSmall"
+                      disabled={!copyFromId || copyAccessM.isPending}
+                      onClick={() => {
+                        const src = copySources.find((u) => u.id === copyFromId);
+                        const label = src?.displayName ?? src?.email ?? "сотрудника";
+                        if (
+                          !confirm(
+                            `Скопировать роли и индивидуальные права от «${label}» пользователю ${props.u.email}? Текущий набор прав будет заменён.`
+                          )
+                        ) {
+                          return;
+                        }
+                        copyAccessM.mutate(copyFromId);
+                      }}
+                    >
+                      Скопировать
+                    </button>
+                  </div>
+                ) : null}
                 </div>
               ) : null}
               {resetOpen ? (
@@ -1489,6 +1613,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               {toggleDbAccessM.error ? <div className="error">{String(toggleDbAccessM.error.message || toggleDbAccessM.error)}</div> : null}
               {resetM.error ? <div className="error">{String(resetM.error.message || resetM.error)}</div> : null}
               {revokeM.error ? <div className="error">{String(revokeM.error.message || revokeM.error)}</div> : null}
+              {copyAccessM.error ? <div className="error">{String(copyAccessM.error.message || copyAccessM.error)}</div> : null}
             </td>
           </tr>
         ) : null}
@@ -1499,14 +1624,22 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   function RoleCard(props: { role: Role; permissions: Permission[]; users: User[] }) {
     const current = props.role.permissions.map((x) => x.permission.id);
     const [sel, setSel] = useState<string[]>(current);
+    const [name, setName] = useState(props.role.name);
     const [open, setOpen] = useState(false);
     const savedCodes = props.role.permissions.map((x) => x.permission.code);
     const draftCodes = props.permissions.length ? permissionCodesFromIds(sel, props.permissions) : savedCodes;
     const summary = summarizeRolePermissions(draftCodes);
-    const dirty = [...sel].sort().join(",") !== [...current].sort().join(",");
+    const permsDirty = [...sel].sort().join(",") !== [...current].sort().join(",");
+    const nameDirty = name.trim() !== props.role.name;
+    const dirty = permsDirty || nameDirty;
     const members = props.users.filter((u) => u.roles.some((r) => r.role.id === props.role.id));
+    const assignedCount = members.length || props.role._count?.users || 0;
     const saveM = useMutation({
-      mutationFn: () => apiPatch<Role>(`/api/admin/roles/${props.role.id}`, { permissionIds: sel }),
+      mutationFn: () =>
+        apiPatch<Role>(`/api/admin/roles/${props.role.id}`, {
+          name: name.trim(),
+          permissionIds: sel
+        }),
       onSuccess: async () => {
         await qc.invalidateQueries({ queryKey: ["admin", "roles"] });
         await qc.invalidateQueries({ queryKey: ["admin", "permissions"] });
@@ -1516,7 +1649,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
       mutationFn: () =>
         apiPost<Role>("/api/admin/roles", {
           code: nextCloneRoleCode(props.role.code, (rolesQ.data ?? []).map((r) => r.code)),
-          name: `Копия: ${props.role.name}`.slice(0, 200),
+          name: `Копия: ${name.trim() || props.role.name}`.slice(0, 200),
           permissionIds: sel
         }),
       onSuccess: async () => {
@@ -1524,6 +1657,20 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         await qc.invalidateQueries({ queryKey: ["admin", "permissions"] });
       }
     });
+    const deleteM = useMutation({
+      mutationFn: () => apiDelete<{ ok: true }>(`/api/admin/roles/${props.role.id}`),
+      onSuccess: async () => {
+        await qc.invalidateQueries({ queryKey: ["admin", "roles"] });
+        await qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      }
+    });
+
+    const memberLabel =
+      members.length > 0
+        ? `Назначено: ${members.map((u) => u.displayName ?? u.email).join(", ")}`
+        : assignedCount > 0
+          ? `Назначено сотрудникам: ${assignedCount}`
+          : "Никто не назначен";
 
     return (
       <div className={open ? "adminRoleCard adminRoleCardOpen" : "adminRoleCard"}>
@@ -1533,37 +1680,74 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               ›
             </span>
             <span className="adminRoleCardTitle">
-              <strong>{props.role.name}</strong>
-              <span className="muted">
-                {props.role.code}
-                {props.role.isSystem ? " · system" : ""}
-                {dirty ? " · не сохранено" : ""}
+              <span className="adminRoleCardIdentity">
+                <strong>{name.trim() || props.role.name}</strong>
+                <span className="muted adminRoleCardCode">
+                  {props.role.code}
+                  {props.role.isSystem ? " · system" : ""}
+                </span>
               </span>
               <span className="adminRoleCardSummary">{summary}</span>
-              <span className="muted adminRoleCardMembers">
-                {members.length === 0
-                  ? "Никто не назначен"
-                  : `Назначено: ${members.map((u) => u.displayName ?? u.email).join(", ")}`}
-              </span>
+              <span className="muted adminRoleCardMembers">{memberLabel}</span>
             </span>
           </button>
-          <button
-            type="button"
-            className="btn btnSmall"
-            disabled={cloneM.isPending}
-            onClick={() => cloneM.mutate()}
-          >
-            Клонировать
-          </button>
-          {open || dirty ? (
-            <button className="btn btnSmall" onClick={() => saveM.mutate()} disabled={saveM.isPending || !dirty}>
-              Сохранить
+          <div className="adminRoleCardActions">
+            <button
+              type="button"
+              className="btn ganttIconBtn"
+              disabled={cloneM.isPending}
+              title="Копировать группу"
+              aria-label="Копировать группу"
+              onClick={() => cloneM.mutate()}
+            >
+              <IconCopy />
             </button>
-          ) : null}
+            {!props.role.isSystem ? (
+              <button
+                type="button"
+                className="btn ganttIconBtn adminIconBtnDanger"
+                disabled={deleteM.isPending}
+                title="Удалить группу"
+                aria-label="Удалить группу"
+                onClick={() => {
+                  if (assignedCount > 0) {
+                    const who =
+                      members.length > 0
+                        ? members.map((u) => u.displayName ?? u.email).join(", ")
+                        : `${assignedCount} сотр.`;
+                    window.alert(`Нельзя удалить роль: она назначена (${who}). Сначала снимите роль у сотрудников.`);
+                    return;
+                  }
+                  if (!confirm(`Удалить роль «${props.role.name}» (${props.role.code})? Это действие нельзя отменить.`)) {
+                    return;
+                  }
+                  deleteM.mutate();
+                }}
+              >
+                <IconTrash />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={`btn ganttIconBtn${dirty && name.trim() ? " reportBuilderIconActive" : ""}`}
+              onClick={() => saveM.mutate()}
+              disabled={saveM.isPending || !dirty || !name.trim()}
+              title={dirty ? "Сохранить изменения" : "Нет изменений"}
+              aria-label="Сохранить"
+            >
+              <IconSave />
+            </button>
+          </div>
         </div>
         {open ? (
           <div className="adminRoleCardBody">
-            <PermissionMatrix catalog={props.permissions} value={sel} onChange={setSel} />
+            <div className="adminRoleCardEdit">
+              <label className="adminField">
+                <span className="muted">Название</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} />
+              </label>
+              <DjangoPermissionPicker catalog={props.permissions} value={sel} onChange={setSel} />
+            </div>
             <aside className="adminRoleMenuPreview">
               <span className="muted">Как в меню</span>
               <strong>{previewNavLabels(draftCodes)}</strong>
@@ -1572,6 +1756,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         ) : null}
         {saveM.error ? <div className="error">{String(saveM.error.message || saveM.error)}</div> : null}
         {cloneM.error ? <div className="error">{String(cloneM.error.message || cloneM.error)}</div> : null}
+        {deleteM.error ? <div className="error">{String(deleteM.error.message || deleteM.error)}</div> : null}
       </div>
     );
   }

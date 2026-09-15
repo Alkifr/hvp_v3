@@ -15,6 +15,11 @@ import {
 import { DEFAULT_EVENT_STATUS, EVENT_STATUS_CATALOG, loadStatusAutomation } from "../../lib/eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
 import { UserMsg } from "../../lib/userErrors.js";
+import {
+  isVirtualAircraftPlaceholder,
+  statusAllowsVirtualAircraft,
+  virtualAircraftDisplayLabel
+} from "../../lib/virtualAircraft.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import {
@@ -108,8 +113,20 @@ function getActor(req: any) {
 function eventAircraftLabel(event: { aircraft?: { tailNumber: string } | null; virtualAircraft?: unknown } | null): string {
   if (!event) return "—";
   if (event.aircraft?.tailNumber) return event.aircraft.tailNumber;
-  const v = event.virtualAircraft as { label?: string } | null | undefined;
-  return (v?.label ?? "—") as string;
+  if (event.virtualAircraft) return virtualAircraftDisplayLabel();
+  return "—";
+}
+
+function assertVirtualAircraftAllowed(event: {
+  aircraftId?: string | null;
+  virtualAircraft?: unknown;
+  status: EventStatus;
+}) {
+  if (!isVirtualAircraftPlaceholder(event)) return;
+  if (statusAllowsVirtualAircraft(event.status)) return;
+  const err: any = new Error("VIRTUAL_AIRCRAFT_NEEDS_REAL");
+  err.statusCode = 400;
+  throw err;
 }
 
 function diffEvent(before: any, after: any) {
@@ -1488,6 +1505,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       forceDone: data.status === EventStatus.DONE,
       autoInProgressStatuses: automation.autoInProgressStatuses
     });
+    assertVirtualAircraftAllowed({
+      aircraftId: data.aircraftId ?? null,
+      virtualAircraft: data.virtualAircraft ?? null,
+      status: statusReconciled.status
+    });
     const created = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const event = await tx.maintenanceEvent.create({
         data: {
@@ -1687,27 +1709,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           actualEndAt: reconciled.actualEndAt
         };
 
-        const virtualAircraft = existing.virtualAircraft as {
-          operatorId: string;
-          aircraftTypeId: string;
-          label: string;
-        } | null;
-        if (
-          virtualAircraft &&
-          (reconciled.status === EventStatus.DONE ||
-            reconciled.status === EventStatus.APPROVED_BY_EXECUTOR ||
-            reconciled.status === EventStatus.APPROVED_BY_CUSTOMER) &&
-          !existing.aircraftId
-        ) {
-          const aircraft = await app.prisma.aircraft.create({
-            data: {
-              tailNumber: virtualAircraft.label,
-              operatorId: virtualAircraft.operatorId,
-              typeId: virtualAircraft.aircraftTypeId
-            }
-          });
-          patchData = { ...patchData, aircraftId: aircraft.id, virtualAircraft: Prisma.JsonNull };
-        }
+        assertVirtualAircraftAllowed({
+          aircraftId: existing.aircraftId,
+          virtualAircraft: existing.virtualAircraft,
+          status: reconciled.status
+        });
 
         const after = await app.prisma.maintenanceEvent.update({
           where: { id },
@@ -1742,7 +1748,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
         updated.push({ eventId: id, from: existing.status, to: reconciled.status });
       } catch (error: any) {
-        failed.push({ eventId: id, message: String(error?.message ?? error) });
+        const raw = String(error?.message ?? error);
+        failed.push({
+          eventId: id,
+          message: raw === "VIRTUAL_AIRCRAFT_NEEDS_REAL" ? UserMsg.VIRTUAL_AIRCRAFT_NEEDS_REAL : raw
+        });
       }
     }
 
@@ -1922,24 +1932,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       autoInProgressStatuses: automation.autoInProgressStatuses
     });
 
-    // При закрытии/согласовании события с виртуальным бортом — создаём Aircraft и привязываем
-    const virtualAircraft = existing.virtualAircraft as { operatorId: string; aircraftTypeId: string; label: string } | null;
-    if (
-      virtualAircraft &&
-      (statusReconciled.status === EventStatus.DONE ||
-        statusReconciled.status === EventStatus.APPROVED_BY_EXECUTOR ||
-        statusReconciled.status === EventStatus.APPROVED_BY_CUSTOMER) &&
-      !existing.aircraftId
-    ) {
-      const aircraft = await app.prisma.aircraft.create({
-        data: {
-          tailNumber: virtualAircraft.label,
-          operatorId: virtualAircraft.operatorId,
-          typeId: virtualAircraft.aircraftTypeId
-        }
-      });
-      patchData = { ...patchData, aircraftId: aircraft.id, virtualAircraft: Prisma.JsonNull };
+    if (body.aircraftId) {
+      patchData = { ...patchData, aircraftId: body.aircraftId, virtualAircraft: Prisma.JsonNull };
     }
+
+    const nextAircraftId = body.aircraftId ?? existing.aircraftId;
+    const nextVirtualAircraft = body.aircraftId ? null : existing.virtualAircraft;
+    assertVirtualAircraftAllowed({
+      aircraftId: nextAircraftId,
+      virtualAircraft: nextVirtualAircraft,
+      status: statusReconciled.status
+    });
 
     patchData = {
       ...patchData,

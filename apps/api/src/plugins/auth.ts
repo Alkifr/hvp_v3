@@ -8,6 +8,7 @@ import { errorBody } from "../lib/userErrors.js";
 import { resolveJwtSecret } from "../lib/bootEnv.js";
 import { getRuntimeConfig, isMutatingHttpMethod, isWriteBlockedExempt } from "../lib/writeBlocked.js";
 import { parseMutedNotificationKinds } from "../lib/userPrefs.js";
+import { effectivePermissionCodes, USER_ACCESS_INCLUDE } from "../lib/userAccess.js";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -52,25 +53,13 @@ function cookieOptions(_req: FastifyRequest) {
 async function loadUser(app: any, userId: string, tokenVer?: number) {
   const u = await app.prisma.user.findUnique({
     where: { id: userId },
-    include: {
-      roles: {
-        include: {
-          role: {
-            include: { permissions: { include: { permission: true } } }
-          }
-        }
-      }
-    }
+    include: USER_ACCESS_INCLUDE
   });
   if (!u || !u.isActive) return null;
   if ((tokenVer ?? 0) !== (u.tokenVersion ?? 0)) return null;
 
-  const roles = u.roles.map((ur: any) => ur.role.code);
-  const permissions = Array.from(
-    new Set<string>(
-      u.roles.flatMap((ur: any) => ur.role.permissions.map((rp: any) => String(rp.permission.code)))
-    )
-  );
+  const roles = u.roles.map((ur: { role: { code: string } }) => ur.role.code);
+  const permissions = effectivePermissionCodes(u);
 
   return {
     id: u.id,

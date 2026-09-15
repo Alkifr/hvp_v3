@@ -112,6 +112,86 @@ const WRITE_IMPLIES_READ: Record<string, string> = {
   "import:write": "gantt:read"
 };
 
+const PERMISSION_ALIASES: Record<string, string[]> = {
+  "events:read": ["view_maintenanceevent"],
+  "events:write": ["change_maintenanceevent", "add_maintenanceevent", "delete_maintenanceevent"],
+  "ref:read": [
+    "view_operator",
+    "view_aircrafttype",
+    "view_aircraft",
+    "view_aircrafttypepalette",
+    "view_eventtype",
+    "view_eventstatuscatalog",
+    "view_workshop",
+    "view_hangar",
+    "view_hangarlayout",
+    "view_hangarstand",
+    "view_placementpriorityrule",
+    "view_optimizationprofile"
+  ],
+  "ref:write": [
+    "add_operator",
+    "change_operator",
+    "delete_operator",
+    "add_aircrafttype",
+    "change_aircrafttype",
+    "delete_aircrafttype",
+    "add_aircraft",
+    "change_aircraft",
+    "delete_aircraft",
+    "add_aircrafttypepalette",
+    "change_aircrafttypepalette",
+    "delete_aircrafttypepalette",
+    "add_eventtype",
+    "change_eventtype",
+    "delete_eventtype",
+    "add_eventstatuscatalog",
+    "change_eventstatuscatalog",
+    "delete_eventstatuscatalog",
+    "add_workshop",
+    "change_workshop",
+    "delete_workshop",
+    "add_hangar",
+    "change_hangar",
+    "delete_hangar",
+    "add_hangarlayout",
+    "change_hangarlayout",
+    "delete_hangarlayout",
+    "add_hangarstand",
+    "change_hangarstand",
+    "delete_hangarstand",
+    "add_placementpriorityrule",
+    "change_placementpriorityrule",
+    "delete_placementpriorityrule",
+    "add_optimizationprofile",
+    "change_optimizationprofile",
+    "delete_optimizationprofile"
+  ],
+  "workforce:read": ["view_shift", "view_person", "view_skill"],
+  "workforce:write": [
+    "add_shift",
+    "change_shift",
+    "delete_shift",
+    "add_person",
+    "change_person",
+    "delete_person",
+    "add_skill",
+    "change_skill",
+    "delete_skill"
+  ],
+  "warehouse:read": ["view_warehouse", "view_material", "view_stockmovement", "view_materialreservation", "view_materialissue"],
+  "warehouse:write": [
+    "add_warehouse",
+    "change_warehouse",
+    "delete_warehouse",
+    "add_material",
+    "change_material",
+    "delete_material"
+  ],
+  "admin:users": ["view_user", "add_user", "change_user"],
+  "admin:roles": ["view_role", "add_role", "change_role", "view_permission"]
+};
+
 export const PERM_LABEL: Record<string, string> = Object.fromEntries(
   PERMISSION_GROUPS.flatMap((g) => g.actions.map((a) => [a.code, `${g.title}: ${a.label}`])).concat([
     [IMPLIED_DATA_PERMS.read, "События: просмотр данных"],
@@ -134,12 +214,20 @@ export function expandPermissionCodes(selected: Iterable<string>): string[] {
   for (const [write, read] of Object.entries(WRITE_IMPLIES_READ)) {
     if (set.has(write)) set.add(read);
   }
+  for (const code of [...set]) {
+    const m = /^(add|change|delete)_(.+)$/.exec(code);
+    if (m) set.add(`view_${m[2]}`);
+  }
   const hasModule = hasAny(MODULE_READS, set) || hasAny(MODULE_WRITES, set);
   if (hasModule) {
-    if (hasAny(MODULE_READS, set)) set.add(IMPLIED_DATA_PERMS.read);
-    else set.delete(IMPLIED_DATA_PERMS.read);
-    if (hasAny(MODULE_WRITES, set)) set.add(IMPLIED_DATA_PERMS.write);
-    else set.delete(IMPLIED_DATA_PERMS.write);
+    if (hasAny(MODULE_READS, set)) {
+      set.add(IMPLIED_DATA_PERMS.read);
+      set.add("view_maintenanceevent");
+    } else set.delete(IMPLIED_DATA_PERMS.read);
+    if (hasAny(MODULE_WRITES, set)) {
+      set.add(IMPLIED_DATA_PERMS.write);
+      set.add("change_maintenanceevent");
+    } else set.delete(IMPLIED_DATA_PERMS.write);
   }
   return [...set];
 }
@@ -159,7 +247,45 @@ export function displayPermissionCodes(stored: Iterable<string>): string[] {
 }
 
 export function hasPermission(perms: Iterable<string> | null | undefined, code: string): boolean {
-  return new Set(expandPermissionCodes(displayPermissionCodes(perms ?? []))).has(code);
+  const set = new Set(expandPermissionCodes(displayPermissionCodes(perms ?? [])));
+  if (set.has(code)) return true;
+  const aliased = PERMISSION_ALIASES[code];
+  if (aliased?.some((c) => set.has(c))) return true;
+  for (const [legacy, codes] of Object.entries(PERMISSION_ALIASES)) {
+    if (codes.includes(code) && set.has(legacy)) return true;
+  }
+  return false;
+}
+
+export type PermissionOverrideEffect = "GRANT" | "DENY";
+
+export function applyPermissionOverrides(
+  roleCodes: Iterable<string>,
+  overrides: Iterable<{ code: string; effect: PermissionOverrideEffect }>
+): string[] {
+  const grants: string[] = [];
+  const denials = new Set<string>();
+  for (const row of overrides) {
+    if (row.effect === "GRANT") grants.push(row.code);
+    else denials.add(row.code);
+  }
+  return expandPermissionCodes([...roleCodes, ...grants]).filter((code) => !denials.has(code));
+}
+
+export function diffPermissionOverrides(
+  roleCodes: Iterable<string>,
+  desiredCodes: Iterable<string>
+): Array<{ code: string; effect: PermissionOverrideEffect }> {
+  const roleSet = new Set(expandPermissionCodes(roleCodes));
+  const desired = new Set(expandPermissionCodes(desiredCodes));
+  const out: Array<{ code: string; effect: PermissionOverrideEffect }> = [];
+  for (const code of desired) {
+    if (!roleSet.has(code)) out.push({ code, effect: "GRANT" });
+  }
+  for (const code of roleSet) {
+    if (!desired.has(code)) out.push({ code, effect: "DENY" });
+  }
+  return out;
 }
 
 function selectedActionLabels(group: PermGroup, selected: Set<string>): string[] {
@@ -186,7 +312,27 @@ export function summarizeRolePermissions(stored: Iterable<string>): string {
     if (labels.length === 1 && labels[0] === "просмотр") parts.push(group.title);
     else parts.push(`${group.title}: ${labels.join(", ")}`);
   }
+  const models = new Set<string>();
+  for (const code of shown) {
+    const m = /^(view|add|change|delete)_([a-z0-9]+)$/.exec(code);
+    if (m) models.add(m[2]);
+  }
+  if (parts.length === 0 && models.size > 0) {
+    return `Объекты данных: ${models.size}`;
+  }
+  if (models.size > 0) parts.push(`модели: ${models.size}`);
   return parts.join(" · ") || "Нет доступа к модулям";
+}
+
+export function djangoPermissionLabel(row: { appLabel?: string | null; model?: string | null; name: string; code: string }): string {
+  const app = (row.appLabel ?? "").trim();
+  const model = (row.model ?? "").trim();
+  if (app && model) return `${app} | ${model} | ${row.name}`;
+  return row.name || row.code;
+}
+
+export function isHiddenPermissionCode(code: string): boolean {
+  return code === "events:read" || code === "events:write" || code === "ref:read" || code === "ref:write";
 }
 
 /** Сколько модулей матрицы имеют хотя бы одно право. */

@@ -58,6 +58,27 @@ export function resolveFrom(cfg: SmtpConfig): string {
   throw new Error("Не указан адрес отправителя (From) и SMTP user");
 }
 
+export function formatSmtpError(e: unknown, cfg: SmtpConfig): string {
+  const err = e as { code?: string; command?: string; response?: string; message?: string };
+  const code = err.code ?? "";
+  const msg = err.message ?? String(e);
+  const target = `${cfg.smtpHost}:${cfg.smtpPort}`;
+  const timedOut = code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT" || /timeout/i.test(msg);
+  if (timedOut) {
+    return `Таймаут SMTP ${target} (SSL=${cfg.smtpSecure}). С сервера приложения нет ответа на этот порт — обычно исходящий TCP закрыт файрволом (DROP), а не ошибка логина.`;
+  }
+  if (code === "ECONNREFUSED") {
+    return `SMTP ${target} отказал в соединении (ECONNREFUSED).`;
+  }
+  if (code === "ENOTFOUND" || code === "EDNS") {
+    return `Не резолвится хост ${cfg.smtpHost}.`;
+  }
+  const extra = [code && `[${code}]`, err.command && `cmd=${err.command}`, err.response]
+    .filter(Boolean)
+    .join(" ");
+  return `SMTP ${target}: ${msg}${extra ? ` ${extra}` : ""}`;
+}
+
 export async function sendMail(
   cfg: SmtpConfig,
   params: { to: string[]; subject: string; text: string; html?: string }
@@ -66,22 +87,33 @@ export async function sendMail(
   // Yandex app passwords часто копируют с пробелами (xxxx xxxx xxxx xxxx).
   const user = cfg.smtpUser?.trim() || "";
   const pass = (cfg.smtpPass ?? "").replace(/\s+/g, "");
+  const plainRelay = !cfg.smtpSecure && cfg.smtpPort === 25;
   const transport = nodemailer.createTransport({
     host: cfg.smtpHost,
     port: cfg.smtpPort,
     secure: cfg.smtpSecure,
     auth: user && pass ? { user, pass } : undefined,
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 20_000,
     // Порт 25 / STARTTLS на внутреннем реле часто с корпоративным сертификатом.
-    ...(!cfg.smtpSecure ? { tls: { rejectUnauthorized: false } } : {})
+    ...(!cfg.smtpSecure ? { tls: { rejectUnauthorized: false } } : {}),
+    // Внутренний релей :25 без AUTH: не ждать STARTTLS, который может висеть до таймаута.
+    ...(plainRelay ? { ignoreTLS: true } : {})
   });
 
-  const info = await transport.sendMail({
-    from: resolveFrom(cfg),
-    to: params.to.join(", "),
-    subject: params.subject,
-    text: params.text,
-    ...(params.html ? { html: params.html } : {})
-  });
-
-  return { messageId: String(info.messageId ?? "") };
+  try {
+    const info = await transport.sendMail({
+      from: resolveFrom(cfg),
+      to: params.to.join(", "),
+      subject: params.subject,
+      text: params.text,
+      ...(params.html ? { html: params.html } : {})
+    });
+    return { messageId: String(info.messageId ?? "") };
+  } catch (e) {
+    throw new Error(formatSmtpError(e, cfg));
+  } finally {
+    transport.close();
+  }
 }

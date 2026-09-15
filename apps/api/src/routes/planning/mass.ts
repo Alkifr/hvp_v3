@@ -7,6 +7,7 @@ import { EventAuditAction, EventStatus, PlanningLevel } from "@prisma/client";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { UserMsg } from "../../lib/userErrors.js";
+import { VIRTUAL_AIRCRAFT_LABEL, virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 
 function assertCanWrite(req: any) {
@@ -459,8 +460,7 @@ function massEventAircraftLabel(event: {
   virtualAircraft?: unknown;
 }): string {
   if (event.aircraft?.tailNumber) return event.aircraft.tailNumber;
-  const virtual = event.virtualAircraft as { label?: string } | null;
-  if (virtual?.label) return virtual.label;
+  if (event.virtualAircraft) return virtualAircraftDisplayLabel();
   return event.title;
 }
 
@@ -1173,7 +1173,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     });
 
     const titleBase = body.titleTemplate ?? eventType.name;
-    const virtualLabel = (i: number) => `— Масс. ${i + 1}`;
+    const virtualLabel = () => VIRTUAL_AIRCRAFT_LABEL;
 
     const { placements: placementsPreview, unplaced: unplacedPreview } = buildMassPlanPlacements({
       count: body.count,
@@ -1755,7 +1755,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           aircraftTypeId: item.aircraftTypeId,
           eventTypeId: item.eventTypeId,
           title: titleBase.includes("%") ? titleBase.replace("%", String(i + 1)) : `${titleBase} #${i + 1}`,
-          label: `— Стр. ${itemIndex + 1}.${i + 1}`,
+          label: VIRTUAL_AIRCRAFT_LABEL,
           startFromMs: item.startFrom.getTime(),
           endToMs: item.endTo.getTime(),
           tatMs,

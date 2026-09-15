@@ -59,7 +59,7 @@ function isActiveAt(startAt: Date, endAt: Date, at: Date): boolean {
 }
 
 function aircraftLabel(event: any): string {
-  return event.aircraft?.tailNumber ?? event.virtualAircraft?.label ?? "—";
+  return event.aircraft?.tailNumber ?? (event.virtualAircraft ? "VIRT" : "—");
 }
 
 function eventBodyType(event: any, bodyTypeByAircraftTypeId: Map<string, BodyType>): BodyType {

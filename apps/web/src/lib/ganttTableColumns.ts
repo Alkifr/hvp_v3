@@ -254,7 +254,7 @@ const FALLBACK_PRIMARY_LABELS: Record<string, { label: string; group: string }> 
   "primary.ao": { label: "Продолжительность слота (Дни) (Факт)", group: "Слот Факт (Фактический слот)" },
   "primary.af": { label: "Номер ангара", group: "Слот План (Согласованный слот)" },
   "primary.ag": { label: "Номер МС в ангаре", group: "Слот План (Согласованный слот)" },
-  "primary.ae": { label: "Комментарии ИТП / Специфические работы", group: "Слот План (Согласованный слот)" }
+  "primary.ae": { label: "Примечание", group: "Слот План (Согласованный слот)" }
 };
 
 function kindForId(id: string): GanttCellKind {

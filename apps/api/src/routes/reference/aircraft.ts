@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { zDateOnly, zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertModelPermission } from "../../lib/rbac.js";
 
 function parseOptionalManufactureDate(raw: unknown): Date | null | undefined {
   if (raw == null || raw === "") return null;
@@ -25,7 +25,7 @@ function parseOptionalManufactureDate(raw: unknown): Date | null | undefined {
 
 export const aircraftRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "Aircraft", "view");
     return await app.prisma.aircraft.findMany({
       include: { operator: true, type: true },
       orderBy: [{ isActive: "desc" }, { tailNumber: "asc" }]
@@ -34,7 +34,7 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
 
   // Массовая загрузка бортов из CSV (UI читает файл и отправляет список строк)
   app.post("/import", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "Aircraft", "add");
     const body = z
       .object({
         dryRun: z.boolean().optional(),
@@ -183,7 +183,7 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "Aircraft", "add");
     const body = z
       .object({
         tailNumber: z.string().trim().min(2).max(32),
@@ -199,7 +199,7 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "Aircraft", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -216,7 +216,7 @@ export const aircraftRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "Aircraft", "delete");
     const id = zUuid.parse((req.params as any).id);
     await app.prisma.aircraft.delete({ where: { id } });
     return { ok: true };

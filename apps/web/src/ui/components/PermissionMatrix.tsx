@@ -10,6 +10,7 @@ import {
   summarizeGroupAccess,
   type PermGroup
 } from "../../lib/permissionCatalog";
+import { DjangoPermissionPicker } from "./DjangoPermissionPicker";
 
 type PermRow = { id: string; code: string; name: string };
 
@@ -119,18 +120,34 @@ export function PermissionMatrix(props: PermissionMatrixProps) {
     if (readOnly && summary === "нет доступа") return null;
     const shownActions = readOnly ? actions.filter((a) => selectedCodes.has(a.code)) : actions;
     if (shownActions.length === 0) return null;
+    if (readOnly) {
+      return (
+        <div key={group.id} className="adminPermGroup adminPermGroupOn profilePermRow">
+          <strong className="profilePermModule">{group.title}</strong>
+          <div className="profilePermActions">
+            {shownActions.map((action) => (
+              <span key={action.code} className="adminPermGranted">
+                {action.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      );
+    }
     return renderGroup(group.id, group.title, group.hint, shownActions, summary);
   }).filter(Boolean);
 
   return (
     <div className="adminPermMatrix">
-      <div className="muted adminHint">
-        {readOnly
-          ? "Показаны только доступные модули. Права назначает администратор."
-          : "Редактирование модуля включает просмотр. Раскройте модуль, чтобы изменить права."}
-      </div>
-      {visibleGroups}
-      {readOnly && visibleGroups.length === 0 ? <div className="muted">Нет доступа к модулям</div> : null}
+      {readOnly ? (
+        visibleGroups.length === 0 ? (
+          <div className="muted">Нет доступа к модулям</div>
+        ) : (
+          visibleGroups
+        )
+      ) : (
+        <DjangoPermissionPicker catalog={catalog} value={props.value} onChange={props.onChange} disabled={editDisabled} />
+      )}
       {!readOnly && !hasModuleCatalog && (known.has(IMPLIED_DATA_PERMS.read) || known.has(IMPLIED_DATA_PERMS.write))
         ? renderGroup(
             "legacy-planning",

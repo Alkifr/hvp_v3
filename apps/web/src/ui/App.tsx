@@ -28,7 +28,7 @@ import {
   parseHashPage
 } from "../lib/eventDeepLink";
 import { hasPermission } from "../lib/permissionCatalog";
-import { firstAllowedPage, APPLY_HOME_KEY, resolveStartPage } from "../lib/userPrefs";
+import { firstAllowedPage, APPLY_HOME_KEY, browserDocumentTitle, resolveStartPage } from "../lib/userPrefs";
 
 type Page =
   | "gantt"
@@ -202,6 +202,18 @@ export function App() {
 
   const [page, setPage] = useState<Page | null>(() => pageFromHash(location.hash));
   const resolvedPage: Page | null = page ?? (me ? resolveStartPage(me.homePage, permissions, isMobile) : null);
+
+  useEffect(() => {
+    if (meQ.isLoading) {
+      document.title = "HVP";
+      return;
+    }
+    if (!me || me.mustChangePassword) {
+      document.title = "HVP / Вход";
+      return;
+    }
+    document.title = browserDocumentTitle(resolvedPage);
+  }, [me, meQ.isLoading, resolvedPage]);
 
   useEffect(() => {
     if (resolvedPage == null) return;

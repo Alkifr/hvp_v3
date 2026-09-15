@@ -1,6 +1,6 @@
 import type { FastifyRequest } from "fastify";
 
-import { hasPermission } from "./permissionCatalog.js";
+import { djangoModelCode, hasPermission, type DjangoAction } from "./permissionCatalog.js";
 
 export function requirePermission(req: FastifyRequest, permission: string) {
   const u = (req as any).auth as { permissions?: string[] } | undefined;
@@ -22,6 +22,10 @@ export function assertAnyPermission(req: FastifyRequest, permissions: string[]) 
     err.statusCode = 403;
     throw err;
   }
+}
+
+export function assertModelPermission(req: FastifyRequest, model: string, action: DjangoAction) {
+  assertPermission(req, djangoModelCode(action, model));
 }
 
 /** Системный администратор: видит все песочницы (как наблюдатель), без прав владельца. */

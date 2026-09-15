@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertModelPermission } from "../../lib/rbac.js";
 
 const zRuleBody = z.object({
   hangarId: zUuid,
@@ -136,7 +136,7 @@ function eventTypeMatchesAlias(eventType: { code: string; name: string }, alias:
 
 export const placementPrioritiesRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "PlacementPriorityRule", "view");
     const hangarId = zUuid.optional().parse((req.query as any)?.hangarId);
     const layoutId = zUuid.optional().parse((req.query as any)?.layoutId);
     const standId = zUuid.optional().parse((req.query as any)?.standId);
@@ -154,7 +154,7 @@ export const placementPrioritiesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "PlacementPriorityRule", "add");
     const body = zRuleBody.parse(req.body);
     const { eventTypeIds, aircraftTypeIds, ...data } = body;
     return await app.prisma.$transaction(async (tx: any) => {
@@ -176,7 +176,7 @@ export const placementPrioritiesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "PlacementPriorityRule", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = zRuleBody.partial().parse(req.body);
     const { eventTypeIds, aircraftTypeIds, ...data } = body;
@@ -205,14 +205,14 @@ export const placementPrioritiesRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "PlacementPriorityRule", "delete");
     const id = zUuid.parse((req.params as any).id);
     await app.prisma.placementPriorityRule.delete({ where: { id } });
     return { ok: true };
   });
 
   app.post("/import", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "PlacementPriorityRule", "add");
     const body = z
       .object({
         rows: z.array(z.record(z.string(), z.unknown())).min(1),

@@ -3,7 +3,7 @@ import argon2 from "argon2";
 import path from "node:path";
 import dotenv from "dotenv";
 
-import { PERMISSION_SEED } from "../src/lib/permissionCatalog.js";
+import { PERMISSION_SEED, plannerModelCodes, viewerModelCodes } from "../src/lib/permissionCatalog.js";
 import { checkEventCountPresets, checkEventCountReportConfig } from "../src/lib/reportPresets.js";
 
 const prisma = new PrismaClient();
@@ -39,8 +39,8 @@ async function main() {
     permissionsSeed.map((p) =>
       prisma.permission.upsert({
         where: { code: p.code },
-        update: { name: p.name },
-        create: { code: p.code, name: p.name }
+        update: { name: p.name, appLabel: p.appLabel, model: p.model, action: p.action },
+        create: { code: p.code, name: p.name, appLabel: p.appLabel, model: p.model, action: p.action }
       })
     )
   );
@@ -80,7 +80,10 @@ async function main() {
     );
   };
 
-  await setRolePerms(roleAdmin.id, permissionsSeed.map((p) => p.code).filter((code) => code !== "admin:cleanup") as string[]);
+  await setRolePerms(
+    roleAdmin.id,
+    permissionsSeed.map((p) => p.code).filter((code) => code !== "admin:cleanup" && code !== "delete_maintenanceevent")
+  );
   const cleanupPermission = permByCode.get("admin:cleanup");
   if (cleanupPermission) {
     await prisma.rolePermission.deleteMany({
@@ -104,7 +107,8 @@ async function main() {
     "resources:plan",
     "resources:actual",
     "workforce:read",
-    "warehouse:read"
+    "warehouse:read",
+    ...plannerModelCodes()
   ]);
   await setRolePerms(roleViewer.id, [
     "gantt:read",
@@ -115,7 +119,8 @@ async function main() {
     "ref:read",
     "resources:read",
     "workforce:read",
-    "warehouse:read"
+    "warehouse:read",
+    ...viewerModelCodes()
   ]);
 
   const adminEmail = env("ADMIN_EMAIL") || "admin@local.dev";

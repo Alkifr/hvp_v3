@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertModelPermission } from "../../lib/rbac.js";
 
 function normalizeHexColor(raw: string) {
   const v = String(raw ?? "").trim();
@@ -13,7 +13,7 @@ function normalizeHexColor(raw: string) {
 
 export const aircraftTypePaletteRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "AircraftTypePalette", "view");
     return await app.prisma.aircraftTypePalette.findMany({
       include: { operator: true, aircraftType: true },
       orderBy: [{ isActive: "desc" }, { operator: { name: "asc" } }, { aircraftType: { name: "asc" } }]
@@ -21,7 +21,7 @@ export const aircraftTypePaletteRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "AircraftTypePalette", "add");
     const body = z
       .object({
         operatorId: zUuid,
@@ -46,7 +46,7 @@ export const aircraftTypePaletteRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "AircraftTypePalette", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -73,7 +73,7 @@ export const aircraftTypePaletteRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "AircraftTypePalette", "delete");
     const id = zUuid.parse((req.params as any).id);
     await app.prisma.aircraftTypePalette.delete({ where: { id } });
     return { ok: true };

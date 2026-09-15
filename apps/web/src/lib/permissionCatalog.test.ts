@@ -6,6 +6,8 @@ import {
   displayPermissionCodes,
   expandPermissionCodes,
   hasPermission,
+  applyPermissionOverrides,
+  diffPermissionOverrides,
   grantedGroupCount,
   summarizeGroupAccess,
   summarizeRolePermissions,
@@ -15,10 +17,12 @@ import {
 
 test("edit implies view and events data access", () => {
   assert.deepEqual(expandPermissionCodes(["gantt:write"]).sort(), [
+    "change_maintenanceevent",
     "events:read",
     "events:write",
     "gantt:read",
-    "gantt:write"
+    "gantt:write",
+    "view_maintenanceevent"
   ]);
 });
 
@@ -83,4 +87,11 @@ test("summarizeGroupAccess drops implied view when edit is on", () => {
   assert.ok(gantt);
   assert.equal(summarizeGroupAccess(gantt, ["gantt:write", "gantt:read"]), "редактирование");
   assert.equal(summarizeGroupAccess(gantt, []), "нет доступа");
+});
+
+test("applyPermissionOverrides and diff keep extras relative to roles", () => {
+  assert.ok(applyPermissionOverrides(["gantt:read"], [{ code: "analytics:read", effect: "GRANT" }]).includes("analytics:read"));
+  assert.deepEqual(diffPermissionOverrides(["gantt:read"], ["gantt:read", "ref:read"]), [
+    { code: "ref:read", effect: "GRANT" }
+  ]);
 });

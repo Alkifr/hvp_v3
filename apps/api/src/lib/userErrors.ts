@@ -57,6 +57,8 @@ export const UserMsg = {
   INVALID_DATE: "Укажите корректную дату",
   CADENCE_REQUIRED: "Для режима с фиксированным интервалом укажите шаг в часах",
   AIRCRAFT_REQUIRED: "Заполните борт",
+  VIRTUAL_AIRCRAFT_NEEDS_REAL:
+    "Событие создано массовым планированием с виртуальным бортом. Выберите реальный борт из справочника, затем повторите смену статуса.",
   SANDBOX_SOURCE_REQUIRED: "Выберите песочницу-источник",
   FIELDS_OR_SUMMARY_REQUIRED: "Выберите поля отчёта или задайте группировку и агрегаты",
   INVALID_JSON: "Некорректный формат запроса",
@@ -125,6 +127,7 @@ const CODE_STATUS: Partial<Record<UserErrorCode, number>> = {
   INVALID_DATE: 400,
   CADENCE_REQUIRED: 400,
   AIRCRAFT_REQUIRED: 400,
+  VIRTUAL_AIRCRAFT_NEEDS_REAL: 400,
   SANDBOX_SOURCE_REQUIRED: 400,
   FIELDS_OR_SUMMARY_REQUIRED: 400,
   INVALID_JSON: 400,

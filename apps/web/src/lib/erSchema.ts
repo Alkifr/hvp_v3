@@ -811,6 +811,18 @@ export const ER_TABLES: ErTable[] = [
         "type": "String"
       },
       {
+        "name": "appLabel",
+        "type": "String"
+      },
+      {
+        "name": "model",
+        "type": "String"
+      },
+      {
+        "name": "action",
+        "type": "String"
+      },
+      {
         "name": "createdAt",
         "type": "DateTime"
       },
@@ -855,6 +867,29 @@ export const ER_TABLES: ErTable[] = [
         "type": "String",
         "pk": true,
         "fk": true
+      }
+    ]
+  },
+  {
+    "id": "UserPermission",
+    "label": "Индивидуальное право",
+    "group": "auth",
+    "columns": [
+      {
+        "name": "userId",
+        "type": "String",
+        "pk": true,
+        "fk": true
+      },
+      {
+        "name": "permissionId",
+        "type": "String",
+        "pk": true,
+        "fk": true
+      },
+      {
+        "name": "effect",
+        "type": "UserPermissionEffect"
       }
     ]
   },
@@ -3172,6 +3207,20 @@ export const ER_EDGES: ErEdge[] = [
   },
   {
     "from": "RolePermission",
+    "fromCol": "permissionId",
+    "to": "Permission",
+    "toCol": "id",
+    "rel": "N:1"
+  },
+  {
+    "from": "UserPermission",
+    "fromCol": "userId",
+    "to": "User",
+    "toCol": "id",
+    "rel": "N:1"
+  },
+  {
+    "from": "UserPermission",
     "fromCol": "permissionId",
     "to": "Permission",
     "toCol": "id",

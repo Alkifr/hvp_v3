@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertModelPermission } from "../../lib/rbac.js";
 
 function capacitySummaryFromStands(stands: { allowedAircraftTypes?: unknown[] }[]): string {
   const any = stands.filter((s) => (s.allowedAircraftTypes?.length ?? 0) === 0).length;
@@ -110,7 +110,7 @@ const zLayoutImport = z.object({
 
 export const layoutsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "HangarLayout", "view");
     const hangarId = zUuid.optional().parse((req.query as any)?.hangarId);
     const activeOnly = ["1", "true", "yes"].includes(String((req.query as any)?.activeOnly ?? "").toLowerCase());
     const aircraftTypeId = zUuid.optional().parse((req.query as any)?.aircraftTypeId);
@@ -148,7 +148,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/:id", async (req) => {
-    assertPermission(req as any, "ref:read");
+    assertModelPermission(req as any, "HangarLayout", "view");
     const id = zUuid.parse((req.params as any).id);
     const row = await app.prisma.hangarLayout.findUniqueOrThrow({
       where: { id },
@@ -174,7 +174,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "HangarLayout", "add");
     const body = z
       .object({
         hangarId: zUuid,
@@ -192,7 +192,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/import", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "HangarLayout", "add");
     const body = zLayoutImport.parse(req.body);
 
     const result = await app.prisma.$transaction(async (tx: any) => {
@@ -290,7 +290,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "HangarLayout", "change");
     const id = zUuid.parse((req.params as any).id);
     const body = z
       .object({
@@ -308,7 +308,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (req) => {
-    assertPermission(req as any, "ref:write");
+    assertModelPermission(req as any, "HangarLayout", "delete");
     const id = zUuid.parse((req.params as any).id);
     await app.prisma.hangarLayout.delete({ where: { id } });
     return { ok: true };

@@ -68,7 +68,7 @@ export function useActiveSandbox(): {
   return { activeId, active, list, loading: listQ.isLoading };
 }
 
-/** Дерево быстрого переключения контекста у иконки песочниц в навбаре. */
+/** Дерево быстрого переключения песочниц у иконки в навбаре. */
 export function NavSandboxMenu(props: {
   active: boolean;
   icon: ReactNode;
@@ -116,7 +116,7 @@ export function NavSandboxMenu(props: {
       role="menu"
       ref={menuRef}
     >
-      <div className="navSandboxMenuTitle">Контекст плана</div>
+      <div className="navSandboxMenuTitle">Песочницы</div>
 
       <button
         type="button"
@@ -133,8 +133,23 @@ export function NavSandboxMenu(props: {
         </span>
       </button>
 
+      <button
+        type="button"
+        className="navSandboxItem navSandboxItemAction"
+        onClick={() => {
+          setOpen(false);
+          props.onManage();
+        }}
+        role="menuitem"
+      >
+        <span className="navSandboxItemBody">
+          <span className="navSandboxItemTitle">Управление песочницами</span>
+        </span>
+      </button>
+
+      <div className="navSandboxDivider" />
+
       <div className="navSandboxGroup">
-        <div className="navSandboxGroupTitle">Песочницы</div>
         {loading ? <div className="navSandboxEmpty">Загрузка…</div> : null}
         {!loading && activeList.length === 0 ? <div className="navSandboxEmpty">Нет активных песочниц</div> : null}
         {activeList.map((s) => (
@@ -184,21 +199,6 @@ export function NavSandboxMenu(props: {
             : null}
         </div>
       ) : null}
-
-      <div className="navSandboxDivider" />
-      <button
-        type="button"
-        className="navSandboxItem navSandboxItemAction"
-        onClick={() => {
-          setOpen(false);
-          props.onManage();
-        }}
-        role="menuitem"
-      >
-        <span className="navSandboxItemBody">
-          <span className="navSandboxItemTitle">Управление песочницами</span>
-        </span>
-      </button>
     </div>
   ) : null;
 
@@ -210,13 +210,13 @@ export function NavSandboxMenu(props: {
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Контекст плана"
-        title="Контекст плана"
+        aria-label="Песочницы"
+        title="Песочницы"
       >
         <span className="navIconGlyph" aria-hidden="true">
           {props.icon}
         </span>
-        <span className="navTooltip">Контекст плана</span>
+        <span className="navTooltip">Песочницы</span>
       </button>
 
       {open && isMobile

@@ -131,7 +131,7 @@ function formatDate(value?: string | null) {
 
 function eventLabel(ev?: ItpEvent | null) {
   if (!ev) return "—";
-  const tail = ev.aircraft?.tailNumber ?? "Вирт. борт";
+  const tail = ev.aircraft?.tailNumber ?? "VIRT";
   return `${tail} • ${ev.title}`;
 }
 

@@ -3,9 +3,9 @@ import { z } from "zod";
 import argon2 from "argon2";
 import { EventAuditAction, EventStatus, UserActivityAction } from "@prisma/client";
 
-import { expandPermissionCodes } from "../../lib/permissionCatalog.js";
+import { diffPermissionOverrides, expandPermissionCodes } from "../../lib/permissionCatalog.js";
 import { zDateTime, zId, zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertAnyPermission, assertPermission } from "../../lib/rbac.js";
 import { logUserActivity } from "../../lib/userActivity.js";
 import { queryActivityFeed } from "../../lib/activityFeed.js";
 import { UserMsg } from "../../lib/userErrors.js";
@@ -18,16 +18,58 @@ import { sandboxAdminRoutes } from "./sandboxes.js";
 import { reportAdminRoutes } from "./reports.js";
 
 async function expandRolePermissionIds(
-  app: { prisma: { permission: { findMany: () => Promise<Array<{ id: string; code: string }>> } } },
+  app: any,
   permissionIds: string[]
 ): Promise<string[]> {
   const rows = await app.prisma.permission.findMany();
-  const byId = new Map(rows.map((p) => [p.id, p.code]));
-  const byCode = new Map(rows.map((p) => [p.code, p.id]));
+  const byId = new Map(rows.map((p: { id: string; code: string }) => [p.id, p.code]));
+  const byCode = new Map(rows.map((p: { id: string; code: string }) => [p.code, p.id]));
   const codes = permissionIds.map((id) => byId.get(id)).filter((code): code is string => Boolean(code));
   return expandPermissionCodes(codes)
     .map((code) => byCode.get(code))
     .filter((id): id is string => Boolean(id));
+}
+
+async function rolePermissionCodes(app: any, roleIds: string[]): Promise<string[]> {
+  if (roleIds.length === 0) return [];
+  const roles = await app.prisma.role.findMany({
+    where: { id: { in: roleIds } },
+    include: { permissions: { include: { permission: true } } }
+  });
+  return [
+    ...new Set<string>(
+      roles.flatMap((r: { permissions: Array<{ permission: { code: string } }> }) =>
+        r.permissions.map((rp: { permission: { code: string } }) => rp.permission.code)
+      )
+    )
+  ];
+}
+
+async function replaceUserPermissionOverrides(
+  app: any,
+  userId: string,
+  roleIds: string[],
+  permissionIds: string[]
+) {
+  const [desiredIds, roleCodes, rows] = await Promise.all([
+    expandRolePermissionIds(app, permissionIds),
+    rolePermissionCodes(app, roleIds),
+    app.prisma.permission.findMany()
+  ]);
+  const byId = new Map(rows.map((p: { id: string; code: string }) => [p.id, p.code]));
+  const byCode = new Map(rows.map((p: { id: string; code: string }) => [p.code, p.id]));
+  const desiredCodes = desiredIds.map((id) => byId.get(id)).filter((code): code is string => Boolean(code));
+  const overrides = diffPermissionOverrides(roleCodes, desiredCodes)
+    .map((row) => {
+      const permissionId = byCode.get(row.code);
+      return permissionId ? { userId, permissionId, effect: row.effect } : null;
+    })
+    .filter((row): row is { userId: string; permissionId: string; effect: "GRANT" | "DENY" } => Boolean(row));
+
+  await app.prisma.userPermission.deleteMany({ where: { userId } });
+  if (overrides.length > 0) {
+    await app.prisma.userPermission.createMany({ data: overrides });
+  }
 }
 
 export const adminRoutes: FastifyPluginAsync = async (app) => {
@@ -117,15 +159,17 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
   // permissions list
   app.get("/permissions", async (req) => {
-    assertPermission(req as any, "admin:roles");
-    return await app.prisma.permission.findMany({ orderBy: { code: "asc" } });
+    assertAnyPermission(req as any, ["admin:roles", "admin:users"]);
+    return await app.prisma.permission.findMany({
+      orderBy: [{ appLabel: "asc" }, { model: "asc" }, { action: "asc" }, { code: "asc" }]
+    });
   });
 
   // roles
   app.get("/roles", async (req) => {
-    assertPermission(req as any, "admin:roles");
+    assertAnyPermission(req as any, ["admin:roles", "admin:users"]);
     return await app.prisma.role.findMany({
-      include: { permissions: { include: { permission: true } } },
+      include: { permissions: { include: { permission: true } }, _count: { select: { users: true } } },
       orderBy: [{ isSystem: "desc" }, { code: "asc" }]
     });
   });
@@ -154,7 +198,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
 
     return await app.prisma.role.findUniqueOrThrow({
       where: { id: role.id },
-      include: { permissions: { include: { permission: true } } }
+      include: { permissions: { include: { permission: true } }, _count: { select: { users: true } } }
     });
   });
 
@@ -183,8 +227,42 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     void role;
     return await app.prisma.role.findUniqueOrThrow({
       where: { id },
-      include: { permissions: { include: { permission: true } } }
+      include: { permissions: { include: { permission: true } }, _count: { select: { users: true } } }
     });
+  });
+
+  app.delete("/roles/:id", async (req) => {
+    assertPermission(req as any, "admin:roles");
+    const id = zUuid.parse((req.params as any).id);
+    const role = await app.prisma.role.findUnique({
+      where: { id },
+      include: {
+        users: { include: { user: { select: { email: true, displayName: true } } } }
+      }
+    });
+    if (!role) {
+      const err: any = new Error("RECORD_NOT_FOUND");
+      err.statusCode = 404;
+      throw err;
+    }
+    if (role.isSystem) {
+      const err: any = new Error("Системную роль нельзя удалить.");
+      err.statusCode = 409;
+      throw err;
+    }
+    if (role.users.length > 0) {
+      const names = role.users
+        .map((row) => row.user.displayName?.trim() || row.user.email)
+        .slice(0, 8);
+      const extra = role.users.length > names.length ? ` и ещё ${role.users.length - names.length}` : "";
+      const err: any = new Error(
+        `Нельзя удалить роль: она назначена сотрудникам (${names.join(", ")}${extra}). Сначала снимите роль.`
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+    await app.prisma.role.delete({ where: { id } });
+    return { ok: true as const };
   });
 
   const USER_LIST_SELECT = {
@@ -198,7 +276,8 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     createdAt: true,
     lastLoginAt: true,
     lastSeenAt: true,
-    roles: { include: { role: true } }
+    roles: { include: { role: true } },
+    permissionOverrides: { include: { permission: { select: { id: true, code: true, name: true } } } }
   } as const;
 
   // users
@@ -265,7 +344,8 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         isActive: z.boolean().optional(),
         mustChangePassword: z.boolean().optional(),
         dbAccessEnabled: z.boolean().optional(),
-        roleIds: z.array(zUuid).optional()
+        roleIds: z.array(zUuid).optional(),
+        permissionIds: z.array(zId).optional()
       })
       .parse(req.body);
 
@@ -308,6 +388,59 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     if (body.roleIds) {
       await app.prisma.userRole.deleteMany({ where: { userId: id } });
       await Promise.all(body.roleIds.map((roleId) => app.prisma.userRole.create({ data: { userId: id, roleId } })));
+    }
+
+    if (body.permissionIds) {
+      const roleIds =
+        body.roleIds ??
+        (await app.prisma.userRole.findMany({ where: { userId: id }, select: { roleId: true } })).map((row) => row.roleId);
+      await replaceUserPermissionOverrides(app, id, roleIds, body.permissionIds);
+    }
+
+    return await app.prisma.user.findUniqueOrThrow({
+      where: { id },
+      select: USER_LIST_SELECT
+    });
+  });
+
+  app.post("/users/:id/copy-access", async (req) => {
+    assertPermission(req as any, "admin:users");
+    const id = zUuid.parse((req.params as any).id);
+    const body = z.object({ fromUserId: zUuid }).parse(req.body);
+    if (body.fromUserId === id) {
+      const err: any = new Error("Выберите другого сотрудника — копировать права на самого себя нельзя.");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const [target, source] = await Promise.all([
+      app.prisma.user.findUnique({ where: { id }, select: { id: true } }),
+      app.prisma.user.findUnique({
+        where: { id: body.fromUserId },
+        select: {
+          id: true,
+          roles: { select: { roleId: true } },
+          permissionOverrides: { select: { permissionId: true, effect: true } }
+        }
+      })
+    ]);
+    if (!target || !source) {
+      const err: any = new Error("USER_NOT_FOUND");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    await app.prisma.userRole.deleteMany({ where: { userId: id } });
+    await Promise.all(source.roles.map((row) => app.prisma.userRole.create({ data: { userId: id, roleId: row.roleId } })));
+    await app.prisma.userPermission.deleteMany({ where: { userId: id } });
+    if (source.permissionOverrides.length > 0) {
+      await app.prisma.userPermission.createMany({
+        data: source.permissionOverrides.map((row) => ({
+          userId: id,
+          permissionId: row.permissionId,
+          effect: row.effect
+        }))
+      });
     }
 
     return await app.prisma.user.findUniqueOrThrow({

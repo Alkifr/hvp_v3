@@ -8,6 +8,7 @@ import { dbAccessPayload } from "../lib/pgAccess.js";
 import { HOME_PAGES, NOTIFICATION_KINDS, parseHomePage, parseMutedNotificationKinds } from "../lib/userPrefs.js";
 import { queryMyPresence, recordLogin } from "../lib/userPresence.js";
 import { getRuntimeConfig } from "../lib/writeBlocked.js";
+import { effectivePermissionCodes, USER_ACCESS_INCLUDE } from "../lib/userAccess.js";
 
 const LOGIN_WINDOW_MS = 60_000;
 const LOGIN_MAX = 10;
@@ -33,11 +34,10 @@ function assertLoginRateLimit(req: FastifyRequest) {
   }
 }
 
-const ME_INCLUDE = {
-  roles: { include: { role: { include: { permissions: { include: { permission: true } } } } } }
-} as const;
+const ME_INCLUDE = USER_ACCESS_INCLUDE;
 
 type UserRoleJoin = { role: { code: string; permissions: Array<{ permission: { code: string } }> } };
+type OverrideJoin = { effect: "GRANT" | "DENY"; permission: { code: string } };
 
 function meUserPayload(user: {
   id: string;
@@ -52,11 +52,10 @@ function meUserPayload(user: {
   pgRoleName: string | null;
   pgPassword: string | null;
   roles: UserRoleJoin[];
+  permissionOverrides?: OverrideJoin[];
 }) {
   const roles = user.roles.map((ur) => ur.role.code);
-  const permissions = Array.from(
-    new Set(user.roles.flatMap((ur) => ur.role.permissions.map((rp) => rp.permission.code)))
-  );
+  const permissions = effectivePermissionCodes(user);
   return {
     ok: true as const,
     user: {
