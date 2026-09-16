@@ -7,13 +7,21 @@ import { apiGet, apiPost } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
 import { downloadMassPlanBatchTemplate } from "../../lib/importTemplates";
 import { endOfMskDayIso, fromInputMskOptional, startOfMskDayIso } from "../../lib/localDate";
+import {
+  LINE_BASE_LABEL,
+  lineBaseAfterWorkshopChange,
+  parseImportLineBase,
+  parseLineBase,
+  type LineBase
+} from "../../lib/lineBase";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 type Hangar = { id: string; name: string; code: string };
 type Operator = { id: string; name: string; code: string };
 type AircraftType = { id: string; name: string; icaoType?: string | null; bodyType?: string | null };
-type EventType = { id: string; name: string; code: string };
+type EventType = { id: string; name: string; code: string; isActive?: boolean };
+type Workshop = { id: string; code: string; name: string; defaultLineBase?: LineBase | null; isActive?: boolean };
 type BatchSolverMode = "ortools" | "hybrid" | "heuristic";
 
 type SolverDiagnostics = {
@@ -185,6 +193,8 @@ type BatchRow = {
   operatorId: string;
   aircraftTypeId: string;
   eventTypeId: string;
+  workshopId: string;
+  lineBase: LineBase | "";
   count: number;
   startFrom: string;
   endTo: string;
@@ -368,6 +378,8 @@ export function MassPlanView(props: { hideHero?: boolean }) {
   const [operatorId, setOperatorId] = useState("");
   const [aircraftTypeId, setAircraftTypeId] = useState("");
   const [eventTypeId, setEventTypeId] = useState("");
+  const [workshopId, setWorkshopId] = useState("");
+  const [lineBase, setLineBase] = useState<LineBase | "">("");
   const [count, setCount] = useState(5);
   const [startFrom, setStartFrom] = useState(() => dayjs().format("YYYY-MM-DD"));
   const [endTo, setEndTo] = useState(() => dayjs().add(30, "day").format("YYYY-MM-DD"));
@@ -407,12 +419,18 @@ export function MassPlanView(props: { hideHero?: boolean }) {
     queryKey: ["ref", "event-types"],
     queryFn: () => apiGet<EventType[]>("/api/ref/event-types")
   });
+  const workshopsQ = useQuery({
+    queryKey: ["ref", "workshops"],
+    queryFn: () => apiGet<Workshop[]>("/api/ref/workshops")
+  });
 
   const buildBody = () => ({
     tatHours: Number(tatHours) || 72,
     operatorId,
     aircraftTypeId,
     eventTypeId,
+    workshopId: workshopId || null,
+    lineBase: parseLineBase(lineBase),
     count: Math.max(1, Math.min(200, Number(count) || 1)),
     startFrom: isValidDateInput(startFrom)
       ? startOfMskDayIso(startFrom)!
@@ -442,6 +460,8 @@ export function MassPlanView(props: { hideHero?: boolean }) {
     operatorId,
     aircraftTypeId,
     eventTypeId,
+    workshopId,
+    lineBase,
     count: 1,
     startFrom,
     endTo,
@@ -467,6 +487,8 @@ export function MassPlanView(props: { hideHero?: boolean }) {
       operatorId: row.operatorId,
       aircraftTypeId: row.aircraftTypeId,
       eventTypeId: row.eventTypeId,
+      workshopId: row.workshopId || null,
+      lineBase: parseLineBase(row.lineBase),
       count: Math.max(1, Math.min(200, Number(row.count) || 1)),
       startFrom: isValidDateInput(row.startFrom)
         ? startOfMskDayIso(row.startFrom)!
@@ -515,7 +537,8 @@ export function MassPlanView(props: { hideHero?: boolean }) {
   const hangars = hangarsQ.data ?? [];
   const operators = operatorsQ.data ?? [];
   const aircraftTypes = aircraftTypesQ.data ?? [];
-  const eventTypes = eventTypesQ.data ?? [];
+  const eventTypes = (eventTypesQ.data ?? []).filter((t) => t.isActive !== false);
+  const workshops = workshopsQ.data ?? [];
   const hangarById = new Map(hangars.map((h) => [h.id, h]));
   const availableHangarIds = hangars.map((h) => h.id).filter((id) => !hangarPriority.includes(id));
   const decisionByIndex = new Map((preview?.solverDiagnostics?.jobs ?? []).map((job) => [job.flatIndex, job]));
@@ -590,6 +613,10 @@ export function MassPlanView(props: { hideHero?: boolean }) {
     const q = normalizeImportToken(value);
     return eventTypes.find((t) => normalizeImportToken(t.id) === q || normalizeImportToken(t.code) === q || normalizeImportToken(t.name) === q)?.id ?? "";
   };
+  const resolveWorkshop = (value: unknown) => {
+    const q = normalizeImportToken(value);
+    return workshops.find((w) => normalizeImportToken(w.id) === q || normalizeImportToken(w.code) === q || normalizeImportToken(w.name) === q)?.id ?? "";
+  };
 
   const importBatchRows = async (file: File) => {
     setBatchImportError(null);
@@ -608,12 +635,24 @@ export function MassPlanView(props: { hideHero?: boolean }) {
       const imported = rows.map((row) => {
         const start = pick(row, ["startFrom", "начало периода", "дата начала", "start"]);
         const end = pick(row, ["endTo", "конец периода", "дата окончания", "end"]);
+        const workshopRaw = pick(row, ["workshop", "цех", "ответственный цех", "workshopId"]);
+        const lineBaseRaw = pick(row, ["lineBase", "lb", "l/b", "контур", "контур lb"]);
+        const nextWorkshopId = resolveWorkshop(workshopRaw);
+        const parsedLineBase = parseImportLineBase(lineBaseRaw);
+        if (String(workshopRaw).trim() && !nextWorkshopId) {
+          throw new Error(`Не найден цех: ${String(workshopRaw).trim()}`);
+        }
+        if (String(lineBaseRaw).trim() && !parsedLineBase) {
+          throw new Error(`Некорректный L/B: ${String(lineBaseRaw).trim()}. Допустимо L/LINE или B/BASE`);
+        }
         return {
           id: makeClientId(),
           tatHours: Number(pick(row, ["tatHours", "tat", "тат", "TAT"])) || 72,
           operatorId: resolveOperator(pick(row, ["operator", "оператор"])),
           aircraftTypeId: resolveAircraftType(pick(row, ["aircraftType", "тип вс", "тип"])),
           eventTypeId: resolveEventType(pick(row, ["eventType", "тип события", "событие"])),
+          workshopId: nextWorkshopId,
+          lineBase: parsedLineBase ?? lineBaseAfterWorkshopChange(nextWorkshopId, workshops, ""),
           count: Number(pick(row, ["count", "количество", "qty"])) || 1,
           startFrom: parseImportDate(start, startFrom),
           endTo: parseImportDate(end, endTo),
@@ -722,6 +761,39 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                         ))}
                       </select>
                     </label>
+                    <label className="massField">
+                      <span className="muted">Ответственный цех</span>
+                      <select
+                        value={workshopId}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          setWorkshopId(next);
+                          setLineBase(lineBaseAfterWorkshopChange(next, workshops, lineBase));
+                          clearPlanOutput();
+                        }}
+                      >
+                        <option value="">— не задан —</option>
+                        {workshops
+                          .filter((w) => w.isActive !== false || w.id === workshopId)
+                          .map((w) => (
+                            <option key={w.id} value={w.id}>{w.code ? `${w.code} • ${w.name}` : w.name}</option>
+                          ))}
+                      </select>
+                    </label>
+                    <label className="massField">
+                      <span className="muted">L/B</span>
+                      <select
+                        value={lineBase}
+                        onChange={(e) => {
+                          setLineBase(parseLineBase(e.target.value) ?? "");
+                          clearPlanOutput();
+                        }}
+                      >
+                        <option value="">— не задан —</option>
+                        <option value="LINE">{LINE_BASE_LABEL.LINE}</option>
+                        <option value="BASE">{LINE_BASE_LABEL.BASE}</option>
+                      </select>
+                    </label>
                   </div>
                 </div>
 
@@ -775,7 +847,7 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                 <div className="massBatchToolbar">
                   <div className="muted small">
                     Заполните строки вручную или импортируйте XLSX/CSV по шаблону
-                    (operator, aircraftType, eventType, tatHours, count, startFrom, endTo).
+                    (operator, aircraftType, eventType, workshop, lineBase, tatHours, count, startFrom, endTo).
                   </div>
                   <div className="massBatchToolbarActions">
                     <button
@@ -823,6 +895,8 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                       <span>Оператор</span>
                       <span>Тип ВС</span>
                       <span>Событие</span>
+                      <span>Цех</span>
+                      <span>L/B</span>
                       <span>TAT</span>
                       <span>Кол-во</span>
                       <span>Начало</span>
@@ -860,6 +934,36 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                             {eventTypes.map((et) => (
                               <option key={et.id} value={et.id}>{et.name}</option>
                             ))}
+                          </select>
+                        </label>
+                        <label className="massField">
+                          <span className="muted">Ответственный цех</span>
+                          <select
+                            value={row.workshopId}
+                            onChange={(e) =>
+                              updateBatchRow(row.id, {
+                                workshopId: e.target.value,
+                                lineBase: lineBaseAfterWorkshopChange(e.target.value, workshops, row.lineBase)
+                              })
+                            }
+                          >
+                            <option value="">—</option>
+                            {workshops
+                              .filter((w) => w.isActive !== false || w.id === row.workshopId)
+                              .map((w) => (
+                                <option key={w.id} value={w.id}>{w.code ? `${w.code} • ${w.name}` : w.name}</option>
+                              ))}
+                          </select>
+                        </label>
+                        <label className="massField">
+                          <span className="muted">L/B</span>
+                          <select
+                            value={row.lineBase}
+                            onChange={(e) => updateBatchRow(row.id, { lineBase: parseLineBase(e.target.value) ?? "" })}
+                          >
+                            <option value="">—</option>
+                            <option value="LINE">{LINE_BASE_LABEL.LINE}</option>
+                            <option value="BASE">{LINE_BASE_LABEL.BASE}</option>
                           </select>
                         </label>
                         <label className="massField">

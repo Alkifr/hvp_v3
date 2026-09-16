@@ -10,6 +10,7 @@ import {
   type EventImportProgress
 } from "../../lib/eventImport";
 import { downloadEventImportTemplate } from "../../lib/importTemplates";
+import { formatLineBase } from "../../lib/lineBase";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 type PreviewStatusFilter = "" | "ok" | "warn" | "error";
@@ -83,7 +84,7 @@ function validateImportRowsShape(rows: any[]): string | null {
     parts.push("Похоже, это файл массового планирования — перейдите на вкладку «Массовое планирование».");
   } else {
     parts.push(
-      "Нужны колонки: Aircraft, Event_name, startAt, endAt (также можно Operator, AircraftType, Event_Title, Hangar, HangarStand, laborBudget_*/laborMps_*/laborActual_*)."
+      "Нужны колонки: Aircraft, Event_name, startAt, endAt (также можно Operator, AircraftType, Event_Title, Hangar, HangarStand, Workshop, LineBase, laborBudget_*/laborMps_*/laborActual_*)."
     );
   }
   return parts.join(" ");
@@ -202,8 +203,8 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
       <div className="card" style={{ display: "grid", gap: 10 }}>
         <div className="muted">
           Excel/CSV. Шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt, budgetStartAt, budgetEndAt,
-          actualStartAt, actualEndAt, towStartAt, towEndAt, Hangar, HangarStand. Периоды можно оставлять пустыми.
-          Места назначаются только в активных вариантах расстановки.
+          actualStartAt, actualEndAt, towStartAt, towEndAt, Hangar, HangarStand, Workshop, LineBase. Периоды можно оставлять пустыми.
+          Места назначаются только в активных вариантах расстановки. Цех и L/B — по коду/названию; пустой L/B берётся из цеха.
           Даты без часового пояса и ячейки Excel трактуются как местное время (MSK).
         </div>
         <div className="row" style={{ alignItems: "flex-end" }}>
@@ -416,6 +417,8 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
                           <th>Буксировка</th>
                           <th>Ангар / место</th>
                           <th>Вариант</th>
+                          <th>Цех</th>
+                          <th>L/B</th>
                           <th>Комментарий</th>
                         </tr>
                       </thead>
@@ -459,6 +462,8 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
                                 {row.stand ? <span className="muted"> / {row.stand}</span> : null}
                               </td>
                               <td>{row.layout || "—"}</td>
+                              <td>{row.workshop || "—"}</td>
+                              <td>{formatLineBase(row.lineBase)}</td>
                               <td className="eventImportMessageCell">
                                 {row.error ? <div className="eventImportErrorText">{row.error}</div> : null}
                                 {row.warnings?.length ? (

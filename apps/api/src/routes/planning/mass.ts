@@ -9,6 +9,7 @@ import { assertPermission } from "../../lib/rbac.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { VIRTUAL_AIRCRAFT_LABEL, virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
+import { parseLineBase, resolveEventLineBase, type LineBase } from "../../lib/lineBase.js";
 
 function assertCanWrite(req: any) {
   if (!canWriteInContext(req)) {
@@ -31,6 +32,79 @@ function getActor(req: any) {
   if (auth?.email) return String(auth.email).slice(0, 80);
   const h = req.headers ?? {};
   return String(h["x-actor"] ?? h["x-user"] ?? "browser").slice(0, 80);
+}
+
+const zOptionalWorkshopId = zUuid.nullable().optional();
+const zOptionalLineBase = z.enum(["LINE", "BASE"]).nullable().optional();
+
+async function resolveMassWorkshopFields(
+  prisma: any,
+  app: { httpErrors: { badRequest: (msg: string) => Error } },
+  input: { workshopId?: string | null; lineBase?: LineBase | null }
+): Promise<{ workshopId: string | null; lineBase: LineBase | null }> {
+  const workshopId = input.workshopId ?? null;
+  if (!workshopId) {
+    return {
+      workshopId: null,
+      lineBase: resolveEventLineBase({
+        requestedProvided: input.lineBase !== undefined,
+        requested: input.lineBase ?? null,
+        workshopDefault: null
+      })
+    };
+  }
+  const workshop = await prisma.workshop.findUnique({
+    where: { id: workshopId },
+    select: { id: true, name: true, isActive: true, defaultLineBase: true }
+  });
+  if (!workshop) throw app.httpErrors.badRequest(`Не найден цех: ${workshopId}`);
+  if (!workshop.isActive) throw app.httpErrors.badRequest(`Цех «${workshop.name}» неактивен`);
+  return {
+    workshopId: workshop.id,
+    lineBase: resolveEventLineBase({
+      requestedProvided: input.lineBase !== undefined,
+      requested: input.lineBase ?? null,
+      workshopDefault: parseLineBase(workshop.defaultLineBase)
+    })
+  };
+}
+
+async function resolveMassWorkshopFieldsMany(
+  prisma: any,
+  app: { httpErrors: { badRequest: (msg: string) => Error } },
+  items: Array<{ workshopId?: string | null; lineBase?: LineBase | null }>
+): Promise<Array<{ workshopId: string | null; lineBase: LineBase | null }>> {
+  const ids = Array.from(new Set(items.map((item) => item.workshopId).filter((id): id is string => Boolean(id))));
+  const workshops =
+    ids.length > 0
+      ? await prisma.workshop.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, name: true, isActive: true, defaultLineBase: true }
+        })
+      : [];
+  const byId = new Map(workshops.map((w: { id: string }) => [w.id, w]));
+  for (const id of ids) {
+    const workshop = byId.get(id) as
+      | { id: string; name: string; isActive: boolean; defaultLineBase: string | null }
+      | undefined;
+    if (!workshop) throw app.httpErrors.badRequest(`Не найден цех: ${id}`);
+    if (!workshop.isActive) throw app.httpErrors.badRequest(`Цех «${workshop.name}» неактивен`);
+  }
+  return items.map((item) => {
+    const workshop = item.workshopId
+      ? (byId.get(item.workshopId) as
+          | { id: string; name: string; isActive: boolean; defaultLineBase: string | null }
+          | undefined)
+      : undefined;
+    return {
+      workshopId: workshop?.id ?? null,
+      lineBase: resolveEventLineBase({
+        requestedProvided: item.lineBase !== undefined,
+        requested: item.lineBase ?? null,
+        workshopDefault: parseLineBase(workshop?.defaultLineBase)
+      })
+    };
+  });
 }
 
 type StandEntry = { hangarId: string; layoutId: string; standId: string; priorityScore?: number; priorityRuleIds?: string[]; scoreDetails?: string[] };
@@ -978,6 +1052,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         operatorId: zUuid,
         aircraftTypeId: zUuid,
         eventTypeId: zUuid,
+        workshopId: zOptionalWorkshopId,
+        lineBase: zOptionalLineBase,
         count: z.number().int().min(1).max(200),
         startFrom: z.string().transform((s) => new Date(s)),
         endTo: z.string().transform((s) => new Date(s)),
@@ -1013,6 +1089,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       .parse(req.body);
 
     const dryRun = Boolean(body.dryRun);
+    const workshopFields = await resolveMassWorkshopFields(app.prisma, app, body);
     const tatMs = body.tatHours * 60 * 60 * 1000;
     const spacingMs = body.spacingHours * 60 * 60 * 1000;
     const cadenceMs = body.cadenceHours ? body.cadenceHours * 60 * 60 * 1000 : null;
@@ -1023,7 +1100,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     const windowEnd = new Date(Math.max(endToMs + tatMs + towAfterMs, startFromMs + body.count * (tatMs + spacingMs)));
 
     const [eventType, aircraftType, hangarsOrdered, layoutsWithStands, reservations, bodyTypeScoreRules] = await Promise.all([
-      app.prisma.eventType.findUniqueOrThrow({ where: { id: body.eventTypeId } }),
+      app.prisma.eventType.findUniqueOrThrow({ where: { id: body.eventTypeId } }).then((row) => {
+        if (!row.isActive) throw app.httpErrors.badRequest(`Тип события «${row.name}» неактивен`);
+        return row;
+      }),
       app.prisma.aircraftType.findUniqueOrThrow({ where: { id: body.aircraftTypeId } }),
       body.hangarIds?.length
         ? app.prisma.hangar.findMany({
@@ -1279,6 +1359,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               actualEndAt: body.actualEndAt ?? null,
               hangarId: p.hangarId,
               layoutId: p.layoutId,
+              workshopId: workshopFields.workshopId,
+              lineBase: workshopFields.lineBase,
               virtualAircraft: virtualAircraft as Prisma.InputJsonValue
             }
           });
@@ -1393,6 +1475,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               actualEndAt: body.actualEndAt ?? null,
               hangarId: null,
               layoutId: null,
+              workshopId: workshopFields.workshopId,
+              lineBase: workshopFields.lineBase,
               virtualAircraft: virtualAircraft as Prisma.InputJsonValue
             }
           });
@@ -1479,6 +1563,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         operatorId: zUuid,
         aircraftTypeId: zUuid,
         eventTypeId: zUuid,
+        workshopId: zOptionalWorkshopId,
+        lineBase: zOptionalLineBase,
         count: z.number().int().min(1).max(200),
         startFrom: z.string().transform((s) => new Date(s)),
         endTo: z.string().transform((s) => new Date(s)),
@@ -1520,6 +1606,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       .parse(req.body);
 
     const dryRun = Boolean(body.dryRun);
+    const workshopFieldsByRow = await resolveMassWorkshopFieldsMany(app.prisma, app, body.items);
     const towBeforeMs = body.towBeforeMinutes * 60 * 1000;
     const towAfterMs = body.towAfterMinutes * 60 * 1000;
     const blockBefore = body.towBlocksStand ? towBeforeMs : 0;
@@ -1612,7 +1699,9 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     const eventTypeById = new Map(eventTypes.map((eventType) => [eventType.id, eventType]));
     const aircraftTypeById = new Map(aircraftTypes.map((aircraftType) => [aircraftType.id, aircraftType]));
     for (const item of body.items) {
-      if (!eventTypeById.has(item.eventTypeId)) throw app.httpErrors.badRequest(`Не найден тип события: ${item.eventTypeId}`);
+      const eventType = eventTypeById.get(item.eventTypeId);
+      if (!eventType) throw app.httpErrors.badRequest(`Не найден тип события: ${item.eventTypeId}`);
+      if (!eventType.isActive) throw app.httpErrors.badRequest(`Тип события «${eventType.name}» неактивен`);
       if (!aircraftTypeById.has(item.aircraftTypeId)) throw app.httpErrors.badRequest(`Не найден тип ВС: ${item.aircraftTypeId}`);
     }
 
@@ -2595,6 +2684,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           actualEndAt: body.actualEndAt ?? null,
           hangarId: p.hangarId,
           layoutId: p.layoutId,
+          workshopId: workshopFieldsByRow[p.rowIndex]?.workshopId ?? null,
+          lineBase: workshopFieldsByRow[p.rowIndex]?.lineBase ?? null,
           virtualAircraft: { operatorId: p.operatorId, aircraftTypeId: p.aircraftTypeId, label: p.label } as Prisma.InputJsonValue
         });
         placementRows.push({
@@ -2652,6 +2743,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           actualEndAt: body.actualEndAt ?? null,
           hangarId: null,
           layoutId: null,
+          workshopId: workshopFieldsByRow[u.rowIndex]?.workshopId ?? null,
+          lineBase: workshopFieldsByRow[u.rowIndex]?.lineBase ?? null,
           virtualAircraft: { operatorId: u.operatorId, aircraftTypeId: u.aircraftTypeId, label: u.label } as Prisma.InputJsonValue
         });
         created.push({ eventId, label: u.label, title: u.title, startAt, endAt, hangarId: null, layoutId: null, standId: null, status: EventStatus.PENDING_EXECUTOR_APPROVAL });

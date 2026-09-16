@@ -55,7 +55,9 @@ export function downloadMassPlanBatchTemplate(params?: {
           endTo,
           titleTemplate: "A-check %",
           spacingHours: 0,
-          cadenceHours: 168
+          cadenceHours: 168,
+          workshop: "",
+          lineBase: ""
         }
       ]
     },
@@ -72,11 +74,13 @@ export function downloadMassPlanBatchTemplate(params?: {
         { Колонка: "titleTemplate", Обязательно: "нет", Описание: "Шаблон названия; % заменяется на номер" },
         { Колонка: "spacingHours", Обязательно: "нет", Описание: "Пауза между событиями, ч (режим «Последовательно»)" },
         { Колонка: "cadenceHours", Обязательно: "нет", Описание: "Шаг cadence, ч (режим «Фикс. cadence»)" },
+        { Колонка: "workshop", Обязательно: "нет", Описание: "Ответственный цех: код, название или id. Алиасы: цех, ответственный цех" },
+        { Колонка: "lineBase", Обязательно: "нет", Описание: "Контур L/B: L/LINE или B/BASE. Пусто = из цеха. Алиасы: L/B, контур" },
         {
           Колонка: "Алиасы",
           Обязательно: "—",
           Описание:
-            "operator←оператор; aircraftType←тип вс|тип; eventType←тип события|событие; tatHours←tat|тат; count←количество|qty; startFrom←начало периода|дата начала|start; endTo←конец периода|дата окончания|end; titleTemplate←название|шаблон"
+            "operator←оператор; aircraftType←тип вс|тип; eventType←тип события|событие; tatHours←tat|тат; count←количество|qty; startFrom←начало периода|дата начала|start; endTo←конец периода|дата окончания|end; titleTemplate←название|шаблон; workshop←цех; lineBase←L/B|контур"
         }
       ]
     }
@@ -133,6 +137,8 @@ export function downloadEventImportTemplate(params?: {
           towEndAt: "",
           Hangar: hangar,
           HangarStand: hangarStand,
+          Workshop: "",
+          LineBase: "",
           ...laborExample
         }
       ]
@@ -152,6 +158,8 @@ export function downloadEventImportTemplate(params?: {
         { Колонка: "towStartAt / towEndAt", Обязательно: "нет", Описание: "Период буксировки (обе даты или пусто)" },
         { Колонка: "Hangar", Обязательно: "нет", Описание: "Ангар: код или название (активный)" },
         { Колонка: "HangarStand", Обязательно: "нет", Описание: "Место в активном варианте расстановки" },
+        { Колонка: "Workshop", Обязательно: "нет", Описание: "Ответственный цех: код, название или id. Алиасы: Цех, ответственный цех" },
+        { Колонка: "LineBase", Обязательно: "нет", Описание: "Контур L/B: L, LINE, L (Line) или B, BASE, B (Base). Пусто = из цеха. Алиасы: L/B, контур" },
         ...laborInstructionRows,
         {
           Колонка: "Алиас CabRep",

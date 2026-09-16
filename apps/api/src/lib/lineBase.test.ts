@@ -1,13 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseLineBase, resolveEventLineBase } from "./lineBase.js";
+import { parseImportLineBase, parseLineBase, resolveEventLineBase } from "./lineBase.js";
 
 test("parseLineBase accepts LINE and BASE", () => {
   assert.equal(parseLineBase("LINE"), "LINE");
   assert.equal(parseLineBase("BASE"), "BASE");
   assert.equal(parseLineBase(""), null);
   assert.equal(parseLineBase(null), null);
+});
+
+test("parseImportLineBase accepts Excel aliases", () => {
+  assert.equal(parseImportLineBase("L"), "LINE");
+  assert.equal(parseImportLineBase("L (Line)"), "LINE");
+  assert.equal(parseImportLineBase("линейный"), "LINE");
+  assert.equal(parseImportLineBase("B"), "BASE");
+  assert.equal(parseImportLineBase("B (Base)"), "BASE");
+  assert.equal(parseImportLineBase(""), null);
+  assert.equal(parseImportLineBase("xyz"), null);
 });
 
 test("create without explicit value uses workshop default", () => {

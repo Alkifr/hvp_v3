@@ -23,6 +23,8 @@ export type EventImportPreviewRow = {
   hangar?: string | null;
   stand?: string | null;
   layout?: string | null;
+  workshop?: string | null;
+  lineBase?: "LINE" | "BASE" | null;
   warnings?: string[];
   error?: string;
 };

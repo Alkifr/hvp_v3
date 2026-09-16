@@ -150,6 +150,26 @@ test("analytics tab and grain round-trip", () => {
   assert.deepEqual(parsed.filterOperatorIds, ["op1"]);
 });
 
+test("analytics monthly tab round-trip", () => {
+  const q = serializeAnalyticsViewShare({
+    tab: "monthly",
+    fromDate: "2026-09-01",
+    toDate: "2026-09-30",
+    compareA: "prod",
+    compareB: "",
+    efficiencyGrain: "week",
+    filterHangarIds: [],
+    filterOperatorIds: [],
+    filterAircraftTypeIds: [],
+    filterAircraftIds: [],
+    filterEventTypeIds: [],
+    sandboxId: null
+  });
+  assert.equal(q.get("tab"), "monthly");
+  const parsed = parseAnalyticsViewShare(q);
+  assert.equal(parsed?.tab, "monthly");
+});
+
 test("ref catalog kind search and hangar layout round-trip", () => {
   const q = serializeRefViewShare({
     kind: "stands",

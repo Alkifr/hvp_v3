@@ -4,7 +4,13 @@ import { EventAuditAction, EventPlacementOrigin, EventStatus, PlanningLevel, Pri
 
 import { parseImportDateTime } from "../../lib/localDate.js";
 import { normalizePlacementGaps } from "../../lib/placementGaps.js";
-import { loadWorkshopLineBase, resolveEventLineBase } from "../../lib/lineBase.js";
+import {
+  importLineBaseProvided,
+  loadWorkshopLineBase,
+  parseImportLineBase,
+  parseLineBase,
+  resolveEventLineBase
+} from "../../lib/lineBase.js";
 import { eventHasExistingSlotOverlap, resolveAllowOverlap } from "../../lib/placementOverlap.js";
 import {
   DONE_SCHEDULE_LOCK_MESSAGE,
@@ -62,6 +68,8 @@ const IMPORT_FIELD_LABELS: Record<string, string> = {
   Event_Title: "Event_Title (название)",
   Hangar: "Hangar (ангар)",
   HangarStand: "HangarStand (место)",
+  Workshop: "Workshop (ответственный цех)",
+  LineBase: "LineBase (L/B)",
   ...Object.fromEntries(
     laborImportFieldAliases().map((col) => [col.field, `${col.field} (${col.title}, ч/ч)`])
   )
@@ -95,7 +103,7 @@ function formatEventImportSchemaError(error: z.ZodError): string {
   }
 
   parts.push(
-    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand, laborBudget_*/laborMps_*/laborActual_*)."
+    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand, Workshop, LineBase, laborBudget_*/laborMps_*/laborActual_*)."
   );
   parts.push("Если это файл массового планирования — перейдите на вкладку «Массовое планирование», а не «Импорт событий».");
 
@@ -761,6 +769,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                 towEndAt: zOptionalDateCell,
                 Hangar: z.string().optional(),
                 HangarStand: z.string().optional(),
+                Workshop: z.union([z.string(), z.number()]).optional(),
+                LineBase: z.union([z.string(), z.number()]).optional(),
                 ...laborImportShape
               })
               .passthrough()
@@ -790,6 +800,27 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const key = (s: unknown) => norm(s).toLocaleLowerCase("ru-RU");
     const upper = (s: unknown) => norm(s).toLocaleUpperCase("ru-RU");
     const lower = key;
+    const pickImportCell = (row: Record<string, unknown>, aliases: string[]) => {
+      const byKey = new Map<string, unknown>();
+      for (const [k, v] of Object.entries(row ?? {})) byKey.set(key(k), v);
+      for (const alias of aliases) {
+        const v = byKey.get(key(alias));
+        if (v == null) continue;
+        if (typeof v === "string" && norm(v) === "") continue;
+        return v;
+      }
+      return "";
+    };
+    const workshopCellAliases = [
+      "Workshop",
+      "workshop",
+      "workshopId",
+      "workshopCode",
+      "Цех",
+      "Ответственный цех",
+      "responsibleWorkshop"
+    ];
+    const lineBaseCellAliases = ["LineBase", "lineBase", "LB", "L/B", "контур", "контур L/B", "Line/Base"];
 
     // Naive даты/Excel serial → wall clock MSK; ISO с Z/offset — абсолютные.
     const parseDate = (v: string | number | Date) => parseImportDateTime(v);
@@ -824,10 +855,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       if (hk && sc) hangarStandPairs.push({ hangarKey: hk, standCode: sc });
     }
 
-    const [aircraftAll, eventTypesAll, hangarsAll] = await Promise.all([
+    const [aircraftAll, eventTypesAll, hangarsAll, workshopsAll] = await Promise.all([
       app.prisma.aircraft.findMany({ include: { operator: true, type: true } }),
       app.prisma.eventType.findMany(),
-      app.prisma.hangar.findMany()
+      app.prisma.hangar.findMany(),
+      app.prisma.workshop.findMany()
     ]);
 
     const aircraftByTail = new Map<string, (typeof aircraftAll)[number]>();
@@ -844,6 +876,13 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       if (!h.isActive) continue;
       hangarByKey.set(key(h.name), h);
       if (h.code) hangarByKey.set(key(h.code), h);
+    }
+
+    const workshopByKey = new Map<string, (typeof workshopsAll)[number]>();
+    for (const w of workshopsAll) {
+      workshopByKey.set(key(w.id), w);
+      workshopByKey.set(key(w.code), w);
+      workshopByKey.set(key(w.name), w);
     }
 
     // Стенды: только активные места в активных вариантах расстановки (как в mass/reservations).
@@ -1066,6 +1105,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       standId?: string | null;
       layoutId?: string | null;
       hangarId?: string | null;
+      workshop?: string | null;
+      workshopId?: string | null;
+      lineBase?: "LINE" | "BASE" | null;
       laborMetricsCount?: number;
       warnings?: string[];
       error?: string;
@@ -1141,6 +1183,20 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           resolvedStand = resolveImportStand(hangar, standCode, startAt, endAt, warnings);
         }
 
+        const workshopRaw = pickImportCell(r as Record<string, unknown>, workshopCellAliases);
+        const lineBaseRaw = pickImportCell(r as Record<string, unknown>, lineBaseCellAliases);
+        const workshop = norm(workshopRaw) ? workshopByKey.get(key(workshopRaw)) ?? null : null;
+        if (norm(workshopRaw) && !workshop) throw new Error(`Не найден цех: ${norm(workshopRaw)}`);
+        if (workshop && !workshop.isActive) throw new Error(`Цех «${workshop.name}» неактивен`);
+        if (importLineBaseProvided(lineBaseRaw) && !parseImportLineBase(lineBaseRaw)) {
+          throw new Error(`Некорректный L/B: ${norm(lineBaseRaw)}. Допустимо L/LINE или B/BASE`);
+        }
+        const resolvedLineBase = resolveEventLineBase({
+          requestedProvided: importLineBaseProvided(lineBaseRaw),
+          requested: parseImportLineBase(lineBaseRaw),
+          workshopDefault: parseLineBase(workshop?.defaultLineBase)
+        });
+
         previewRows.push({
           rowIndex,
           ok: true,
@@ -1161,6 +1217,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           layout: resolvedStand?.layoutLabel ?? null,
           standId: resolvedStand?.standId ?? null,
           layoutId: resolvedStand?.layoutId ?? null,
+          workshop: workshop ? (workshop.code ? `${workshop.code} • ${workshop.name}` : workshop.name) : null,
+          workshopId: workshop?.id ?? null,
+          lineBase: resolvedLineBase,
           warnings,
           laborMetricsCount: laborMetrics.length
         });
@@ -1265,6 +1324,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               actualStartAt,
               actualEndAt,
               hangarId: hangar?.id ?? null,
+              workshopId: previewRows[i]!.workshopId ?? null,
+              lineBase: previewRows[i]!.lineBase ?? null,
               sandboxId: sbId
             }
           });
@@ -1294,6 +1355,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                   towEndAt: towEndAt?.toISOString() ?? null,
                   Hangar: hangarStr,
                   HangarStand: standCode,
+                  Workshop: previewRows[i]!.workshop ?? null,
+                  LineBase: previewRows[i]!.lineBase ?? null,
                   laborMetrics: collectLaborMetricsFromImportRow(r as Record<string, unknown>)
                 }
               }

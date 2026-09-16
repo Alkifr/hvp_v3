@@ -5,6 +5,11 @@ import { z } from "zod";
 import { assertPermission, isSystemAdmin } from "../lib/rbac.js";
 import { zDateTime, zUuid } from "../lib/zod.js";
 import { sandboxFilter } from "../plugins/sandbox.js";
+import {
+  MONTHLY_BASE_PLAN_MAX_DAYS,
+  buildMonthlyBasePlan,
+  type MonthlyBasePlanEventInput
+} from "../lib/monthlyBasePlan.js";
 
 const MS_HOUR = 60 * 60 * 1000;
 
@@ -1161,6 +1166,143 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         avgEventTatH: round1(sideB.avgEventTatH - sideA.avgEventTatH)
       },
       hangarCompare
+    };
+  });
+
+  // GET /api/analytics/monthly-base-plan?from&to&tzOffset
+  app.get("/monthly-base-plan", async (req) => {
+    assertPermission(req as any, "events:read");
+    const query = z
+      .object({
+        from: zDateTime,
+        to: zDateTime,
+        tzOffset: z.coerce.number().int().min(-14 * 60).max(14 * 60).optional().default(0)
+      })
+      .parse(req.query);
+
+    if (query.to <= query.from) {
+      const err: any = new Error("Период to должен быть позже from");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const spanDays = (query.to.getTime() - query.from.getTime()) / (24 * 60 * 60 * 1000);
+    if (spanDays > MONTHLY_BASE_PLAN_MAX_DAYS) {
+      const err: any = new Error(`Период не больше ${MONTHLY_BASE_PLAN_MAX_DAYS} суток`);
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const sb = sandboxFilter(req as any);
+    const [events, operators, aircraftTypes, palettes] = await Promise.all([
+      app.prisma.maintenanceEvent.findMany({
+        where: {
+          ...sb,
+          status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] },
+          startAt: { lt: query.to },
+          endAt: { gt: query.from }
+        },
+        include: {
+          aircraft: {
+            select: {
+              id: true,
+              tailNumber: true,
+              operatorId: true,
+              typeId: true,
+              operator: { select: { id: true, code: true, name: true } },
+              type: { select: { id: true, name: true, icaoType: true } }
+            }
+          },
+          eventType: { select: { id: true, name: true, color: true } },
+          hangar: { select: { id: true, name: true } },
+          workshop: { select: { id: true, name: true, code: true } },
+          reportMetrics: {
+            where: { block: { in: ["WP_PLAN_MPS", "LABOR_BUDGET"] } },
+            select: { block: true, department: true, manHours: true }
+          },
+          workPlanLines: {
+            where: {
+              date: { gte: new Date(query.from.getTime() - 24 * 60 * 60 * 1000), lt: query.to }
+            },
+            select: {
+              date: true,
+              plannedMinutes: true,
+              skill: { select: { code: true } },
+              shift: { select: { code: true, startMin: true } }
+            }
+          }
+        },
+        orderBy: [{ startAt: "asc" }]
+      }),
+      app.prisma.operator.findMany({ select: { id: true, code: true, name: true } }),
+      app.prisma.aircraftType.findMany({ select: { id: true, name: true, icaoType: true } }),
+      app.prisma.aircraftTypePalette.findMany({
+        where: { isActive: true },
+        select: { operatorId: true, aircraftTypeId: true, color: true }
+      })
+    ]);
+
+    const operatorById = new Map(operators.map((o) => [o.id, o]));
+    const typeById = new Map(aircraftTypes.map((t) => [t.id, t]));
+    const paletteByKey = new Map(palettes.map((p) => [`${p.operatorId}:${p.aircraftTypeId}`, p.color]));
+
+    const inputs: MonthlyBasePlanEventInput[] = events.map((e) => {
+      const virt = (e.virtualAircraft ?? null) as {
+        label?: string;
+        operatorId?: string;
+        aircraftTypeId?: string;
+      } | null;
+      const operatorId = e.aircraft?.operatorId ?? virt?.operatorId ?? null;
+      const aircraftTypeId = e.aircraft?.typeId ?? virt?.aircraftTypeId ?? null;
+      const operator = operatorId ? operatorById.get(operatorId) : null;
+      const type = aircraftTypeId ? typeById.get(aircraftTypeId) : null;
+      const color =
+        (operatorId && aircraftTypeId ? paletteByKey.get(`${operatorId}:${aircraftTypeId}`) : null) ||
+        e.eventType?.color ||
+        "#38bdf8";
+      return {
+        eventId: e.id,
+        title: e.title,
+        startAt: e.startAt,
+        endAt: e.endAt,
+        aircraftLabel: e.aircraft?.tailNumber ?? virt?.label ?? "—",
+        aircraftTypeName: e.aircraft?.type?.icaoType || e.aircraft?.type?.name || type?.icaoType || type?.name || "—",
+        operatorCode: e.aircraft?.operator?.code || operator?.code || "—",
+        operatorId,
+        aircraftId: e.aircraft?.id ?? null,
+        aircraftTypeId,
+        eventTypeId: e.eventType?.id ?? null,
+        hangarId: e.hangar?.id ?? e.hangarId ?? null,
+        hangarName: e.hangar?.name ?? "—",
+        workshopId: e.workshop?.id ?? null,
+        workshopName: e.workshop?.name || e.workshop?.code || "—",
+        color,
+        metrics: e.reportMetrics.map((m) => ({
+          block: m.block,
+          department: m.department,
+          manHours: m.manHours == null ? null : Number(m.manHours)
+        })),
+        planLines: e.workPlanLines.map((line) => ({
+          date: line.date,
+          plannedMinutes: line.plannedMinutes,
+          shiftCode: line.shift?.code ?? null,
+          shiftStartMin: line.shift?.startMin ?? null,
+          skillCode: line.skill?.code ?? null
+        }))
+      };
+    });
+
+    const report = buildMonthlyBasePlan({
+      from: query.from,
+      to: query.to,
+      tzOffsetMinutes: query.tzOffset,
+      events: inputs
+    });
+
+    return {
+      ok: true as const,
+      period: { from: query.from.toISOString(), to: query.to.toISOString() },
+      ...report
     };
   });
 };

@@ -1226,6 +1226,8 @@ a {
     minmax(120px, 1.2fr)
     minmax(120px, 1.2fr)
     minmax(120px, 1.2fr)
+    minmax(120px, 1.2fr)
+    88px
     72px
     64px
     132px
@@ -1235,7 +1237,7 @@ a {
   gap: 8px;
   align-items: start;
   padding: 8px 10px;
-  min-width: 980px;
+  min-width: 1240px;
 }
 
 .massBatchHead {
@@ -13428,6 +13430,224 @@ textarea.refInput {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.monthlyPlanHScroll {
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.monthlyPlanInner {
+  min-width: 100%;
+}
+
+.monthlyPlanWrap {
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: min(68vh, 720px);
+}
+
+.monthlyPlanFooterWrap {
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: min(40vh, 360px);
+}
+
+.monthlyPlanShopTitle {
+  margin: 16px 0 6px;
+}
+
+.monthlyPlanShopNote {
+  margin-bottom: 8px;
+}
+
+.analyticsTable.monthlyPlanTable {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11px;
+  table-layout: fixed;
+}
+
+.monthlyPlanTable th,
+.monthlyPlanTable td {
+  padding: 3px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+  border-left: none;
+  border-right: none;
+  white-space: nowrap;
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+
+.monthlyPlanShiftEdge {
+  border-right: 1px dashed #94a3b8 !important;
+}
+
+.monthlyPlanDayEdge {
+  border-right: 1px solid #475569 !important;
+}
+
+.monthlyPlanMeta {
+  width: 76px;
+  min-width: 76px;
+  max-width: 76px;
+  padding: 3px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-right: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.monthlyPlanAcGreen {
+  background: #66ff33 !important;
+  font-weight: 700;
+}
+
+.monthlyPlanShift {
+  width: 18px;
+  min-width: 18px;
+  max-width: 18px;
+  padding: 2px 0 !important;
+  text-align: center;
+  box-sizing: border-box;
+  overflow: visible;
+}
+
+.monthlyPlanSlot {
+  position: relative;
+  overflow: visible;
+  z-index: 0;
+}
+
+.monthlyPlanSlotStart {
+  z-index: 3;
+}
+
+.monthlyPlanSlotRow {
+  position: relative;
+  z-index: 2;
+}
+
+.monthlyPlanSlotTitle {
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.monthlyPlanSlotTitleHalo {
+  -webkit-text-stroke: 0.7px #0f172a;
+  paint-order: stroke fill;
+  text-shadow:
+    0 0 2px #ffffff,
+    1px 0 0 #0f172a,
+    -1px 0 0 #0f172a,
+    0 1px 0 #0f172a,
+    0 -1px 0 #0f172a;
+}
+
+.monthlyPlanLabor {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  overflow: hidden;
+}
+
+.monthlyPlanDayHead {
+  text-align: center;
+  overflow: visible;
+  height: 24px;
+}
+
+.monthlyPlanDayHeadStart {
+  position: relative;
+  z-index: 3;
+  overflow: visible;
+  border-right: none !important;
+}
+
+.monthlyPlanDayLabel {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 36px;
+  transform: translateY(-50%);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: #0f172a;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.monthlyPlanDayValue {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.monthlyPlanTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: #f8fafc;
+}
+
+.monthlyPlanTable thead th.monthlyPlanDayHeadStart {
+  z-index: 6;
+}
+
+.monthlyPlanTable thead th.monthlyPlanDayHead.monthlyPlanDayEdge {
+  z-index: 4;
+}
+
+.monthlyPlanTable thead tr:nth-child(2) th {
+  top: 24px;
+}
+
+.monthlyPlanWeekend {
+  background: #dcfce7 !important;
+}
+
+.monthlyPlanHangarRow td {
+  font-weight: 700;
+  background: #e2e8f0;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+
+.monthlyPlanLaborRow td {
+  background: #fff;
+}
+
+.monthlyPlanStubRow td {
+  background: #fffbeb;
+}
+
+.monthlyPlanStub {
+  background: #fef9c3;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.monthlyPlanFooterWrap .monthlyPlanMeta {
+  background: #f8fafc;
 }
 
 .analyticsTatChartWrap,

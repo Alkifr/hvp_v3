@@ -76,7 +76,7 @@ export type HangarViewShare = {
 };
 
 export type AnalyticsViewShare = {
-  tab: "tat" | "util" | "compare" | "builder";
+  tab: "tat" | "util" | "compare" | "monthly" | "builder";
   fromDate: string;
   toDate: string;
   compareA: string;
@@ -284,7 +284,7 @@ export function syncHangarViewHash(state: HangarViewShare & { sandboxId?: string
   writePageHashQuery("hangar", serializeHangarViewShare(state));
 }
 
-const ANALYTICS_TABS = ["tat", "util", "compare", "builder"] as const;
+const ANALYTICS_TABS = ["tat", "util", "compare", "monthly", "builder"] as const;
 const ANALYTICS_GRAINS = ["day", "week", "month", "period"] as const;
 
 export function parseAnalyticsViewShare(query: URLSearchParams): AnalyticsViewShare | null {

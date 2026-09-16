@@ -24,6 +24,7 @@ import { sandboxIsArchived, useActiveSandbox, type SandboxSummary } from "../com
 import { parseHashPage } from "../../lib/eventDeepLink";
 import { parseAnalyticsViewShare, syncAnalyticsViewHash } from "../../lib/viewShareUrl";
 import { ReportBuilderPanel } from "./ReportBuilderPanel";
+import { MonthlyBasePlanPanel, type MonthlyBasePlanResponse } from "./MonthlyBasePlanPanel";
 
 ChartJS.register(
   CategoryScale,
@@ -36,7 +37,7 @@ ChartJS.register(
   Filler
 );
 
-type TabId = "tat" | "util" | "compare" | "builder";
+type TabId = "tat" | "util" | "compare" | "monthly" | "builder";
 type EfficiencyGrain = "day" | "week" | "month" | "period";
 
 const DETAIL_LEVEL_LABEL: Record<EfficiencyGrain, string> = {
@@ -342,7 +343,7 @@ export function AnalyticsView() {
   }, []);
 
   const [tab, setTab] = useState<TabId>(() =>
-    ["tat", "util", "compare", "builder"].includes(String(savedUi?.tab)) ? (savedUi.tab as TabId) : "tat"
+    ["tat", "util", "compare", "monthly", "builder"].includes(String(savedUi?.tab)) ? (savedUi.tab as TabId) : "tat"
   );
   const [fromInput, setFromInput] = useState(() =>
     isValidDateInput(String(savedUi?.fromDate ?? "")) ? String(savedUi.fromDate) : toInputDate(dayjs().subtract(30, "day"))
@@ -494,6 +495,15 @@ export function AnalyticsView() {
     enabled: tab === "compare" && periodOk && compareReady
   });
 
+  const monthlyQ = useQuery({
+    queryKey: ["analytics", "monthly-base-plan", fromIso, toIso, tzOffset, active?.id ?? "prod"],
+    queryFn: () =>
+      apiGet<MonthlyBasePlanResponse>(
+        `/api/analytics/monthly-base-plan?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&tzOffset=${tzOffset}`
+      ),
+    enabled: tab === "monthly" && periodOk
+  });
+
   const filterSeedRows = useMemo((): FilterRow[] => {
     if (tab === "tat") return tatQ.data?.rows ?? [];
     if (tab === "util") {
@@ -506,8 +516,9 @@ export function AnalyticsView() {
       }
       return rows;
     }
+    if (tab === "monthly") return monthlyQ.data?.events ?? [];
     return [];
-  }, [tab, tatQ.data, utilQ.data, compareQ.data]);
+  }, [tab, tatQ.data, utilQ.data, compareQ.data, monthlyQ.data]);
 
   const filterOptions = useMemo(() => {
     const hangarIdSet = new Set<string>();
@@ -595,6 +606,9 @@ export function AnalyticsView() {
         <button type="button" className={tab === "compare" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("compare")}>
           Сценарии A vs B
         </button>
+        <button type="button" className={tab === "monthly" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("monthly")}>
+          Месячный план Base
+        </button>
         <button type="button" className={tab === "builder" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("builder")}>
           Конструктор отчётов
         </button>
@@ -630,6 +644,31 @@ export function AnalyticsView() {
                       {label}
                     </button>
                   ))}
+                  {tab === "monthly" ? (
+                    <>
+                      <button
+                        className="btn btnGhost"
+                        type="button"
+                        onClick={() => {
+                          setFromInput(toInputDate(dayjs().startOf("month")));
+                          setToInput(toInputDate(dayjs().endOf("month")));
+                        }}
+                      >
+                        Этот месяц
+                      </button>
+                      <button
+                        className="btn btnGhost"
+                        type="button"
+                        onClick={() => {
+                          const next = dayjs().add(1, "month");
+                          setFromInput(toInputDate(next.startOf("month")));
+                          setToInput(toInputDate(next.endOf("month")));
+                        }}
+                      >
+                        След. месяц
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               </div>
               {tab === "compare" ? (
@@ -776,6 +815,9 @@ export function AnalyticsView() {
           filters={filters}
           periodLabel={periodChipLabel}
         />
+      ) : null}
+      {tab === "monthly" ? (
+        <MonthlyBasePlanPanel q={monthlyQ} filters={filters} periodLabel={periodChipLabel} />
       ) : null}
       {tab === "builder" ? (
         <ReportBuilderPanel
