@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EventStatus } from "@prisma/client";
+import { EventStatus } from "./eventStatusCatalog.js";
 
 import {
   isVirtualAircraftPlaceholder,

@@ -1,6 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
-import { EventAuditAction, EventStatus } from "@prisma/client";
+import { EventAuditAction } from "@prisma/client";
 import dayjs from "dayjs";
+
+import { EventStatus } from "./eventStatusCatalog.js";
 
 import {
   aircraftDisplayCode,

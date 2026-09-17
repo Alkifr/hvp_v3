@@ -9,7 +9,7 @@ export const EVENT_STATUS_CODES = [
   "DELETED"
 ] as const;
 
-export type EventStatusCode = (typeof EVENT_STATUS_CODES)[number];
+export type EventStatusCode = string;
 
 export type EventStatusCatalogItem = {
   code: EventStatusCode;
@@ -98,6 +98,8 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
   }
 ];
 
+export const SYSTEM_EVENT_STATUS_CODES = new Set<string>(EVENT_STATUS_CODES);
+
 export const STATUS_LABEL: Record<string, string> = Object.fromEntries(
   EVENT_STATUS_CATALOG.map((item) => [item.code, item.name])
 );
@@ -121,19 +123,35 @@ export const STATUS_GANTT_STRIPE: Partial<Record<EventStatusCode, string>> = Obj
 export function overlayStatusCatalog(
   rows: Array<Partial<EventStatusCatalogItem> & { code: string }> | null | undefined
 ): EventStatusCatalogItem[] {
-  if (!rows?.length) return EVENT_STATUS_CATALOG;
-  const byCode = new Map(rows.map((row) => [row.code, row]));
-  return EVENT_STATUS_CATALOG.map((item) => {
+  const byCode = new Map((rows ?? []).map((row) => [row.code, row]));
+  const merged: EventStatusCatalogItem[] = EVENT_STATUS_CATALOG.map((item) => {
     const overlay = byCode.get(item.code);
-    if (!overlay) return item;
+    if (!overlay) return { ...item, isSystem: true };
     return {
       ...item,
       name: overlay.name?.trim() || item.name,
       color: overlay.color !== undefined ? overlay.color : item.color,
       sortOrder: overlay.sortOrder ?? item.sortOrder,
-      selectable: overlay.selectable ?? item.selectable
+      selectable: overlay.selectable ?? item.selectable,
+      manualOnly: overlay.manualOnly ?? item.manualOnly,
+      allowsAutoInProgress: overlay.allowsAutoInProgress ?? item.allowsAutoInProgress,
+      isSystem: true
     };
-  }).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ru"));
+  });
+  for (const row of rows ?? []) {
+    if (SYSTEM_EVENT_STATUS_CODES.has(row.code)) continue;
+    merged.push({
+      code: row.code,
+      name: row.name?.trim() || row.code,
+      color: row.color,
+      sortOrder: row.sortOrder ?? 0,
+      selectable: row.selectable ?? true,
+      manualOnly: row.manualOnly ?? false,
+      allowsAutoInProgress: row.allowsAutoInProgress ?? false,
+      isSystem: false
+    });
+  }
+  return merged.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ru"));
 }
 
 export function statusCatalogLabel(

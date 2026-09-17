@@ -1,4 +1,18 @@
-import { EventStatus, type PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
+
+/** Системные коды — логика планирования. Остальные коды задаются в справочнике. */
+export const EventStatus = {
+  PENDING_EXECUTOR_APPROVAL: "PENDING_EXECUTOR_APPROVAL",
+  PENDING_CUSTOMER_APPROVAL: "PENDING_CUSTOMER_APPROVAL",
+  APPROVED_BY_EXECUTOR: "APPROVED_BY_EXECUTOR",
+  APPROVED_BY_CUSTOMER: "APPROVED_BY_CUSTOMER",
+  IN_PROGRESS: "IN_PROGRESS",
+  DONE: "DONE",
+  CANCELLED: "CANCELLED",
+  DELETED: "DELETED"
+} as const;
+
+export type EventStatus = string;
 
 export type EventStatusCatalogItem = {
   code: EventStatus;
@@ -22,7 +36,8 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
     sortOrder: 10,
     selectable: true,
     manualOnly: true,
-    allowsAutoInProgress: false
+    allowsAutoInProgress: false,
+    isSystem: true
   },
   {
     code: EventStatus.PENDING_CUSTOMER_APPROVAL,
@@ -31,7 +46,8 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
     sortOrder: 20,
     selectable: true,
     manualOnly: true,
-    allowsAutoInProgress: false
+    allowsAutoInProgress: false,
+    isSystem: true
   },
   {
     code: EventStatus.APPROVED_BY_EXECUTOR,
@@ -40,7 +56,8 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
     sortOrder: 30,
     selectable: true,
     manualOnly: false,
-    allowsAutoInProgress: true
+    allowsAutoInProgress: true,
+    isSystem: true
   },
   {
     code: EventStatus.APPROVED_BY_CUSTOMER,
@@ -49,7 +66,8 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
     sortOrder: 40,
     selectable: true,
     manualOnly: false,
-    allowsAutoInProgress: true
+    allowsAutoInProgress: true,
+    isSystem: true
   },
   {
     code: EventStatus.IN_PROGRESS,
@@ -58,7 +76,8 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
     sortOrder: 50,
     selectable: true,
     manualOnly: false,
-    allowsAutoInProgress: false
+    allowsAutoInProgress: false,
+    isSystem: true
   },
   {
     code: EventStatus.DONE,
@@ -67,7 +86,8 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
     sortOrder: 60,
     selectable: true,
     manualOnly: false,
-    allowsAutoInProgress: false
+    allowsAutoInProgress: false,
+    isSystem: true
   },
   {
     code: EventStatus.CANCELLED,
@@ -76,7 +96,8 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
     sortOrder: 70,
     selectable: true,
     manualOnly: true,
-    allowsAutoInProgress: false
+    allowsAutoInProgress: false,
+    isSystem: true
   },
   {
     code: EventStatus.DELETED,
@@ -92,9 +113,26 @@ export const EVENT_STATUS_CATALOG: EventStatusCatalogItem[] = [
 
 const byCode = new Map(EVENT_STATUS_CATALOG.map((item) => [item.code, item]));
 
+export const SYSTEM_EVENT_STATUS_CODES = new Set(EVENT_STATUS_CATALOG.map((item) => item.code));
+
+export function isSystemEventStatusCode(code: string): boolean {
+  return SYSTEM_EVENT_STATUS_CODES.has(code);
+}
+
+export function normalizeEventStatusCode(raw: string): string {
+  return String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+export function isEventStatusCodeFormat(code: string): boolean {
+  return code.length >= 2 && code.length <= 64 && /^[A-Z][A-Z0-9_]*$/.test(code);
+}
+
 export function eventStatusLabel(code: string | null | undefined): string {
   if (!code) return "—";
-  return byCode.get(code as EventStatus)?.name ?? code;
+  return byCode.get(code)?.name ?? code;
 }
 
 export function selectableEventStatuses(): EventStatusCatalogItem[] {
@@ -133,7 +171,7 @@ export async function ensureEventStatusCatalogRows(prisma: PrismaClient): Promis
 }
 
 export type EventStatusStoredRow = {
-  code: EventStatus;
+  code: string;
   name: string;
   color: string | null;
   sortOrder: number;
@@ -146,15 +184,14 @@ export function mergeEventStatusCatalogRow(
   stored: EventStatusStoredRow
 ): EventStatusCatalogItem & { id: string; isActive: boolean } {
   const base = byCode.get(stored.code);
+  const isSystem = isSystemEventStatusCode(stored.code);
   const selectable = stored.code === EventStatus.DELETED ? false : stored.selectable;
   const allowsAutoInProgress =
     stored.code === EventStatus.DELETED || stored.code === EventStatus.CANCELLED
       ? false
       : (stored.allowsAutoInProgress ?? base?.allowsAutoInProgress ?? false);
   const manualOnly =
-    stored.code === EventStatus.DELETED
-      ? true
-      : (stored.manualOnly ?? base?.manualOnly ?? false);
+    stored.code === EventStatus.DELETED ? true : (stored.manualOnly ?? base?.manualOnly ?? false);
   return {
     id: stored.code,
     code: stored.code,
@@ -164,7 +201,7 @@ export function mergeEventStatusCatalogRow(
     selectable,
     manualOnly,
     allowsAutoInProgress,
-    isSystem: stored.code === EventStatus.DELETED,
+    isSystem,
     isActive: selectable
   };
 }
@@ -187,4 +224,14 @@ export async function loadStatusAutomation(prisma: PrismaClient): Promise<{
     autoInProgressStatuses: new Set(rows.filter((row) => row.allowsAutoInProgress).map((row) => row.code)),
     manualOnlyStatuses: new Set(rows.filter((row) => row.manualOnly).map((row) => row.code))
   };
+}
+
+export async function loadSelectableEventStatusCodes(prisma: PrismaClient): Promise<Set<string>> {
+  await ensureEventStatusCatalogRows(prisma);
+  const rows = await prisma.eventStatusCatalog.findMany({
+    select: { code: true, selectable: true }
+  });
+  return new Set(
+    rows.filter((row) => row.selectable && row.code !== EventStatus.DELETED).map((row) => row.code)
+  );
 }

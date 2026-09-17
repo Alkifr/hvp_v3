@@ -1,7 +1,6 @@
-import { EventStatus } from "@prisma/client";
-
 import {
   AUTO_IN_PROGRESS_STATUSES,
+  EventStatus,
   MANUAL_ONLY_STATUSES
 } from "./eventStatusCatalog.js";
 

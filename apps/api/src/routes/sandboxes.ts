@@ -1,11 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { EventAuditAction, EventStatus, Prisma, SandboxMemberRole, UserActivityAction } from "@prisma/client";
+import { EventAuditAction, Prisma, SandboxMemberRole, UserActivityAction } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import { zDateTime, zUuid } from "../lib/zod.js";
 import { isSystemAdmin, assertPermission, requirePermission } from "../lib/rbac.js";
 import { UserMsg } from "../lib/userErrors.js";
+import { EventStatus } from "../lib/eventStatusCatalog.js";
 import { copyPlanToSandbox, eventFingerprint, resolveOriginEventId } from "../lib/sandboxCopy.js";
 import { logUserActivity } from "../lib/userActivity.js";
 

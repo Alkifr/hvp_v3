@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { EventStatus } from "@prisma/client";
+import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { z } from "zod";
 
 import { assertPermission } from "../../lib/rbac.js";

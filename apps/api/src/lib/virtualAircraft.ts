@@ -1,4 +1,4 @@
-import { EventStatus } from "@prisma/client";
+import { EventStatus } from "./eventStatusCatalog.js";
 
 /** Короткая подпись плейсхолдера; в справочник бортов не пишется. */
 export const VIRTUAL_AIRCRAFT_LABEL = "VIRT";

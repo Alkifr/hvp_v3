@@ -1096,7 +1096,7 @@ export const ER_TABLES: ErTable[] = [
     "columns": [
       {
         "name": "code",
-        "type": "EventStatus",
+        "type": "String",
         "pk": true
       },
       {
@@ -1567,7 +1567,7 @@ export const ER_TABLES: ErTable[] = [
       },
       {
         "name": "status",
-        "type": "EventStatus"
+        "type": "String"
       },
       {
         "name": "planningKind",

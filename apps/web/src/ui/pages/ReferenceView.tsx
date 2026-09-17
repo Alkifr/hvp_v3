@@ -363,7 +363,7 @@ export function ReferenceView() {
   const isAdmin = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("SUPER_ADMIN"));
   const canWrite = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER") || me?.roles?.includes("SUPER_ADMIN"));
   const canMutate = kind === "event-statuses" ? isAdmin : canWrite;
-  const canCreateOrDelete = canMutate && kind !== "event-statuses";
+  const canCreate = canMutate;
 
   const url = useMemo(() => `/api/ref/${kind}`, [kind]);
 
@@ -724,6 +724,13 @@ export function ReferenceView() {
       setFCode("NEW_EVENT");
       setFName("Событие");
       setFColor("#3b82f6");
+    } else if (k === "event-statuses") {
+      setFCode("CUSTOM_STATUS");
+      setFName("Новый статус");
+      setFColor("#3b82f6");
+      setFSortOrder(90);
+      setFAllowsAutoInProgress(false);
+      setFManualOnly(false);
     } else if (k === "workshops") {
       setFCode("SHOP1");
       setFName("Цех");
@@ -923,6 +930,7 @@ export function ReferenceView() {
       return { code: fCode.trim(), name: fName.trim(), color: fColor.trim() ? fColor.trim() : undefined, isActive: fIsActive };
     if (kind === "event-statuses")
       return {
+        ...(mode === "create" ? { code: fCode.trim().toUpperCase().replace(/[\s-]+/g, "_") } : {}),
         name: fName.trim(),
         color: fColor.trim() ? fColor.trim() : null,
         sortOrder: Number.isFinite(fSortOrder) ? fSortOrder : 0,
@@ -1147,7 +1155,7 @@ export function ReferenceView() {
                 </label>
               </>
             ) : null}
-            {canCreateOrDelete ? (
+            {canCreate ? (
               <button className="btn btnPrimary" onClick={openCreate}>
                 + Добавить
               </button>
@@ -1503,7 +1511,11 @@ export function ReferenceView() {
               <div className="muted refSectionHint">
                 {REF_SINGULAR[kind]}
                 {mode === "edit" ? " · выбранная строка подсвечена в списке" : ""}
-                {kind === "event-statuses" ? " · код фиксирован логикой планирования" : ""}
+                {kind === "event-statuses"
+                  ? mode === "create"
+                    ? " · латинский код, название и цвет полоски на Гантте"
+                    : " · системный код менять нельзя"
+                  : ""}
               </div>
             </div>
             <button className="btn" onClick={() => setMode(null)}>
@@ -1534,7 +1546,12 @@ export function ReferenceView() {
             {kind === "event-statuses" ? (
               <label style={{ display: "grid", gap: 6 }}>
                 <span className="muted">Код</span>
-                <input value={fCode} readOnly style={{ width: 280, opacity: 0.72 }} />
+                <input
+                  value={fCode}
+                  readOnly={mode !== "create"}
+                  onChange={(e) => setFCode(e.target.value.toUpperCase())}
+                  style={{ width: 280, opacity: mode === "create" ? 1 : 0.72 }}
+                />
               </label>
             ) : null}
 
@@ -2074,7 +2091,7 @@ export function ReferenceView() {
               {search
                 ? "Попробуйте изменить запрос или очистить поиск."
                 : kind === "event-statuses"
-                  ? "Статусы создаются системой. Администратор может изменить название и цвет."
+                  ? "Нажмите «Добавить», чтобы создать пользовательский статус. Системные коды задают логику планирования."
                   : canMutate
                     ? "Нажмите «Добавить», чтобы создать первую запись."
                     : "Обратитесь к администратору для наполнения справочника."}
@@ -2322,7 +2339,7 @@ export function ReferenceView() {
                                 </svg>
                               </button>
                             ) : null}
-                            {canCreateOrDelete ? (
+                            {canMutate && (kind !== "event-statuses" || !row.isSystem) ? (
                             <button
                               className="btn btnGhost refIconButton refBtnDanger"
                               onClick={() => {

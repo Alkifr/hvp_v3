@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import argon2 from "argon2";
-import { EventAuditAction, EventStatus, UserActivityAction } from "@prisma/client";
+import { EventAuditAction, UserActivityAction } from "@prisma/client";
 
 import { diffPermissionOverrides, expandPermissionCodes } from "../../lib/permissionCatalog.js";
 import { zDateTime, zId, zUuid } from "../../lib/zod.js";
@@ -9,6 +9,7 @@ import { assertAnyPermission, assertPermission } from "../../lib/rbac.js";
 import { logUserActivity } from "../../lib/userActivity.js";
 import { queryActivityFeed } from "../../lib/activityFeed.js";
 import { UserMsg } from "../../lib/userErrors.js";
+import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { queryPresenceHeatmap } from "../../lib/userPresence.js";
 import { syncUserDbAccess } from "../../lib/pgAccess.js";
 import { mailDigestRoutes } from "./mailDigest.js";

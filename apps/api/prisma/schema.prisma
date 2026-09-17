@@ -12,17 +12,6 @@ enum PlanningLevel {
   OPERATIONAL
 }
 
-enum EventStatus {
-  PENDING_EXECUTOR_APPROVAL
-  PENDING_CUSTOMER_APPROVAL
-  APPROVED_BY_EXECUTOR
-  APPROVED_BY_CUSTOMER
-  IN_PROGRESS
-  DONE
-  CANCELLED
-  DELETED
-}
-
 enum EventPlanningKind {
   PLANNED
   UNPLANNED
@@ -669,9 +658,9 @@ model EventType {
   placementPriorityRules PlacementPriorityRuleEventType[]
 }
 
-/// Редактируемые подписи и палитра статусов события. Код = enum EventStatus (логика планирования).
+/// Подписи, палитра и пользовательские статусы события. Системные коды задают логику планирования.
 model EventStatusCatalog {
-  code                 EventStatus @id
+  code                 String @id
   name                 String
   /// hex полоски на Гантте, например #FFC182; пусто — без полоски
   color                String?
@@ -881,7 +870,7 @@ model OptimizationScoreRule {
 model MaintenanceEvent {
   id           String            @id @default(uuid())
   level        PlanningLevel
-  status       EventStatus       @default(PENDING_EXECUTOR_APPROVAL)
+  status       String            @default("PENDING_EXECUTOR_APPROVAL")
   planningKind EventPlanningKind @default(PLANNED)
   title        String
 

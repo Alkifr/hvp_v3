@@ -1,9 +1,10 @@
-import { PrismaClient, PlanningLevel, EventStatus } from "@prisma/client";
+import { PrismaClient, PlanningLevel } from "@prisma/client";
 import argon2 from "argon2";
 import path from "node:path";
 import dotenv from "dotenv";
 
 import { PERMISSION_SEED, plannerModelCodes, viewerModelCodes } from "../src/lib/permissionCatalog.js";
+import { EventStatus } from "../src/lib/eventStatusCatalog.js";
 import { checkEventCountPresets, checkEventCountReportConfig } from "../src/lib/reportPresets.js";
 
 const prisma = new PrismaClient();

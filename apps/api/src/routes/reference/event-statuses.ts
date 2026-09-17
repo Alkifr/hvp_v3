@@ -1,12 +1,14 @@
 import type { FastifyPluginAsync } from "fastify";
-import { EventStatus } from "@prisma/client";
 import { z } from "zod";
 
 import { assertModelPermission, assertSystemAdmin } from "../../lib/rbac.js";
 import {
   ensureEventStatusCatalogRows,
-  EVENT_STATUS_CATALOG,
-  mergeEventStatusCatalogRow
+  EventStatus,
+  isEventStatusCodeFormat,
+  isSystemEventStatusCode,
+  mergeEventStatusCatalogRow,
+  normalizeEventStatusCode
 } from "../../lib/eventStatusCatalog.js";
 
 function normalizeHexColor(raw: string | null | undefined) {
@@ -18,6 +20,33 @@ function normalizeHexColor(raw: string | null | undefined) {
   return `#${m[1]!.toUpperCase()}`;
 }
 
+const statusFields = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  color: z.string().trim().max(16).nullable().optional(),
+  sortOrder: z.number().int().min(0).max(10_000).optional(),
+  selectable: z.boolean().optional(),
+  isActive: z.boolean().optional(),
+  allowsAutoInProgress: z.boolean().optional(),
+  manualOnly: z.boolean().optional()
+});
+
+function parseStatusCode(raw: unknown): string {
+  const code = normalizeEventStatusCode(String(raw ?? ""));
+  if (!isEventStatusCodeFormat(code)) {
+    throw Object.assign(new Error("Код статуса: латиница, цифры и подчёркивание, 2–64 символа"), { statusCode: 400 });
+  }
+  return code;
+}
+
+function parseColor(body: { color?: string | null }) {
+  const color =
+    body.color === undefined ? undefined : body.color === null || body.color === "" ? null : normalizeHexColor(body.color);
+  if (body.color !== undefined && body.color !== null && body.color !== "" && color === undefined) {
+    throw Object.assign(new Error("Некорректный цвет. Ожидается hex: #RRGGBB"), { statusCode: 400 });
+  }
+  return color;
+}
+
 export const eventStatusesRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
     assertModelPermission(req as any, "EventStatusCatalog", "view");
@@ -25,46 +54,63 @@ export const eventStatusesRoutes: FastifyPluginAsync = async (app) => {
     const rows = await app.prisma.eventStatusCatalog.findMany({
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }]
     });
-    const byCode = new Map(rows.map((row) => [row.code, row]));
-    return EVENT_STATUS_CATALOG.map((item) => {
-      const stored = byCode.get(item.code);
-      return mergeEventStatusCatalogRow(
-        stored ?? {
-          code: item.code,
-          name: item.name,
-          color: item.color,
-          sortOrder: item.sortOrder,
-          selectable: item.selectable,
-          allowsAutoInProgress: item.allowsAutoInProgress,
-          manualOnly: item.manualOnly
-        }
-      );
-    }).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ru"));
+    return rows
+      .map((row) => mergeEventStatusCatalogRow(row))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ru"));
+  });
+
+  app.post("/", async (req) => {
+    assertModelPermission(req as any, "EventStatusCatalog", "add");
+    assertSystemAdmin(req as any);
+    const body = statusFields
+      .extend({
+        code: z.string().trim().min(1).max(64),
+        name: z.string().trim().min(1).max(200)
+      })
+      .parse(req.body);
+
+    const code = parseStatusCode(body.code);
+    if (isSystemEventStatusCode(code)) {
+      throw app.httpErrors.badRequest("Этот код зарезервирован системой. Выберите другой.");
+    }
+    const color = parseColor(body);
+    const selectable = body.selectable ?? body.isActive ?? true;
+    const allowsAutoInProgress = body.allowsAutoInProgress ?? false;
+    const manualOnly = body.manualOnly ?? false;
+
+    await ensureEventStatusCatalogRows(app.prisma);
+    const existing = await app.prisma.eventStatusCatalog.findUnique({ where: { code } });
+    if (existing) {
+      throw app.httpErrors.conflict("Статус с таким кодом уже есть");
+    }
+
+    const created = await app.prisma.eventStatusCatalog.create({
+      data: {
+        code,
+        name: body.name,
+        color: color ?? null,
+        sortOrder: body.sortOrder ?? 90,
+        selectable,
+        allowsAutoInProgress,
+        manualOnly
+      }
+    });
+    return mergeEventStatusCatalogRow(created);
   });
 
   app.patch("/:id", async (req) => {
     assertModelPermission(req as any, "EventStatusCatalog", "change");
     assertSystemAdmin(req as any);
-    const code = z.nativeEnum(EventStatus).parse((req.params as any).id);
-    const body = z
-      .object({
-        name: z.string().trim().min(1).max(200).optional(),
-        color: z.string().trim().max(16).nullable().optional(),
-        sortOrder: z.number().int().min(0).max(10_000).optional(),
-        selectable: z.boolean().optional(),
-        isActive: z.boolean().optional(),
-        allowsAutoInProgress: z.boolean().optional(),
-        manualOnly: z.boolean().optional()
-      })
-      .parse(req.body);
-
-    const color =
-      body.color === undefined ? undefined : body.color === null || body.color === "" ? null : normalizeHexColor(body.color);
-    if (body.color !== undefined && body.color !== null && body.color !== "" && color === undefined) {
-      throw Object.assign(new Error("Некорректный цвет. Ожидается hex: #RRGGBB"), { statusCode: 400 });
-    }
+    const code = parseStatusCode((req.params as any).id);
+    const body = statusFields.parse(req.body);
+    const color = parseColor(body);
 
     await ensureEventStatusCatalogRows(app.prisma);
+    const existing = await app.prisma.eventStatusCatalog.findUnique({ where: { code } });
+    if (!existing) {
+      throw app.httpErrors.notFound("Статус не найден");
+    }
+
     const selectable =
       code === EventStatus.DELETED ? false : (body.selectable ?? body.isActive);
     const terminal = code === EventStatus.DELETED || code === EventStatus.CANCELLED;
@@ -84,5 +130,22 @@ export const eventStatusesRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return mergeEventStatusCatalogRow(updated);
+  });
+
+  app.delete("/:id", async (req) => {
+    assertModelPermission(req as any, "EventStatusCatalog", "delete");
+    assertSystemAdmin(req as any);
+    const code = parseStatusCode((req.params as any).id);
+    if (isSystemEventStatusCode(code)) {
+      throw app.httpErrors.badRequest("Системный статус нельзя удалить");
+    }
+
+    const used = await app.prisma.maintenanceEvent.count({ where: { status: code } });
+    if (used > 0) {
+      throw app.httpErrors.conflict(`Статус используется в ${used} событии(ях)`);
+    }
+
+    await app.prisma.eventStatusCatalog.delete({ where: { code } });
+    return { ok: true };
   });
 };

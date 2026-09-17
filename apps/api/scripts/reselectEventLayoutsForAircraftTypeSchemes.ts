@@ -1,6 +1,8 @@
-import { EventStatus, PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 import dotenv from "dotenv";
 import path from "node:path";
+
+import { EventStatus } from "../src/lib/eventStatusCatalog.js";
 
 dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
 

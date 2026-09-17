@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { EventAuditAction, EventPlacementOrigin, EventStatus, PlanningLevel, Prisma } from "@prisma/client";
+import { EventAuditAction, EventPlacementOrigin, PlanningLevel, Prisma } from "@prisma/client";
 
 import { parseImportDateTime } from "../../lib/localDate.js";
 import { normalizePlacementGaps } from "../../lib/placementGaps.js";
@@ -18,7 +18,12 @@ import {
   patchTouchesDoneScheduleLock,
   reconcileEventStatus
 } from "../../lib/eventStatus.js";
-import { DEFAULT_EVENT_STATUS, EVENT_STATUS_CATALOG, loadStatusAutomation } from "../../lib/eventStatusCatalog.js";
+import {
+  DEFAULT_EVENT_STATUS,
+  EventStatus,
+  loadSelectableEventStatusCodes,
+  loadStatusAutomation
+} from "../../lib/eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import {
@@ -1510,7 +1515,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const body = z
       .object({
         level: z.nativeEnum(PlanningLevel),
-        status: z.nativeEnum(EventStatus).optional(),
+        status: z.string().trim().min(1).max(64).optional(),
         planningKind: z.enum(PLANNING_KIND_VALUES).optional(),
         title: z.string().trim().min(1).max(300),
         aircraftId: zUuid.optional(),
@@ -1544,6 +1549,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .refine((v) => v.aircraftId != null || v.virtualAircraft != null, { message: UserMsg.AIRCRAFT_REQUIRED })
       .parse(req.body);
 
+    if (body.status) {
+      const selectable = await loadSelectableEventStatusCodes(app.prisma);
+      if (!selectable.has(body.status)) {
+        throw app.httpErrors.badRequest("Этот статус нельзя выбрать");
+      }
+    }
     const { changeReason, placements, allowOverlap, autoFillGapPlacements, lineBase, ...data } = body;
     const resolvedLineBase = resolveEventLineBase({
       requestedProvided: lineBase !== undefined,
@@ -1689,7 +1700,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const body = z
       .object({
         eventIds: z.array(zUuid).min(1).max(BULK_STATUS_MAX),
-        status: z.nativeEnum(EventStatus),
+        status: z.string().trim().min(1).max(64),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .parse(req.body);
@@ -1698,17 +1709,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Массовый перевод в «Удалено» недоступен");
     }
 
-    const storedCatalog = await app.prisma.eventStatusCatalog.findMany({
-      select: { code: true, selectable: true }
-    });
-    const storedByCode = new Map(storedCatalog.map((row) => [row.code, row]));
-    const selectable = new Set(
-      EVENT_STATUS_CATALOG.filter((item) => {
-        if (item.code === EventStatus.DELETED) return false;
-        const stored = storedByCode.get(item.code);
-        return stored ? stored.selectable : item.selectable;
-      }).map((item) => item.code)
-    );
+    const selectable = await loadSelectableEventStatusCodes(app.prisma);
     if (!selectable.has(body.status)) {
       throw app.httpErrors.badRequest("Этот статус нельзя выбрать");
     }
@@ -1828,7 +1829,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const body = z
       .object({
         level: z.nativeEnum(PlanningLevel).optional(),
-        status: z.nativeEnum(EventStatus).optional(),
+        status: z.string().trim().min(1).max(64).optional(),
         planningKind: z.enum(PLANNING_KIND_VALUES).optional(),
         title: z.string().trim().min(1).max(300).optional(),
         aircraftId: zUuid.optional(),
@@ -1861,6 +1862,13 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     });
     if (!existing) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+
+    if (body.status && body.status !== existing.status) {
+      const selectable = await loadSelectableEventStatusCodes(app.prisma);
+      if (!selectable.has(body.status)) {
+        throw app.httpErrors.badRequest("Этот статус нельзя выбрать");
+      }
+    }
 
     let { changeReason, placements, allowOverlap, autoFillGapPlacements, lineBase, ...patch } = body;
     const nextWorkshopId = body.workshopId !== undefined ? body.workshopId : existing.workshopId;

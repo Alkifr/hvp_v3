@@ -1,4 +1,4 @@
-import { EventStatus } from "@prisma/client";
+import { EventStatus } from "../eventStatusCatalog.js";
 
 import { PRIMARY_TABLE_COLUMN_BY_KEY } from "./columnCatalog.generated.js";
 import { formatPrimaryDateDisplay, isTemporalPrimaryType } from "./dateFormat.js";

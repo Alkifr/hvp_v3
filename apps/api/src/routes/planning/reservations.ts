@@ -1,10 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
+import { EventAuditAction, Prisma } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { DONE_SCHEDULE_LOCK_MESSAGE, isDoneScheduleLocked } from "../../lib/eventStatus.js";
+import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import {
   assertChangeReasonIfNeeded,

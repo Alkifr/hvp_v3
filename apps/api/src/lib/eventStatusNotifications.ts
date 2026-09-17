@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { EventStatus, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+
+import { EventStatus } from "./eventStatusCatalog.js";
 
 import { VIRTUAL_AIRCRAFT_LABEL } from "./virtualAircraft.js";
 

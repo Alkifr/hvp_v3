@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { EventAuditAction, EventStatus, Prisma } from "@prisma/client";
+import { EventAuditAction, Prisma } from "@prisma/client";
 
 import { isEventOverdueNoFact, reconcileEventStatus } from "./eventStatus.js";
-import { loadStatusAutomation } from "./eventStatusCatalog.js";
+import { EventStatus, loadStatusAutomation } from "./eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "./eventStatusNotifications.js";
 import { isVirtualAircraftPlaceholder, statusAllowsVirtualAircraft, VIRTUAL_AIRCRAFT_LABEL } from "./virtualAircraft.js";
 

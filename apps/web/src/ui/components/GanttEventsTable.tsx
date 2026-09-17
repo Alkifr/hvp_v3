@@ -31,10 +31,8 @@ import { formatLineBase, lineBaseAfterWorkshopChange, LINE_BASE_LABEL, parseLine
 import {
   DEFAULT_EVENT_STATUS,
   overlayStatusCatalog,
-  SELECTABLE_EVENT_STATUSES,
   statusCatalogLabel,
-  type EventStatusCatalogItem,
-  type EventStatusCode
+  type EventStatusCatalogItem
 } from "../../lib/eventStatusCatalog";
 import {
   VIRTUAL_AIRCRAFT_LABEL,
@@ -209,7 +207,7 @@ type RowDraft = {
   id: string;
   title: string;
   level: "STRATEGIC" | "OPERATIONAL";
-  status: EventStatusCode;
+  status: string;
   planningKind: "PLANNED" | "UNPLANNED";
   aircraftId: string;
   eventTypeId: string;
@@ -229,8 +227,6 @@ type RowDraft = {
   multiPlacement: boolean;
   hasVirtualAircraft: boolean;
 };
-
-const STATUS_OPTIONS: Array<RowDraft["status"]> = [...SELECTABLE_EVENT_STATUSES];
 
 function toInputLocal(v: string | Date | null | undefined): string {
   if (!v) return "";
@@ -331,7 +327,7 @@ function draftFromEvent(
     id: ev.id,
     title: ev.title,
     level: ev.level,
-    status: ((STATUS_OPTIONS as string[]).includes(ev.status) ? ev.status : DEFAULT_EVENT_STATUS) as RowDraft["status"],
+    status: ev.status || DEFAULT_EVENT_STATUS,
     planningKind: eventPlanningKind(ev),
     aircraftId: ev.aircraft?.id ?? "",
     eventTypeId: ev.eventType?.id ?? "",

@@ -2,11 +2,12 @@ import type { FastifyPluginAsync } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
-import { EventAuditAction, EventStatus, PlanningLevel } from "@prisma/client";
+import { EventAuditAction, PlanningLevel } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { UserMsg } from "../../lib/userErrors.js";
+import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { VIRTUAL_AIRCRAFT_LABEL, virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 import { parseLineBase, resolveEventLineBase, type LineBase } from "../../lib/lineBase.js";

@@ -1,4 +1,4 @@
-import { EventStatus } from "@prisma/client";
+import { EventStatus } from "./eventStatusCatalog.js";
 
 const INACTIVE_EVENT_STATUSES: EventStatus[] = [EventStatus.CANCELLED, EventStatus.DELETED];
 
