@@ -1328,7 +1328,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           hangarId: string | null;
           layoutId: string | null;
           standId: string | null;
-          status: EventStatus;
+          status: string;
           towBeforeStartAt?: Date;
           towBeforeEndAt?: Date;
           towAfterStartAt?: Date;
@@ -2657,7 +2657,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           hangarId: string | null;
           layoutId: string | null;
           standId: string | null;
-          status: EventStatus;
+          status: string;
         }> = [];
       const eventRows: Prisma.MaintenanceEventCreateManyInput[] = [];
       const placementRows: Prisma.EventPlacementCreateManyInput[] = [];

@@ -1,6 +1,6 @@
 import { EventStatus } from "./eventStatusCatalog.js";
 
-const INACTIVE_EVENT_STATUSES: EventStatus[] = [EventStatus.CANCELLED, EventStatus.DELETED];
+const INACTIVE_EVENT_STATUSES: string[] = [EventStatus.CANCELLED, EventStatus.DELETED];
 
 export function resolveAllowOverlap(params: {
   requested?: boolean;

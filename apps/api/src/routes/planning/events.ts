@@ -133,7 +133,7 @@ function eventAircraftLabel(event: { aircraft?: { tailNumber: string } | null; v
 function assertVirtualAircraftAllowed(event: {
   aircraftId?: string | null;
   virtualAircraft?: unknown;
-  status: EventStatus;
+  status: string;
 }) {
   if (!isVirtualAircraftPlaceholder(event)) return;
   if (statusAllowsVirtualAircraft(event.status)) return;
@@ -1688,7 +1688,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const BULK_STATUS_MAX = 1000;
-  const BULK_STATUS_TERMINAL = new Set<EventStatus>([
+  const BULK_STATUS_TERMINAL = new Set<string>([
     EventStatus.DONE,
     EventStatus.CANCELLED,
     EventStatus.DELETED
@@ -1728,7 +1728,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     });
     const byId = new Map(events.map((event) => [event.id, event]));
 
-    const updated: Array<{ eventId: string; from: EventStatus; to: EventStatus }> = [];
+    const updated: Array<{ eventId: string; from: string; to: string }> = [];
     const skipped: Array<{ eventId: string; reason: "not_found" | "unchanged" | "terminal" | "deleted" }> = [];
     const failed: Array<{ eventId: string; message: string }> = [];
 

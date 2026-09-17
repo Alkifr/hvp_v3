@@ -3,7 +3,7 @@ import { EventStatus } from "./eventStatusCatalog.js";
 /** Короткая подпись плейсхолдера; в справочник бортов не пишется. */
 export const VIRTUAL_AIRCRAFT_LABEL = "VIRT";
 
-const VIRTUAL_AIRCRAFT_ALLOWED_STATUSES = new Set<EventStatus>([
+const VIRTUAL_AIRCRAFT_ALLOWED_STATUSES = new Set<string>([
   EventStatus.PENDING_EXECUTOR_APPROVAL,
   EventStatus.PENDING_CUSTOMER_APPROVAL,
   EventStatus.CANCELLED,
@@ -17,8 +17,8 @@ export function isVirtualAircraftPlaceholder(event: {
   return !event.aircraftId && event.virtualAircraft != null;
 }
 
-export function statusAllowsVirtualAircraft(status: EventStatus | string): boolean {
-  return VIRTUAL_AIRCRAFT_ALLOWED_STATUSES.has(status as EventStatus);
+export function statusAllowsVirtualAircraft(status: string): boolean {
+  return VIRTUAL_AIRCRAFT_ALLOWED_STATUSES.has(status);
 }
 
 export function virtualAircraftDisplayLabel(_raw?: string | null): string {

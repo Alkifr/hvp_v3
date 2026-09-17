@@ -657,7 +657,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       standCode: string | null;
       startAt: string;
       endAt: string;
-      status: EventStatus;
+      status: string;
       category: "newOnly" | "conflictSameStand" | "cancelled";
       conflicts: Array<{
         prodEventId: string;

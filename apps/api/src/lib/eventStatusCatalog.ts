@@ -12,10 +12,8 @@ export const EventStatus = {
   DELETED: "DELETED"
 } as const;
 
-export type EventStatus = string;
-
 export type EventStatusCatalogItem = {
-  code: EventStatus;
+  code: string;
   name: string;
   color: string | null;
   sortOrder: number;
@@ -150,7 +148,7 @@ export const AUTO_IN_PROGRESS_STATUSES = new Set(
 );
 
 /** Статусы «на согласовании» — борт ещё можно менять */
-export const AIRCRAFT_EDITABLE_STATUSES = new Set<EventStatus>([
+export const AIRCRAFT_EDITABLE_STATUSES = new Set<string>([
   EventStatus.PENDING_EXECUTOR_APPROVAL,
   EventStatus.PENDING_CUSTOMER_APPROVAL
 ]);
@@ -207,8 +205,8 @@ export function mergeEventStatusCatalogRow(
 }
 
 export async function loadStatusAutomation(prisma: PrismaClient): Promise<{
-  autoInProgressStatuses: Set<EventStatus>;
-  manualOnlyStatuses: Set<EventStatus>;
+  autoInProgressStatuses: Set<string>;
+  manualOnlyStatuses: Set<string>;
 }> {
   await ensureEventStatusCatalogRows(prisma);
   const rows = await prisma.eventStatusCatalog.findMany({

@@ -30,8 +30,8 @@ export async function emitStatusChangeNotifications(
     eventId: string;
     sandboxId: string | null | undefined;
     title: string;
-    fromStatus: EventStatus;
-    toStatus: EventStatus;
+    fromStatus: string;
+    toStatus: string;
     aircraft?: { tailNumber?: string | null } | null;
     virtualAircraft?: unknown;
   }

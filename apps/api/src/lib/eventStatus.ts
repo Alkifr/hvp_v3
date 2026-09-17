@@ -12,7 +12,7 @@ export function floorToMinute(d: Date): Date {
 }
 
 export type StatusReconcileInput = {
-  status: EventStatus;
+  status: string;
   startAt: Date;
   endAt: Date;
   actualStartAt: Date | null | undefined;
@@ -20,19 +20,19 @@ export type StatusReconcileInput = {
   now?: Date;
   /** User explicitly requested DONE (manual). */
   forceDone?: boolean;
-  autoInProgressStatuses?: Set<EventStatus>;
-  manualOnlyStatuses?: Set<EventStatus>;
+  autoInProgressStatuses?: Set<string>;
+  manualOnlyStatuses?: Set<string>;
 };
 
 export type StatusReconcileResult = {
-  status: EventStatus;
+  status: string;
   actualStartAt: Date | null;
   actualEndAt: Date | null;
   statusChanged: boolean;
   actualFilledFromOper: boolean;
 };
 
-const TERMINAL_MANUAL = new Set<EventStatus>([EventStatus.CANCELLED, EventStatus.DELETED]);
+const TERMINAL_MANUAL = new Set<string>([EventStatus.CANCELLED, EventStatus.DELETED]);
 
 /**
  * Auto status rules:
@@ -98,12 +98,12 @@ export function reconcileEventStatus(input: StatusReconcileInput): StatusReconci
 }
 
 export function isEventOverdueNoFact(params: {
-  status: EventStatus;
+  status: string;
   endAt: Date;
   actualStartAt: Date | null | undefined;
   actualEndAt: Date | null | undefined;
   now?: Date;
-  manualOnlyStatuses?: Set<EventStatus>;
+  manualOnlyStatuses?: Set<string>;
 }): boolean {
   const manualOnly = params.manualOnlyStatuses ?? MANUAL_ONLY_STATUSES;
   // Pending approval / cancelled / deleted / done — no overdue nag
@@ -115,8 +115,8 @@ export function isEventOverdueNoFact(params: {
 
 /** Schedule/type/placement stay locked while DONE unless status is explicitly changed away. */
 export function isDoneScheduleLocked(
-  existingStatus: EventStatus,
-  requestedStatus?: EventStatus | null
+  existingStatus: string,
+  requestedStatus?: string | null
 ): boolean {
   if (existingStatus !== EventStatus.DONE) return false;
   if (requestedStatus != null && requestedStatus !== EventStatus.DONE) return false;
@@ -146,7 +146,7 @@ export type DoneSchedulePatch = {
 };
 
 export type DoneScheduleExisting = {
-  status: EventStatus;
+  status: string;
   planningKind: string;
   eventTypeId: string;
   startAt: Date;
@@ -163,7 +163,7 @@ export type DoneScheduleExisting = {
 export function patchTouchesDoneScheduleLock(
   existing: DoneScheduleExisting,
   patch: DoneSchedulePatch,
-  requestedStatus?: EventStatus | null
+  requestedStatus?: string | null
 ): boolean {
   if (!isDoneScheduleLocked(existing.status, requestedStatus)) return false;
 
