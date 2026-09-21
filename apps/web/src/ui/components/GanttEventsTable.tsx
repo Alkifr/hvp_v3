@@ -198,7 +198,7 @@ export type GanttTableEvent = {
   hangar?: { id?: string; name: string } | null;
   workshop?: { id?: string; code?: string | null; name: string } | null;
   layout?: { id?: string; name: string; hangarId?: string } | null;
-  reservation?: { stand?: { id?: string; code: string } | null } | null;
+  reservation?: { stand?: { id?: string; code: string; name?: string } | null } | null;
   placements?: EventPlacementRow[];
   allowOverlap?: boolean;
   lineBase?: "LINE" | "BASE" | null;
