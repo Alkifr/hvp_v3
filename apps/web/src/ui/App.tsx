@@ -13,6 +13,7 @@ import { SandboxesView } from "./pages/SandboxesView";
 import { AnalyticsView } from "./pages/AnalyticsView";
 import { MailDigestView } from "./pages/MailDigestView";
 import { RmItpView } from "./pages/RmItpView";
+import { RmTowsView } from "./pages/RmTowsView";
 import { HelpView } from "./pages/HelpView";
 import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { NotificationBell } from "./components/NotificationBell";
@@ -37,6 +38,7 @@ type Page =
   | "import"
   | "mass"
   | "itp"
+  | "tows"
   | "ref"
   | "profile"
   | "admin"
@@ -53,6 +55,7 @@ function isPage(value: string): value is Page {
     value === "import" ||
     value === "mass" ||
     value === "itp" ||
+    value === "tows" ||
     value === "profile" ||
     value === "admin" ||
     value === "sandboxes" ||
@@ -83,11 +86,6 @@ function consumeEventDeepLinkFromHash() {
   const link = eventDeepLinkFromHashQuery(query);
   if (!link) return null;
 
-  const targetSandbox = link.sandboxId ?? null;
-  const current = getActiveSandboxId();
-  if ((targetSandbox || null) !== (current || null)) {
-    setActiveSandboxId(targetSandbox);
-  }
   applyEventDeepLink(link);
 
   const cleanPage = isPage(page) ? page : "gantt";
@@ -144,6 +142,15 @@ const ICONS = {
       <path d="M6 4h9l3 3v13H6z" />
       <path d="M15 4v4h4" />
       <path d="M9 12h6M9 16h4" />
+    </svg>
+  ),
+  tows: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 15h11l3-4h2" />
+      <circle cx="8" cy="17" r="1.6" />
+      <circle cx="16" cy="17" r="1.6" />
+      <path d="M4 15V9h7" />
+      <path d="M3 6h6l2 3" />
     </svg>
   ),
   ref: (
@@ -293,6 +300,7 @@ export function App() {
   const canHangar = hasPermission(permissions, "hangar:read");
   const canAnalytics = hasPermission(permissions, "analytics:read");
   const canItp = hasPermission(permissions, "itp:read");
+  const canTows = hasPermission(permissions, "tows:read");
   const canImport = hasPermission(permissions, "import:write");
   const canRef = hasPermission(permissions, "ref:read");
   const canAdmin = hasPermission(permissions, "admin:users") || hasPermission(permissions, "admin:roles");
@@ -309,6 +317,7 @@ export function App() {
       canHangar={canHangar}
       canAnalytics={canAnalytics}
       canItp={canItp}
+      canTows={canTows}
       canImport={canImport}
       canRef={canRef}
       canAdmin={canAdmin}
@@ -327,6 +336,7 @@ function AppShell(props: {
   canHangar: boolean;
   canAnalytics: boolean;
   canItp: boolean;
+  canTows: boolean;
   canImport: boolean;
   canRef: boolean;
   canAdmin: boolean;
@@ -342,6 +352,7 @@ function AppShell(props: {
     canHangar,
     canAnalytics,
     canItp,
+    canTows,
     canImport,
     canRef,
     canAdmin,
@@ -374,6 +385,7 @@ function AppShell(props: {
       hangar: canHangar,
       analytics: canAnalytics,
       itp: canItp && !isMobile,
+      tows: canTows && !isMobile,
       import: canImportInActiveContext && !isMobile,
       mass: canImportInActiveContext && !isMobile,
       ref: canRef && !isMobile,
@@ -393,6 +405,7 @@ function AppShell(props: {
     canHangar,
     canAnalytics,
     canItp,
+    canTows,
     canImportInActiveContext,
     canRef,
     canMail,
@@ -434,6 +447,9 @@ function AppShell(props: {
             ) : null}
             {!isMobile && canItp ? (
               <NavIcon active={page === "itp"} onClick={() => setPage("itp")} label="РМ ИТП" icon={ICONS.itp} />
+            ) : null}
+            {!isMobile && canTows ? (
+              <NavIcon active={page === "tows"} onClick={() => setPage("tows")} label="РМ Буксировки" icon={ICONS.tows} />
             ) : null}
 
             {!isMobile && canMail ? (
@@ -488,6 +504,7 @@ function AppShell(props: {
         {page === "gantt" && canGantt ? <GanttView /> : null}
         {page === "hangar" && canHangar ? <HangarView /> : null}
         {!isMobile && page === "itp" && canItp ? <RmItpView /> : null}
+        {!isMobile && page === "tows" && canTows ? <RmTowsView /> : null}
         {!isMobile && canImportInActiveContext && (page === "import" || page === "mass") ? (
           <BulkEventsView tab={page === "mass" ? "mass" : "import"} onTab={(tab) => setPage(tab)} />
         ) : null}

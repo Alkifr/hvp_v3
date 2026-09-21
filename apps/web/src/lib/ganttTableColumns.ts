@@ -40,6 +40,7 @@ export type GanttCellKind =
   | "standId"
   | "allowOverlap"
   | "notes"
+  | "comment"
   | "timeOfStart"
   | "timeOfEnd"
   | "timeOfActualStart"
@@ -103,7 +104,8 @@ const LEGACY_COL_MAP: Record<string, GanttTableColId> = {
   layoutId: "layoutId",
   standId: "primary.ag",
   allowOverlap: "allowOverlap",
-  notes: "primary.ae"
+  notes: "primary.ae",
+  comment: "comment"
 };
 
 const KIND_BY_ID: Record<string, GanttCellKind> = {
@@ -137,7 +139,8 @@ const KIND_BY_ID: Record<string, GanttCellKind> = {
   layoutId: "layoutId",
   "primary.ag": "standId",
   allowOverlap: "allowOverlap",
-  "primary.ae": "notes"
+  "primary.ae": "notes",
+  comment: "comment"
 };
 
 /** Реквизиты, которые таблица рисует из события Ганта — primary-query для них не нужен. */
@@ -147,6 +150,7 @@ export const EVENT_NATIVE_COL_IDS = new Set<string>([
   "layoutId",
   "allowOverlap",
   "lineBase",
+  "comment",
   ...Object.keys(KIND_BY_ID).filter((id) => id.startsWith("primary."))
 ]);
 
@@ -180,7 +184,8 @@ export const DEFAULT_VISIBLE_IDS: GanttTableColId[] = [
   "layoutId",
   "primary.ag",
   "allowOverlap",
-  "primary.ae"
+  "primary.ae",
+  "comment"
 ];
 
 const EXTRA_COLUMNS: GanttTableColDef[] = [
@@ -230,6 +235,15 @@ const EXTRA_COLUMNS: GanttTableColDef[] = [
     defaultWidth: 80,
     minWidth: 56,
     kind: "allowOverlap"
+  },
+  {
+    id: "comment",
+    label: "Комментарий",
+    group: "План (Гантт)",
+    subgroup: null,
+    defaultWidth: 180,
+    minWidth: 100,
+    kind: "comment"
   }
 ];
 
@@ -357,7 +371,7 @@ export function factoryVisibleIds(columns: GanttTableColDef[]): GanttTableColId[
   return ids;
 }
 
-/** Заводской набор: исходные 25 столбцов Ганта, остальные скрыты. */
+/** Заводской набор: исходные столбцы Ганта, остальные скрыты. */
 export function factoryColumnConfig(columns: GanttTableColDef[]): GanttTableColConfig {
   const visible = factoryVisibleIds(columns);
   return {

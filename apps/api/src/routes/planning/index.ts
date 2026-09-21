@@ -5,8 +5,10 @@ import { reservationsRoutes } from "./reservations.js";
 import { massPlanningRoutes } from "./mass.js";
 import { hangarPlanningRoutes } from "./hangar-planning.js";
 import { technicalPlansRoutes } from "./technical-plans.js";
+import { towsRoutes } from "./tows.js";
 
 export const planningRoutes: FastifyPluginAsync = async (app) => {
+  await app.register(towsRoutes, { prefix: "/tows" });
   await app.register(eventsRoutes, { prefix: "/events" });
   await app.register(reservationsRoutes, { prefix: "/reservations" });
   await app.register(massPlanningRoutes, { prefix: "/mass" });

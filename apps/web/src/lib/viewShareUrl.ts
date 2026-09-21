@@ -76,7 +76,7 @@ export type HangarViewShare = {
 };
 
 export type AnalyticsViewShare = {
-  tab: "tat" | "util" | "compare" | "monthly" | "builder";
+  tab: "tat" | "util" | "tows" | "compare" | "monthly" | "builder";
   fromDate: string;
   toDate: string;
   compareA: string;
@@ -87,6 +87,15 @@ export type AnalyticsViewShare = {
   filterAircraftTypeIds: string[];
   filterAircraftIds: string[];
   filterEventTypeIds: string[];
+};
+
+export type TowsViewShare = {
+  fromDate: string;
+  toDate: string;
+  filterHangarIds: string[];
+  filterOperatorIds: string[];
+  filterAircraftTypeIds: string[];
+  filterAircraftIds: string[];
 };
 
 export function queryHasViewShare(query: URLSearchParams): boolean {
@@ -284,7 +293,7 @@ export function syncHangarViewHash(state: HangarViewShare & { sandboxId?: string
   writePageHashQuery("hangar", serializeHangarViewShare(state));
 }
 
-const ANALYTICS_TABS = ["tat", "util", "compare", "monthly", "builder"] as const;
+const ANALYTICS_TABS = ["tat", "util", "tows", "compare", "monthly", "builder"] as const;
 const ANALYTICS_GRAINS = ["day", "week", "month", "period"] as const;
 
 export function parseAnalyticsViewShare(query: URLSearchParams): AnalyticsViewShare | null {
@@ -332,6 +341,39 @@ export function syncAnalyticsViewHash(state: AnalyticsViewShare & { sandboxId?: 
   const parsed = parseHashPage(location.hash);
   if (parsed.page !== "analytics") return;
   writePageHashQuery("analytics", serializeAnalyticsViewShare(state));
+}
+
+export function parseTowsViewShare(query: URLSearchParams): TowsViewShare | null {
+  if (!queryHasViewShare(query)) return null;
+  const from = readDate(query, "from");
+  const to = readDate(query, "to");
+  return {
+    fromDate: from ?? "",
+    toDate: to ?? "",
+    filterHangarIds: csv(query, "hangar"),
+    filterOperatorIds: csv(query, "op"),
+    filterAircraftTypeIds: csv(query, "type"),
+    filterAircraftIds: csv(query, "ac")
+  };
+}
+
+export function serializeTowsViewShare(state: TowsViewShare & { sandboxId?: string | null }): URLSearchParams {
+  const q = new URLSearchParams();
+  if (isValidDateInput(state.fromDate)) q.set("from", state.fromDate);
+  if (isValidDateInput(state.toDate)) q.set("to", state.toDate);
+  setCsv(q, "hangar", state.filterHangarIds);
+  setCsv(q, "op", state.filterOperatorIds);
+  setCsv(q, "type", state.filterAircraftTypeIds);
+  setCsv(q, "ac", state.filterAircraftIds);
+  putSandbox(q, state.sandboxId);
+  return q;
+}
+
+export function syncTowsViewHash(state: TowsViewShare & { sandboxId?: string | null }) {
+  if (typeof window === "undefined") return;
+  const parsed = parseHashPage(location.hash);
+  if (parsed.page !== "tows") return;
+  writePageHashQuery("tows", serializeTowsViewShare(state));
 }
 
 export const REF_SHARE_KINDS = [

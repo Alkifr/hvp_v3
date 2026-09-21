@@ -36,7 +36,9 @@ test("maps a golden event row including metrics and external analytics", () => {
     slotDeviations: [],
     reportMetrics: [
       { block: "WP_PLAN_MPS", department: "ME", manHours: 10, costAmount: null },
-      { block: "WP_PLAN_MPS", department: "AV", manHours: 20, costAmount: null }
+      { block: "WP_PLAN_MPS", department: "AV", manHours: 20, costAmount: null },
+      { block: "ADD_PLAN", department: "ME", manHours: 4, costAmount: null },
+      { block: "NRC_ACTUAL", department: "INT", manHours: 1, costAmount: null }
     ],
     reportScalars: [],
     placements: [],
@@ -56,6 +58,8 @@ test("maps a golden event row including metrics and external analytics", () => {
   assert.equal(row["primary.aq"], 0);
   assert.equal(row["primary.bd"], 30);
   assert.equal(row["primary.be"], 30);
+  assert.equal(row["primary.cr"], 4);
+  assert.equal(row["primary.dx"], 1);
   assert.equal(row["primary.fy"], "ROLL-1");
   assert.equal(row["primary.gg"], 2);
 });

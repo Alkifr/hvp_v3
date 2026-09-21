@@ -3,6 +3,7 @@ export const HOME_PAGES = [
   "hangar",
   "analytics",
   "itp",
+  "tows",
   "import",
   "ref",
   "mail",

@@ -84,7 +84,7 @@ function validateImportRowsShape(rows: any[]): string | null {
     parts.push("Похоже, это файл массового планирования — перейдите на вкладку «Массовое планирование».");
   } else {
     parts.push(
-      "Нужны колонки: Aircraft, Event_name, startAt, endAt (также можно Operator, AircraftType, Event_Title, Hangar, HangarStand, Workshop, LineBase, laborBudget_*/laborMps_*/laborActual_*)."
+      "Нужны колонки: Aircraft, Event_name, startAt, endAt (также можно Operator, AircraftType, Event_Title, Hangar, HangarStand, Workshop, LineBase, laborBudget_*/laborAddBudget_*/laborNrcBudget_*/laborMps_*/laborActual_*/laborAddPlan_*/laborNrcPlan_*/laborAddActual_*/laborNrcActual_*)."
     );
   }
   return parts.join(" ");

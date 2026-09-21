@@ -95,6 +95,8 @@ const SCREEN_PERMISSIONS: PermissionSeed[] = [
   { code: "hangar:write", name: "Can change ангар (схема)", appLabel: "event", model: "EventPlacement", action: "change" },
   { code: "analytics:read", name: "Can view аналитика", appLabel: "analytics", model: "SavedReport", action: "view" },
   { code: "itp:read", name: "Can view РМ ИТП", appLabel: "tech", model: "EventTechnicalPlan", action: "view" },
+  { code: "tows:read", name: "Can view РМ Буксировки", appLabel: "event", model: "EventTow", action: "view" },
+  { code: "tows:write", name: "Can change РМ Буксировки", appLabel: "event", model: "EventTow", action: "change" },
   { code: "import:write", name: "Can add события импортом", appLabel: "event", model: "MaintenanceEvent", action: "add" },
   { code: "admin:users", name: "Can change пользователи (админка)", appLabel: "auth", model: "User", action: "change" },
   { code: "admin:roles", name: "Can change группы (админка)", appLabel: "auth", model: "Role", action: "change" },
@@ -116,7 +118,7 @@ const SCREEN_PERMISSIONS: PermissionSeed[] = [
 
 export const PERMISSION_SEED: PermissionSeed[] = [...crudSeed(), ...SCREEN_PERMISSIONS];
 
-const MODULE_READS = ["gantt:read", "hangar:read", "analytics:read", "itp:read"] as const;
+const MODULE_READS = ["gantt:read", "hangar:read", "analytics:read", "itp:read", "tows:read"] as const;
 const MODULE_WRITES = ["gantt:write", "hangar:write", "import:write"] as const;
 
 const WRITE_IMPLIES_READ: Record<string, string> = {
@@ -127,7 +129,8 @@ const WRITE_IMPLIES_READ: Record<string, string> = {
   "warehouse:write": "warehouse:read",
   "resources:plan": "resources:read",
   "resources:actual": "resources:read",
-  "import:write": "gantt:read"
+  "import:write": "gantt:read",
+  "tows:write": "tows:read"
 };
 
 const REF_MODELS = [

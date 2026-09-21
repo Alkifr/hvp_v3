@@ -10,6 +10,7 @@ import {
   buildMonthlyBasePlan,
   type MonthlyBasePlanEventInput
 } from "../lib/monthlyBasePlan.js";
+import { serializeTowReportRow, resolveVirtualNames, towInclude } from "./planning/tows.js";
 
 const MS_HOUR = 60 * 60 * 1000;
 
@@ -1303,6 +1304,77 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       ok: true as const,
       period: { from: query.from.toISOString(), to: query.to.toISOString() },
       ...report
+    };
+  });
+
+  // GET /api/analytics/tows?from&to
+  app.get("/tows", async (req) => {
+    assertPermission(req as any, "events:read");
+    const query = z
+      .object({
+        from: zDateTime,
+        to: zDateTime
+      })
+      .parse(req.query);
+
+    if (query.to <= query.from) {
+      const err: any = new Error("Период to должен быть позже from");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const tows = await app.prisma.eventTow.findMany({
+      where: {
+        ...sandboxFilter(req as any),
+        startAt: { lt: query.to },
+        endAt: { gt: query.from },
+        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+      },
+      include: towInclude,
+      orderBy: [{ startAt: "asc" }, { id: "asc" }]
+    });
+
+    const virtualNames = await resolveVirtualNames(app.prisma, tows);
+    const rows = tows.map((tow) => {
+      const report = serializeTowReportRow(tow, virtualNames.get(tow.id));
+      return {
+        id: report.id,
+        eventId: report.eventId,
+        eventTitle: report.eventTitle,
+        eventStatus: report.eventStatus,
+        eventTypeId: report.eventTypeId || null,
+        eventType: report.eventType || "—",
+        hangarId: report.hangarId || null,
+        hangar: report.hangarNumber || "—",
+        aircraftId: report.aircraftId || null,
+        aircraft: report.tailNumber || "—",
+        aircraftTypeId: report.aircraftTypeId || null,
+        aircraftType: report.aircraftType || "—",
+        operatorId: report.operatorId || null,
+        operator: report.operator || "—",
+        direction: report.direction,
+        directionLabel: report.directionLabel || "Не определено",
+        fromStand: report.fromStand,
+        toStand: report.toStand,
+        startAt: report.plannedStartAt,
+        endAt: report.plannedEndAt,
+        occupancyEndAt: report.occupancyEndAt || report.inferredOccupancyEndAt || null,
+        towDurationMin: report.towDurationMinutes,
+        occupancyMin: report.standOccupancyMinutes,
+        slotMin: report.toSlotMinutes,
+        startChangeReason: report.startChangeReason,
+        notes: report.notes,
+        positionComment: report.positionComment,
+        plannedStartMsk: report.plannedStartMsk,
+        occupancyEndMsk: report.occupancyEndMsk,
+        standOccupancy: report.standOccupancy
+      };
+    });
+
+    return {
+      ok: true as const,
+      period: { from: query.from.toISOString(), to: query.to.toISOString() },
+      rows
     };
   });
 };

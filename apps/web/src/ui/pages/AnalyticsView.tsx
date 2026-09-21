@@ -25,6 +25,7 @@ import { parseHashPage } from "../../lib/eventDeepLink";
 import { parseAnalyticsViewShare, syncAnalyticsViewHash } from "../../lib/viewShareUrl";
 import { ReportBuilderPanel } from "./ReportBuilderPanel";
 import { MonthlyBasePlanPanel, type MonthlyBasePlanResponse } from "./MonthlyBasePlanPanel";
+import { TowsAnalyticsPanel, type TowsAnalyticsResponse } from "./TowsAnalyticsPanel";
 
 ChartJS.register(
   CategoryScale,
@@ -37,7 +38,7 @@ ChartJS.register(
   Filler
 );
 
-type TabId = "tat" | "util" | "compare" | "monthly" | "builder";
+type TabId = "tat" | "util" | "tows" | "compare" | "monthly" | "builder";
 type EfficiencyGrain = "day" | "week" | "month" | "period";
 
 const DETAIL_LEVEL_LABEL: Record<EfficiencyGrain, string> = {
@@ -343,7 +344,9 @@ export function AnalyticsView() {
   }, []);
 
   const [tab, setTab] = useState<TabId>(() =>
-    ["tat", "util", "compare", "monthly", "builder"].includes(String(savedUi?.tab)) ? (savedUi.tab as TabId) : "tat"
+    ["tat", "util", "tows", "compare", "monthly", "builder"].includes(String(savedUi?.tab))
+      ? (savedUi.tab as TabId)
+      : "tat"
   );
   const [fromInput, setFromInput] = useState(() =>
     isValidDateInput(String(savedUi?.fromDate ?? "")) ? String(savedUi.fromDate) : toInputDate(dayjs().subtract(30, "day"))
@@ -504,8 +507,18 @@ export function AnalyticsView() {
     enabled: tab === "monthly" && periodOk
   });
 
+  const towsQ = useQuery({
+    queryKey: ["analytics", "tows", fromIso, toIso, active?.id ?? "prod"],
+    queryFn: () =>
+      apiGet<TowsAnalyticsResponse>(
+        `/api/analytics/tows?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`
+      ),
+    enabled: tab === "tows" && periodOk
+  });
+
   const filterSeedRows = useMemo((): FilterRow[] => {
     if (tab === "tat") return tatQ.data?.rows ?? [];
+    if (tab === "tows") return towsQ.data?.rows ?? [];
     if (tab === "util") {
       return (utilQ.data?.hangars ?? []).map((h) => ({ hangarId: h.hangarId }));
     }
@@ -518,7 +531,7 @@ export function AnalyticsView() {
     }
     if (tab === "monthly") return monthlyQ.data?.events ?? [];
     return [];
-  }, [tab, tatQ.data, utilQ.data, compareQ.data, monthlyQ.data]);
+  }, [tab, tatQ.data, towsQ.data, utilQ.data, compareQ.data, monthlyQ.data]);
 
   const filterOptions = useMemo(() => {
     const hangarIdSet = new Set<string>();
@@ -602,6 +615,9 @@ export function AnalyticsView() {
         </button>
         <button type="button" className={tab === "util" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("util")}>
           Utilization
+        </button>
+        <button type="button" className={tab === "tows" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("tows")}>
+          Tows
         </button>
         <button type="button" className={tab === "compare" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("compare")}>
           Сценарии A vs B
@@ -712,6 +728,23 @@ export function AnalyticsView() {
                   compact
                 />
               </label>
+              {tab === "util" || tab === "tows" ? (
+                <label className="tgField">
+                  <span className="tgFieldLabel">Детализация</span>
+                  <select
+                    value={efficiencyGrain}
+                    onChange={(e) => setEfficiencyGrain(e.target.value as EfficiencyGrain)}
+                    style={{ width: 140 }}
+                    title="Уровень детализации интервалов"
+                  >
+                    {(Object.keys(DETAIL_LEVEL_LABEL) as EfficiencyGrain[]).map((g) => (
+                      <option key={g} value={g}>
+                        {DETAIL_LEVEL_LABEL[g]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               {tab !== "util" ? (
                 <>
                   <label className="tgField">
@@ -771,23 +804,7 @@ export function AnalyticsView() {
                     />
                   </label>
                 </>
-              ) : (
-                <label className="tgField">
-                  <span className="tgFieldLabel">Детализация</span>
-                  <select
-                    value={efficiencyGrain}
-                    onChange={(e) => setEfficiencyGrain(e.target.value as EfficiencyGrain)}
-                    style={{ width: 140 }}
-                    title="Уровень детализации интервалов"
-                  >
-                    {(Object.keys(DETAIL_LEVEL_LABEL) as EfficiencyGrain[]).map((g) => (
-                      <option key={g} value={g}>
-                        {DETAIL_LEVEL_LABEL[g]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
+              ) : null}
             </div>
           </div>
           {!periodOk ? <div className="error">Дата «по» должна быть позже «с»</div> : null}
@@ -803,6 +820,17 @@ export function AnalyticsView() {
           grain={efficiencyGrain}
           periodLabel={periodChipLabel}
           detailLabel={DETAIL_LEVEL_LABEL[efficiencyGrain]}
+        />
+      ) : null}
+      {tab === "tows" ? (
+        <TowsAnalyticsPanel
+          q={towsQ}
+          filters={filters}
+          grain={efficiencyGrain}
+          periodLabel={periodChipLabel}
+          fromIso={fromIso}
+          toIso={toIso}
+          tzOffset={tzOffset}
         />
       ) : null}
       {tab === "compare" ? (

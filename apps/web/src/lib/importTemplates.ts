@@ -5,8 +5,14 @@ type SheetRow = Record<string, string | number>;
 const LABOR_IMPORT_DEPARTMENTS = ["ME", "AV", "INT", "NDT", "SHOP", "CabRep"] as const;
 const LABOR_IMPORT_BLOCKS = [
   { prefix: "laborBudget", title: "Трудоемкость (Бюджет)" },
+  { prefix: "laborAddBudget", title: "Трудоемкость на ADD (Бюджет)" },
+  { prefix: "laborNrcBudget", title: "Трудоемкость на NRC (Бюджет)" },
   { prefix: "laborMps", title: "Плановая трудоемкость WP согласно MPS" },
-  { prefix: "laborActual", title: "Фактическая трудоемкость WP (завершенное)" }
+  { prefix: "laborActual", title: "Фактическая трудоемкость WP (завершенное)" },
+  { prefix: "laborAddPlan", title: "Трудоемкость на ADD (План)" },
+  { prefix: "laborNrcPlan", title: "Трудоемкость на NRC (План)" },
+  { prefix: "laborAddActual", title: "Фактические данные ADD (Факт)" },
+  { prefix: "laborNrcActual", title: "Фактические данные NRC (Факт)" }
 ] as const;
 
 function laborImportExampleValues(prefix: string): Record<string, number | ""> {
@@ -164,7 +170,7 @@ export function downloadEventImportTemplate(params?: {
         {
           Колонка: "Алиас CabRep",
           Обязательно: "—",
-          Описание: "Допустимо laborBudget_CAB_REP / laborMps_CAB_REP / laborActual_CAB_REP вместо *_CabRep"
+          Описание: "Допустимо laborBudget_CAB_REP / laborAddBudget_CAB_REP / laborNrcBudget_CAB_REP / laborMps_CAB_REP / laborActual_CAB_REP / laborAddPlan_CAB_REP / laborNrcPlan_CAB_REP / laborAddActual_CAB_REP / laborNrcActual_CAB_REP вместо *_CabRep"
         },
         {
           Колонка: "Даты",

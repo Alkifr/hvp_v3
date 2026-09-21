@@ -48,6 +48,7 @@ export const FIELD_LABEL: Record<string, string> = {
   actualStartAtLocal: "Фактическое начало",
   actualEndAtLocal: "Фактическое окончание",
   notes: "Примечание",
+  comment: "Комментарий",
   hangarId: "Ангар",
   layoutId: "Вариант размещения",
   standId: "Место",
@@ -78,6 +79,10 @@ export const FIELD_LABEL: Record<string, string> = {
   HangarStand: "Место",
   towStartAt: "Начало буксировки",
   towEndAt: "Окончание буксировки",
+  fromLabel: "Откуда (с МС)",
+  toLabel: "Куда (на МС)",
+  positionComment: "Позиция",
+  startChangeReason: "Причина изменения времени начала буксировки",
   sandbox: "Песочница",
   sandboxId: "Песочница",
   sandboxName: "Название песочницы",
@@ -328,6 +333,19 @@ export function extractDiffEntries(changes: unknown): DiffEntry[] {
         });
       }
       if ((v as { delete?: unknown }).delete) out.push({ field: "Интервал буксировки удалён", note: "Удалён из события" });
+      const startAt = (v as { startAt?: { from?: unknown; to?: unknown } }).startAt;
+      if (startAt && typeof startAt === "object") {
+        out.push({ field: "Начало буксировки", from: startAt.from, to: startAt.to });
+      }
+      const endAt = (v as { endAt?: { from?: unknown; to?: unknown } }).endAt;
+      if (endAt && typeof endAt === "object") {
+        out.push({ field: "Окончание буксировки", from: endAt.from, to: endAt.to });
+      }
+      for (const key of ["fromLabel", "toLabel", "notes", "positionComment", "startChangeReason"] as const) {
+        if (key in v && (v as Record<string, unknown>)[key] != null) {
+          out.push({ field: labelFor(key), to: (v as Record<string, unknown>)[key] });
+        }
+      }
       continue;
     }
     if (k === "imported" && isPlainObject(v)) {
@@ -503,7 +521,9 @@ export function formatActionLabel(action: string, changes?: unknown): string {
   }
   if (action === "UPDATE" && isPlainObject(changes)) {
     if (isPlainObject(changes.tow)) {
-      return (changes.tow as { add?: unknown }).add ? "Добавлена буксировка" : "Удалена буксировка";
+      if ((changes.tow as { add?: unknown }).add) return "Добавлена буксировка";
+      if ((changes.tow as { delete?: unknown }).delete) return "Удалена буксировка";
+      return "Изменена буксировка";
     }
     if (isPlainObject(changes.dnd)) {
       return (changes.dnd as { bumpedByEventId?: unknown }).bumpedByEventId

@@ -818,6 +818,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
             hangarId: src.hangarId,
             layoutId: src.layoutId,
             notes: src.notes,
+            comment: (src as { comment?: string | null }).comment ?? null,
             // В prod событие становится новым корнем; lineage указывает на sandbox-источник
             originEventId: null,
             sourceEventId: src.id,
@@ -900,7 +901,15 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
               eventId: eventIdMap.get(t.eventId)!,
               sandboxId: null,
               startAt: t.startAt,
-              endAt: t.endAt
+              endAt: t.endAt,
+              fromStandId: t.fromStandId,
+              toStandId: t.toStandId,
+              fromLabel: t.fromLabel,
+              toLabel: t.toLabel,
+              notes: t.notes,
+              positionComment: t.positionComment,
+              startChangeReason: t.startChangeReason,
+              placementId: t.placementId ? (placementIdMap.get(t.placementId) ?? null) : null
             }))
           });
           createdTows = c.count;

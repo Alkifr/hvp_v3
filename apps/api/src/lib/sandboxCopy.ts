@@ -38,6 +38,7 @@ type SourceEvent = {
   workshopId?: string | null;
   lineBase?: "LINE" | "BASE" | null;
   notes: string | null;
+  comment?: string | null;
   originEventId?: string | null;
   sourceEventId?: string | null;
   sourceSandboxId?: string | null;
@@ -213,6 +214,7 @@ export async function copyPlanToSandbox(
       workshopId: (src as any).workshopId ?? null,
       lineBase: (src as any).lineBase ?? null,
       notes: src.notes,
+      comment: src.comment ?? null,
       allowOverlap: Boolean((src as { allowOverlap?: boolean }).allowOverlap),
       originEventId,
       sourceEventId: src.id,
@@ -368,7 +370,16 @@ export async function copyPlanToSandbox(
         eventId: eventIdMap.get(t.eventId)!,
         sandboxId: targetSandboxId,
         startAt: t.startAt,
-        endAt: t.endAt
+        endAt: t.endAt,
+        fromStandId: t.fromStandId,
+        toStandId: t.toStandId,
+        fromLabel: t.fromLabel,
+        toLabel: t.toLabel,
+        notes: t.notes,
+        positionComment: t.positionComment,
+        startChangeReason: t.startChangeReason,
+        occupancyEndAt: t.occupancyEndAt,
+        placementId: t.placementId ? (placementIdMap.get(t.placementId) ?? null) : null
       }))
     });
     counts.tows = towCreated.count;

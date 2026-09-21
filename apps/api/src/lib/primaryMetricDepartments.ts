@@ -27,26 +27,56 @@ const SKILL_CODE_TO_DEPARTMENT: Record<string, PrimaryMetricDepartmentCode> = {
 };
 
 export const LABOR_METRIC_BLOCKS = [
-  {
-    block: "LABOR_BUDGET" as const,
-    label: "Трудоемкость (Бюджет)",
-    hint: "ч/ч по квалификациям; TAT бюджета в отчёте — колонка W (V−U+1)"
-  },
-  {
-    block: "WP_PLAN_MPS" as const,
-    label: "Плановая трудоемкость WP согласно MPS",
-    hint: "Выработка в сутки (План) в отчёте = TOTAL / TAT плана (AB)"
-  },
-  {
-    block: "WP_ACTUAL" as const,
-    label: "Фактическая трудоемкость WP (завершенное)",
-    hint: "Выработка в сутки (Факт) в отчёте = TOTAL / TAT факта (AO)"
-  }
+  { block: "LABOR_BUDGET" as const, label: "Бюджет" },
+  { block: "WP_PLAN_MPS" as const, label: "MPS" },
+  { block: "WP_ACTUAL" as const, label: "Факт" }
 ];
 
 export type LaborMetricBlockCode = (typeof LABOR_METRIC_BLOCKS)[number]["block"];
 
-/** Excel-колонки живых ч/ч (3 блока × 6 квалификаций). Совпадает с rowMapper METRIC_COLUMNS. */
+/** Серии карточки события: routine + ADD/NRC. */
+export const LABOR_CARD_SERIES = [
+  {
+    key: "budget" as const,
+    label: "Бюджет",
+    hoursBlock: "LABOR_BUDGET" as const,
+    addBlock: "ADD_BUDGET" as const,
+    nrcBlock: "NRC_BUDGET" as const,
+    tat: "budget" as const
+  },
+  {
+    key: "mps" as const,
+    label: "MPS",
+    hoursBlock: "WP_PLAN_MPS" as const,
+    addBlock: "ADD_PLAN" as const,
+    nrcBlock: "NRC_PLAN" as const,
+    tat: "mps" as const
+  },
+  {
+    key: "actual" as const,
+    label: "Факт",
+    hoursBlock: "WP_ACTUAL" as const,
+    addBlock: "ADD_ACTUAL" as const,
+    nrcBlock: "NRC_ACTUAL" as const,
+    tat: "actual" as const
+  }
+];
+
+export const LABOR_EDITABLE_BLOCKS = [
+  "LABOR_BUDGET",
+  "ADD_BUDGET",
+  "NRC_BUDGET",
+  "WP_PLAN_MPS",
+  "WP_ACTUAL",
+  "ADD_PLAN",
+  "NRC_PLAN",
+  "ADD_ACTUAL",
+  "NRC_ACTUAL"
+] as const;
+
+export type LaborEditableBlockCode = (typeof LABOR_EDITABLE_BLOCKS)[number];
+
+/** Excel-колонки живых ч/ч: бюджет / MPS / факт + ADD/NRC плана и факта. */
 export const LIVE_LABOR_EXCEL_COLUMNS = [
   "AX",
   "AY",
@@ -60,6 +90,30 @@ export const LIVE_LABOR_EXCEL_COLUMNS = [
   "BI",
   "BJ",
   "BK",
+  "CJ",
+  "CK",
+  "CL",
+  "CM",
+  "CN",
+  "CO",
+  "CR",
+  "CS",
+  "CT",
+  "CU",
+  "CV",
+  "CW",
+  "DV",
+  "DW",
+  "DX",
+  "DY",
+  "DZ",
+  "EA",
+  "ED",
+  "EE",
+  "EF",
+  "EG",
+  "EH",
+  "EI",
   "FP",
   "FQ",
   "FR",
@@ -78,8 +132,14 @@ export function isLiveLaborExcelColumn(excelColumn: string | null | undefined): 
 /** Префиксы колонок импорта событий → блоки EventReportMetric. */
 export const LABOR_IMPORT_BLOCK_PREFIXES = [
   { prefix: "laborBudget", block: "LABOR_BUDGET" as const, title: "Трудоемкость (Бюджет)" },
+  { prefix: "laborAddBudget", block: "ADD_BUDGET" as const, title: "Трудоемкость на ADD (Бюджет)" },
+  { prefix: "laborNrcBudget", block: "NRC_BUDGET" as const, title: "Трудоемкость на NRC (Бюджет)" },
   { prefix: "laborMps", block: "WP_PLAN_MPS" as const, title: "Плановая трудоемкость WP согласно MPS" },
-  { prefix: "laborActual", block: "WP_ACTUAL" as const, title: "Фактическая трудоемкость WP (завершенное)" }
+  { prefix: "laborActual", block: "WP_ACTUAL" as const, title: "Фактическая трудоемкость WP (завершенное)" },
+  { prefix: "laborAddPlan", block: "ADD_PLAN" as const, title: "Трудоемкость на ADD (План)" },
+  { prefix: "laborNrcPlan", block: "NRC_PLAN" as const, title: "Трудоемкость на NRC (План)" },
+  { prefix: "laborAddActual", block: "ADD_ACTUAL" as const, title: "Фактические данные ADD (Факт)" },
+  { prefix: "laborNrcActual", block: "NRC_ACTUAL" as const, title: "Фактические данные NRC (Факт)" }
 ] as const;
 
 /** Суффиксы колонок импорта (CabRep в шаблоне; CAB_REP — алиас). */
@@ -94,12 +154,12 @@ export const LABOR_IMPORT_DEPARTMENT_SUFFIXES = [
 
 export type LaborImportColumn = {
   field: string;
-  block: LaborMetricBlockCode;
+  block: LaborEditableBlockCode;
   department: PrimaryMetricDepartmentCode;
   title: string;
 };
 
-/** Канонические колонки импорта трудоёмкости (18 шт.). */
+/** Канонические колонки импорта трудоёмкости (9 блоков × 6 квалификаций). */
 export function laborImportColumns(): LaborImportColumn[] {
   return LABOR_IMPORT_BLOCK_PREFIXES.flatMap((block) =>
     LABOR_IMPORT_DEPARTMENT_SUFFIXES.map((dep) => ({
@@ -163,8 +223,8 @@ export function parseOptionalLaborHours(value: unknown, label: string): number |
 /** Собрать заполненные метрики трудоёмкости из строки импорта. */
 export function collectLaborMetricsFromImportRow(
   row: Record<string, unknown>
-): Array<{ block: LaborMetricBlockCode; department: PrimaryMetricDepartmentCode; manHours: number }> {
-  const byKey = new Map<string, { block: LaborMetricBlockCode; department: PrimaryMetricDepartmentCode; manHours: number }>();
+): Array<{ block: LaborEditableBlockCode; department: PrimaryMetricDepartmentCode; manHours: number }> {
+  const byKey = new Map<string, { block: LaborEditableBlockCode; department: PrimaryMetricDepartmentCode; manHours: number }>();
   for (const col of laborImportFieldAliases()) {
     if (!(col.field in row) && !(col.canonicalField in row)) continue;
     const raw = row[col.field] ?? row[col.canonicalField];

@@ -28,7 +28,7 @@ test("edit implies view and events data access", () => {
 
 test("legacy events:read opens all planning modules in the matrix", () => {
   const shown = displayPermissionCodes(["events:read", "ref:read"]);
-  for (const code of ["gantt:read", "hangar:read", "analytics:read", "itp:read", "ref:read"]) {
+  for (const code of ["gantt:read", "hangar:read", "analytics:read", "itp:read", "tows:read", "ref:read"]) {
     assert.ok(shown.includes(code), code);
   }
 });
@@ -74,6 +74,8 @@ test("previewNavLabels follows App desktop menu rules", () => {
   assert.ok(previewNavLabels(["gantt:write"]).includes("План"));
   assert.ok(previewNavLabels(["admin:users"]).includes("Админка"));
   assert.ok(!previewNavLabels(["analytics:read"]).includes("РМ ИТП"));
+  assert.ok(!previewNavLabels(["analytics:read"]).includes("РМ Буксировки"));
+  assert.ok(previewNavLabels(["tows:read"]).includes("РМ Буксировки"));
 });
 
 test("nextCloneRoleCode stays unique and within 32 chars", () => {

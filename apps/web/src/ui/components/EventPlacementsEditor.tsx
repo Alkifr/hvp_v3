@@ -215,7 +215,7 @@ export function EventPlacementsEditor(props: {
                       emptyLabel="— не выбрано —"
                       options={standOptions.map((stand) => ({
                         id: stand.id,
-                        label: `${stand.code} • ${stand.name}${stand.isCompatible === false ? " — недоступно для типа ВС" : ""}`,
+                        label: `${stand.name?.trim() || stand.code}${stand.isCompatible === false ? " — недоступно для типа ВС" : ""}`,
                         disabled: stand.isCompatible === false
                       }))}
                       value={p.standId}

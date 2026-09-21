@@ -26,13 +26,14 @@ import {
 } from "../../lib/eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
 import { UserMsg } from "../../lib/userErrors.js";
+import { inferTowRoute, type TowPlacementInput } from "../../lib/towReport.js";
 import {
   isVirtualAircraftPlaceholder,
   statusAllowsVirtualAircraft,
   virtualAircraftDisplayLabel
 } from "../../lib/virtualAircraft.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
-import { assertPermission } from "../../lib/rbac.js";
+import { assertAnyPermission, assertPermission } from "../../lib/rbac.js";
 import {
   assertChangeReasonIfNeeded,
   canWriteInContext,
@@ -61,6 +62,14 @@ function assertCanWriteEvent(req: any) {
     return;
   }
   assertPermission(req, "events:write");
+}
+
+function assertCanWriteTow(req: any) {
+  if (req.sandbox) {
+    assertCanWrite(req);
+    return;
+  }
+  assertAnyPermission(req, ["events:write", "tows:write"]);
 }
 
 const IMPORT_FIELD_LABELS: Record<string, string> = {
@@ -108,7 +117,7 @@ function formatEventImportSchemaError(error: z.ZodError): string {
   }
 
   parts.push(
-    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand, Workshop, LineBase, laborBudget_*/laborMps_*/laborActual_*)."
+    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand, Workshop, LineBase, laborBudget_*/laborAddBudget_*/laborNrcBudget_*/laborMps_*/laborActual_*/laborAddPlan_*/laborNrcPlan_*/laborAddActual_*/laborNrcActual_*)."
   );
   parts.push("Если это файл массового планирования — перейдите на вкладку «Массовое планирование», а не «Импорт событий».");
 
@@ -159,6 +168,7 @@ function diffEvent(before: any, after: any) {
     "hangarId",
     "layoutId",
     "notes",
+    "comment",
     "virtualAircraft",
     "allowOverlap",
     "workshopId",
@@ -548,24 +558,34 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const eventId = zUuid.parse((req.params as any).id);
     return await app.prisma.eventTow.findMany({
       where: { eventId, ...sandboxFilter(req) },
+      include: { placement: { include: { hangar: true, stand: true } } },
       orderBy: [{ startAt: "asc" }]
     });
   });
 
   app.post("/:id/tows", async (req) => {
-    assertCanWriteEvent(req);
+    assertCanWriteTow(req);
     const eventId = zUuid.parse((req.params as any).id);
     const body = z
       .object({
         startAt: zDateTime,
         endAt: zDateTime,
+        placementId: zUuid.nullable().optional(),
+        fromLabel: z.string().trim().max(120).nullable().optional(),
+        toLabel: z.string().trim().max(120).nullable().optional(),
+        notes: z.string().trim().max(2000).nullable().optional(),
         changeReason: z.string().trim().min(1).max(1000).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: UserMsg.END_AFTER_START })
       .parse(req.body);
 
     const ev = await app.prisma.maintenanceEvent.findFirst({
-      where: { id: eventId, ...sandboxFilter(req) }
+      where: { id: eventId, ...sandboxFilter(req) },
+      include: {
+        hangar: true,
+        reservations: { include: { stand: true }, take: 1 },
+        placements: { include: { hangar: true, stand: true }, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] }
+      }
     });
     if (!ev) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     if (isDoneScheduleLocked(ev.status)) {
@@ -575,9 +595,49 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(UserMsg.TOW_WITHIN_EVENT);
     }
 
+    const placementRows: TowPlacementInput[] = ev.placements.map((p) => ({
+      id: p.id,
+      startAt: p.startAt,
+      endAt: p.endAt,
+      hangarId: p.hangarId ?? p.hangar?.id ?? null,
+      hangarCode: p.hangar?.code ?? null,
+      hangarName: p.hangar?.name ?? null,
+      standCode: p.stand?.code || p.stand?.name || null
+    }));
+    if (body.placementId && !placementRows.some((p) => p.id === body.placementId)) {
+      throw app.httpErrors.badRequest("Этап размещения не найден у этого события");
+    }
+    const bound = body.placementId ? placementRows.find((p) => p.id === body.placementId) ?? null : null;
+    const inferred = inferTowRoute(
+      body.startAt,
+      body.endAt,
+      placementRows,
+      {
+        hangarId: ev.hangarId,
+        hangarCode: ev.hangar?.code ?? null,
+        hangarName: ev.hangar?.name ?? null,
+        occupancyMs: null
+      },
+      bound
+    );
+    const fromLabel = body.fromLabel !== undefined ? body.fromLabel : inferred.fromStand;
+    const toLabel =
+      body.toLabel !== undefined
+        ? body.toLabel
+        : inferred.toStand || ev.reservations[0]?.stand?.code || null;
+
     const sbId = sandboxIdFor(req);
     const created = await app.prisma.eventTow.create({
-      data: { eventId, startAt: body.startAt, endAt: body.endAt, sandboxId: sbId }
+      data: {
+        eventId,
+        startAt: body.startAt,
+        endAt: body.endAt,
+        sandboxId: sbId,
+        placementId: body.placementId ?? inferred.placementId,
+        fromLabel,
+        toLabel,
+        notes: body.notes ?? null
+      }
     });
 
     await app.prisma.maintenanceEventAudit.create({
@@ -588,7 +648,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         actor: getActor(req),
         reason: body.changeReason ?? "Буксировка",
         changes: {
-          tow: { add: { id: created.id, startAt: created.startAt.toISOString(), endAt: created.endAt.toISOString() } }
+          tow: {
+            add: {
+              id: created.id,
+              startAt: created.startAt.toISOString(),
+              endAt: created.endAt.toISOString(),
+              placementId: created.placementId,
+              fromLabel: created.fromLabel,
+              toLabel: created.toLabel
+            }
+          }
         }
       }
     });
@@ -596,8 +665,132 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     return created;
   });
 
+  app.patch("/:id/tows/:towId", async (req) => {
+    assertCanWriteTow(req);
+    const eventId = zUuid.parse((req.params as any).id);
+    const towId = zUuid.parse((req.params as any).towId);
+    const body = z
+      .object({
+        startAt: zDateTime.optional(),
+        endAt: zDateTime.optional(),
+        placementId: zUuid.nullable().optional(),
+        fromLabel: z.string().trim().max(120).nullable().optional(),
+        toLabel: z.string().trim().max(120).nullable().optional(),
+        notes: z.string().trim().max(2000).nullable().optional(),
+        startChangeReason: z.string().trim().max(1000).nullable().optional(),
+        changeReason: z.string().trim().min(1).max(1000).optional()
+      })
+      .parse(req.body);
+
+    const ev = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) },
+      include: {
+        hangar: true,
+        reservations: { include: { stand: true }, take: 1 },
+        placements: { include: { hangar: true, stand: true }, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] }
+      }
+    });
+    if (!ev) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+    if (isDoneScheduleLocked(ev.status)) {
+      throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
+
+    const existing = await app.prisma.eventTow.findFirst({
+      where: { id: towId, eventId, ...sandboxFilter(req) }
+    });
+    if (!existing) throw app.httpErrors.notFound(UserMsg.RECORD_NOT_FOUND);
+
+    const nextStart = body.startAt ?? existing.startAt;
+    const nextEnd = body.endAt ?? existing.endAt;
+    if (nextEnd <= nextStart) throw app.httpErrors.badRequest(UserMsg.END_AFTER_START);
+    if (nextStart < ev.startAt || nextEnd > ev.endAt) {
+      throw app.httpErrors.badRequest(UserMsg.TOW_WITHIN_EVENT);
+    }
+    const startChanged = body.startAt != null && body.startAt.getTime() !== existing.startAt.getTime();
+    const endChanged = body.endAt != null && body.endAt.getTime() !== existing.endAt.getTime();
+    assertChangeReasonIfNeeded(req, true, body.changeReason ?? body.startChangeReason, UserMsg.CHANGE_REASON_REQUIRED);
+    if (startChanged && !String(body.startChangeReason ?? body.changeReason ?? "").trim()) {
+      throw app.httpErrors.badRequest("Укажите причину изменения времени начала буксировки");
+    }
+
+    const placementRows: TowPlacementInput[] = ev.placements.map((p) => ({
+      id: p.id,
+      startAt: p.startAt,
+      endAt: p.endAt,
+      hangarId: p.hangarId ?? p.hangar?.id ?? null,
+      hangarCode: p.hangar?.code ?? null,
+      hangarName: p.hangar?.name ?? null,
+      standCode: p.stand?.code || p.stand?.name || null
+    }));
+    if (body.placementId && !placementRows.some((p) => p.id === body.placementId)) {
+      throw app.httpErrors.badRequest("Этап размещения не найден у этого события");
+    }
+    const nextPlacementId = body.placementId === undefined ? existing.placementId : body.placementId;
+    const bound = nextPlacementId ? placementRows.find((p) => p.id === nextPlacementId) ?? null : null;
+    const inferred = inferTowRoute(
+      nextStart,
+      nextEnd,
+      placementRows,
+      {
+        hangarId: ev.hangarId,
+        hangarCode: ev.hangar?.code ?? null,
+        hangarName: ev.hangar?.name ?? null,
+        occupancyMs: null
+      },
+      bound
+    );
+    const fromLabel = body.fromLabel !== undefined ? body.fromLabel : inferred.fromStand;
+    const toLabel =
+      body.toLabel !== undefined
+        ? body.toLabel
+        : inferred.toStand || ev.reservations[0]?.stand?.code || existing.toLabel;
+
+    const updated = await app.prisma.eventTow.update({
+      where: { id: towId },
+      data: {
+        startAt: nextStart,
+        endAt: nextEnd,
+        placementId: nextPlacementId,
+        fromLabel,
+        toLabel,
+        notes: body.notes === undefined ? undefined : body.notes,
+        startChangeReason:
+          body.startChangeReason === undefined
+            ? startChanged
+              ? body.changeReason ?? existing.startChangeReason
+              : undefined
+            : body.startChangeReason
+      },
+      include: { placement: { include: { hangar: true, stand: true } } }
+    });
+
+    await app.prisma.maintenanceEventAudit.create({
+      data: {
+        eventId,
+        sandboxId: sandboxIdFor(req),
+        action: EventAuditAction.UPDATE,
+        actor: getActor(req),
+        reason: body.changeReason ?? body.startChangeReason ?? "Буксировка",
+        changes: {
+          tow: {
+            id: towId,
+            startAt: startChanged ? { from: existing.startAt.toISOString(), to: nextStart.toISOString() } : undefined,
+            endAt: endChanged ? { from: existing.endAt.toISOString(), to: nextEnd.toISOString() } : undefined,
+            placementId: nextPlacementId,
+            fromLabel,
+            toLabel,
+            notes: body.notes,
+            startChangeReason: body.startChangeReason ?? (startChanged ? body.changeReason : undefined)
+          }
+        }
+      }
+    });
+
+    return updated;
+  });
+
   app.delete("/:id/tows/:towId", async (req) => {
-    assertCanWriteEvent(req);
+    assertCanWriteTow(req);
     const eventId = zUuid.parse((req.params as any).id);
     const towId = zUuid.parse((req.params as any).towId);
     const query = z
@@ -1533,6 +1726,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         lineBase: z.enum(["LINE", "BASE"]).nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
+        comment: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional().default(false),
         autoFillGapPlacements: z.boolean().optional().default(true),
         changeReason: z.string().trim().min(1).max(1000).optional()
@@ -1846,6 +2040,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         lineBase: z.enum(["LINE", "BASE"]).nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
+        comment: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional(),
         autoFillGapPlacements: z.boolean().optional().default(true),
         changeReason: z.string().trim().min(1).max(1000).optional()

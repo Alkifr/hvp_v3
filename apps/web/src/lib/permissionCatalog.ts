@@ -13,7 +13,7 @@ export const IMPLIED_DATA_PERMS = {
   write: "events:write"
 } as const;
 
-const MODULE_READS = ["gantt:read", "hangar:read", "analytics:read", "itp:read"] as const;
+const MODULE_READS = ["gantt:read", "hangar:read", "analytics:read", "itp:read", "tows:read"] as const;
 const MODULE_WRITES = ["gantt:write", "hangar:write", "import:write"] as const;
 
 export const PERMISSION_GROUPS: PermGroup[] = [
@@ -45,6 +45,15 @@ export const PERMISSION_GROUPS: PermGroup[] = [
     id: "itp",
     title: "РМ ИТП",
     actions: [{ code: "itp:read", label: "Просмотр" }]
+  },
+  {
+    id: "tows",
+    title: "РМ Буксировки",
+    hint: "Реестр буксировок и выгрузка",
+    actions: [
+      { code: "tows:read", label: "Просмотр" },
+      { code: "tows:write", label: "Редактирование" }
+    ]
   },
   {
     id: "import",
@@ -109,7 +118,8 @@ const WRITE_IMPLIES_READ: Record<string, string> = {
   "warehouse:write": "warehouse:read",
   "resources:plan": "resources:read",
   "resources:actual": "resources:read",
-  "import:write": "gantt:read"
+  "import:write": "gantt:read",
+  "tows:write": "tows:read"
 };
 
 const PERMISSION_ALIASES: Record<string, string[]> = {
@@ -368,6 +378,7 @@ export function previewNavItems(perms: Iterable<string>): NavPreviewItem[] {
   if (hasPermission(perms, "hangar:read")) items.push({ id: "hangar", label: "Ангар" });
   if (hasPermission(perms, "analytics:read")) items.push({ id: "analytics", label: "Аналитика" });
   if (hasPermission(perms, "itp:read")) items.push({ id: "itp", label: "РМ ИТП" });
+  if (hasPermission(perms, "tows:read")) items.push({ id: "tows", label: "РМ Буксировки" });
   if (hasPermission(perms, "mail:send") || hasPermission(perms, "admin:mail")) items.push({ id: "mail", label: "Рассылка" });
   if (hasPermission(perms, "import:write")) items.push({ id: "import", label: "Импорт/План" });
   if (hasPermission(perms, "ref:read")) items.push({ id: "ref", label: "Справочники" });

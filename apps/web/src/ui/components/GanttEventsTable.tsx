@@ -184,6 +184,7 @@ export type GanttTableEvent = {
   status: string;
   planningKind?: "PLANNED" | "UNPLANNED" | string;
   notes?: string | null;
+  comment?: string | null;
   aircraft?: {
     id?: string;
     tailNumber: string;
@@ -218,6 +219,7 @@ type RowDraft = {
   actualStartAtLocal: string;
   actualEndAtLocal: string;
   notes: string;
+  comment: string;
   hangarId: string;
   workshopId: string;
   layoutId: string;
@@ -338,6 +340,7 @@ function draftFromEvent(
     actualStartAtLocal: toInputLocal(ev.actualStartAt),
     actualEndAtLocal: toInputLocal(ev.actualEndAt),
     notes: ev.notes ?? "",
+    comment: ev.comment ?? "",
     hangarId: ev.hangar?.id ?? "",
     workshopId,
     layoutId: ev.layout?.id ?? "",
@@ -365,6 +368,7 @@ function computeDiff(a: RowDraft, b: RowDraft) {
     "actualStartAtLocal",
     "actualEndAtLocal",
     "notes",
+    "comment",
     "hangarId",
     "layoutId",
     "standId",
@@ -1412,6 +1416,7 @@ export function GanttEventsTable(props: {
         actualStartAt,
         actualEndAt,
         notes: draft.notes.trim() ? draft.notes : null,
+        comment: draft.comment.trim() ? draft.comment : null,
         allowOverlap: draft.allowOverlap,
         ...(reason ? { changeReason: reason } : {})
       };
@@ -1638,7 +1643,7 @@ export function GanttEventsTable(props: {
         return (
           <span
             className="ganttTableCellText"
-            title={ev.workshop ? (ev.workshop.code ? `${ev.workshop.code} • ${ev.workshop.name}` : ev.workshop.name) : undefined}
+            title={ev.workshop?.name || undefined}
           >
             {ev.workshop?.name ?? "—"}
           </span>
@@ -1700,13 +1705,19 @@ export function GanttEventsTable(props: {
           </span>
         );
       case "standId":
-        return ev.reservation?.stand?.code ?? "—";
+        return ev.reservation?.stand?.name?.trim() || ev.reservation?.stand?.code || "—";
       case "allowOverlap":
         return eventAllowsOverlap(ev, props.events) ? "да" : "—";
       case "notes":
         return (
           <span className="ganttTableNotes" title={ev.notes?.trim() || undefined}>
             {ev.notes?.trim() ? ev.notes : "—"}
+          </span>
+        );
+      case "comment":
+        return (
+          <span className="ganttTableNotes" title={ev.comment?.trim() || undefined}>
+            {ev.comment?.trim() ? ev.comment : "—"}
           </span>
         );
       case "actions":
@@ -1861,7 +1872,7 @@ export function GanttEventsTable(props: {
               .filter((w) => w.isActive !== false || w.id === d.workshopId)
               .map((w) => (
                 <option key={w.id} value={w.id}>
-                  {w.code ? `${w.code} • ${w.name}` : w.name}
+                  {w.name}
                 </option>
               ))}
           </select>
@@ -1995,7 +2006,7 @@ export function GanttEventsTable(props: {
         );
       case "standId":
         return ctx.locationLocked ? (
-          <input className="evInput ganttTableInput evInputReadonly" value={ev.reservation?.stand?.code ?? "—"} readOnly />
+          <input className="evInput ganttTableInput evInputReadonly" value={ev.reservation?.stand?.name?.trim() || ev.reservation?.stand?.code || "—"} readOnly />
         ) : (
           <select
             className="evInput ganttTableInput"
@@ -2006,7 +2017,7 @@ export function GanttEventsTable(props: {
             <option value="">— не выбрано —</option>
             {ctx.standOptions.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.code}
+                {s.name?.trim() || s.code}
               </option>
             ))}
           </select>
@@ -2023,6 +2034,10 @@ export function GanttEventsTable(props: {
       case "notes":
         return (
           <input className="evInput ganttTableInput" value={d.notes} onChange={(e) => patchDraft({ notes: e.target.value })} />
+        );
+      case "comment":
+        return (
+          <input className="evInput ganttTableInput" value={d.comment} onChange={(e) => patchDraft({ comment: e.target.value })} />
         );
       case "actions":
         return (

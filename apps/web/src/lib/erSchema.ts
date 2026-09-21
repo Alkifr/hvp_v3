@@ -1644,6 +1644,10 @@ export const ER_TABLES: ErTable[] = [
         "type": "String?"
       },
       {
+        "name": "comment",
+        "type": "String?"
+      },
+      {
         "name": "allowOverlap",
         "type": "Boolean"
       },
@@ -2324,6 +2328,41 @@ export const ER_TABLES: ErTable[] = [
       {
         "name": "endAt",
         "type": "DateTime"
+      },
+      {
+        "name": "placementId",
+        "type": "String?",
+        "fk": true
+      },
+      {
+        "name": "fromStandId",
+        "type": "String?",
+        "fk": true
+      },
+      {
+        "name": "toStandId",
+        "type": "String?",
+        "fk": true
+      },
+      {
+        "name": "fromLabel",
+        "type": "String?"
+      },
+      {
+        "name": "toLabel",
+        "type": "String?"
+      },
+      {
+        "name": "notes",
+        "type": "String?"
+      },
+      {
+        "name": "positionComment",
+        "type": "String?"
+      },
+      {
+        "name": "startChangeReason",
+        "type": "String?"
       },
       {
         "name": "createdAt",
@@ -3580,6 +3619,27 @@ export const ER_EDGES: ErEdge[] = [
     "from": "EventTow",
     "fromCol": "sandboxId",
     "to": "Sandbox",
+    "toCol": "id",
+    "rel": "N:1"
+  },
+  {
+    "from": "EventTow",
+    "fromCol": "placementId",
+    "to": "EventPlacement",
+    "toCol": "id",
+    "rel": "N:1"
+  },
+  {
+    "from": "EventTow",
+    "fromCol": "fromStandId",
+    "to": "HangarStand",
+    "toCol": "id",
+    "rel": "N:1"
+  },
+  {
+    "from": "EventTow",
+    "fromCol": "toStandId",
+    "to": "HangarStand",
     "toCol": "id",
     "rel": "N:1"
   },

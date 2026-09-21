@@ -701,3 +701,98 @@ export async function exportMonthlyBasePlanExcel(params: MonthlyBasePlanExcelInp
 
   await downloadWorkbook(wb, `monthly-base-plan-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`);
 }
+
+export async function exportTowsExcel(params: {
+  periodLabel: string;
+  detailLabel: string;
+  kpis: ExcelKpi[];
+  directions: Array<{ label: string; count: number }>;
+  reasons: Array<{ label: string; count: number }>;
+  routes: Array<{ label: string; count: number }>;
+  hangars: Array<Record<string, string | number | null>>;
+  timeline: Array<Record<string, string | number | null>>;
+  tows: Array<Record<string, string | number | null>>;
+  hourChart: { labels: string[]; counts: number[] };
+  timelineChart: { labels: string[]; tows: number[]; occupancyH: number[]; peakConcurrent: number[] };
+}) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "HVP Analytics";
+  addKpiSheet(wb, params.kpis, [
+    ["Модуль", "Tows"],
+    ["Период", params.periodLabel],
+    ["Детализация", params.detailLabel],
+    ["Выгружено", dayjs().format("YYYY-MM-DD HH:mm")]
+  ]);
+  addSheetFromRows(wb, "Буксировки", params.tows);
+  addSheetFromRows(wb, "Ангары", params.hangars);
+  addSheetFromRows(wb, "Таймлайн", params.timeline);
+  addSheetFromRows(
+    wb,
+    "Направления",
+    params.directions.map((d) => ({ Направление: d.label, Количество: d.count }))
+  );
+  addSheetFromRows(
+    wb,
+    "Причины сдвига",
+    params.reasons.map((d) => ({ Причина: d.label, Количество: d.count }))
+  );
+  addSheetFromRows(
+    wb,
+    "Маршруты",
+    params.routes.map((d) => ({ Маршрут: d.label, Количество: d.count }))
+  );
+
+  await addChartSheet(wb, "Tows — графики", [
+    {
+      title: "Таймлайн буксировок",
+      config: {
+        type: "bar",
+        data: {
+          labels: params.timelineChart.labels,
+          datasets: [
+            {
+              type: "bar",
+              label: "Буксировок",
+              data: params.timelineChart.tows,
+              yAxisID: "yCount",
+              backgroundColor: "rgba(14, 116, 144, 0.35)"
+            },
+            {
+              type: "line",
+              label: "Занятие МС, ч",
+              data: params.timelineChart.occupancyH,
+              yAxisID: "yHours",
+              borderColor: "#0d9488"
+            },
+            {
+              type: "line",
+              label: "Пик одновременных",
+              data: params.timelineChart.peakConcurrent,
+              yAxisID: "yCount",
+              borderColor: "#b45309"
+            }
+          ]
+        },
+        options: {
+          scales: {
+            yCount: { position: "left", beginAtZero: true },
+            yHours: { position: "right", beginAtZero: true, grid: { display: false } }
+          }
+        }
+      }
+    },
+    {
+      title: "Старт по часам",
+      config: {
+        type: "bar",
+        data: {
+          labels: params.hourChart.labels,
+          datasets: [{ label: "Старт", data: params.hourChart.counts, backgroundColor: "rgba(13, 148, 136, 0.55)" }]
+        },
+        options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+      }
+    }
+  ]);
+
+  await downloadWorkbook(wb, `analytics-tows-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`);
+}

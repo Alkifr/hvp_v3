@@ -1,0 +1,1 @@
+ALTER TABLE "EventTow" ADD COLUMN IF NOT EXISTS "occupancyEndAt" TIMESTAMP(3);

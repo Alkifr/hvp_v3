@@ -6,6 +6,7 @@ export const PRESENCE_PAGES = [
   "gantt",
   "hangar",
   "itp",
+  "tows",
   "import",
   "mass",
   "ref",

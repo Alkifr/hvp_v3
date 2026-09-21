@@ -16,6 +16,7 @@ import {
 import { buildEventShareUrl, copyTextToClipboard, parseHashPage } from "../../lib/eventDeepLink";
 import { parseGanttViewShare, syncGanttViewHash } from "../../lib/viewShareUrl";
 import { eventAllowsOverlap } from "../../lib/eventSlotOverlap";
+import { ganttBarNotesText, rowHasGanttBarNotes } from "../../lib/ganttBarNotes";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { lineBaseAfterWorkshopChange, parseLineBase, LINE_BASE_LABEL, type LineBase } from "../../lib/lineBase";
 import {
@@ -86,6 +87,7 @@ const FIELD_LABEL: Record<string, string> = {
   actualStartAtLocal: "Фактическое начало",
   actualEndAtLocal: "Фактическое окончание",
   notes: "Примечание",
+  comment: "Комментарий",
   hangarId: "Ангар",
   workshopId: "Цех",
   lineBase: "L/B",
@@ -167,6 +169,7 @@ type EventRow = {
   status: string;
   planningKind?: "PLANNED" | "UNPLANNED" | string;
   notes?: string | null;
+  comment?: string | null;
   aircraft?: {
     id?: string;
     tailNumber: string;
@@ -544,7 +547,58 @@ type GanttFilters = {
 
 type GanttFilterKey = keyof GanttFilters;
 
-type TowSegment = { id: string; eventId: string; startAt: string; endAt: string };
+const APRON_STAND_LABEL = "МС";
+
+type TowKind = "IN" | "OUT" | "TRANSFER";
+
+type TowSegment = {
+  id: string;
+  eventId: string;
+  startAt: string;
+  endAt: string;
+  fromLabel?: string | null;
+  toLabel?: string | null;
+  placementId?: string | null;
+  placement?: { id: string; hangar?: { name?: string | null; code?: string | null } | null; stand?: { code?: string | null; name?: string | null } | null } | null;
+};
+
+type PendingTowWrite = {
+  kind: "add" | "edit";
+  towId?: string;
+  startAt: string;
+  endAt: string;
+  placementId: string | null;
+  fromLabel: string;
+  toLabel: string;
+};
+
+function standCodeForLayout(standId: string, layoutId: string, standsByLayout: Map<string, Stand[]>): string {
+  if (!standId || !layoutId) return "";
+  return (standsByLayout.get(layoutId) ?? []).find((s) => s.id === standId)?.code ?? "";
+}
+
+function towLabelsForKind(
+  kind: TowKind,
+  target: PlacementDraft | undefined,
+  previous: PlacementDraft | undefined,
+  standsByLayout: Map<string, Stand[]>
+): { fromLabel: string; toLabel: string } {
+  const toStand = target ? standCodeForLayout(target.standId, target.layoutId, standsByLayout) : "";
+  const fromStand = previous ? standCodeForLayout(previous.standId, previous.layoutId, standsByLayout) : "";
+  if (kind === "OUT") return { fromLabel: toStand || APRON_STAND_LABEL, toLabel: APRON_STAND_LABEL };
+  if (kind === "TRANSFER") return { fromLabel: fromStand || APRON_STAND_LABEL, toLabel: toStand || APRON_STAND_LABEL };
+  return { fromLabel: APRON_STAND_LABEL, toLabel: toStand };
+}
+
+function towKindFromLabels(fromLabel?: string | null, toLabel?: string | null): TowKind {
+  const from = String(fromLabel ?? "").trim();
+  const to = String(toLabel ?? "").trim();
+  const fromApron = !from || from === APRON_STAND_LABEL;
+  const toApron = to === APRON_STAND_LABEL;
+  if (!fromApron && toApron) return "OUT";
+  if (!fromApron && !toApron && to) return "TRANSFER";
+  return "IN";
+}
 
 type DndMoveRequest = { eventId: string; hangarId: string; bumpOnConflict: boolean; bumpedEventId?: string };
 type DndPlaceRequest = DndMoveRequest & { startAt: string; endAt: string };
@@ -597,6 +651,7 @@ type EditorDraft = {
   actualStartAtLocal: string;
   actualEndAtLocal: string;
   notes: string;
+  comment: string;
   hangarId: string; // optional, "" means null
   workshopId: string; // optional, "" means null
   layoutId: string; // optional, "" means null
@@ -1146,14 +1201,15 @@ function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "LOCAL", catalog?: 
   const planningKind = `\nТип: ${PLANNING_KIND_LABEL[eventPlanningKind(ev)]}`;
   const status = `\nСтатус: ${statusCatalogLabel(ev.status, catalog)}`;
   const notes = ev.notes?.trim() ? `\nПримечание: ${ev.notes.trim()}` : "";
+  const comment = ev.comment?.trim() ? `\nКомментарий: ${ev.comment.trim()}` : "";
   const prefix = ev.placementOrigin === "AUTO_GAP" ? "Автоматический этап: без ангара\n" : ev.segmentKey ? `Этап: ${place}\n` : "";
-  return `${prefix}${base}\n${period}${planningKind}${status}${plan}${fact}${notes}`;
+  return `${prefix}${base}\n${period}${planningKind}${status}${plan}${fact}${notes}${comment}`;
 }
 
 const GANTT_NOTES_BAND = 20;
 
 function rowHasGanttNotes(events: Array<{ ev: EventRow }>): boolean {
-  return events.some((item) => Boolean(item.ev.notes?.trim()));
+  return rowHasGanttBarNotes(events);
 }
 
 function GanttBarNotes(props: { text?: string | null; left: number; width: number; onClick?: () => void }) {
@@ -2605,7 +2661,7 @@ export function GanttView() {
     const workshops = (workshopsQ.data ?? [])
       .filter((w) => w.isActive !== false)
       .filter((w) => eventsForGantt.length === 0 || workshopIdSet.has(w.id))
-      .map((w) => ({ id: w.id, label: w.code ? `${w.code} • ${w.name}` : w.name }))
+      .map((w) => ({ id: w.id, label: w.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const statusSortOrder = new Map<string, number>(statusCatalog.map((s) => [s.code, s.sortOrder]));
@@ -3284,7 +3340,7 @@ export function GanttView() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
   const [pendingSave, setPendingSave] = useState<
-    "event" | "reserve" | "towAdd" | "towDel" | "dndMove" | "bulkStatus" | null
+    "event" | "reserve" | "towAdd" | "towEdit" | "towDel" | "dndMove" | "bulkStatus" | null
   >(null);
   const [changeReason, setChangeReason] = useState("");
   /** Сброс ошибок/статуса мутаций карточки при открытии другой / закрытии */
@@ -3313,6 +3369,7 @@ export function GanttView() {
       actualStartAtLocal: "",
       actualEndAtLocal: "",
       notes: "",
+      comment: "",
       hangarId: "",
       workshopId: "",
       layoutId: "",
@@ -3365,6 +3422,7 @@ export function GanttView() {
       actualStartAtLocal: toInputLocal(ev.actualStartAt),
       actualEndAtLocal: toInputLocal(ev.actualEndAt),
       notes: ev.notes ?? "",
+      comment: ev.comment ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       workshopId: (ev.workshop as any)?.id ?? (ev as any).workshopId ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
@@ -3414,6 +3472,7 @@ export function GanttView() {
       actualStartAtLocal: "",
       actualEndAtLocal: "",
       notes: ev.notes ?? "",
+      comment: ev.comment ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       workshopId: (ev.workshop as any)?.id ?? (ev as any).workshopId ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
@@ -3669,6 +3728,7 @@ export function GanttView() {
       "actualStartAtLocal",
       "actualEndAtLocal",
       "notes",
+      "comment",
       "hangarId",
       "workshopId",
       "lineBase",
@@ -3723,16 +3783,62 @@ export function GanttView() {
     setConfirmOpen(true);
   };
 
-  const requestTowAddWithReason = () => {
+  const buildTowWritePayload = (kind: "add" | "edit", towId?: string): PendingTowWrite => {
     if (!draft?.id) throw new Error("Сначала сохраните событие");
     const startAt = dayjs(towStartLocal).second(0).millisecond(0).toISOString();
     const endAt = dayjs(towEndLocal).second(0).millisecond(0).toISOString();
     if (dayjs(endAt).valueOf() <= dayjs(startAt).valueOf()) throw new Error("Окончание буксировки должно быть позже начала");
-    const payload = { kind: "add" as const, startAt, endAt };
+    const saved = manualPlacements(draft.placements).filter((p) => p.id);
+    if (draft.multiPlacement && saved.length > 0 && !towPlacementId) {
+      throw new Error("Выберите этап размещения для буксировки");
+    }
+    const target = saved.find((p) => p.id === towPlacementId);
+    const targetIdx = target ? saved.findIndex((p) => p.id === target.id) : -1;
+    const previous = targetIdx > 0 ? saved[targetIdx - 1] : undefined;
+    const synthetic: PlacementDraft | undefined = draft.standId
+      ? {
+          clientKey: "legacy",
+          startAtLocal: draft.startAtLocal,
+          endAtLocal: draft.endAtLocal,
+          budgetStartAtLocal: "",
+          budgetEndAtLocal: "",
+          actualStartAtLocal: "",
+          actualEndAtLocal: "",
+          hangarId: draft.hangarId,
+          layoutId: draft.layoutId,
+          standId: draft.standId
+        }
+      : undefined;
+    const labels = towLabelsForKind(towKind, target ?? synthetic, previous, standsByLayout);
+    return {
+      kind,
+      towId,
+      startAt,
+      endAt,
+      placementId: target?.id ?? null,
+      fromLabel: labels.fromLabel,
+      toLabel: labels.toLabel
+    };
+  };
+
+  const requestTowAddWithReason = () => {
+    const payload = buildTowWritePayload("add");
     setPendingTow(payload);
     setPendingSave("towAdd");
     if (activeSandbox) {
       addTowM.mutate(payload);
+      return;
+    }
+    setConfirmOpen(true);
+  };
+
+  const requestTowEditWithReason = () => {
+    if (!editingTowId) throw new Error("Выберите буксировку для изменения");
+    const payload = buildTowWritePayload("edit", editingTowId);
+    setPendingTow(payload);
+    setPendingSave("towEdit");
+    if (activeSandbox) {
+      patchTowM.mutate(payload);
       return;
     }
     setConfirmOpen(true);
@@ -3846,6 +3952,7 @@ export function GanttView() {
         layoutId: draft.layoutId || null,
         placements: placementsPayload,
         notes: draft.notes?.trim() ? draft.notes : null,
+        comment: draft.comment?.trim() ? draft.comment : null,
         allowOverlap: draft.allowOverlap,
         autoFillGapPlacements: draft.multiPlacement && draft.autoFillGapPlacements,
         ...(reason ? { changeReason: reason } : {})
@@ -3935,10 +4042,27 @@ export function GanttView() {
 
   const [towStartLocal, setTowStartLocal] = useState(() => dayjs().minute(0).second(0).format("YYYY-MM-DDTHH:mm"));
   const [towEndLocal, setTowEndLocal] = useState(() => dayjs().add(30, "minute").minute(0).second(0).format("YYYY-MM-DDTHH:mm"));
+  const [towKind, setTowKind] = useState<TowKind>("IN");
+  const [towPlacementId, setTowPlacementId] = useState("");
+  const [editingTowId, setEditingTowId] = useState<string | null>(null);
 
-  const [pendingTow, setPendingTow] = useState<{ kind: "add"; startAt: string; endAt: string } | { kind: "del"; towId: string } | null>(
+  const [pendingTow, setPendingTow] = useState<PendingTowWrite | { kind: "del"; towId: string } | null>(
     null
   );
+
+  const savedTowPlacementIds = (draft?.placements ?? []).map((p) => p.id).filter(Boolean).join(",");
+  useEffect(() => {
+    const ids = savedTowPlacementIds.split(",").filter(Boolean);
+    const multi = Boolean(draft?.multiPlacement);
+    setTowPlacementId((cur) => {
+      if (cur && ids.includes(cur)) return cur;
+      if (multi) return ids[0] ?? "";
+      return "";
+    });
+  }, [draft?.id, draft?.multiPlacement, savedTowPlacementIds]);
+  useEffect(() => {
+    setEditingTowId(null);
+  }, [draft?.id]);
 
   const [pendingDnd, setPendingDnd] = useState<(DndMoveRequest | DndPlaceRequest | DndBatchPlaceRequest) | null>(null);
   const dndCommitRef = useRef<(payload: DndMoveRequest | DndPlaceRequest | DndBatchPlaceRequest) => void>(() => {});
@@ -4263,7 +4387,7 @@ export function GanttView() {
   ]);
 
   const addTowM = useMutation({
-    mutationFn: async (override: { kind: "add"; startAt: string; endAt: string } | null = null) => {
+    mutationFn: async (override: PendingTowWrite | null = null) => {
       if (!draft?.id) throw new Error("Сначала сохраните событие");
       const tow = override ?? (pendingTow?.kind === "add" ? pendingTow : null);
       if (!tow) throw new Error("Нет данных буксировки");
@@ -4271,6 +4395,9 @@ export function GanttView() {
       return await apiPost(`/api/events/${draft.id}/tows`, {
         startAt: tow.startAt,
         endAt: tow.endAt,
+        placementId: tow.placementId,
+        fromLabel: tow.fromLabel,
+        toLabel: tow.toLabel,
         ...(reason ? { changeReason: reason } : {})
       });
     },
@@ -4279,6 +4406,40 @@ export function GanttView() {
       setPendingSave(null);
       setPendingTow(null);
       setChangeReason("");
+      setEditingTowId(null);
+      void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
+      if (draft?.id) {
+        void qc.invalidateQueries({ queryKey: ["event-tows", draft.id] });
+        void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
+      }
+    }
+  });
+
+  const patchTowM = useMutation({
+    mutationFn: async (override: PendingTowWrite | null = null) => {
+      if (!draft?.id) throw new Error("Сначала сохраните событие");
+      const tow = override ?? (pendingTow?.kind === "edit" ? pendingTow : null);
+      if (!tow?.towId) throw new Error("Не выбрана буксировка");
+      const reason = changeReason.trim();
+      const startChanged = towsQ.data?.find((t) => t.id === tow.towId)?.startAt
+        ? dayjs(towsQ.data.find((t) => t.id === tow.towId)!.startAt).valueOf() !== dayjs(tow.startAt).valueOf()
+        : false;
+      return await apiPatch(`/api/events/${draft.id}/tows/${tow.towId}`, {
+        startAt: tow.startAt,
+        endAt: tow.endAt,
+        placementId: tow.placementId,
+        fromLabel: tow.fromLabel,
+        toLabel: tow.toLabel,
+        ...(reason ? { changeReason: reason } : {}),
+        ...(startChanged && reason ? { startChangeReason: reason } : {})
+      });
+    },
+    onSuccess: () => {
+      setConfirmOpen(false);
+      setPendingSave(null);
+      setPendingTow(null);
+      setChangeReason("");
+      setEditingTowId(null);
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
       if (draft?.id) {
         void qc.invalidateQueries({ queryKey: ["event-tows", draft.id] });
@@ -4472,6 +4633,7 @@ export function GanttView() {
     unreserveM.reset();
     deleteEventM.reset();
     addTowM.reset();
+    patchTowM.reset();
     delTowM.reset();
   }, [editorFeedbackEpoch]);
 
@@ -5142,6 +5304,7 @@ export function GanttView() {
             .map((t) => `${formatExportDate(t.startAt)} – ${formatExportDate(t.endAt)}`)
             .join("; "),
           "Примечание": String(ev.notes ?? ""),
+          "Комментарий": String(ev.comment ?? ""),
           "ID события": ev.id
         };
       });
@@ -5972,7 +6135,7 @@ export function GanttView() {
                   </div>
                   <div
                     className="tgField"
-                    title="Показать текст примечания события под баром, чтобы не пропустить нерешённые моменты"
+                    title="Показать примечание под баром для событий, которые ещё не завершены и не отменены"
                   >
                     <span className="tgFieldLabel">Примечание</span>
                     <SwitchToggle
@@ -6676,7 +6839,7 @@ export function GanttView() {
                               {renderEntryTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                               {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                               {showGanttNotes ? (
-                                <GanttBarNotes text={ev.notes} left={toPaneX(x)} width={w} onClick={() => pickEvent(ev)} />
+                                <GanttBarNotes text={ganttBarNotesText(ev)} left={toPaneX(x)} width={w} onClick={() => pickEvent(ev)} />
                               ) : null}
                             </Fragment>
                           );
@@ -6899,7 +7062,7 @@ export function GanttView() {
                             {renderEntryTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                             {renderExitTimeLabel(r.events, ev, exitTargetSeg, exitTargetStartAt, exitTargetEndAt, exitTargetIsFact)}
                             {showGanttNotes ? (
-                              <GanttBarNotes text={ev.notes} left={toPaneX(x)} width={w} onClick={() => { if (!dndActive) pickEvent(ev); }} />
+                              <GanttBarNotes text={ganttBarNotesText(ev)} left={toPaneX(x)} width={w} onClick={() => { if (!dndActive) pickEvent(ev); }} />
                             ) : null}
                             </Fragment>
                           );
@@ -7215,14 +7378,14 @@ export function GanttView() {
                       <SingleSelectDropdown
                         className="evSelect"
                         searchable
-                        searchPlaceholder="Введите код или название цеха"
+                        searchPlaceholder="Введите название цеха"
                         placeholder="— не задан —"
                         emptyLabel="— не задан —"
                         options={(workshopsQ.data ?? [])
                           .filter((workshop) => workshop.isActive !== false || workshop.id === draft.workshopId)
                           .map((workshop) => ({
                             id: workshop.id,
-                            label: workshop.code ? `${workshop.code} • ${workshop.name}` : workshop.name
+                            label: workshop.name
                           }))}
                         value={draft.workshopId}
                         onChange={(workshopId) =>
@@ -7423,12 +7586,12 @@ export function GanttView() {
                     <SingleSelectDropdown
                       className="evSelect"
                       searchable
-                      searchPlaceholder="Введите код или название места"
+                      searchPlaceholder="Введите название места"
                       placeholder="— не выбрано —"
                       emptyLabel="— не выбрано —"
                       options={(standsForEditorQ.data ?? []).map((stand) => ({
                         id: stand.id,
-                        label: `${stand.code} • ${stand.name}${
+                        label: `${stand.name?.trim() || stand.code}${
                           stand.isCompatible === false ? " — недоступно для типа ВС" : ""
                         }`,
                         disabled: stand.isCompatible === false
@@ -7502,10 +7665,12 @@ export function GanttView() {
                   helpLabel="Буксировки"
                   help={
                     <>
-                      <p>Интервалы закатки и выкатки внутри события.</p>
+                      <p>Интервалы закатки, выкатки и перестановки внутри события.</p>
                       <ul>
                         <li>Сначала сохраните событие — затем можно добавлять буксировки.</li>
-                        <li>Можно указать несколько интервалов; они должны лежать внутри оперативного периода.</li>
+                        <li>Закатка в начале ТО: «откуда» — МС, «куда» — место из карточки (или выбранного этапа).</li>
+                        <li>На разделённом событии привяжите буксировку к этапу размещения.</li>
+                        <li>Созданный интервал можно изменить — те же ограничения, что у расписания события (в статусе «Завершено» правки недоступны).</li>
                       </ul>
                     </>
                   }
@@ -7522,7 +7687,7 @@ export function GanttView() {
                     disabled={scheduleLockedByDone}
                   >
                   <div style={{ display: "grid", gap: 10 }}>
-                    <div className="evForm">
+                    <div className={`evForm${editingTowId ? " evTowFormEditing" : ""}`}>
                       <label className="evField">
                         <span className="evFieldLabel">Начало буксировки</span>
                         <input
@@ -7541,17 +7706,84 @@ export function GanttView() {
                           onChange={(e) => setTowEndLocal(e.target.value)}
                         />
                       </label>
+                      <label className="evField">
+                        <span className="evFieldLabel">Назначение</span>
+                        <select className="evInput" value={towKind} onChange={(e) => setTowKind(e.target.value as TowKind)}>
+                          <option value="IN">Закатка (с МС в ангар)</option>
+                          <option value="OUT">Выкатка (из ангара на МС)</option>
+                          <option value="TRANSFER">Перестановка между этапами</option>
+                        </select>
+                      </label>
+                      <label className="evField">
+                        <span className="evFieldLabel">Этап размещения</span>
+                        <select
+                          className="evInput"
+                          value={towPlacementId}
+                          onChange={(e) => setTowPlacementId(e.target.value)}
+                        >
+                          {draft.multiPlacement ? null : <option value="">Авто (по времени)</option>}
+                          {manualPlacements(draft.placements)
+                            .filter((p) => p.id)
+                            .map((p, idx) => {
+                              const hangarName = (hangarsQ.data ?? []).find((h) => h.id === p.hangarId)?.name ?? "Ангар";
+                              const standCode = standCodeForLayout(p.standId, p.layoutId, standsByLayout) || "без МС";
+                              return (
+                                <option key={p.id} value={p.id}>
+                                  {idx + 1}. {hangarName} · {standCode}
+                                </option>
+                              );
+                            })}
+                        </select>
+                      </label>
                     </div>
+                    {draft.multiPlacement && !manualPlacements(draft.placements).some((p) => p.id) ? (
+                      <div className="muted">Сохраните этапы размещения, чтобы привязать буксировку к конкретному МС.</div>
+                    ) : null}
                     <div className="evInlineActions">
-                      <button
-                        className="btn btnPrimary"
-                        onClick={() => requestTowAddWithReason()}
-                        disabled={addTowM.isPending}
-                      >
-                        Добавить интервал
-                      </button>
+                      {editingTowId ? (
+                        <>
+                          <button
+                            className="btn btnPrimary"
+                            onClick={() => requestTowEditWithReason()}
+                            disabled={
+                              patchTowM.isPending ||
+                              (draft.multiPlacement &&
+                                manualPlacements(draft.placements).some((p) => p.id) &&
+                                !towPlacementId)
+                            }
+                          >
+                            Сохранить буксировку
+                          </button>
+                          <button
+                            className="btn"
+                            type="button"
+                            onClick={() => {
+                              setEditingTowId(null);
+                              setTowKind("IN");
+                            }}
+                          >
+                            Отменить правку
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="btn btnPrimary"
+                          onClick={() => requestTowAddWithReason()}
+                          disabled={
+                            addTowM.isPending ||
+                            (draft.multiPlacement &&
+                              manualPlacements(draft.placements).some((p) => p.id) &&
+                              !towPlacementId)
+                          }
+                        >
+                          Добавить интервал
+                        </button>
+                      )}
                       {addTowM.error ? (
                         <span className="error">{String((addTowM.error as any)?.message ?? addTowM.error)}</span>
+                      ) : null}
+                      {patchTowM.error ? (
+                        <span className="error">{String((patchTowM.error as any)?.message ?? patchTowM.error)}</span>
                       ) : null}
                     </div>
 
@@ -7560,18 +7792,53 @@ export function GanttView() {
                         <div className="muted">Буксировок пока нет.</div>
                       ) : (
                         (towsQ.data ?? []).map((t) => (
-                          <div key={t.id} className="evTowItem">
+                          <div key={t.id} className={`evTowItem${editingTowId === t.id ? " evTowItemActive" : ""}`}>
                             <div>
                               <strong>{dayjs(t.startAt).format("DD.MM.YYYY HH:mm")}</strong> –{" "}
                               <strong>{dayjs(t.endAt).format("DD.MM.YYYY HH:mm")}</strong>
+                              <div className="muted">
+                                {t.fromLabel || APRON_STAND_LABEL} → {t.toLabel || "—"}
+                                {t.placement?.hangar?.name
+                                  ? ` · ${t.placement.hangar.name}${t.placement.stand?.code ? ` / ${t.placement.stand.code}` : ""}`
+                                  : ""}
+                              </div>
                             </div>
-                            <button
-                              className="btn"
-                              onClick={() => requestTowDeleteWithReason(t.id)}
-                              disabled={delTowM.isPending}
-                            >
-                              Удалить
-                            </button>
+                            <div className="evTowItemActions">
+                              <button
+                                className={`btn btnGhost refIconButton${editingTowId === t.id ? " evTowIconBtnActive" : ""}`}
+                                type="button"
+                                title="Редактировать"
+                                aria-label="Редактировать"
+                                onClick={() => {
+                                  setEditingTowId(t.id);
+                                  setTowStartLocal(toInputLocal(t.startAt));
+                                  setTowEndLocal(toInputLocal(t.endAt));
+                                  setTowKind(towKindFromLabels(t.fromLabel, t.toLabel));
+                                  setTowPlacementId(t.placementId ?? "");
+                                }}
+                                disabled={delTowM.isPending || patchTowM.isPending}
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                  <path d="M4 20h4.4L18.7 9.7a2.1 2.1 0 0 0 0-3L17.3 5.3a2.1 2.1 0 0 0-3 0L4 15.6V20Z" />
+                                  <path d="m13.5 6.1 4.4 4.4" />
+                                </svg>
+                              </button>
+                              <button
+                                className="btn btnGhost refIconButton evTowIconBtnDanger"
+                                type="button"
+                                title="Удалить"
+                                aria-label="Удалить"
+                                onClick={() => requestTowDeleteWithReason(t.id)}
+                                disabled={delTowM.isPending}
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                  <path d="M5 7h14" />
+                                  <path d="M10 11v6M14 11v6" />
+                                  <path d="M8 7l1-3h6l1 3" />
+                                  <path d="M7 7l1 13h8l1-13" />
+                                </svg>
+                              </button>
+                            </div>
                           </div>
                         ))
                       )}
@@ -7592,7 +7859,7 @@ export function GanttView() {
                   helpLabel="Примечание"
                   help={
                     <>
-                      <p>Свободный комментарий к событию для команды планирования и производства.</p>
+                      <p>Рабочая заметка по событию: нерешённые вопросы и согласования. На диаграмме плашка «Примечание» показывает этот текст только пока статус не «Завершено» и не «Отменено».</p>
                       <ul>
                         <li>Сюда удобно писать контекст, особенности работ и внешние согласования.</li>
                         <li>Текст виден всем, у кого есть доступ к карточке события.</li>
@@ -7611,6 +7878,17 @@ export function GanttView() {
                   onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
                   placeholder="Опишите контекст, особенности, внешние согласования…"
                 />
+                <label className="evFieldLabel" style={{ display: "block", marginTop: 12 }} htmlFor="event-comment">
+                  Комментарий
+                </label>
+                <textarea
+                  id="event-comment"
+                  className="evInput evTextarea"
+                  rows={4}
+                  value={draft.comment}
+                  onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
+                  placeholder="Дополнительная информация…"
+                />
               </div>
             </section>
             </fieldset>
@@ -7622,10 +7900,11 @@ export function GanttView() {
                     helpLabel="Трудоёмкость"
                     help={
                       <>
-                        <p>Трудоёмкость по квалификациям (ч/ч) для бюджета, MPS-плана и факта WP.</p>
+                        <p>Таблица routine / ADD / NRC по квалификациям: бюджет, MPS и факт.</p>
                         <ul>
                           <li>Блок доступен после сохранения события.</li>
-                          <li>Значения попадают в первичную таблицу; выработка в сутки для MPS/факта считается в отчёте как TOTAL / TAT.</li>
+                          <li>Значения пишутся в EventReportMetric и попадают в первичную таблицу.</li>
+                          <li>SUM — по колонкам routine/ADD/NRC. TOTAL — сумма трёх колонок периода. TOTAL/TAT — TOTAL периода на TAT бюджета / MPS / факта.</li>
                         </ul>
                       </>
                     }
@@ -7973,6 +8252,20 @@ export function GanttView() {
               <div className="evDiffTitle">Новая буксировка</div>
               <div className="muted">
                 {dayjs(pendingTow.startAt).format("DD.MM.YYYY HH:mm")} — {dayjs(pendingTow.endAt).format("DD.MM.YYYY HH:mm")}
+                {pendingTow.fromLabel || pendingTow.toLabel
+                  ? ` · ${pendingTow.fromLabel || "—"} → ${pendingTow.toLabel || "—"}`
+                  : ""}
+              </div>
+            </div>
+          ) : null}
+          {pendingSave === "towEdit" && pendingTow?.kind === "edit" ? (
+            <div className="evDiff">
+              <div className="evDiffTitle">Изменение буксировки</div>
+              <div className="muted">
+                {dayjs(pendingTow.startAt).format("DD.MM.YYYY HH:mm")} — {dayjs(pendingTow.endAt).format("DD.MM.YYYY HH:mm")}
+                {pendingTow.fromLabel || pendingTow.toLabel
+                  ? ` · ${pendingTow.fromLabel || "—"} → ${pendingTow.toLabel || "—"}`
+                  : ""}
               </div>
             </div>
           ) : null}
@@ -8020,6 +8313,7 @@ export function GanttView() {
               {saveEventM.error ||
               reserveM.error ||
               addTowM.error ||
+              patchTowM.error ||
               delTowM.error ||
               dndMoveM.error ||
               bulkStatusM.error ? (
@@ -8029,6 +8323,7 @@ export function GanttView() {
                       saveEventM.error ??
                       reserveM.error ??
                       addTowM.error ??
+                      patchTowM.error ??
                       delTowM.error ??
                       dndMoveM.error ??
                       bulkStatusM.error
@@ -8038,6 +8333,7 @@ export function GanttView() {
               ) : saveEventM.isPending ||
                 reserveM.isPending ||
                 addTowM.isPending ||
+                patchTowM.isPending ||
                 delTowM.isPending ||
                 dndMoveM.isPending ||
                 bulkStatusM.isPending ? (
@@ -8057,6 +8353,7 @@ export function GanttView() {
                   saveEventM.isPending ||
                   reserveM.isPending ||
                   addTowM.isPending ||
+                  patchTowM.isPending ||
                   delTowM.isPending ||
                   dndMoveM.isPending ||
                   bulkStatusM.isPending
@@ -8065,6 +8362,7 @@ export function GanttView() {
                   if (pendingSave === "event") saveEventM.mutate();
                   if (pendingSave === "reserve") reserveM.mutate();
                   if (pendingSave === "towAdd") addTowM.mutate(null);
+                  if (pendingSave === "towEdit") patchTowM.mutate(null);
                   if (pendingSave === "towDel") delTowM.mutate(null);
                   if (pendingSave === "dndMove") dndMoveM.mutate(null);
                   if (pendingSave === "bulkStatus") bulkStatusM.mutate();

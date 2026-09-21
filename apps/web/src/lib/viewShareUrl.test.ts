@@ -6,11 +6,13 @@ import {
   parseGanttViewShare,
   parseHangarViewShare,
   parseRefViewShare,
+  parseTowsViewShare,
   queryHasViewShare,
   serializeAnalyticsViewShare,
   serializeGanttViewShare,
   serializeHangarViewShare,
-  serializeRefViewShare
+  serializeRefViewShare,
+  serializeTowsViewShare
 } from "./viewShareUrl.ts";
 
 test("event-only hash is not a view share", () => {
@@ -150,6 +152,27 @@ test("analytics tab and grain round-trip", () => {
   assert.deepEqual(parsed.filterOperatorIds, ["op1"]);
 });
 
+test("analytics tows tab round-trip", () => {
+  const q = serializeAnalyticsViewShare({
+    tab: "tows",
+    fromDate: "2026-09-01",
+    toDate: "2026-09-30",
+    compareA: "prod",
+    compareB: "",
+    efficiencyGrain: "day",
+    filterHangarIds: ["h1"],
+    filterOperatorIds: [],
+    filterAircraftTypeIds: [],
+    filterAircraftIds: [],
+    filterEventTypeIds: [],
+    sandboxId: null
+  });
+  assert.equal(q.get("tab"), "tows");
+  assert.equal(q.get("grain"), "day");
+  const parsed = parseAnalyticsViewShare(q);
+  assert.equal(parsed?.tab, "tows");
+});
+
 test("analytics monthly tab round-trip", () => {
   const q = serializeAnalyticsViewShare({
     tab: "monthly",
@@ -188,6 +211,30 @@ test("ref catalog kind search and hangar layout round-trip", () => {
   assert.equal(parsed.search, "A1");
   assert.equal(parsed.filterHangarId, "h1");
   assert.equal(parsed.filterLayoutId, "l9");
+});
+
+test("tows range and filters round-trip", () => {
+  const q = serializeTowsViewShare({
+    fromDate: "2026-09-01",
+    toDate: "2026-09-30",
+    filterHangarIds: ["h1"],
+    filterOperatorIds: ["op1"],
+    filterAircraftTypeIds: ["t1"],
+    filterAircraftIds: ["a1"],
+    sandboxId: "sb9"
+  });
+  assert.equal(q.get("from"), "2026-09-01");
+  assert.equal(q.get("to"), "2026-09-30");
+  assert.equal(q.get("hangar"), "h1");
+  assert.equal(q.get("op"), "op1");
+  assert.equal(q.get("type"), "t1");
+  assert.equal(q.get("ac"), "a1");
+  assert.equal(q.get("sandbox"), "sb9");
+  const parsed = parseTowsViewShare(q);
+  assert.ok(parsed);
+  assert.equal(parsed.fromDate, "2026-09-01");
+  assert.deepEqual(parsed.filterHangarIds, ["h1"]);
+  assert.deepEqual(parsed.filterAircraftIds, ["a1"]);
 });
 
 test("ref operators always writes kind", () => {

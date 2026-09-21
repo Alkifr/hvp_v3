@@ -145,6 +145,8 @@ enum PrimaryMetricBlock {
   NRC_ACTUAL
   ADD_ACTUAL
   LABOR_BUDGET
+  ADD_BUDGET
+  NRC_BUDGET
 }
 
 enum PrimaryMetricDepartment {
@@ -760,6 +762,8 @@ model HangarStand {
   reservations           StandReservation[]
   placements             EventPlacement[]
   placementPriorityRules PlacementPriorityRule[]
+  towsFrom               EventTow[]                @relation("EventTowFromStand")
+  towsTo                 EventTow[]                @relation("EventTowToStand")
 
   @@unique([layoutId, code])
   @@index([layoutId])
@@ -901,6 +905,9 @@ model MaintenanceEvent {
   lineBase EventLineBase?
 
   notes String?
+
+  /// Дополнительный свободный комментарий (не показывается плашкой на Ганте).
+  comment String?
 
   /// Событие уже размещалось с нахлёстом: при следующих сохранениях конфликт слота не блокирует запись.
   allowOverlap Boolean @default(false)
@@ -1208,6 +1215,7 @@ model EventPlacement {
   stand   HangarStand?     @relation(fields: [standId], references: [id])
 
   reservation StandReservation?
+  tows        EventTow[]
 
   @@index([eventId, sortOrder])
   @@index([sandboxId])
@@ -1224,14 +1232,33 @@ model EventTow {
   sandboxId String?
   startAt   DateTime
   endAt     DateTime
+  placementId String?
+  fromStandId String?
+  toStandId   String?
+  /// Свободный текст МС, если места нет в справочнике ангара
+  fromLabel String?
+  toLabel   String?
+  notes     String?
+  /// Комментарий к позиции / месту
+  positionComment String?
+  /// Почему сдвинули плановое начало буксировки
+  startChangeReason String?
+  /// Плановое окончание занятия МС; если пусто — конец этапа/оперативного слота
+  occupancyEndAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  event   MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  sandbox Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  event     MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sandbox   Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  placement EventPlacement?  @relation(fields: [placementId], references: [id], onDelete: SetNull)
+  fromStand HangarStand?     @relation("EventTowFromStand", fields: [fromStandId], references: [id], onDelete: SetNull)
+  toStand   HangarStand?     @relation("EventTowToStand", fields: [toStandId], references: [id], onDelete: SetNull)
 
   @@index([eventId, startAt])
   @@index([sandboxId])
+  @@index([placementId])
+  @@index([fromStandId])
+  @@index([toStandId])
 }
 
 /// Уведомления (колокольчик): просрочка без факта, ошибки пользователей (только админам) и др.

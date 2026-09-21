@@ -5887,6 +5887,16 @@ textarea {
   gap: 14px;
 }
 
+.towsPage {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.towsPage > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .itpLayout {
   display: block;
 }
@@ -6104,6 +6114,107 @@ textarea {
 
 .itpBlockedRow {
   background: rgba(254, 226, 226, 0.45);
+}
+
+.towsPage .analyticsFilterBar .ganttToolbarGroup {
+  flex-wrap: wrap;
+}
+
+.towsPage .ganttToolbarRow {
+  width: 100%;
+  align-items: flex-end;
+}
+
+.towsPage .towsToolbarExport {
+  margin-left: auto;
+  border-left: 0;
+  padding-left: 0;
+  flex-wrap: nowrap;
+}
+
+.towsTableWrap {
+  max-height: calc(100vh - 280px);
+  max-width: 100%;
+  overflow-x: scroll;
+  overflow-y: auto;
+}
+
+.towsTable {
+  width: max-content;
+  min-width: max(100%, 1680px);
+  table-layout: auto;
+}
+
+.towsTable th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.15;
+  max-width: 7.2rem;
+  min-width: 4.2rem;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: bottom;
+}
+
+.towsTable th.towsActionsCol {
+  max-width: 76px;
+  min-width: 76px;
+}
+
+.towsTable td {
+  white-space: nowrap;
+}
+
+.towsTable td:has(.towsMemo) {
+  white-space: normal;
+}
+
+.towsActionsCol {
+  width: 76px;
+  min-width: 76px;
+  max-width: 76px;
+  text-align: left;
+}
+
+.towsTable input {
+  min-width: 110px;
+  max-width: 220px;
+  box-sizing: border-box;
+}
+
+.towsMemo {
+  display: block;
+  box-sizing: border-box;
+  min-width: 140px;
+  min-height: 44px;
+  width: 180px;
+  max-width: 280px;
+  resize: both;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  line-height: 1.35;
+  background: #fff;
+}
+
+.linkBtn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #2563eb;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linkBtn:hover {
+  color: #1d4ed8;
 }
 
 .itpNetworkMatrix {
@@ -8215,51 +8326,106 @@ textarea {
 
 .laborMetricsPanel {
   display: grid;
-  gap: 14px;
+  gap: 6px;
 }
 
-.laborMetricsBlock {
-  border-top: 1px solid rgba(148, 163, 184, 0.28);
-  padding-top: 10px;
-  display: grid;
-  gap: 8px;
-}
-
-.laborMetricsBlockHead {
-  display: grid;
-  gap: 2px;
-}
-
-.laborMetricsGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-  gap: 8px;
-}
-
-.laborMetricsCell {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.laborMetricsCellLabel {
-  font-size: 11px;
-  font-weight: 650;
-  color: #475569;
-}
-
-.laborMetricsTotal {
-  background: #f1f5f9;
+.laborMetricsTableWrap {
+  overflow-x: auto;
+  border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 8px;
-  padding: 6px 8px;
 }
 
-.laborMetricsTotalValue {
-  min-height: 36px;
-  display: flex;
-  align-items: center;
+.laborMetricsTable {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+  font-size: 11px;
+}
+
+.laborMetricsTable th,
+.laborMetricsTable td {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 1px 3px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.laborMetricsTable thead th {
+  font-weight: 700;
+  padding: 3px 4px;
+}
+
+.laborMetricsCol--budget {
+  background: #eef2f6;
+  color: #334155;
+}
+
+.laborMetricsCol--mps {
+  background: #f3f1ee;
+  color: #3f3f46;
+}
+
+.laborMetricsCol--actual {
+  background: #eef3f1;
+  color: #334155;
+}
+
+.laborMetricsTable thead .laborMetricsCol--budget,
+.laborMetricsFoot .laborMetricsCol--budget {
+  background: #dce3ea;
+}
+
+.laborMetricsTable thead .laborMetricsCol--mps,
+.laborMetricsFoot .laborMetricsCol--mps {
+  background: #e6e2db;
+}
+
+.laborMetricsTable thead .laborMetricsCol--actual,
+.laborMetricsFoot .laborMetricsCol--actual {
+  background: #dde6e2;
+}
+
+.laborMetricsColStart {
+  border-left-width: 2px !important;
+  border-left-color: rgba(51, 65, 85, 0.45) !important;
+}
+
+.laborMetricsCorner {
+  min-width: 64px;
+  background: #f8fafc;
+}
+
+.laborMetricsTable tbody th {
+  text-align: left;
+  font-weight: 650;
+  background: #fff;
+  white-space: nowrap;
+  padding: 1px 6px 1px 4px;
+}
+
+.laborMetricsInput {
+  width: 100%;
+  min-width: 42px;
+  min-height: 22px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.laborMetricsDash,
+.laborMetricsMutedCell {
+  color: #94a3b8;
+}
+
+.laborMetricsFoot th,
+.laborMetricsFoot td {
+  background: #f1f5f9;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  padding: 3px 4px;
 }
 
 .evInputReadonly {
@@ -8732,10 +8898,48 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 9px 12px;
+  padding: 8px 10px 8px 12px;
   border: 1px solid rgba(148, 163, 184, 0.32);
   border-radius: 10px;
   background: #fff;
+}
+
+.evTowItemActive {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+}
+
+.evTowItemActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.evTowIconBtnDanger {
+  color: #dc2626;
+}
+
+.evTowIconBtnDanger:hover:not(:disabled) {
+  border-color: rgba(220, 38, 38, 0.45);
+  color: #b91c1c;
+  background: rgba(220, 38, 38, 0.1);
+}
+
+.evTowIconBtnActive {
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+.evTowFormEditing .evInput,
+.evTowFormEditing .evSelect {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.16);
 }
 
 .evHistoryList {

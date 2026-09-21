@@ -5,12 +5,14 @@ import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
+import { durationDays, inclusiveCalendarDays } from "../../lib/primaryTable/formulaEngine.js";
 import {
-  LABOR_METRIC_BLOCKS,
+  LABOR_CARD_SERIES,
+  LABOR_EDITABLE_BLOCKS,
   PRIMARY_METRIC_DEPARTMENTS,
   PRIMARY_METRIC_DEPARTMENT_LABEL,
   skillCodeToDepartment,
-  type LaborMetricBlockCode
+  type LaborEditableBlockCode
 } from "../../lib/primaryMetricDepartments.js";
 
 function assertCanWrite(req: any) {
@@ -26,7 +28,7 @@ function toUtcDayStart(v: string | Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
 }
 
-const zLaborBlock = z.enum(["LABOR_BUDGET", "WP_PLAN_MPS", "WP_ACTUAL"]);
+const zLaborBlock = z.enum(LABOR_EDITABLE_BLOCKS);
 const zDepartment = z.enum(["ME", "AV", "INT", "NDT", "SHOP", "CAB_REP"]);
 
 export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
@@ -37,7 +39,15 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
 
     const event = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req as any) },
-      select: { id: true }
+      select: {
+        id: true,
+        startAt: true,
+        endAt: true,
+        budgetStartAt: true,
+        budgetEndAt: true,
+        actualStartAt: true,
+        actualEndAt: true
+      }
     });
     if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
 
@@ -47,7 +57,7 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
         where: {
           eventId,
           ...sandboxFilter(req as any),
-          block: { in: LABOR_METRIC_BLOCKS.map((b) => b.block) }
+          block: { in: [...LABOR_EDITABLE_BLOCKS] }
         }
       })
     ]);
@@ -65,7 +75,10 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
       valueByKey.set(`${metric.block}:${metric.department}`, metric.manHours == null ? null : Number(metric.manHours));
     }
 
-    const blocks = LABOR_METRIC_BLOCKS.map((def) => {
+    const hoursOf = (block: LaborEditableBlockCode, department: (typeof PRIMARY_METRIC_DEPARTMENTS)[number]) =>
+      valueByKey.get(`${block}:${department}`) ?? null;
+
+    const series = LABOR_CARD_SERIES.map((def) => {
       const departments = PRIMARY_METRIC_DEPARTMENTS.map((department) => {
         const skill = skillByDepartment.get(department) ?? null;
         return {
@@ -73,26 +86,39 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
           label: PRIMARY_METRIC_DEPARTMENT_LABEL[department],
           skillId: skill?.id ?? null,
           skillCode: skill?.code ?? department,
-          manHours: valueByKey.get(`${def.block}:${department}`) ?? null
+          manHours: hoursOf(def.hoursBlock, department),
+          addHours: hoursOf(def.addBlock, department),
+          nrcHours: hoursOf(def.nrcBlock, department)
         };
       });
-      const total = departments.reduce<number | null>((sum, row) => {
-        if (row.manHours == null) return sum;
-        return (sum ?? 0) + row.manHours;
-      }, null);
+      const sumCol = (pick: (row: (typeof departments)[number]) => number | null) =>
+        departments.reduce<number | null>((sum, row) => {
+          const value = pick(row);
+          if (value == null) return sum;
+          return (sum ?? 0) + value;
+        }, null);
       return {
-        block: def.block as LaborMetricBlockCode,
+        key: def.key,
         label: def.label,
-        hint: def.hint,
+        hoursBlock: def.hoursBlock,
+        addBlock: def.addBlock,
+        nrcBlock: def.nrcBlock,
         departments,
-        total
+        totalHours: sumCol((row) => row.manHours),
+        totalAdd: sumCol((row) => row.addHours),
+        totalNrc: sumCol((row) => row.nrcHours)
       };
     });
 
     return {
       ok: true as const,
       eventId,
-      blocks,
+      tatDays: {
+        budget: inclusiveCalendarDays(event.budgetStartAt, event.budgetEndAt),
+        mps: durationDays(event.startAt, event.endAt),
+        actual: durationDays(event.actualStartAt, event.actualEndAt)
+      },
+      series,
       departments: PRIMARY_METRIC_DEPARTMENTS.map((department) => ({
         department,
         label: PRIMARY_METRIC_DEPARTMENT_LABEL[department],
@@ -126,44 +152,37 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
     if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
 
     const sandboxId = sandboxIdFor(req as any);
+    const byKey = new Map<string, (typeof body.values)[number]>();
+    for (const row of body.values) byKey.set(`${row.block}:${row.department}`, row);
+    const unique = Array.from(byKey.values());
+    const filled = unique.filter((row) => row.manHours != null);
 
-    await app.prisma.$transaction(async (tx) => {
-      for (const row of body.values) {
-        if (row.manHours == null) {
+    await app.prisma.$transaction(
+      async (tx) => {
+        if (unique.length > 0) {
           await tx.eventReportMetric.deleteMany({
             where: {
               eventId,
-              block: row.block,
-              department: row.department,
-              ...sandboxFilter(req as any)
+              ...sandboxFilter(req as any),
+              OR: unique.map((row) => ({ block: row.block, department: row.department }))
             }
           });
-          continue;
         }
-        await tx.eventReportMetric.upsert({
-          where: {
-            eventId_block_department: {
+        if (filled.length > 0) {
+          await tx.eventReportMetric.createMany({
+            data: filled.map((row) => ({
               eventId,
+              sandboxId,
               block: row.block,
-              department: row.department
-            }
-          },
-          create: {
-            eventId,
-            sandboxId,
-            block: row.block,
-            department: row.department,
-            manHours: row.manHours,
-            source: "MANUAL"
-          },
-          update: {
-            manHours: row.manHours,
-            sandboxId,
-            source: "MANUAL"
-          }
-        });
-      }
-    });
+              department: row.department,
+              manHours: row.manHours!,
+              source: "MANUAL" as const
+            }))
+          });
+        }
+      },
+      { timeout: 15_000, maxWait: 10_000 }
+    );
 
     return { ok: true as const };
   });
