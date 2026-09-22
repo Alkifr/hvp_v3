@@ -171,7 +171,20 @@ export function laborImportColumns(): LaborImportColumn[] {
   );
 }
 
-/** Все допустимые имена колонок импорта (канон + алиасы CAB_REP). */
+/**
+ * Имена колонок из выгрузок, которые отличаются от канона шаблона.
+ * laborBudget_Add_ME = laborAddBudget_ME, laborMPS_Add_ME = laborAddPlan_ME и т.д.
+ */
+const LABOR_IMPORT_PREFIX_ALIASES: Record<string, readonly string[]> = {
+  laborAddBudget: ["laborBudget_Add"],
+  laborNrcBudget: ["laborBudget_Nrc"],
+  laborAddPlan: ["laborMPS_Add", "laborMps_Add"],
+  laborNrcPlan: ["laborMPS_Nrc", "laborMps_Nrc"],
+  laborAddActual: ["laborActual_Add"],
+  laborNrcActual: ["laborActual_Nrc"]
+};
+
+/** Все допустимые имена колонок импорта (канон + алиасы CabRep и ADD/NRC). */
 export function laborImportFieldAliases(): Array<LaborImportColumn & { canonicalField: string }> {
   const out: Array<LaborImportColumn & { canonicalField: string }> = [];
   for (const block of LABOR_IMPORT_BLOCK_PREFIXES) {
@@ -183,9 +196,12 @@ export function laborImportFieldAliases(): Array<LaborImportColumn & { canonical
         title: `${block.title} / ${PRIMARY_METRIC_DEPARTMENT_LABEL[dep.department]}`,
         canonicalField
       };
-      out.push({ ...base, field: canonicalField });
-      for (const alias of dep.aliases) {
-        out.push({ ...base, field: `${block.prefix}_${alias}` });
+      const prefixes = [block.prefix, ...(LABOR_IMPORT_PREFIX_ALIASES[block.prefix] ?? [])];
+      const suffixes = [dep.suffix, ...dep.aliases];
+      for (const prefix of prefixes) {
+        for (const suffix of suffixes) {
+          out.push({ ...base, field: `${prefix}_${suffix}` });
+        }
       }
     }
   }
@@ -225,9 +241,16 @@ export function collectLaborMetricsFromImportRow(
   row: Record<string, unknown>
 ): Array<{ block: LaborEditableBlockCode; department: PrimaryMetricDepartmentCode; manHours: number }> {
   const byKey = new Map<string, { block: LaborEditableBlockCode; department: PrimaryMetricDepartmentCode; manHours: number }>();
+  const rowByLower = new Map<string, unknown>();
+  for (const [key, value] of Object.entries(row)) rowByLower.set(key.toLowerCase(), value);
   for (const col of laborImportFieldAliases()) {
-    if (!(col.field in row) && !(col.canonicalField in row)) continue;
-    const raw = row[col.field] ?? row[col.canonicalField];
+    const raw =
+      col.field in row
+        ? row[col.field]
+        : col.canonicalField in row
+          ? row[col.canonicalField]
+          : rowByLower.get(col.field.toLowerCase());
+    if (raw === undefined) continue;
     const manHours = parseOptionalLaborHours(raw, col.field);
     if (manHours == null) continue;
     byKey.set(`${col.block}:${col.department}`, { block: col.block, department: col.department, manHours });

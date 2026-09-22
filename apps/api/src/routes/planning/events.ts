@@ -22,7 +22,9 @@ import {
   DEFAULT_EVENT_STATUS,
   EventStatus,
   loadSelectableEventStatusCodes,
-  loadStatusAutomation
+  loadStatusAutomation,
+  eventStatusLabel,
+  resolveImportEventStatus
 } from "../../lib/eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
 import { UserMsg } from "../../lib/userErrors.js";
@@ -969,6 +971,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                 HangarStand: z.string().optional(),
                 Workshop: z.union([z.string(), z.number()]).optional(),
                 LineBase: z.union([z.string(), z.number()]).optional(),
+                Status: z.union([z.string(), z.number()]).optional(),
+                Reason: z.union([z.string(), z.number()]).optional(),
+                Comment: z.union([z.string(), z.number()]).optional(),
                 ...laborImportShape
               })
               .passthrough()
@@ -1019,6 +1024,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       "responsibleWorkshop"
     ];
     const lineBaseCellAliases = ["LineBase", "lineBase", "LB", "L/B", "контур", "контур L/B", "Line/Base"];
+    const statusCellAliases = ["Status", "Статус", "status"];
+    const reasonCellAliases = ["Reason", "Причина", "reason"];
+    const commentCellAliases = ["Comment", "Комментарий", "comment"];
 
     // Naive даты/Excel serial → wall clock MSK; ISO с Z/offset — абсолютные.
     const parseDate = (v: string | number | Date) => parseImportDateTime(v);
@@ -1053,11 +1061,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       if (hk && sc) hangarStandPairs.push({ hangarKey: hk, standCode: sc });
     }
 
-    const [aircraftAll, eventTypesAll, hangarsAll, workshopsAll] = await Promise.all([
+    const [aircraftAll, eventTypesAll, hangarsAll, workshopsAll, statusCatalog] = await Promise.all([
       app.prisma.aircraft.findMany({ include: { operator: true, type: true } }),
       app.prisma.eventType.findMany(),
       app.prisma.hangar.findMany(),
-      app.prisma.workshop.findMany()
+      app.prisma.workshop.findMany(),
+      app.prisma.eventStatusCatalog.findMany({ select: { code: true, name: true } })
     ]);
 
     const aircraftByTail = new Map<string, (typeof aircraftAll)[number]>();
@@ -1203,7 +1212,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       startAt: Date,
       endAt: Date,
       warnings: string[]
-    ): { standId: string; layoutId: string; layoutLabel: string } => {
+    ): { standId: string; layoutId: string; layoutLabel: string; allowOverlap: boolean } => {
       const standKey = `${hangar.id}|${standCode}`;
       const stands = standsByHangarAndCode.get(standKey) ?? [];
       if (stands.length === 0) {
@@ -1219,21 +1228,21 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         throw new Error(`Не найдено активное место ${standCode} в ангаре ${hangar.name}`);
       }
 
-      // Конфликт схем с уже существующим планом — блокирует; внутри файла — только предупреждение.
-      const layoutCompatible = stands.filter((s) => !existingLayoutConflict(hangar.id, s.layoutId, startAt, endAt));
+      // Занятое место и чужая схема — не ошибка импорта: событие садится с нахлёстом.
+      let allowOverlap = false;
+      let layoutCompatible = stands.filter((s) => !existingLayoutConflict(hangar.id, s.layoutId, startAt, endAt));
 
       if (layoutCompatible.length === 0) {
         const foreign =
           (layoutLocksByHangar.get(hangar.id) ?? []).find((lock) => overlaps(startAt, endAt, lock.start, lock.end)) ??
           null;
         if (foreign) {
-          throw new Error(
-            `В этот период в ангаре «${hangar.name}» уже используется схема «${foreign.layoutName}» (${foreign.label}). Место ${standCode} из другой активной схемы недоступно.`
+          warnings.push(
+            `Нахлёст схем в ангаре «${hangar.name}»: уже используется «${foreign.layoutName}» (${foreign.label}). Событие будет импортировано с нахлёстом.`
           );
         }
-        throw new Error(
-          `Не удалось подобрать активную схему для места ${standCode} в ангаре «${hangar.name}» без конфликта схем.`
-        );
+        layoutCompatible = stands;
+        allowOverlap = true;
       }
 
       // Предпочитаем схему, уже занятую в этом периоде (план или файл), затем место без нахлёста.
@@ -1249,29 +1258,33 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       const pool = sameLayoutPreferred.length > 0 ? sameLayoutPreferred : layoutCompatible;
 
       const freeOfExisting = pool.filter((s) => !existingStandConflict(s.id, startAt, endAt));
+      const standPool = freeOfExisting.length > 0 ? freeOfExisting : pool;
       if (freeOfExisting.length === 0) {
         const busy = existingStandConflict(pool[0]!.id, startAt, endAt);
-        throw new Error(
-          `Конфликт резерва места ${standCode}: уже занято событием ${busy?.event.title ?? "в плане"} (${busy ? eventAircraftLabel(busy.event) : "—"})`
+        warnings.push(
+          `Нахлёст места ${standCode}: уже занято событием ${busy?.event.title ?? "в плане"} (${busy ? eventAircraftLabel(busy.event) : "—"}). Событие будет импортировано с нахлёстом.`
         );
+        allowOverlap = true;
       }
 
       const free =
-        freeOfExisting.find((s) => !plannedStandConflict(s.id, startAt, endAt) && !plannedLayoutConflict(hangar.id, s.layoutId, startAt, endAt)) ??
-        freeOfExisting.find((s) => !plannedStandConflict(s.id, startAt, endAt)) ??
-        freeOfExisting[0]!;
+        standPool.find((s) => !plannedStandConflict(s.id, startAt, endAt) && !plannedLayoutConflict(hangar.id, s.layoutId, startAt, endAt)) ??
+        standPool.find((s) => !plannedStandConflict(s.id, startAt, endAt)) ??
+        standPool[0]!;
 
       const selfStand = plannedStandConflict(free.id, startAt, endAt);
       if (selfStand) {
         warnings.push(
           `Нахлёст внутри файла по месту ${standCode}: пересекается с «${selfStand.label}». Событие будет импортировано с нахлёстом.`
         );
+        allowOverlap = true;
       }
       const selfLayout = plannedLayoutConflict(hangar.id, free.layoutId, startAt, endAt);
       if (selfLayout) {
         warnings.push(
-          `Внутри файла пересечение схем в ангаре «${hangar.name}»: период пересекается со строкой «${selfLayout.label}» (другая схема). Событие будет импортировано.`
+          `Внутри файла пересечение схем в ангаре «${hangar.name}»: период пересекается со строкой «${selfLayout.label}» (другая схема). Событие будет импортировано с нахлёстом.`
         );
+        allowOverlap = true;
       }
 
       const layoutLabel = free.layout.name || free.layout.code || free.layoutId;
@@ -1280,7 +1293,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           `Место ${standCode} есть в ${stands.length} активных схемах ангара «${hangar.name}»; выбрана «${layoutLabel}».`
         );
       }
-      return { standId: free.id, layoutId: free.layoutId, layoutLabel };
+      return { standId: free.id, layoutId: free.layoutId, layoutLabel, allowOverlap };
     };
 
     const previewRows: Array<{
@@ -1306,6 +1319,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       workshop?: string | null;
       workshopId?: string | null;
       lineBase?: "LINE" | "BASE" | null;
+      statusCode?: string | null;
+      eventStatusName?: string | null;
+      reason?: string | null;
+      comment?: string | null;
+      allowOverlap?: boolean;
       laborMetricsCount?: number;
       warnings?: string[];
       error?: string;
@@ -1360,10 +1378,20 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         }
         const typeStr = norm((r as any).AircraftType);
         if (typeStr && aircraft.type?.name) {
+          const looseType = (s: string) => s.replace(/^b(?=\d)/, "");
           const t = key(typeStr);
           const tName = key(aircraft.type.name);
           const tIcao = key((aircraft.type as any).icaoType ?? "");
-          if (t !== tName && t !== tIcao) warnings.push(`AircraftType не совпадает с бортом: в файле "${typeStr}", в справочнике "${aircraft.type.name}"`);
+          const sameType =
+            t === tName ||
+            t === tIcao ||
+            looseType(t) === looseType(tName) ||
+            looseType(t) === looseType(tIcao);
+          if (!sameType) {
+            warnings.push(
+              `AircraftType в файле «${typeStr}» отличается от справочника «${aircraft.type.name}». Строка будет импортирована, тип ВС берётся из справочника по борту.`
+            );
+          }
         }
 
         const hangar = hangarStr ? hangarByKey.get(key(hangarStr)) ?? null : null;
@@ -1375,7 +1403,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           throw new Error(`Не найден ангар: ${hangarStr}`);
         }
 
-        let resolvedStand: { standId: string; layoutId: string; layoutLabel: string } | null = null;
+        let resolvedStand: { standId: string; layoutId: string; layoutLabel: string; allowOverlap: boolean } | null = null;
         if (standCode) {
           if (!hangar) throw new Error("Указано HangarStand, но не указан/не найден Hangar (нужен для поиска места)");
           resolvedStand = resolveImportStand(hangar, standCode, startAt, endAt, warnings);
@@ -1394,6 +1422,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           requested: parseImportLineBase(lineBaseRaw),
           workshopDefault: parseLineBase(workshop?.defaultLineBase)
         });
+
+        const statusRaw = norm(pickImportCell(r as Record<string, unknown>, statusCellAliases));
+        const reasonRaw = norm(pickImportCell(r as Record<string, unknown>, reasonCellAliases));
+        const commentRaw = norm(pickImportCell(r as Record<string, unknown>, commentCellAliases));
+        let statusCode: string = DEFAULT_EVENT_STATUS;
+        if (statusRaw) {
+          const resolved = resolveImportEventStatus(statusRaw, statusCatalog);
+          if (!resolved) throw new Error(`Не найден статус: ${statusRaw}`);
+          if (resolved === EventStatus.DELETED) throw new Error("Статус «Удалено» нельзя задать импортом");
+          statusCode = resolved;
+        }
+        const eventStatusName = statusCatalog.find((item) => item.code === statusCode)?.name ?? eventStatusLabel(statusCode);
 
         previewRows.push({
           rowIndex,
@@ -1418,6 +1458,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           workshop: workshop ? (workshop.code ? `${workshop.code} • ${workshop.name}` : workshop.name) : null,
           workshopId: workshop?.id ?? null,
           lineBase: resolvedLineBase,
+          statusCode,
+          eventStatusName,
+          reason: reasonRaw || null,
+          comment: commentRaw || null,
+          allowOverlap: Boolean(resolvedStand?.allowOverlap),
           warnings,
           laborMetricsCount: laborMetrics.length
         });
@@ -1510,7 +1555,6 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           const created = await tx.maintenanceEvent.create({
             data: {
               level: PlanningLevel.OPERATIONAL,
-              status: DEFAULT_EVENT_STATUS,
               planningKind: planningKindFromBudget(budgetStartAt, budgetEndAt),
               title,
               aircraftId: aircraft.id,
@@ -1524,6 +1568,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               hangarId: hangar?.id ?? null,
               workshopId: previewRows[i]!.workshopId ?? null,
               lineBase: previewRows[i]!.lineBase ?? null,
+              status: previewRows[i]!.statusCode ?? DEFAULT_EVENT_STATUS,
+              comment: previewRows[i]!.comment ?? null,
+              allowOverlap: Boolean(previewRows[i]!.allowOverlap),
               sandboxId: sbId
             }
           });
@@ -1555,6 +1602,9 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                   HangarStand: standCode,
                   Workshop: previewRows[i]!.workshop ?? null,
                   LineBase: previewRows[i]!.lineBase ?? null,
+                  Status: previewRows[i]!.statusCode ?? null,
+                  Reason: previewRows[i]!.reason ?? null,
+                  Comment: previewRows[i]!.comment ?? null,
                   laborMetrics: collectLaborMetricsFromImportRow(r as Record<string, unknown>)
                 }
               }
@@ -1589,40 +1639,34 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               throw new Error("Не удалось определить активное место/схему из предпросмотра");
             }
 
-            // Повторно проверим конфликт на случай параллельных изменений
-            const conflicts = await tx.standReservation.findMany({
-              where: {
-                sandboxId: sbId,
-                standId,
-                startAt: { lt: endAt },
-                endAt: { gt: startAt },
-                event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
-              },
-              include: { event: { include: { aircraft: true } } }
-            });
-            const conflict = conflicts.find((r) => !importedEventIds.has(r.eventId));
-            if (conflict) {
-              throw new Error(
-                `Конфликт резерва места ${standCode}: уже занято событием ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`
-              );
-            }
-
-            const layoutConflictRows = await tx.standReservation.findMany({
-              where: {
-                sandboxId: sbId,
-                layoutId: { not: layoutId },
-                startAt: { lt: endAt },
-                endAt: { gt: startAt },
-                layout: { hangarId },
-                event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
-              },
-              include: { layout: { select: { name: true } }, event: { include: { aircraft: true } } }
-            });
-            const layoutConflict = layoutConflictRows.find((r) => !importedEventIds.has(r.eventId));
-            if (layoutConflict) {
-              throw new Error(
-                `В этот период в ангаре уже используется другая схема расстановки: ${layoutConflict.layout?.name ?? "другая схема"} (${layoutConflict.event.title}, ${eventAircraftLabel(layoutConflict.event)})`
-              );
+            const [standConflicts, layoutConflictRows] = await Promise.all([
+              tx.standReservation.findMany({
+                where: {
+                  sandboxId: sbId,
+                  standId,
+                  startAt: { lt: endAt },
+                  endAt: { gt: startAt },
+                  event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+                },
+                select: { eventId: true }
+              }),
+              tx.standReservation.findMany({
+                where: {
+                  sandboxId: sbId,
+                  layoutId: { not: layoutId },
+                  startAt: { lt: endAt },
+                  endAt: { gt: startAt },
+                  layout: { hangarId },
+                  event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+                },
+                select: { eventId: true }
+              })
+            ]);
+            const overlapsExisting =
+              standConflicts.some((row) => !importedEventIds.has(row.eventId)) ||
+              layoutConflictRows.some((row) => !importedEventIds.has(row.eventId));
+            if (overlapsExisting) {
+              await tx.maintenanceEvent.update({ where: { id: created.id }, data: { allowOverlap: true } });
             }
 
             const placement = await tx.eventPlacement.create({
@@ -1666,6 +1710,18 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               data: { eventId: created.id, sandboxId: sbId, startAt: towStartAt, endAt: towEndAt }
             });
             createdTow = true;
+          }
+
+          const importReason = previewRows[i]!.reason;
+          if (importReason) {
+            await tx.eventSlotDeviation.create({
+              data: {
+                eventId: created.id,
+                sandboxId: sbId,
+                kind: "DURATION_VS_PLAN",
+                reason: importReason
+              }
+            });
           }
 
           const laborMetrics = collectLaborMetricsFromImportRow(r as Record<string, unknown>);

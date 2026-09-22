@@ -128,6 +128,32 @@ export function isEventStatusCodeFormat(code: string): boolean {
   return code.length >= 2 && code.length <= 64 && /^[A-Z][A-Z0-9_]*$/.test(code);
 }
 
+function statusMatchKey(raw: string): string {
+  return String(raw ?? "")
+    .trim()
+    .toLocaleLowerCase("ru-RU")
+    .replace(/[\s-]+/g, "_");
+}
+
+/** Код статуса из ячейки импорта: код каталога или русское название. Пустая ячейка → null. */
+export function resolveImportEventStatus(
+  raw: string,
+  catalog: Array<{ code: string; name: string }>
+): string | null {
+  const key = statusMatchKey(raw);
+  if (!key) return null;
+  const normalizedCode = normalizeEventStatusCode(raw);
+  for (const item of catalog) {
+    if (item.code === normalizedCode) return item.code;
+    if (statusMatchKey(item.code) === key || statusMatchKey(item.name) === key) return item.code;
+  }
+  for (const item of EVENT_STATUS_CATALOG) {
+    if (item.code === normalizedCode) return item.code;
+    if (statusMatchKey(item.code) === key || statusMatchKey(item.name) === key) return item.code;
+  }
+  return null;
+}
+
 export function eventStatusLabel(code: string | null | undefined): string {
   if (!code) return "—";
   return byCode.get(code)?.name ?? code;

@@ -25,6 +25,7 @@ export type EventImportPreviewRow = {
   layout?: string | null;
   workshop?: string | null;
   lineBase?: "LINE" | "BASE" | null;
+  eventStatusName?: string | null;
   warnings?: string[];
   error?: string;
 };

@@ -47,6 +47,28 @@ test("collects labor metrics from import row columns", () => {
   );
 });
 
+test("accepts migration labor column aliases", () => {
+  const metrics = collectLaborMetricsFromImportRow({
+    laborBudget_Add_ME: 7,
+    laborBudget_Nrc_AV: "1,5",
+    laborMPS_Add_INT: 3,
+    laborMPS_Nrc_NDT: 4,
+    laborActual_Add_SHOP: 8,
+    laborActual_Nrc_CabRep: 2
+  });
+  assert.deepEqual(
+    metrics.sort((a, b) => `${a.block}:${a.department}`.localeCompare(`${b.block}:${b.department}`)),
+    [
+      { block: "ADD_ACTUAL", department: "SHOP", manHours: 8 },
+      { block: "ADD_BUDGET", department: "ME", manHours: 7 },
+      { block: "ADD_PLAN", department: "INT", manHours: 3 },
+      { block: "NRC_ACTUAL", department: "CAB_REP", manHours: 2 },
+      { block: "NRC_BUDGET", department: "AV", manHours: 1.5 },
+      { block: "NRC_PLAN", department: "NDT", manHours: 4 }
+    ]
+  );
+});
+
 test("recognizes live labor excel columns including ADD/NRC", () => {
   assert.equal(isLiveLaborExcelColumn("AX"), true);
   assert.equal(isLiveLaborExcelColumn("fu"), true);

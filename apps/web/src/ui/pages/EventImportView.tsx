@@ -450,7 +450,10 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
                                   {status === "error" ? "Ошибка" : status === "warn" ? "Предупреждение" : "Готово"}
                                 </span>
                               </td>
-                              <td>{row.title || "—"}</td>
+                              <td>
+                                {row.title || "—"}
+                                {row.eventStatusName ? <div className="muted">{row.eventStatusName}</div> : null}
+                              </td>
                               <td>{row.eventTypeKey || "—"}</td>
                               <td>{row.aircraftTail || "—"}</td>
                               <td>{formatImportPeriod(row.startAt, row.endAt)}</td>

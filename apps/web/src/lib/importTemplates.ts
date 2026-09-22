@@ -145,6 +145,9 @@ export function downloadEventImportTemplate(params?: {
           HangarStand: hangarStand,
           Workshop: "",
           LineBase: "",
+          Status: "Согласовано с заказчиком",
+          Reason: "",
+          Comment: "",
           ...laborExample
         }
       ]
@@ -166,7 +169,16 @@ export function downloadEventImportTemplate(params?: {
         { Колонка: "HangarStand", Обязательно: "нет", Описание: "Место в активном варианте расстановки" },
         { Колонка: "Workshop", Обязательно: "нет", Описание: "Ответственный цех: код, название или id. Алиасы: Цех, ответственный цех" },
         { Колонка: "LineBase", Обязательно: "нет", Описание: "Контур L/B: L, LINE, L (Line) или B, BASE, B (Base). Пусто = из цеха. Алиасы: L/B, контур" },
+        { Колонка: "Status", Обязательно: "нет", Описание: "Статус события: название из справочника или код (например «Завершено», DONE). Пусто = «На согласовании с исполнителем». Алиас: Статус" },
+        { Колонка: "Reason", Обязательно: "нет", Описание: "Причина продления слота (от согласованного плана). Алиас: Причина" },
+        { Колонка: "Comment", Обязательно: "нет", Описание: "Свободный комментарий события. Алиас: Комментарий" },
         ...laborInstructionRows,
+        {
+          Колонка: "Алиасы ADD/NRC",
+          Обязательно: "—",
+          Описание:
+            "Допустимы имена выгрузки: laborBudget_Add_* = laborAddBudget_*, laborBudget_Nrc_* = laborNrcBudget_*, laborMPS_Add_* = laborAddPlan_*, laborMPS_Nrc_* = laborNrcPlan_*, laborActual_Add_* = laborAddActual_*, laborActual_Nrc_* = laborNrcActual_*"
+        },
         {
           Колонка: "Алиас CabRep",
           Обязательно: "—",

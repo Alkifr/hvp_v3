@@ -347,6 +347,75 @@ function LayoutSchemePreview(props: { detail?: LayoutDetail | null; selectedStan
   );
 }
 
+function csvCell(value: unknown): string {
+  const s = String(value ?? "");
+  if (/[;"\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function downloadAircraftDirectoryCsv(rows: any[]) {
+  const header = ["tailNumber", "operator", "aircraftType", "manufactureDate", "serialNumber"];
+  const lines = [header.join(";")];
+  const sorted = [...rows].sort((a, b) => String(a.tailNumber ?? "").localeCompare(String(b.tailNumber ?? ""), "ru"));
+  for (const row of sorted) {
+    lines.push(
+      [
+        row.tailNumber ?? "",
+        row.operator?.code ?? row.operator?.name ?? "",
+        row.type?.name ?? row.type?.icaoType ?? "",
+        toDateInputValue(row.manufactureDate),
+        row.serialNumber ?? ""
+      ]
+        .map(csvCell)
+        .join(";")
+    );
+  }
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "aircraft-directory.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function parseSimpleCsv(text: string): string[][] {
+  const lines = text.replace(/\r/g, "").split("\n").filter((line) => line.trim());
+  if (lines.length < 2) throw new Error("CSV должен содержать шапку и хотя бы одну строку данных.");
+  const headerLine = lines[0] ?? "";
+  const delimiter = [";", "\t", ","].sort((a, b) => headerLine.split(b).length - headerLine.split(a).length)[0] ?? ";";
+  return lines.map((line) => {
+    const cells: string[] = [];
+    let cell = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      const next = line[i + 1];
+      if (ch === '"' && inQuotes && next === '"') {
+        cell += '"';
+        i += 1;
+      } else if (ch === '"') {
+        inQuotes = !inQuotes;
+      } else if (ch === delimiter && !inQuotes) {
+        cells.push(cell.trim().replace(/^"+|"+$/g, ""));
+        cell = "";
+      } else {
+        cell += ch;
+      }
+    }
+    cells.push(cell.trim().replace(/^"+|"+$/g, ""));
+    return cells;
+  });
+}
+
+function csvHeaderIndex(headers: string[], aliases: string[]): number {
+  const norm = (v: string) => v.replace(/^\uFEFF/, "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const keys = headers.map(norm);
+  return keys.findIndex((h) => aliases.includes(h));
+}
+
 export function ReferenceView() {
   const initialShare = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -477,6 +546,10 @@ export function ReferenceView() {
   const [aircraftCsvText, setAircraftCsvText] = useState<string>("");
   const [aircraftCsvParseError, setAircraftCsvParseError] = useState<string | null>(null);
   const [aircraftImportResult, setAircraftImportResult] = useState<any>(null);
+  const [operatorCsvText, setOperatorCsvText] = useState("");
+  const [operatorImportResult, setOperatorImportResult] = useState<any>(null);
+  const [aircraftTypeCsvText, setAircraftTypeCsvText] = useState("");
+  const [aircraftTypeImportResult, setAircraftTypeImportResult] = useState<any>(null);
   const [layoutImportFile, setLayoutImportFile] = useState<File | null>(null);
   const [layoutImportRows, setLayoutImportRows] = useState<Array<Record<string, unknown>>>([]);
   const [layoutImportError, setLayoutImportError] = useState<string | null>(null);
@@ -573,6 +646,70 @@ export function ReferenceView() {
       }
     },
     onError: (err) => showFeedback("error", `Импорт бортов не выполнен: ${String((err as any)?.message ?? err)}`)
+  });
+
+  const parseOperatorCsvRows = (text: string) => {
+    const rows = parseSimpleCsv(text);
+    const headers = rows[0] ?? [];
+    const codeIdx = csvHeaderIndex(headers, ["code", "код", "operator", "operatorcode"]);
+    const nameIdx = csvHeaderIndex(headers, ["name", "название", "operatorname"]);
+    if (codeIdx < 0 || nameIdx < 0) throw new Error("В CSV нужны колонки: code, name.");
+    return rows.slice(1).map((row) => ({
+      code: String(row[codeIdx] ?? "").trim(),
+      name: String(row[nameIdx] ?? "").trim()
+    }));
+  };
+
+  const parseAircraftTypeCsvRows = (text: string) => {
+    const rows = parseSimpleCsv(text);
+    const headers = rows[0] ?? [];
+    const nameIdx = csvHeaderIndex(headers, ["name", "название", "aircrafttype", "тип"]);
+    const icaoIdx = csvHeaderIndex(headers, ["icaotype", "icao"]);
+    const manufacturerIdx = csvHeaderIndex(headers, ["manufacturer", "производитель"]);
+    const bodyIdx = csvHeaderIndex(headers, ["bodytype", "фюзеляж"]);
+    if (nameIdx < 0) throw new Error("В CSV нужна колонка name.");
+    return rows.slice(1).map((row) => ({
+      name: String(row[nameIdx] ?? "").trim(),
+      ...(icaoIdx >= 0 ? { icaoType: String(row[icaoIdx] ?? "").trim() } : {}),
+      ...(manufacturerIdx >= 0 ? { manufacturer: String(row[manufacturerIdx] ?? "").trim() } : {}),
+      ...(bodyIdx >= 0 ? { bodyType: String(row[bodyIdx] ?? "").trim() } : {})
+    }));
+  };
+
+  const operatorImportM = useMutation({
+    mutationFn: async (payload: { dryRun?: boolean; rows: Array<{ code: string; name: string }> }) =>
+      apiPost("/api/ref/operators/import", payload),
+    onSuccess: async (res) => {
+      setOperatorImportResult(res);
+      await qc.invalidateQueries({ queryKey: ["ref", "operators"] });
+      const summary = (res as any)?.summary;
+      showFeedback(
+        summary?.dryRun ? "info" : "success",
+        summary?.dryRun
+          ? `Предпросмотр операторов: можно добавить ${summary.okRows ?? 0}, ошибок ${summary.errorRows ?? 0}.`
+          : `Операторы загружены: создано ${(res as any)?.created ?? 0}.`
+      );
+    },
+    onError: (err) => showFeedback("error", `Импорт операторов не выполнен: ${String((err as any)?.message ?? err)}`)
+  });
+
+  const aircraftTypeImportM = useMutation({
+    mutationFn: async (payload: {
+      dryRun?: boolean;
+      rows: Array<{ name: string; icaoType?: string; manufacturer?: string; bodyType?: string }>;
+    }) => apiPost("/api/ref/aircraft-types/import", payload),
+    onSuccess: async (res) => {
+      setAircraftTypeImportResult(res);
+      await qc.invalidateQueries({ queryKey: ["ref", "aircraft-types"] });
+      const summary = (res as any)?.summary;
+      showFeedback(
+        summary?.dryRun ? "info" : "success",
+        summary?.dryRun
+          ? `Предпросмотр типов ВС: можно добавить ${summary.okRows ?? 0}, ошибок ${summary.errorRows ?? 0}.`
+          : `Типы ВС загружены: создано ${(res as any)?.created ?? 0}.`
+      );
+    },
+    onError: (err) => showFeedback("error", `Импорт типов ВС не выполнен: ${String((err as any)?.message ?? err)}`)
   });
 
   const layoutImportM = useMutation({
@@ -1155,6 +1292,16 @@ export function ReferenceView() {
                 </label>
               </>
             ) : null}
+            {kind === "aircraft" ? (
+              <button
+                className="btn"
+                type="button"
+                disabled={!listQ.data?.length}
+                onClick={() => downloadAircraftDirectoryCsv(listQ.data ?? [])}
+              >
+                Выгрузить CSV
+              </button>
+            ) : null}
             {canCreate ? (
               <button className="btn btnPrimary" onClick={openCreate}>
                 + Добавить
@@ -1193,7 +1340,7 @@ export function ReferenceView() {
                   </span>
                 </span>
               </div>
-              <div className="muted refSectionHint">Формат: tailNumber;operator;aircraftType[;manufactureDate]. Разделитель: запятая/точка с запятой/таб.</div>
+              <div className="muted refSectionHint">Формат: tailNumber;operator;aircraftType[;manufactureDate;serialNumber]. Разделитель: запятая/точка с запятой/таб. Кнопка «Выгрузить CSV» сохраняет текущий справочник в этом формате.</div>
             </div>
           </div>
           <div className="row" style={{ alignItems: "flex-end" }}>
@@ -1311,6 +1458,130 @@ export function ReferenceView() {
                   </table>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {kind === "operators" && canWrite ? (
+        <div className="card refSection">
+          <div className="refSectionHeader">
+            <div>
+              <strong>Импорт операторов из CSV</strong>
+              <div className="muted refSectionHint">Колонки: code, name. Уже существующие коды пропускаются.</div>
+            </div>
+          </div>
+          <div className="row" style={{ alignItems: "flex-end" }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">CSV файл</span>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setOperatorImportResult(null);
+                  setOperatorCsvText("");
+                  if (!f) return;
+                  setOperatorCsvText(decodeAircraftCsv(await f.arrayBuffer()));
+                }}
+                style={{ width: 360 }}
+              />
+            </label>
+            <button
+              className="btn"
+              disabled={operatorImportM.isPending || !operatorCsvText}
+              onClick={() => {
+                try {
+                  operatorImportM.mutate({ dryRun: true, rows: parseOperatorCsvRows(operatorCsvText) });
+                } catch (err: any) {
+                  showFeedback("error", String(err?.message ?? err));
+                }
+              }}
+            >
+              Предпросмотр
+            </button>
+            <button
+              className="btn btnPrimary"
+              disabled={operatorImportM.isPending || !((operatorImportResult as any)?.summary?.okRows > 0)}
+              onClick={() => {
+                try {
+                  operatorImportM.mutate({ rows: parseOperatorCsvRows(operatorCsvText) });
+                } catch (err: any) {
+                  showFeedback("error", String(err?.message ?? err));
+                }
+              }}
+            >
+              Импортировать
+            </button>
+          </div>
+          {operatorImportResult?.rows?.some((row: any) => row.error) ? (
+            <div className="error" style={{ marginTop: 8 }}>
+              {operatorImportResult.rows
+                .filter((row: any) => row.error)
+                .map((row: any) => `Строка ${row.rowIndex}: ${row.error}`)
+                .join(" ")}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {kind === "aircraft-types" && canWrite ? (
+        <div className="card refSection">
+          <div className="refSectionHeader">
+            <div>
+              <strong>Импорт типов ВС из CSV</strong>
+              <div className="muted refSectionHint">Колонки: name; опционально icaoType, manufacturer, bodyType (NARROW_BODY или WIDE_BODY).</div>
+            </div>
+          </div>
+          <div className="row" style={{ alignItems: "flex-end" }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span className="muted">CSV файл</span>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setAircraftTypeImportResult(null);
+                  setAircraftTypeCsvText("");
+                  if (!f) return;
+                  setAircraftTypeCsvText(decodeAircraftCsv(await f.arrayBuffer()));
+                }}
+                style={{ width: 360 }}
+              />
+            </label>
+            <button
+              className="btn"
+              disabled={aircraftTypeImportM.isPending || !aircraftTypeCsvText}
+              onClick={() => {
+                try {
+                  aircraftTypeImportM.mutate({ dryRun: true, rows: parseAircraftTypeCsvRows(aircraftTypeCsvText) });
+                } catch (err: any) {
+                  showFeedback("error", String(err?.message ?? err));
+                }
+              }}
+            >
+              Предпросмотр
+            </button>
+            <button
+              className="btn btnPrimary"
+              disabled={aircraftTypeImportM.isPending || !((aircraftTypeImportResult as any)?.summary?.okRows > 0)}
+              onClick={() => {
+                try {
+                  aircraftTypeImportM.mutate({ rows: parseAircraftTypeCsvRows(aircraftTypeCsvText) });
+                } catch (err: any) {
+                  showFeedback("error", String(err?.message ?? err));
+                }
+              }}
+            >
+              Импортировать
+            </button>
+          </div>
+          {aircraftTypeImportResult?.rows?.some((row: any) => row.error) ? (
+            <div className="error" style={{ marginTop: 8 }}>
+              {aircraftTypeImportResult.rows
+                .filter((row: any) => row.error)
+                .map((row: any) => `Строка ${row.rowIndex}: ${row.error}`)
+                .join(" ")}
             </div>
           ) : null}
         </div>

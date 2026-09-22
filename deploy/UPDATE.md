@@ -1,223 +1,339 @@
 # Обновление стенда в корпоративном контуре
 
-Документ для администратора сервера. Путь установки ниже — **пример**; подставьте свой каталог, пользователя службы и имя unit в systemd.
+Документ для администратора. Команды ниже рассчитаны на **новичка** и на контур без интернета на боевом сервере.
 
-Предположения:
+Подставьте свои имена, если они другие:
 
-- Node.js **20+**, PostgreSQL **16**
-- Код лежит в `/opt/hangar-planning`
-- Служба: `hvp.service`, пользователь `hvp`
-- Процесс: `npm start` → API и UI на порту **3000**
-- Конфиг: `/opt/hangar-planning/.env` (не из git)
+| Что | Пример в этом документе |
+|---|---|
+| Каталог приложения | `/opt/hvp_v3` |
+| Пользователь службы | `hvp` |
+| systemd unit | `hvp.service` |
+| Репозиторий | https://github.com/Alkifr/hvp_v3 |
+| Сборка | Ubuntu x86_64 с интернетом, Node **20+** |
+| Боевой сервер | Astra Linux **без интернета** |
+| БД | PostgreSQL **16**, часто на **другом** хосте |
 
 `.env` при обновлении **не перезаписывать** и **не копировать** с машины разработчика.
 
+Сообщение Astra «Операционная система не активирована» на команды не влияет — его можно игнорировать.
+
 ---
 
-## Что общее для обеих схем
+## Карта машин (закрытый контур)
 
-### Перед любым обновлением
+Типовой путь файла:
 
-1. Сообщите пользователям окно работ. В админке можно включить режим «только просмотр» (блокировка записи).
-2. Сделайте backup базы **на сервере**:
+**Ubuntu (интернет, сборка)** → **Mac (скачать архив)** → **рабочий ПК / Windows jump** → **Astra (установка)**.
 
-```bash
-sudo -u hvp -H bash -lc 'cd /opt/hangar-planning && set -a && . ./.env && set +a && mkdir -p backups && pg_dump -Fc "$DATABASE_CLOUD_URL" > "backups/hvp-$(date +%Y%m%d-%H%M%S).dump"'
-```
+| Машина | Интернет | Роль |
+|---|---|---|
+| Ubuntu | да | `git clone`, `npm ci`, `build`, `.tgz` |
+| Mac | да | веб-консоль Ubuntu и/или `scp` архива |
+| Windows jump (js) | обычно нет | единственный вход во внутреннюю сеть |
+| Astra (приложение) | нет | Node, `hvp.service`, UI/API :3000 |
+| Хост PostgreSQL | внутренняя сеть | базу **не останавливать** |
 
-Проверьте, что файл появился и размер не нулевой.
+`node_modules` **нельзя** собирать на macOS/Windows и класть на Astra (`argon2`, движки Prisma).
 
-3. Запишите текущую версию кода (чтобы откатиться):
+Архив **не открывать** 7-Zip/WinRAR, **не** переименовывать `.tgz` → `.tar`, **не** перепаковывать. Иначе `tar` даст «неожиданный конец файла».
 
-```bash
-cd /opt/hangar-planning
-sudo -u hvp git rev-parse --short HEAD
-sudo -u hvp git log -1 --oneline
-```
-
-Если git нет (офлайн-архив) — сохраните копию каталога или имя файла прошлого архива.
-
-4. Остановите приложение:
+OpenSSL 3.0.x на Ubuntu и 3.4.x на Astra совместимы. Перед `npm ci` на Ubuntu:
 
 ```bash
-sudo systemctl stop hvp
+export PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 ```
 
-Не останавливайте PostgreSQL.
+---
 
-### Чего не делать
+## Чего не делать
 
 | Действие | Почему |
 |---|---|
-| `SEED_DEMO=1` / `prisma:seed:demo` | Создаст демо-учётки на боевой базе |
+| `SEED_DEMO=1` / `prisma:seed:demo` | Демо-учётки на боевой базе |
 | `CONFIRM_TRUNCATE=1 import:ref-data` | Снесёт справочники |
 | Менять `.env` «как в примере» | Сбросит JWT, CORS, cookie, пароль БД |
-| Копировать `node_modules` с macOS/Windows на Linux | Нативные модули (`argon2`, Prisma) не подойдут |
-| `git pull` с незакоммиченными правками на сервере | Конфликт, сломанный стенд |
-
-### После получения новой версии кода
-
-Шаги **одинаковые**, откуда бы ни пришёл код (git или архив).
-
-Работать от пользователя службы, с тем же `PATH`, что у Node:
-
-```bash
-cd /opt/hangar-planning
-sudo systemctl stop hvp
-
-# зависимости — см. разделы «с интернетом» / «без интернета»
-
-sudo -u hvp -H env PATH="/usr/local/bin:$PATH" npm run prisma:migrate:deploy -w apps/api
-sudo -u hvp -H env PATH="/usr/local/bin:$PATH" npm run prisma:seed -w apps/api
-sudo -u hvp -H env PATH="/usr/local/bin:$PATH" npm run build
-sudo systemctl start hvp
-sudo systemctl status hvp --no-pager
-```
-
-- **migrate** — обязателен. Накатывает SQL из `apps/api/prisma/migrations/`.
-- **seed без `SEED_DEMO`** — безопасен для уже существующей базы: обновляет роли и права, **не сбрасывает пароли** существующих пользователей. Нужен, когда в версии появились новые permission-коды.
-- **build** — обязателен: `npm start` раздаёт собранный UI из `dist`.
-
-Проверка:
-
-```bash
-curl -sf http://127.0.0.1:3000/health/ready && echo OK
-```
-
-Ожидание: HTTP 200. Дальше откройте UI в браузере, войдите, проверьте Гантт.
-
-Снимите техрежим в админке, если включали.
+| Копировать `node_modules` с Mac/Windows | Нативные модули не подойдут |
+| `sudo -u hvp cp … /opt/….bak` | У `hvp` нет права создавать каталоги в `/opt` |
+| Собирать архив, не проверив `gzip -t` | Битый файл доедет до Astra |
+| Останавливать PostgreSQL | Приложение и БД часто на разных серверах |
 
 ---
 
-## Вариант 1. На сервере есть интернет
+## Вариант A. На сервере приложения есть интернет
 
-Нужен доступ:
-
-- к git-репозиторию (GitHub или внутренний git);
-- к npm registry (`registry.npmjs.org`), если в релизе менялись зависимости.
+Нужен git и npm registry.
 
 ```bash
-cd /opt/hangar-planning
+cd /opt/hvp_v3
 sudo systemctl stop hvp
 
 sudo -u hvp -H env PATH="/usr/local/bin:$PATH" git fetch --all --tags
-sudo -u hvp -H env PATH="/usr/local/bin:$PATH" git rev-parse --short HEAD   # запомнить
+sudo -u hvp -H env PATH="/usr/local/bin:$PATH" git rev-parse --short HEAD
 sudo -u hvp -H env PATH="/usr/local/bin:$PATH" git pull --ff-only
-
 sudo -u hvp -H env PATH="/usr/local/bin:$PATH" npm ci
 ```
 
-`npm ci` ставит пакеты строго по `package-lock.json`. Если `npm ci` ругается на lockfile — не удаляйте lockfile на сервере; разберитесь с версией, которую принёс git.
+Дальше: backup (см. ниже) уже должен быть снят **до** stop, затем migrate → seed → build → start → health.
 
-Дальше — общие шаги: migrate → seed → build → start → health.
-
-Если git на сервере есть, а **npm registry закрыт**, код обновляете `git pull`, а `node_modules` — как в варианте 2 (архив зависимостей, собранный на той же ОС).
+Если git есть, а npm registry закрыт — код через `git pull`, зависимости как в варианте B (Linux-архив).
 
 ---
 
-## Вариант 2. Интернета на сервере нет
+## Вариант B. Astra без интернета (основной сценарий)
 
-Типовая схема: подготовка **на машине с той же ОС и архитектурой**, что сервер (Linux x86_64 / Astra и т.п.), перенос носителем или через внутреннюю сеть.
+### B1. Ubuntu: клон и сборка
 
-Не готовьте `node_modules` на Mac/Windows для Linux-сервера.
-
-### 2.1. Что приготовить на машине с интернетом
-
-Нужны: Node 20+, git, tar.
+Заходите в домашний каталог. `Permission denied` на `git clone` значит, что вы не в `~` (часто `/` или `/opt`).
 
 ```bash
-git clone --depth 1 <url-репозитория> hvp_release
-# или: git fetch && git checkout <тег-или-коммит>
+cd ~
+uname -m          # нужно x86_64
+node -v           # v20 или новее
+df -h ~           # свободно гигабайты, не десятки мегабайт
+```
+
+Если Node нет:
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs git python3 make g++
+```
+
+```bash
+cd ~
+rm -rf hvp_release
+git clone https://github.com/Alkifr/hvp_v3.git hvp_release
 cd hvp_release
 git rev-parse --short HEAD > VERSION.txt
+git log -1 --oneline
+
+export PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 npm ci
 npm run build
 ```
 
-Соберите архив **без** `.env` и без чужих backup:
+Проверка сборки:
 
 ```bash
+ls package.json node_modules apps/api/dist apps/web/dist
+```
+
+Архив **без** `.env`, `.git` и `backups`:
+
+```bash
+rm -f ~/hvp-*-linux.tgz
 tar --exclude='.env' --exclude='.env.*' --exclude='backups' --exclude='.git' \
-  -czf hvp-$(cat VERSION.txt)-linux.tgz .
+  -czf ~/hvp-$(cat VERSION.txt)-linux.tgz .
+ls -lh ~/hvp-*-linux.tgz
+gzip -t ~/hvp-*-linux.tgz && echo "gzip ok"
+sha256sum ~/hvp-*-linux.tgz
 ```
 
-В архиве должны быть:
+**Пока нет `gzip ok` — никуда не копируйте.** Битый архив на Ubuntu уже встречался (размер «плавал», `gzip: unexpected end of file`). Тогда удалите `.tgz` и повторите только `tar` (если `node_modules` и `dist` на месте).
 
-- исходники;
-- `package-lock.json`;
-- `node_modules/` (уже под Linux);
-- `apps/api/dist/`, `apps/web/dist/` (если build уже сделали).
+Запишите имя файла, размер и sha256.
 
-Если на сборочной машине **нет** той же ОС, что на сервере:
+Python `http.server` на произвольном порту с облачной ВМ обычно **не открывается** с Mac: группу безопасности не расширяйте ради этого. `transfer.sh` часто недоступен (`Connection refused`).
 
-1. Упакуйте **только исходники** (без `node_modules`, без `dist`):
+### B2. Ubuntu → Mac
+
+На Mac в zsh маска `*` раскрывается **локально**. Пишите имя целиком или кавычки:
 
 ```bash
-git archive --format=tar.gz -o hvp-src-$(git rev-parse --short HEAD).tgz HEAD
+scp user_prod@UBUNTU_IP:~/hvp-XXXX-linux.tgz ~/Downloads/
 ```
 
-2. На сервере после распаковки зависимости взять неоткуда. Тогда нужен **офлайн-кэш npm**, собранный на Linux:
+или:
 
 ```bash
-# на Linux с интернетом, в каталоге релиза:
-npm ci --cache ./npm-cache
-tar -czf hvp-npm-cache.tgz npm-cache package-lock.json
+scp 'user_prod@UBUNTU_IP:~/hvp-*-linux.tgz' ~/Downloads/
 ```
 
-На сервере:
+`Permission denied (publickey)` — на Ubuntu нет ключа **этого** Mac. В веб-консоли Ubuntu **добавьте** строку из `~/.ssh/id_ed25519.pub` (или `id_rsa.pub`) в `~/.ssh/authorized_keys` **новой строкой**, старый ключ с другого Mac не удаляйте:
 
 ```bash
-tar -xzf hvp-src-….tgz
-tar -xzf hvp-npm-cache.tgz
-npm ci --offline --cache ./npm-cache
-npm run build
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+nano ~/.ssh/authorized_keys   # в конец — один ключ = одна строка
+chmod 600 ~/.ssh/authorized_keys
 ```
 
-`--offline` не ходит в сеть. Кэш и lockfile должны быть от **того же** `package-lock.json`.
+Если SSH с Mac нельзя — GitHub Release (репозиторий публичный: после скачивания релиз удалите).
 
-### 2.2. На сервере без интернета
+Токен: https://github.com/settings/tokens (настройки **аккаунта**, не репозитория). Classic PAT: `repo`, `read:org`, `workflow`.
 
 ```bash
+gh auth login
+gh release create "offline-XXXX" ~/hvp-XXXX-linux.tgz \
+  --repo Alkifr/hvp_v3 --title "Offline linux XXXX" --notes "Без .env"
+```
+
+Скачать с https://github.com/Alkifr/hvp_v3/releases на Mac. Удалить:
+
+```bash
+gh release delete "offline-XXXX" --repo Alkifr/hvp_v3 --yes
+```
+
+На Mac сверьте размер и хеш с Ubuntu:
+
+```bash
+ls -lh ~/Downloads/hvp-XXXX-linux.tgz
+shasum -a 256 ~/Downloads/hvp-XXXX-linux.tgz
+```
+
+### B3. Mac → Windows jump → Astra
+
+На Windows файл не открывать. Класть как есть, например `C:\p_dev\hvp_releases\hvp-XXXX-linux.tgz`.
+
+```powershell
+Get-Item C:\p_dev\hvp_releases\hvp-XXXX-linux.tgz | Select-Object Name, Length
+Get-FileHash C:\p_dev\hvp_releases\hvp-XXXX-linux.tgz -Algorithm SHA256
+```
+
+`Length` и хеш = как на Ubuntu. Иначе копируйте заново.
+
+На Astra (подставьте пользователя и хост):
+
+```powershell
+scp C:\p_dev\hvp_releases\hvp-XXXX-linux.tgz USER@ASTRA_HOST:/tmp/
+```
+
+В WinSCP режим **Binary**, не Text.
+
+На Astra:
+
+```bash
+ls -lh /tmp/hvp-XXXX-linux.tgz
+sha256sum /tmp/hvp-XXXX-linux.tgz
+gzip -t /tmp/hvp-XXXX-linux.tgz && echo "gzip ok"
+file /tmp/hvp-XXXX-linux.tgz
+```
+
+Нужно: тот же размер и sha256, `gzip ok`, `file` говорит `gzip compressed data` **без** FAT/encrypted.  
+`gzip: stdin: not in gzip format` — это не gzip (часто обрезанный или пересохранённый `.tar`).  
+`tar: Неожиданный конец файла` — файл обрезан, распаковку прекратить.
+
+### B4. Backup и остановка на Astra
+
+Окно работ; в админке можно включить «только просмотр». PostgreSQL **не** останавливать.
+
+`?schema=public` в `DATABASE_CLOUD_URL` нужен Prisma. **`pg_dump` его не понимает** (`неверный параметр в URI: "schema"`). Отрезайте хвост после `?`:
+
+```bash
+sudo -u hvp -H bash -lc 'cd /opt/hvp_v3 && set -a && . ./.env && set +a && mkdir -p backups && pg_dump -Fc "${DATABASE_CLOUD_URL%%\?*}" > "backups/hvp-$(date +%Y%m%d-%H%M%S).dump"'
+ls -lh /opt/hvp_v3/backups/
+```
+
+Dump не нулевого размера. Без него дальше не идите.
+
+```bash
+cd /opt/hvp_v3
+sudo -u hvp git rev-parse --short HEAD 2>/dev/null || echo "git на сервере не обязателен"
 sudo systemctl stop hvp
-sudo -u hvp cp -a /opt/hangar-planning /opt/hangar-planning.bak-$(date +%Y%m%d-%H%M%S)
-
-# сохранить .env
-sudo -u hvp cp /opt/hangar-planning/.env /tmp/hvp.env.save
-
-cd /opt/hangar-planning
-sudo -u hvp tar -xzf /path/to/hvp-XXXX-linux.tgz
-sudo -u hvp cp /tmp/hvp.env.save /opt/hangar-planning/.env
-rm -f /tmp/hvp.env.save
 ```
 
-Если архив уже содержит `node_modules` и `dist` под Linux — `npm ci` и `build` можно не повторять. Если только исходники + npm-cache — выполните `npm ci --offline` и `build`, как выше.
-
-Дальше — общие шаги: migrate → seed → start → health.
-
-Права на файлы:
+Копию каталога в `/opt` делает **root**, не `sudo -u hvp` (`Отказано в доступе`):
 
 ```bash
-sudo chown -R hvp:hvp /opt/hangar-planning
+sudo cp -a /opt/hvp_v3 /opt/hvp_v3.bak-$(date +%Y%m%d-%H%M%S)
+sudo cp /opt/hvp_v3/.env /tmp/hvp.env.save
+sudo chown hvp:hvp /tmp/hvp.env.save
+ls -ld /opt/hvp_v3.bak-*
 ```
+
+### B5. Распаковка
+
+```bash
+cd /opt/hvp_v3
+sudo tar -xzf /tmp/hvp-XXXX-linux.tgz
+sudo cp /tmp/hvp.env.save /opt/hvp_v3/.env
+sudo chown -R hvp:hvp /opt/hvp_v3
+sudo -u hvp test -f /opt/hvp_v3/.env && echo "env ok"
+ls /opt/hvp_v3/apps/api/dist /opt/hvp_v3/apps/web/dist /opt/hvp_v3/node_modules >/dev/null && echo "tree ok"
+```
+
+Если предыдущий `tar` оборвался — сначала верните `bak`, потом распаковывайте снова. В архиве уже Linux-`node_modules` и `dist`: **`npm ci` и `build` на Astra не нужны**.
+
+Если `file` сказал обычный `tar archive` (не gzip) — только тогда `sudo tar -xf`, не `-xzf`. Для штатного `.tgz` всегда `-xzf`.
+
+### B6. Миграции, seed, запуск
+
+```bash
+cd /opt/hvp_v3
+sudo -u hvp -H env PATH="/usr/local/bin:$PATH" npm run prisma:migrate:deploy -w apps/api
+sudo -u hvp -H env PATH="/usr/local/bin:$PATH" npm run prisma:seed -w apps/api
+sudo systemctl start hvp
+sudo systemctl status hvp --no-pager
+curl -sf http://127.0.0.1:3000/health/ready && echo OK
+```
+
+- **migrate** обязателен.
+- **seed без `SEED_DEMO`** обновляет роли и права, **не** сбрасывает пароли существующих пользователей.
+- Дальше вход в UI, Гантт; снять техрежим, если включали.
+
+#### Если migrate: `P1001 Can't reach database server`
+
+Приложение и Postgres часто на разных хостах (например 02v и 03v). Сначала сеть:
+
+```bash
+getent hosts ИМЯ_ХОСТА_БД
+ping -c 2 ИМЯ_ХОСТА_БД
+timeout 5 bash -c 'echo > /dev/tcp/ИМЯ_ХОСТА_БД/5432' && echo "port 5432 open"
+```
+
+Проверка **от пользователя `hvp`** (не от вашего логина):
+
+```bash
+sudo -u hvp -H bash -lc 'timeout 5 bash -c "echo > /dev/tcp/ИМЯ_ХОСТА_БД/5432" && echo "hvp: port open" || echo "hvp: port closed"'
+sudo -u hvp -H bash -lc 'cd /opt/hvp_v3 && set -a && . ./.env && set +a && psql "${DATABASE_CLOUD_URL%%\?*}" -c "SELECT 1"'
+```
+
+Если `SELECT 1` проходит — повторите migrate. При спецсимволах в пароле (`:`, `)`, `@`) Prisma иногда даёт P1001, хотя `psql` уже работает. Одноразово, без правки `.env`:
+
+```bash
+cd /opt/hvp_v3
+sudo -u hvp -H bash -lc 'set -a && . ./.env && set +a
+export PATH="/usr/local/bin:$PATH"
+export DATABASE_CLOUD_URL="$(python3 - <<"PY"
+import os
+from urllib.parse import urlparse, quote, urlunparse
+u = os.environ["DATABASE_CLOUD_URL"]
+p = urlparse(u)
+password = quote(p.password or "", safe="")
+netloc = f"{p.username}:{password}@{p.hostname}"
+if p.port:
+    netloc += f":{p.port}"
+print(urlunparse((p.scheme, netloc, p.path, p.params, p.query, p.fragment)))
+PY
+)"
+cd /opt/hvp_v3 && npm run prisma:migrate:deploy -w apps/api'
+```
+
+`.env` «наугад» не меняйте. На хосте БД: `systemctl status postgresql` (или `postgresql-16`), `ss -tlnp | grep 5432`.
 
 ---
 
 ## Откат
 
-1. `sudo systemctl stop hvp`
-2. Вернуть код:
-   - **с git:** `sudo -u hvp git checkout <старый-хеш>` затем `npm ci`, `npm run build`
-   - **без git:** распаковать предыдущий архив / вернуть `/opt/hangar-planning.bak-…`, снова положить сохранённый `.env`
-3. Если уже накатились миграции и новая версия не стартует — восстановить базу:
-
 ```bash
-sudo -u hvp -H bash -lc 'cd /opt/hangar-planning && set -a && . ./.env && set +a && pg_restore --clean --if-exists --no-owner -d "$DATABASE_CLOUD_URL" backups/hvp-….dump'
+sudo systemctl stop hvp
+sudo mv /opt/hvp_v3 /opt/hvp_v3.broken
+sudo mv /opt/hvp_v3.bak-ГГГГММДД-ЧЧММСС /opt/hvp_v3
 ```
 
-Откат миграций Prisma «назад» вручную не делайте: для контура надёжнее restore из dump, снятого **до** migrate.
+Если migrate уже прошёл и новая версия не стартует — restore dump, снятого **до** обновления (`?schema=` снова отрезать):
 
-4. `sudo systemctl start hvp` и проверка `/health/ready`.
+```bash
+sudo -u hvp -H bash -lc 'cd /opt/hvp_v3 && set -a && . ./.env && set +a && pg_restore --clean --if-exists --no-owner -d "${DATABASE_CLOUD_URL%%\?*}" backups/hvp-….dump'
+```
+
+Миграции Prisma «назад» вручную не откатывайте.
+
+```bash
+sudo systemctl start hvp
+curl -sf http://127.0.0.1:3000/health/ready && echo OK
+```
 
 ---
 
@@ -225,34 +341,32 @@ sudo -u hvp -H bash -lc 'cd /opt/hangar-planning && set -a && . ./.env && set +a
 
 | Симптом | Что проверить |
 |---|---|
-| `health/ready` 503 | PostgreSQL, `DATABASE_CLOUD_URL` в `.env`, сеть до БД |
-| Белая страница / старый UI | Не сделали `npm run build` или не перезапустили службу |
-| Cookie не держится | HTTP без TLS: в `.env` должен быть `COOKIE_SECURE=0`. За HTTPS — наоборот, не ставить |
-| `JWT_SECRET must be set…` | В `.env` на сервере `NODE_ENV=production` и секрет ≥ 24 символов |
-| Seed ругается на demo-админа | Не заданы `ADMIN_EMAIL` / `ADMIN_PASSWORD`, либо они demo-значения |
-| `CREATEROLE` / доступ к БД из профиля | Учётка приложения в Postgres без права создавать роли — это не ломает обновление, только выдачу DBeaver |
-| `npm ci` тянет сеть в офлайне | Нет `--offline` или кэш/lockfile от другой версии |
+| `git clone` Permission denied | `cd ~`, не клонировать в `/` и `/opt` без root |
+| zsh: no matches found при scp | имя файла целиком или путь в кавычках |
+| scp: Permission denied (publickey) | ключ **этого** Mac в `authorized_keys` |
+| `неверный параметр в URI: schema` | `pg_dump`/`pg_restore`: `"${DATABASE_CLOUD_URL%%\?*}"` |
+| `cp: Отказано в доступе` на `*.bak` в `/opt` | `sudo cp -a`, не `sudo -u hvp` |
+| `gzip: not in gzip format` | не тот файл или переименованный tar; смотреть `file` |
+| `tar: Неожиданный конец файла` | архив обрезан; сверить sha256 на всех хостах |
+| `file` пишет FAT/encrypted | архив трогали на Windows; везти исходный `.tgz` |
+| P1001 Prisma | порт 5432, `psql` от `hvp`, кодирование пароля в URL |
+| `health/ready` 503 | Postgres, `.env`, сеть до БД |
+| Белая страница / старый UI | нет `dist` в архиве или службу не перезапустили |
+| Cookie не держится | HTTP: `COOKIE_SECURE=0`. HTTPS: наоборот |
 | Служба сразу падает | `journalctl -u hvp -n 80 --no-pager` |
 
 ---
 
-## Краткий чеклист
+## Краткий чеклист без интернета на Astra
 
-**Интернет на сервере**
-
-1. Backup dump  
-2. `systemctl stop hvp`  
-3. `git pull --ff-only`  
-4. `npm ci`  
-5. `prisma:migrate:deploy` → `prisma:seed` → `build`  
-6. `systemctl start hvp`  
-7. `curl` health + вход в UI  
-
-**Без интернета**
-
-1. На Linux с сетью: `npm ci` (+ лучше сразу `build`), архив без `.env`  
-2. На сервере: backup dump, stop, сохранить `.env`, распаковать архив, вернуть `.env`  
-3. Если в архиве не было `node_modules` под Linux: `npm ci --offline --cache …` и `build`  
-4. migrate → seed → start → health  
+1. Ubuntu: clone в `~` → `PRISMA_CLI_BINARY_TARGETS` → `npm ci` → `build` → `tar` → **`gzip -t` + sha256**
+2. Mac: `scp` (кавычки / точное имя) или GitHub Release
+3. Windows: только копия, Binary, тот же sha256
+4. Astra `/tmp`: sha256 и `gzip -t`
+5. Dump БД с отрезанным `?schema=`
+6. `systemctl stop hvp` (Postgres не трогать)
+7. `sudo cp -a` в `/opt/hvp_v3.bak-…`, сохранить `.env`
+8. `sudo tar -xzf`, вернуть `.env`, `chown hvp:hvp`
+9. `prisma:migrate:deploy` → `prisma:seed` (без `SEED_DEMO`) → `systemctl start` → `/health/ready`
 
 Seed на обновлении — **без** `SEED_DEMO`. Справочники (`import:ref-data`) в штатное обновление не входят.
