@@ -1,4 +1,4 @@
-import { rangesOverlap } from "./ganttVirtualize.ts";
+import { rangesOverlap } from "./ganttVirtualize";
 
 export type DndStandOccupant = {
   eventId: string;

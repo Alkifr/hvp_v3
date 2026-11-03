@@ -31,6 +31,7 @@ import {
 import { DEADLINE_SLOT_HINT, slotExitAfterDeadline } from "../../lib/deadline";
 import { formatEventTooltip, type LaborPresence } from "../../lib/eventTooltip";
 import { planDndDisplace, planDndLayoutLock, type DndDisplacePlan, type DndStandOccupant } from "../../lib/dndDisplace";
+import { planEdgeTows, type EdgePlacement } from "../../lib/edgeTowPlan";
 import { parseGanttViewShare, syncGanttViewHash } from "../../lib/viewShareUrl";
 import {
   compareHangarStandRows,
@@ -3126,7 +3127,7 @@ export function GanttView() {
 
   const scheduleGanttVirt = useCallback(() => {
     if (virtMeasureRafRef.current != null) return;
-    virtMeasureRafRef.current = requestAnimationFrame(flushGanttVirt);
+    virtMeasureRafRef.current = requestAnimationFrame(() => flushGanttVirt());
   }, [flushGanttVirt]);
   scheduleGanttVirtRef.current = scheduleGanttVirt;
 
