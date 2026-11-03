@@ -3041,6 +3041,22 @@ export const PRIMARY_TABLE_COLUMNS: PrimaryTableColumnDef[] = [
     "source": "EventACheckAnalysis.program",
     "formula": null,
     "sortOrder": 190
+  },
+  {
+    "key": "primary.gi",
+    "excelColumn": "GI",
+    "group": "Слот План (Согласованный слот)",
+    "subgroup": null,
+    "label": "DeadLine",
+    "path": "Слот План (Согласованный слот) / DeadLine",
+    "owner": "ОПП",
+    "fillMode": "MANUAL",
+    "applicability": "ALL",
+    "type": "datetime",
+    "availability": "available",
+    "source": "MaintenanceEvent.deadlineAt",
+    "formula": null,
+    "sortOrder": 191
   }
 ];
 

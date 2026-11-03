@@ -19,6 +19,7 @@ export function buildEventShareUrl(params: {
 
 export const ADMIN_HASH_TABS = [
   "overview",
+  "server",
   "users",
   "roles",
   "activity",
@@ -26,6 +27,12 @@ export const ADMIN_HASH_TABS = [
   "announce",
   "cleanup",
   "mail",
+  "imports",
+  "import-types",
+  "import-aircraft",
+  "import-workshops",
+  "import-layouts",
+  "import-priorities",
   "sandboxes",
   "reports"
 ] as const;

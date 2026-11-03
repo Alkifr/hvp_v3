@@ -14,6 +14,7 @@ import { AnalyticsView } from "./pages/AnalyticsView";
 import { MailDigestView } from "./pages/MailDigestView";
 import { RmItpView } from "./pages/RmItpView";
 import { RmTowsView } from "./pages/RmTowsView";
+import { RmPersonnelView } from "./pages/RmPersonnelView";
 import { HelpView } from "./pages/HelpView";
 import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { NotificationBell } from "./components/NotificationBell";
@@ -39,6 +40,7 @@ type Page =
   | "mass"
   | "itp"
   | "tows"
+  | "personnel"
   | "ref"
   | "profile"
   | "admin"
@@ -56,6 +58,7 @@ function isPage(value: string): value is Page {
     value === "mass" ||
     value === "itp" ||
     value === "tows" ||
+    value === "personnel" ||
     value === "profile" ||
     value === "admin" ||
     value === "sandboxes" ||
@@ -132,9 +135,11 @@ const ICONS = {
   ),
   mass: (
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3l9 5-9 5-9-5 9-5z" />
-      <path d="M3 13l9 5 9-5" />
-      <path d="M3 17l9 5 9-5" />
+      <path d="M12 2v4.2" />
+      <path d="m9 4.2 3 3 3-3" />
+      <rect x="3" y="9.5" width="18" height="12" rx="1.6" />
+      <path d="M4 15.5h16" />
+      <path d="M9.5 10.4v10.2" />
     </svg>
   ),
   itp: (
@@ -151,6 +156,14 @@ const ICONS = {
       <circle cx="16" cy="17" r="1.6" />
       <path d="M4 15V9h7" />
       <path d="M3 6h6l2 3" />
+    </svg>
+  ),
+  personnel: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="9" cy="8" r="3" />
+      <circle cx="17" cy="10" r="2.5" />
+      <path d="M3 20c.6-4 2.8-6 6-6s5.4 2 6 6" />
+      <path d="M14 15c3.8-.8 6.2 1 7 5" />
     </svg>
   ),
   ref: (
@@ -301,6 +314,7 @@ export function App() {
   const canAnalytics = hasPermission(permissions, "analytics:read");
   const canItp = hasPermission(permissions, "itp:read");
   const canTows = hasPermission(permissions, "tows:read");
+  const canPersonnel = hasPermission(permissions, "personnel:read");
   const canImport = hasPermission(permissions, "import:write");
   const canRef = hasPermission(permissions, "ref:read");
   const canAdmin = hasPermission(permissions, "admin:users") || hasPermission(permissions, "admin:roles");
@@ -318,6 +332,7 @@ export function App() {
       canAnalytics={canAnalytics}
       canItp={canItp}
       canTows={canTows}
+      canPersonnel={canPersonnel}
       canImport={canImport}
       canRef={canRef}
       canAdmin={canAdmin}
@@ -337,6 +352,7 @@ function AppShell(props: {
   canAnalytics: boolean;
   canItp: boolean;
   canTows: boolean;
+  canPersonnel: boolean;
   canImport: boolean;
   canRef: boolean;
   canAdmin: boolean;
@@ -353,6 +369,7 @@ function AppShell(props: {
     canAnalytics,
     canItp,
     canTows,
+    canPersonnel,
     canImport,
     canRef,
     canAdmin,
@@ -386,6 +403,7 @@ function AppShell(props: {
       analytics: canAnalytics,
       itp: canItp && !isMobile,
       tows: canTows && !isMobile,
+      personnel: canPersonnel && !isMobile,
       import: canImportInActiveContext && !isMobile,
       mass: canImportInActiveContext && !isMobile,
       ref: canRef && !isMobile,
@@ -406,6 +424,7 @@ function AppShell(props: {
     canAnalytics,
     canItp,
     canTows,
+    canPersonnel,
     canImportInActiveContext,
     canRef,
     canMail,
@@ -451,9 +470,8 @@ function AppShell(props: {
             {!isMobile && canTows ? (
               <NavIcon active={page === "tows"} onClick={() => setPage("tows")} label="РМ Буксировки" icon={ICONS.tows} />
             ) : null}
-
-            {!isMobile && canMail ? (
-              <NavIcon active={page === "mail"} onClick={() => setPage("mail")} label="Рассылка" icon={ICONS.mail} />
+            {!isMobile && canPersonnel ? (
+              <NavIcon active={page === "personnel"} onClick={() => setPage("personnel")} label="РМ Персонал" icon={ICONS.personnel} />
             ) : null}
 
             {!isMobile && canImportInActiveContext ? (
@@ -486,6 +504,9 @@ function AppShell(props: {
                 }}
               />
             ) : null}
+            {!isMobile && canMail ? (
+              <NavIcon active={page === "mail"} onClick={() => setPage("mail")} label="Рассылка" icon={ICONS.mail} />
+            ) : null}
             <NavIcon active={page === "help"} onClick={() => setPage("help")} label="Инструкция" icon={ICONS.help} />
             <NavIcon active={page === "profile"} onClick={() => setPage("profile")} label="Профиль" icon={ICONS.profile} />
             {!isMobile && canAdmin ? (
@@ -505,6 +526,7 @@ function AppShell(props: {
         {page === "hangar" && canHangar ? <HangarView /> : null}
         {!isMobile && page === "itp" && canItp ? <RmItpView /> : null}
         {!isMobile && page === "tows" && canTows ? <RmTowsView /> : null}
+        {!isMobile && page === "personnel" && canPersonnel ? <RmPersonnelView /> : null}
         {!isMobile && canImportInActiveContext && (page === "import" || page === "mass") ? (
           <BulkEventsView tab={page === "mass" ? "mass" : "import"} onTab={(tab) => setPage(tab)} />
         ) : null}

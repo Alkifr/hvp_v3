@@ -14,6 +14,7 @@ import {
   sandboxIdFor
 } from "../../plugins/sandbox.js";
 import { eventHasExistingSlotOverlap, resolveAllowOverlap } from "../../lib/placementOverlap.js";
+import { resolveStandLocation } from "../../lib/standLocation.js";
 
 function assertCanWrite(req: any) {
   if (!canWriteInContext(req)) {
@@ -51,6 +52,9 @@ function standAccepts(stand: any, aircraftTypeId: string | null): boolean {
   return allowed.length === 0 || !aircraftTypeId || allowed.includes(aircraftTypeId);
 }
 
+// Поиск конфликтов и смещение нескольких событий не укладываются в 5 с по умолчанию.
+const DND_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 10_000 };
+
 export const reservationsRoutes: FastifyPluginAsync = async (app) => {
   const replaceSingleReservation = async (
     tx: any,
@@ -72,6 +76,14 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     if (placementCount > 1) {
       throw new Error("Многоэтапное событие изменяется только через карточку события");
     }
+    const location = resolveStandLocation({
+      hangarId: params.hangarId,
+      layoutId: params.layoutId,
+      standId: params.standId
+    });
+    if (!location.occupiesStand || !location.layoutId || !location.standId) {
+      throw new Error("Место занимает слот только вместе с ангаром и схемой");
+    }
     await tx.standReservation.deleteMany({ where: { eventId: params.eventId } });
     await tx.eventPlacement.deleteMany({ where: { eventId: params.eventId } });
     const placement = await tx.eventPlacement.create({
@@ -84,9 +96,9 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         budgetEndAt: params.budgetEndAt ?? null,
         actualStartAt: params.actualStartAt ?? null,
         actualEndAt: params.actualEndAt ?? null,
-        hangarId: params.hangarId,
-        layoutId: params.layoutId,
-        standId: params.standId,
+        hangarId: location.hangarId,
+        layoutId: location.layoutId,
+        standId: location.standId,
         sortOrder: 0
       }
     });
@@ -95,8 +107,8 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         eventId: params.eventId,
         placementId: placement.id,
         sandboxId: params.sandboxId,
-        layoutId: params.layoutId,
-        standId: params.standId,
+        layoutId: location.layoutId,
+        standId: location.standId,
         startAt: params.startAt,
         endAt: params.endAt
       }
@@ -285,6 +297,31 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       UserMsg.CHANGE_REASON_REQUIRED
     );
 
+    const reserveChanges: Record<string, unknown> = {
+      reservation: {
+        from: existingReservation
+          ? {
+              layoutId: existingReservation.layoutId,
+              standId: existingReservation.standId,
+              startAt: existingReservation.startAt.toISOString(),
+              endAt: existingReservation.endAt.toISOString()
+            }
+          : null,
+        to: {
+          layoutId: reservation.layoutId,
+          standId: reservation.standId,
+          startAt: reservation.startAt.toISOString(),
+          endAt: reservation.endAt.toISOString()
+        }
+      }
+    };
+    if ((event.hangarId ?? null) !== layout.hangarId) {
+      reserveChanges.hangarId = { from: event.hangarId ?? null, to: layout.hangarId };
+    }
+    if (Boolean(event.allowOverlap) !== overlap.storedValue) {
+      reserveChanges.allowOverlap = { from: Boolean(event.allowOverlap), to: overlap.storedValue };
+    }
+
     await app.prisma.maintenanceEventAudit.create({
       data: {
         eventId,
@@ -292,24 +329,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         action: EventAuditAction.RESERVE,
         actor: getActor(req),
         reason: body.changeReason ?? (existingReservation ? null : "Первичное назначение места"),
-        changes: {
-          reservation: {
-            from: existingReservation
-              ? {
-                  layoutId: existingReservation.layoutId,
-                  standId: existingReservation.standId,
-                  startAt: existingReservation.startAt.toISOString(),
-                  endAt: existingReservation.endAt.toISOString()
-                }
-              : null,
-            to: {
-              layoutId: reservation.layoutId,
-              standId: reservation.standId,
-              startAt: reservation.startAt.toISOString(),
-              endAt: reservation.endAt.toISOString()
-            }
-          }
-        }
+        changes: reserveChanges as Prisma.InputJsonValue
       }
     });
 
@@ -424,27 +444,24 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           where: { id: { in: toBump } },
           data: { hangarId: null, layoutId: null, status: EventStatus.PENDING_EXECUTOR_APPROVAL }
         });
-        // 3) аудит по каждому "вытолкнутому"
-        for (const bumpedEventId of toBump) {
-          await tx.maintenanceEventAudit.create({
-            data: {
-              eventId: bumpedEventId,
-              sandboxId: sbId,
-              action: EventAuditAction.UPDATE,
-              actor: getActor(req),
-              reason: body.changeReason ?? null,
-              changes: {
-                dnd: {
-                  bumpedByEventId: body.eventId,
-                  reservationTo: null,
-                  statusTo: EventStatus.PENDING_EXECUTOR_APPROVAL,
-                  hangarIdTo: null,
-                  layoutIdTo: null
-                }
+        await tx.maintenanceEventAudit.createMany({
+          data: toBump.map((bumpedEventId) => ({
+            eventId: bumpedEventId,
+            sandboxId: sbId,
+            action: EventAuditAction.UPDATE,
+            actor: getActor(req),
+            reason: body.changeReason ?? null,
+            changes: {
+              dnd: {
+                bumpedByEventId: body.eventId,
+                reservationTo: null,
+                statusTo: EventStatus.PENDING_EXECUTOR_APPROVAL,
+                hangarIdTo: null,
+                layoutIdTo: null
               }
             }
-          });
-        }
+          }))
+        });
       }
 
       const existingReservation = event.reservations[0]
@@ -505,7 +522,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return { ok: true, reservation, bumpedEventIds };
-    });
+    }, DND_TRANSACTION_OPTIONS);
 
     return moved;
   });
@@ -616,26 +633,24 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           where: { id: { in: toBump } },
           data: { hangarId: null, layoutId: null, status: EventStatus.PENDING_EXECUTOR_APPROVAL }
         });
-        for (const bumpedEventId of toBump) {
-          await tx.maintenanceEventAudit.create({
-            data: {
-              eventId: bumpedEventId,
-              sandboxId: sbId,
-              action: EventAuditAction.UPDATE,
-              actor: getActor(req),
-              reason: body.changeReason ?? null,
-              changes: {
-                dnd: {
-                  bumpedByEventId: body.eventId,
-                  reservationTo: null,
-                  statusTo: EventStatus.PENDING_EXECUTOR_APPROVAL,
-                  hangarIdTo: null,
-                  layoutIdTo: null
-                }
+        await tx.maintenanceEventAudit.createMany({
+          data: toBump.map((bumpedEventId) => ({
+            eventId: bumpedEventId,
+            sandboxId: sbId,
+            action: EventAuditAction.UPDATE,
+            actor: getActor(req),
+            reason: body.changeReason ?? null,
+            changes: {
+              dnd: {
+                bumpedByEventId: body.eventId,
+                reservationTo: null,
+                statusTo: EventStatus.PENDING_EXECUTOR_APPROVAL,
+                hangarIdTo: null,
+                layoutIdTo: null
               }
             }
-          });
-        }
+          }))
+        });
       }
 
       const prev = {
@@ -700,7 +715,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return { ok: true, reservation, bumpedEventIds };
-    });
+    }, DND_TRANSACTION_OPTIONS);
 
     return moved;
   });
@@ -878,7 +893,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
           standCode: candidate.stand.code
         }
       };
-    });
+    }, DND_TRANSACTION_OPTIONS);
 
     return moved;
   });
@@ -1142,8 +1157,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const del = await app.prisma.standReservation.deleteMany({ where: { eventId } });
-    await app.prisma.eventPlacement.deleteMany({ where: { eventId } });
-    await app.prisma.maintenanceEvent.update({ where: { id: eventId }, data: { hangarId: null, layoutId: null } });
+    await app.prisma.eventPlacement.updateMany({ where: { eventId }, data: { standId: null } });
 
     await app.prisma.maintenanceEventAudit.create({
       data: {
@@ -1151,7 +1165,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         sandboxId: sandboxIdFor(req),
         action: EventAuditAction.UNRESERVE,
         actor: getActor(req),
-        reason: "Снятие резерва",
+        reason: "Место снято",
         changes: {
           reservation: {
             from: {

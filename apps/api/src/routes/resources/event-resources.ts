@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { EventAuditAction } from "@prisma/client";
 import { z } from "zod";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
@@ -6,6 +7,7 @@ import { assertPermission } from "../../lib/rbac.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 import { durationDays, inclusiveCalendarDays } from "../../lib/primaryTable/formulaEngine.js";
+import { laborBlockEditable } from "../../lib/laborEditability.js";
 import {
   LABOR_CARD_SERIES,
   LABOR_EDITABLE_BLOCKS,
@@ -23,13 +25,26 @@ function assertCanWrite(req: any) {
   }
 }
 
+function getActor(req: any) {
+  const auth = req.auth as { email?: string } | undefined;
+  if (auth?.email) return String(auth.email).slice(0, 80);
+  const headers = req.headers ?? {};
+  return String(headers["x-actor"] ?? headers["x-user"] ?? "browser").slice(0, 80);
+}
+
+function sameHours(left: number | null, right: number | null) {
+  if (left == null && right == null) return true;
+  if (left == null || right == null) return false;
+  return left === right;
+}
+
 function toUtcDayStart(v: string | Date) {
   const d = v instanceof Date ? v : new Date(v);
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
 }
 
 const zLaborBlock = z.enum(LABOR_EDITABLE_BLOCKS);
-const zDepartment = z.enum(["ME", "AV", "INT", "NDT", "SHOP", "CAB_REP"]);
+const zDepartment = z.enum(PRIMARY_METRIC_DEPARTMENTS);
 
 export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
   // --- Трудоёмкость WP (ч/ч) → EventReportMetric ---
@@ -141,15 +156,38 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
               manHours: z.number().finite().min(0).max(1_000_000).nullable()
             })
           )
-          .max(64)
+          .max(80)
       })
       .parse(req.body);
 
     const event = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req as any) },
-      select: { id: true }
+      select: { id: true, status: true }
     });
     if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+
+    const statusRows = await app.prisma.eventStatusCatalog.findMany({
+      where: { code: { in: [event.status, "IN_PROGRESS"] } },
+      select: { code: true, sortOrder: true }
+    });
+    const sortOf = (code: string) => statusRows.find((row) => row.code === code)?.sortOrder;
+    for (const row of body.values) {
+      if (
+        laborBlockEditable({
+          status: event.status,
+          block: row.block,
+          statusSortOrder: sortOf(event.status),
+          inProgressSortOrder: sortOf("IN_PROGRESS")
+        })
+      ) {
+        continue;
+      }
+      throw app.httpErrors.badRequest(
+        row.block === "WP_ACTUAL" || row.block === "ADD_ACTUAL" || row.block === "NRC_ACTUAL"
+          ? "Фактическую трудоёмкость можно менять только в статусе «Завершено»"
+          : "Бюджет и MPS можно менять, пока статус не позже «В работе»"
+      );
+    }
 
     const sandboxId = sandboxIdFor(req as any);
     const byKey = new Map<string, (typeof body.values)[number]>();
@@ -159,6 +197,26 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
 
     await app.prisma.$transaction(
       async (tx) => {
+        const existing =
+          unique.length > 0
+            ? await tx.eventReportMetric.findMany({
+                where: {
+                  eventId,
+                  ...sandboxFilter(req as any),
+                  OR: unique.map((row) => ({ block: row.block, department: row.department }))
+                },
+                select: { block: true, department: true, manHours: true }
+              })
+            : [];
+        const before = new Map(
+          existing.map((row) => [`${row.block}:${row.department}`, row.manHours == null ? null : Number(row.manHours)])
+        );
+        const changed = unique.flatMap((row) => {
+          const previous = before.get(`${row.block}:${row.department}`) ?? null;
+          if (sameHours(previous, row.manHours)) return [];
+          return [{ block: row.block, department: row.department, from: previous, to: row.manHours }];
+        });
+
         if (unique.length > 0) {
           await tx.eventReportMetric.deleteMany({
             where: {
@@ -178,6 +236,30 @@ export const eventResourcesRoutes: FastifyPluginAsync = async (app) => {
               manHours: row.manHours!,
               source: "MANUAL" as const
             }))
+          });
+        }
+        if (changed.length > 0) {
+          await tx.maintenanceEventAudit.create({
+            data: {
+              eventId,
+              sandboxId,
+              action: EventAuditAction.UPDATE,
+              actor: getActor(req),
+              changes: {
+                laborMetrics: {
+                  from: changed.map((row) => ({
+                    block: row.block,
+                    department: row.department,
+                    manHours: row.from
+                  })),
+                  to: changed.map((row) => ({
+                    block: row.block,
+                    department: row.department,
+                    manHours: row.to
+                  }))
+                }
+              }
+            }
           });
         }
       },

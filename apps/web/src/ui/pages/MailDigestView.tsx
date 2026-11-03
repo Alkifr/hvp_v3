@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiDelete, apiGet, apiPost, apiPut } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
+import { composeOutgoingLetter } from "../../lib/mailLetter";
 import { resolveFieldPick, suggestFieldPick } from "../../lib/reportFieldPick";
 import { authMe } from "../auth/authApi";
 import { SwitchToggle } from "../components/SwitchToggle";
@@ -210,6 +211,10 @@ export function MailDigestView() {
   const [emailDraft, setEmailDraft] = useState("");
   const [previewText, setPreviewText] = useState("");
   const [previewHtml, setPreviewHtml] = useState("");
+  const [draftText, setDraftText] = useState("");
+  const [textDirty, setTextDirty] = useState(false);
+  const [letterNote, setLetterNote] = useState("");
+  const [previewReady, setPreviewReady] = useState(false);
   const [previewStats, setPreviewStats] = useState<MailPreview["stats"] | null>(null);
   const [sendMenu, setSendMenu] = useState(false);
   const [histStatus, setHistStatus] = useState<SendStatus | "all">("all");
@@ -267,6 +272,10 @@ export function MailDigestView() {
     setColumns(selected.columns?.length ? selected.columns : DEFAULT_COLUMNS);
     setPreviewText("");
     setPreviewHtml("");
+    setDraftText("");
+    setTextDirty(false);
+    setLetterNote("");
+    setPreviewReady(false);
     setPreviewStats(null);
     setHydratedId(selected.id);
   }, [selected, hydratedId, customDefaults]);
@@ -354,21 +363,48 @@ export function MailDigestView() {
     onSuccess: (res) => {
       setPreviewText(res.text);
       setPreviewHtml(res.html);
+      setDraftText(res.text);
+      setTextDirty(false);
+      setPreviewReady(true);
       setPreviewStats(res.stats);
     }
   });
 
   const sendM = useMutation({
-    mutationFn: (target: "self" | "all") => {
+    mutationFn: async (target: "self" | "all") => {
       if (!selectedVariantId) throw new Error("Сначала создайте вариант рассылки");
+      let generatedText = previewText;
+      let generatedHtml = previewHtml;
+      let nextDraft = draftText;
+      let dirty = textDirty;
+      if (!generatedText.trim() && !generatedHtml.trim() && !dirty) {
+        const res = await apiPost<MailPreview>(`/api/mail-digest/${selectedVariantId}/preview`, periodPayload());
+        generatedText = res.text;
+        generatedHtml = res.html;
+        nextDraft = res.text;
+        dirty = false;
+        setPreviewText(res.text);
+        setPreviewHtml(res.html);
+        setDraftText(res.text);
+        setTextDirty(false);
+        setPreviewReady(true);
+        setPreviewStats(res.stats);
+      }
+      const letter = composeOutgoingLetter({
+        note: letterNote,
+        draftText: nextDraft,
+        generatedText,
+        generatedHtml,
+        textDirty: dirty
+      });
       return apiPost<{ ok: true; messageId: string; recipients: string[]; subject: string }>(
         `/api/mail-digest/${selectedVariantId}/send`,
         {
           ...periodPayload(),
           recipients,
           subject: name.trim() || "Изменения плана ТО",
-          text: previewText.trim() || undefined,
-          html: previewHtml.trim() || undefined,
+          text: letter.explicit ? letter.text ?? "" : undefined,
+          html: letter.explicit ? letter.html ?? "" : undefined,
           target
         }
       );
@@ -487,6 +523,14 @@ export function MailDigestView() {
     setPageTab(tab);
     writeLs(LS_TAB, tab);
   };
+
+  const outgoing = composeOutgoingLetter({
+    note: letterNote,
+    draftText,
+    generatedText: previewText,
+    generatedHtml: previewHtml,
+    textDirty
+  });
 
   return (
     <div className="mailDigestPage">
@@ -891,6 +935,17 @@ export function MailDigestView() {
                       ) : null}
                     </div>
 
+                    <label className="adminField adminFieldGrow">
+                      <span className="muted">Комментарий в начале письма</span>
+                      <textarea
+                        rows={3}
+                        value={letterNote}
+                        onChange={(e) => setLetterNote(e.target.value)}
+                        placeholder="Необязательный текст перед таблицей изменений"
+                        style={{ width: "100%", resize: "vertical" }}
+                      />
+                    </label>
+
                     <div className="adminFormRow">
                       <button className="btn" disabled={previewM.isPending} onClick={() => previewM.mutate()}>
                         Предпросмотр
@@ -905,26 +960,51 @@ export function MailDigestView() {
                       </div>
                     ) : null}
 
-                    {previewHtml ? (
+                    {outgoing.html ? (
                       <div className="adminMailPreview">
                         <div className="muted" style={{ marginBottom: 8 }}>
-                          Превью письма
+                          Превью письма — так его увидят получатели
                         </div>
-                        <div className="adminMailPreviewFrame" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                        <div className="adminMailPreviewFrame" dangerouslySetInnerHTML={{ __html: outgoing.html }} />
                       </div>
+                    ) : previewReady ? (
+                      <div className="muted">За период нет строк для таблицы. Напишите текст ниже — уйдёт он.</div>
                     ) : (
-                      <div className="muted">Нажмите «Предпросмотр», чтобы собрать изменения.</div>
+                      <div className="muted">Нажмите «Предпросмотр», чтобы собрать изменения. Комментарий можно написать и до этого.</div>
                     )}
 
-                    {previewText ? (
+                    {previewReady || textDirty ? (
                       <label className="adminField adminFieldGrow">
-                        <span className="muted">Текстовая версия (можно править перед отправкой)</span>
+                        <span className="muted">Текст письма — можно изменить перед отправкой</span>
                         <textarea
-                          rows={8}
-                          value={previewText}
-                          onChange={(e) => setPreviewText(e.target.value)}
+                          rows={10}
+                          value={draftText}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            setDraftText(next);
+                            setTextDirty(next !== previewText);
+                          }}
                           style={{ width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", resize: "vertical" }}
                         />
+                        {textDirty ? (
+                          <span className="mailLetterEditNote">
+                            Текст изменён: уйдёт эта версия, без таблицы.{" "}
+                            <button
+                              type="button"
+                              className="profileTextLink"
+                              onClick={() => {
+                                setDraftText(previewText);
+                                setTextDirty(false);
+                              }}
+                            >
+                              Вернуть автоматический текст
+                            </button>
+                          </span>
+                        ) : previewText.trim() ? (
+                          <span className="muted">Пока текст не трогали, в письме останется таблица изменений.</span>
+                        ) : (
+                          <span className="muted">Поле пустое: без комментария такое письмо не уйдёт.</span>
+                        )}
                       </label>
                     ) : null}
                   </div>

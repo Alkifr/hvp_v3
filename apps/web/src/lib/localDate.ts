@@ -1,4 +1,7 @@
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+
+dayjs.extend(utc);
 
 /** MSK fixed offset (no DST since 2014). East of UTC, minutes. */
 export const MSK_OFFSET_MINUTES = 180;
@@ -168,4 +171,18 @@ export function endOfMskDayIso(dateStr: string): string | null {
 export function fromInputMskOptional(value: string): string | null {
   if (!value) return null;
   return cellToIsoLocal(value.replace("T", " "));
+}
+
+/** Absolute instant → `datetime-local` wall clock in MSK. */
+export function toInputMsk(value: string | Date | null | undefined): string {
+  if (value == null || value === "") return "";
+  const d = dayjs(value).utcOffset(MSK_OFFSET_MINUTES);
+  return d.isValid() ? d.format("YYYY-MM-DDTHH:mm") : "";
+}
+
+/** Absolute instant → `DD.MM.YYYY HH:mm` in MSK. */
+export function formatMskDateTime(value: string | Date | null | undefined): string {
+  if (value == null || value === "") return "";
+  const d = dayjs(value).utcOffset(MSK_OFFSET_MINUTES);
+  return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : "";
 }

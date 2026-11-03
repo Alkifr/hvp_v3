@@ -19,6 +19,8 @@ test("parseHomePage accepts known modules and treats auto as empty", () => {
 test("isHomePageAllowed hides desktop modules on mobile", () => {
   assert.equal(isHomePageAllowed("tows", ["tows:read"], true), false);
   assert.equal(isHomePageAllowed("tows", ["tows:read"], false), true);
+  assert.equal(isHomePageAllowed("personnel", ["personnel:read"], true), false);
+  assert.equal(isHomePageAllowed("personnel", ["personnel:read"], false), true);
   assert.equal(isHomePageAllowed("gantt", ["gantt:read"], true), true);
   assert.equal(isHomePageAllowed("gantt", ["hangar:read"], false), false);
 });

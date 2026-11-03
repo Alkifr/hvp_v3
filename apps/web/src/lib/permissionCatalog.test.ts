@@ -48,6 +48,14 @@ test("write implies view even if read was not stored", () => {
   assert.equal(hasPermission(["gantt:read"], "events:read"), true);
 });
 
+test("personnel actions imply personnel view only", () => {
+  for (const code of ["personnel:write", "personnel:lock", "personnel:unlock"]) {
+    assert.equal(hasPermission([code], "personnel:read"), true);
+  }
+  assert.equal(hasPermission(["personnel:read"], "gantt:read"), false);
+  assert.ok(previewNavLabels(["personnel:read"]).includes("РМ Персонал"));
+});
+
 test("legacy events:write opens planning editors", () => {
   assert.equal(hasPermission(["events:write"], "gantt:write"), true);
   assert.equal(hasPermission(["events:write"], "import:write"), true);

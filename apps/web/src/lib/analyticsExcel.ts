@@ -377,6 +377,7 @@ export type MonthlyBasePlanExcelInput = {
       NDT: number;
       SHOP: number;
       CAB_REP: number;
+      PAINT: number;
     };
   }>;
   shops: Array<{
@@ -397,7 +398,8 @@ const QUAL_COLUMNS = [
   { key: "INT" as const, label: "INT" },
   { key: "NDT" as const, label: "NDT" },
   { key: "SHOP" as const, label: "SHOP" },
-  { key: "CAB_REP" as const, label: "CabRep" }
+  { key: "CAB_REP" as const, label: "CabRep" },
+  { key: "PAINT" as const, label: "Paint" }
 ];
 
 function verticalShiftBorders(col: number, firstShiftCol: number) {

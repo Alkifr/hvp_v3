@@ -27,8 +27,15 @@ test("parseHashPage reads #admin/roles", () => {
 
 test("adminTabFromHash accepts known tabs and ignores unknown", () => {
   assert.equal(adminTabFromHash("#admin/overview"), "overview");
+  assert.equal(adminTabFromHash("#admin/server"), "server");
   assert.equal(adminTabFromHash("#admin/sandboxes"), "sandboxes");
   assert.equal(adminTabFromHash("#admin/reports"), "reports");
+  assert.equal(adminTabFromHash("#admin/imports"), "imports");
+  assert.equal(adminTabFromHash("#admin/import-types"), "import-types");
+  assert.equal(adminTabFromHash("#admin/import-aircraft"), "import-aircraft");
+  assert.equal(adminTabFromHash("#admin/import-workshops"), "import-workshops");
+  assert.equal(adminTabFromHash("#admin/import-layouts"), "import-layouts");
+  assert.equal(adminTabFromHash("#admin/import-priorities"), "import-priorities");
   assert.equal(adminTabFromHash("#admin/cleanup"), "cleanup");
   assert.equal(adminTabFromHash("#admin"), null);
   assert.equal(adminTabFromHash("#admin/unknown"), null);

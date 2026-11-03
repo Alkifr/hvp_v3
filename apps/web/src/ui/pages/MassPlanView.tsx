@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import * as XLSX from "xlsx";
@@ -8,6 +8,13 @@ import { isValidDateInput } from "../../lib/dateInput";
 import { downloadMassPlanBatchTemplate } from "../../lib/importTemplates";
 import { endOfMskDayIso, fromInputMskOptional, startOfMskDayIso } from "../../lib/localDate";
 import {
+  massPlanBlockMessage,
+  parseImportNumber,
+  scheduleModeFromToken,
+  uniformValue,
+  type MassPlanBatchRow
+} from "../../lib/massPlanBatch";
+import {
   LINE_BASE_LABEL,
   lineBaseAfterWorkshopChange,
   parseImportLineBase,
@@ -16,8 +23,9 @@ import {
 } from "../../lib/lineBase";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
+import { MassBatchRows } from "./MassBatchRows";
 
-type Hangar = { id: string; name: string; code: string };
+type Hangar = { id: string; name: string; code: string; isActive?: boolean };
 type Operator = { id: string; name: string; code: string };
 type AircraftType = { id: string; name: string; icaoType?: string | null; bodyType?: string | null };
 type EventType = { id: string; name: string; code: string; isActive?: boolean };
@@ -187,22 +195,7 @@ type MassResult = {
   createdTowsAfter?: number;
 };
 
-type BatchRow = {
-  id: string;
-  tatHours: number;
-  operatorId: string;
-  aircraftTypeId: string;
-  eventTypeId: string;
-  workshopId: string;
-  lineBase: LineBase | "";
-  count: number;
-  startFrom: string;
-  endTo: string;
-  titleTemplate: string;
-  scheduleMode: "compact" | "sequential" | "fixedCadence";
-  spacingHours: number;
-  cadenceHours: number;
-};
+type BatchRow = MassPlanBatchRow;
 
 function fromInputLocalOptional(value: string): string | null {
   return fromInputMskOptional(value);
@@ -384,6 +377,7 @@ export function MassPlanView(props: { hideHero?: boolean }) {
   const [startFrom, setStartFrom] = useState(() => dayjs().format("YYYY-MM-DD"));
   const [endTo, setEndTo] = useState(() => dayjs().add(30, "day").format("YYYY-MM-DD"));
   const [hangarPriority, setHangarPriority] = useState<string[]>([]);
+  const [strictHangars, setStrictHangars] = useState(true);
   const [titleTemplate, setTitleTemplate] = useState("");
   const [scheduleMode, setScheduleMode] = useState<"compact" | "sequential" | "fixedCadence">("compact");
   const [spacingHours, setSpacingHours] = useState(0);
@@ -439,6 +433,7 @@ export function MassPlanView(props: { hideHero?: boolean }) {
       ? endOfMskDayIso(endTo)!
       : endOfMskDayIso(dayjs().add(30, "day").format("YYYY-MM-DD"))!,
     hangarIds: hangarPriority.length > 0 ? hangarPriority : undefined,
+    strictHangars,
     titleTemplate: titleTemplate.trim() || undefined,
     scheduleMode,
     spacingHours: Math.max(0, Number(spacingHours) || 0),
@@ -497,11 +492,12 @@ export function MassPlanView(props: { hideHero?: boolean }) {
         ? endOfMskDayIso(row.endTo)!
         : endOfMskDayIso(dayjs().add(30, "day").format("YYYY-MM-DD"))!,
       titleTemplate: row.titleTemplate.trim() || undefined,
-      scheduleMode,
-      spacingHours: Math.max(0, Number(spacingHours) || 0),
-      cadenceHours: scheduleMode === "fixedCadence" ? Math.max(1, Number(cadenceHours) || 1) : undefined
+      scheduleMode: row.scheduleMode,
+      spacingHours: Math.max(0, Number(row.spacingHours) || 0),
+      cadenceHours: row.scheduleMode === "fixedCadence" ? Math.max(1, Number(row.cadenceHours) || 1) : undefined
     })),
     hangarIds: hangarPriority.length > 0 ? hangarPriority : undefined,
+    strictHangars,
     placementMode,
     budgetStartAt: fromInputLocalOptional(budgetStartAtLocal),
     budgetEndAt: fromInputLocalOptional(budgetEndAtLocal),
@@ -535,41 +531,64 @@ export function MassPlanView(props: { hideHero?: boolean }) {
   });
 
   const hangars = hangarsQ.data ?? [];
+  const activeHangars = useMemo(() => hangars.filter((hangar) => hangar.isActive !== false), [hangars]);
   const operators = operatorsQ.data ?? [];
   const aircraftTypes = aircraftTypesQ.data ?? [];
-  const eventTypes = (eventTypesQ.data ?? []).filter((t) => t.isActive !== false);
+  const eventTypes = useMemo(
+    () => (eventTypesQ.data ?? []).filter((t) => t.isActive !== false),
+    [eventTypesQ.data]
+  );
   const workshops = workshopsQ.data ?? [];
   const hangarById = new Map(hangars.map((h) => [h.id, h]));
-  const availableHangarIds = hangars.map((h) => h.id).filter((id) => !hangarPriority.includes(id));
+  const availableHangarIds = activeHangars.map((h) => h.id).filter((id) => !hangarPriority.includes(id));
+
+  useEffect(() => {
+    if (!hangarsQ.data) return;
+    const activeIds = new Set(hangarsQ.data.filter((hangar) => hangar.isActive !== false).map((hangar) => hangar.id));
+    setHangarPriority((prev) => {
+      const next = prev.filter((id) => activeIds.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [hangarsQ.data]);
   const decisionByIndex = new Map((preview?.solverDiagnostics?.jobs ?? []).map((job) => [job.flatIndex, job]));
-  const isBatchReady = batchRows.length > 0 && batchRows.every((row) => row.operatorId && row.aircraftTypeId && row.eventTypeId && row.startFrom && row.endTo);
+  const formBlockMessage = massPlanBlockMessage(
+    inputMode === "batch"
+      ? { mode: "batch", rows: batchRows }
+      : { mode: "single", operatorId, aircraftTypeId, eventTypeId }
+  );
+  const scheduleMixed = useMemo(() => {
+    if (batchRows.length < 2) return false;
+    return (
+      uniformValue(batchRows.map((row) => row.scheduleMode)) == null ||
+      uniformValue(batchRows.map((row) => row.spacingHours)) == null ||
+      uniformValue(batchRows.map((row) => row.cadenceHours)) == null
+    );
+  }, [batchRows]);
   const plannedEventsCount = inputMode === "batch" ? batchRows.reduce((sum, row) => sum + row.count, 0) : count;
   const isCalculating = previewM.isPending || applyM.isPending;
   const calculationTitle = applyM.isPending ? "Создание событий" : "Расчёт размещения";
   const calculationText = applyM.isPending
-    ? `Создаём ${plannedEventsCount} событий и резервов. Не закрывайте страницу до завершения.`
+    ? `Создаём ${plannedEventsCount} событий. Не закрывайте страницу до завершения.`
     : inputMode === "batch"
       ? `Анализируем ${batchRows.length} строк и ${plannedEventsCount} событий. Режим solver: ${batchSolverMode === "ortools" ? "только OR-Tools" : batchSolverMode === "hybrid" ? "гибрид" : "эвристика"}.`
       : `Подбираем места для ${plannedEventsCount} событий.`;
 
   const handlePreview = (e: React.FormEvent) => {
     e.preventDefault();
+    if (formBlockMessage) return;
     if (inputMode === "batch") {
-      if (!isBatchReady) return;
       previewM.mutate(buildBatchBody());
       return;
     }
-    if (!operatorId || !aircraftTypeId || !eventTypeId) return;
     previewM.mutate(buildBody());
   };
 
   const handleApply = () => {
+    if (formBlockMessage) return;
     if (inputMode === "batch") {
-      if (!isBatchReady) return;
       applyM.mutate(buildBatchBody());
       return;
     }
-    if (!operatorId || !aircraftTypeId || !eventTypeId) return;
     applyM.mutate(buildBody());
   };
 
@@ -579,6 +598,7 @@ export function MassPlanView(props: { hideHero?: boolean }) {
     if (j < 0 || j >= next.length) return;
     [next[index], next[j]] = [next[j]!, next[index]!];
     setHangarPriority(next);
+    clearPlanOutput();
   };
 
   const scheduleLabel = (mode: "compact" | "sequential" | "fixedCadence") =>
@@ -595,11 +615,27 @@ export function MassPlanView(props: { hideHero?: boolean }) {
     return solver === "ortools" ? reason : `Использована эвристика: ${reason}`;
   };
 
-  const updateBatchRow = (id: string, patch: Partial<BatchRow>) => {
-    setBatchRows((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  const updateBatchRow = useCallback((id: string, patch: Partial<BatchRow>) => {
+    setBatchRows((rows) =>
+      rows.map((row) => {
+        if (row.id !== id) return row;
+        const unresolved = { ...row.unresolved };
+        if ("operatorId" in patch) delete unresolved.operator;
+        if ("aircraftTypeId" in patch) delete unresolved.aircraftType;
+        if ("eventTypeId" in patch) delete unresolved.eventType;
+        const hasUnresolved = Object.values(unresolved).some((value) => Boolean(value));
+        return { ...row, ...patch, unresolved: hasUnresolved ? unresolved : undefined };
+      })
+    );
     setPreview(null);
     setResult(null);
-  };
+  }, []);
+
+  const removeBatchRow = useCallback((id: string) => {
+    setBatchRows((rows) => rows.filter((row) => row.id !== id));
+    setPreview(null);
+    setResult(null);
+  }, []);
 
   const resolveOperator = (value: unknown) => {
     const q = normalizeImportToken(value);
@@ -632,36 +668,67 @@ export function MassPlanView(props: { hideHero?: boolean }) {
         }
         return "";
       };
+      const unknownModes = new Map<string, number>();
       const imported = rows.map((row) => {
         const start = pick(row, ["startFrom", "начало периода", "дата начала", "start"]);
         const end = pick(row, ["endTo", "конец периода", "дата окончания", "end"]);
         const workshopRaw = pick(row, ["workshop", "цех", "ответственный цех", "workshopId"]);
         const lineBaseRaw = pick(row, ["lineBase", "lb", "l/b", "контур", "контур lb"]);
+        const operatorRaw = String(pick(row, ["operator", "оператор"]) ?? "").trim();
+        const aircraftRaw = String(pick(row, ["aircraftType", "тип вс", "тип"]) ?? "").trim();
+        const eventRaw = String(pick(row, ["eventType", "тип события", "событие"]) ?? "").trim();
+        const scheduleRaw = String(pick(row, ["scheduleMode", "режим", "режим расписания"]) ?? "").trim();
         const nextWorkshopId = resolveWorkshop(workshopRaw);
         const parsedLineBase = parseImportLineBase(lineBaseRaw);
+        const operatorIdResolved = resolveOperator(operatorRaw);
+        const aircraftTypeIdResolved = resolveAircraftType(aircraftRaw);
+        const eventTypeIdResolved = resolveEventType(eventRaw);
+        const parsedSchedule = scheduleModeFromToken(normalizeImportToken(scheduleRaw), scheduleMode);
         if (String(workshopRaw).trim() && !nextWorkshopId) {
           throw new Error(`Не найден цех: ${String(workshopRaw).trim()}`);
         }
         if (String(lineBaseRaw).trim() && !parsedLineBase) {
           throw new Error(`Некорректный L/B: ${String(lineBaseRaw).trim()}. Допустимо L/LINE или B/BASE`);
         }
+        if (scheduleRaw && !parsedSchedule.recognized) {
+          unknownModes.set(scheduleRaw, (unknownModes.get(scheduleRaw) ?? 0) + 1);
+        }
+        const unresolved = {
+          ...(operatorRaw && !operatorIdResolved ? { operator: operatorRaw } : {}),
+          ...(aircraftRaw && !aircraftTypeIdResolved ? { aircraftType: aircraftRaw } : {}),
+          ...(eventRaw && !eventTypeIdResolved ? { eventType: eventRaw } : {})
+        };
         return {
           id: makeClientId(),
-          tatHours: Number(pick(row, ["tatHours", "tat", "тат", "TAT"])) || 72,
-          operatorId: resolveOperator(pick(row, ["operator", "оператор"])),
-          aircraftTypeId: resolveAircraftType(pick(row, ["aircraftType", "тип вс", "тип"])),
-          eventTypeId: resolveEventType(pick(row, ["eventType", "тип события", "событие"])),
+          tatHours: Math.max(1, parseImportNumber(pick(row, ["tatHours", "tat", "тат", "TAT"]), 72)),
+          operatorId: operatorIdResolved,
+          aircraftTypeId: aircraftTypeIdResolved,
+          eventTypeId: eventTypeIdResolved,
           workshopId: nextWorkshopId,
           lineBase: parsedLineBase ?? lineBaseAfterWorkshopChange(nextWorkshopId, workshops, ""),
-          count: Number(pick(row, ["count", "количество", "qty"])) || 1,
+          count: Math.min(200, Math.max(1, parseImportNumber(pick(row, ["count", "количество", "qty"]), 1))),
           startFrom: parseImportDate(start, startFrom),
           endTo: parseImportDate(end, endTo),
           titleTemplate: String(pick(row, ["titleTemplate", "название", "шаблон"]) || ""),
-          scheduleMode,
-          spacingHours: Number(pick(row, ["spacingHours", "пауза"])) || Number(spacingHours) || 0,
-          cadenceHours: Number(pick(row, ["cadenceHours", "шаг"])) || Number(cadenceHours) || 168
+          scheduleMode: parsedSchedule.mode,
+          spacingHours: Math.max(0, parseImportNumber(pick(row, ["spacingHours", "пауза", "пауза между событиями"]), spacingHours)),
+          cadenceHours: Math.max(0, parseImportNumber(pick(row, ["cadenceHours", "шаг", "шаг запуска"]), cadenceHours)),
+          unresolved: Object.keys(unresolved).length > 0 ? unresolved : undefined
         };
       });
+      const sharedMode = uniformValue(imported.map((row) => row.scheduleMode));
+      const sharedSpacing = uniformValue(imported.map((row) => row.spacingHours));
+      const sharedCadence = uniformValue(imported.map((row) => row.cadenceHours));
+      if (sharedMode) setScheduleMode(sharedMode);
+      if (sharedSpacing != null) setSpacingHours(sharedSpacing);
+      if (sharedCadence != null) setCadenceHours(sharedCadence);
+      if (unknownModes.size > 0) {
+        const details = [...unknownModes.entries()]
+          .slice(0, 5)
+          .map(([value, count]) => `«${value}» (${count})`)
+          .join(", ");
+        setBatchImportError(`Неизвестный режим расписания: ${details}. Для этих строк оставлен режим формы.`);
+      }
       setBatchRows(imported);
       clearPlanOutput();
     } catch (err: any) {
@@ -694,7 +761,7 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                 <p>
                   {inputMode === "single"
                     ? "Задайте тип события, объём и период — система создаст серию по одному шаблону."
-                    : "Каждая строка — отдельный набор событий. Расписание и буксировки задаются ниже для всех строк."}
+                    : "Каждая строка — отдельный набор событий. Режим, пауза и шаг берутся из строки, в том числе из файла. Буксировки задаются ниже для всех строк."}
                 </p>
               </div>
               <div className="massModeToggle" role="group" aria-label="Режим ввода">
@@ -727,10 +794,11 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                 <div className="massFieldGroup">
                   <p className="massFieldGroupTitle">Что планируем</p>
                   <div className="massFormGrid massFormGridIdentity">
-                    <label className="massField">
+                    <label className={operatorId ? "massField" : "massField massFieldInvalid"}>
                       <span className="muted">Оператор</span>
                       <select
                         value={operatorId}
+                        aria-invalid={!operatorId}
                         onChange={(e) => {
                           setOperatorId(e.target.value);
                           clearPlanOutput();
@@ -743,18 +811,18 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                         ))}
                       </select>
                     </label>
-                    <label className="massField">
+                    <label className={aircraftTypeId ? "massField" : "massField massFieldInvalid"}>
                       <span className="muted">Тип ВС</span>
-                      <select value={aircraftTypeId} onChange={(e) => setAircraftTypeId(e.target.value)} required>
+                      <select value={aircraftTypeId} aria-invalid={!aircraftTypeId} onChange={(e) => setAircraftTypeId(e.target.value)} required>
                         <option value="">— выберите —</option>
                         {aircraftTypes.map((t) => (
                           <option key={t.id} value={t.id}>{t.name}{t.icaoType ? ` (${t.icaoType})` : ""}</option>
                         ))}
                       </select>
                     </label>
-                    <label className="massField">
+                    <label className={eventTypeId ? "massField" : "massField massFieldInvalid"}>
                       <span className="muted">Вид события</span>
-                      <select value={eventTypeId} onChange={(e) => setEventTypeId(e.target.value)} required>
+                      <select value={eventTypeId} aria-invalid={!eventTypeId} onChange={(e) => setEventTypeId(e.target.value)} required>
                         <option value="">— выберите —</option>
                         {eventTypes.map((et) => (
                           <option key={et.id} value={et.id}>{et.name}</option>
@@ -847,7 +915,8 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                 <div className="massBatchToolbar">
                   <div className="muted small">
                     Заполните строки вручную или импортируйте XLSX/CSV по шаблону
-                    (operator, aircraftType, eventType, workshop, lineBase, tatHours, count, startFrom, endTo).
+                    (operator, aircraftType, eventType, workshop, lineBase, tatHours, count, startFrom, endTo, scheduleMode, spacingHours, cadenceHours).
+                    Если пауза или шаг в ячейке пустые, для строки берётся значение из «Расширенных настроек» — одно на все такие строки.
                   </div>
                   <div className="massBatchToolbarActions">
                     <button
@@ -882,128 +951,28 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                         if (file) void importBatchRows(file);
                       }}
                     />
-                    <button type="button" className="btn" onClick={() => setBatchRows((rows) => [...rows, newBatchRow()])}>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setBatchRows((rows) => [...rows, newBatchRow()]);
+                        clearPlanOutput();
+                      }}
+                    >
                       + строка
                     </button>
                   </div>
                 </div>
                 {batchImportError ? <div className="error">{batchImportError}</div> : null}
-                <div className="massBatchRows">
-                  <div className="massBatchHead" aria-hidden="true">
-                    <div className="massBatchRowGrid">
-                      <span>#</span>
-                      <span>Оператор</span>
-                      <span>Тип ВС</span>
-                      <span>Событие</span>
-                      <span>Цех</span>
-                      <span>L/B</span>
-                      <span>TAT</span>
-                      <span>Кол-во</span>
-                      <span>Начало</span>
-                      <span>Крайний старт</span>
-                      <span>Название</span>
-                      <span />
-                    </div>
-                  </div>
-                  {batchRows.map((row, idx) => (
-                    <div className="massBatchRowCard" key={row.id}>
-                      <div className="massBatchRowGrid">
-                        <div className="massBatchRowIndex">{idx + 1}</div>
-                        <label className="massField">
-                          <span className="muted">Оператор</span>
-                          <select value={row.operatorId} onChange={(e) => updateBatchRow(row.id, { operatorId: e.target.value })} required>
-                            <option value="">—</option>
-                            {operators.map((o) => (
-                              <option key={o.id} value={o.id}>{o.name}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="massField">
-                          <span className="muted">Тип ВС</span>
-                          <select value={row.aircraftTypeId} onChange={(e) => updateBatchRow(row.id, { aircraftTypeId: e.target.value })} required>
-                            <option value="">—</option>
-                            {aircraftTypes.map((t) => (
-                              <option key={t.id} value={t.id}>{t.name}{t.icaoType ? ` (${t.icaoType})` : ""}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="massField">
-                          <span className="muted">Вид события</span>
-                          <select value={row.eventTypeId} onChange={(e) => updateBatchRow(row.id, { eventTypeId: e.target.value })} required>
-                            <option value="">—</option>
-                            {eventTypes.map((et) => (
-                              <option key={et.id} value={et.id}>{et.name}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="massField">
-                          <span className="muted">Ответственный цех</span>
-                          <select
-                            value={row.workshopId}
-                            onChange={(e) =>
-                              updateBatchRow(row.id, {
-                                workshopId: e.target.value,
-                                lineBase: lineBaseAfterWorkshopChange(e.target.value, workshops, row.lineBase)
-                              })
-                            }
-                          >
-                            <option value="">—</option>
-                            {workshops
-                              .filter((w) => w.isActive !== false || w.id === row.workshopId)
-                              .map((w) => (
-                                <option key={w.id} value={w.id}>{w.code ? `${w.code} • ${w.name}` : w.name}</option>
-                              ))}
-                          </select>
-                        </label>
-                        <label className="massField">
-                          <span className="muted">L/B</span>
-                          <select
-                            value={row.lineBase}
-                            onChange={(e) => updateBatchRow(row.id, { lineBase: parseLineBase(e.target.value) ?? "" })}
-                          >
-                            <option value="">—</option>
-                            <option value="LINE">{LINE_BASE_LABEL.LINE}</option>
-                            <option value="BASE">{LINE_BASE_LABEL.BASE}</option>
-                          </select>
-                        </label>
-                        <label className="massField">
-                          <span className="muted">TAT, ч</span>
-                          <input type="number" min={1} max={8760} value={row.tatHours} onChange={(e) => updateBatchRow(row.id, { tatHours: Number(e.target.value) || 1 })} />
-                        </label>
-                        <label className="massField">
-                          <span className="muted">Кол-во</span>
-                          <input type="number" min={1} max={200} value={row.count} onChange={(e) => updateBatchRow(row.id, { count: Number(e.target.value) || 1 })} />
-                        </label>
-                        <label className="massField">
-                          <span className="muted">Начало периода</span>
-                          <input type="date" value={row.startFrom} onChange={(e) => updateBatchRow(row.id, { startFrom: e.target.value })} />
-                        </label>
-                        <label className="massField">
-                          <span className="muted">Крайний старт</span>
-                          <input type="date" value={row.endTo} onChange={(e) => updateBatchRow(row.id, { endTo: e.target.value })} />
-                        </label>
-                        <label className="massField">
-                          <span className="muted">Шаблон названия</span>
-                          <input value={row.titleTemplate} onChange={(e) => updateBatchRow(row.id, { titleTemplate: e.target.value })} placeholder="% = номер" />
-                        </label>
-                        <button
-                          type="button"
-                          className="btn btnGhost massBatchDeleteButton"
-                          onClick={() => setBatchRows((rows) => rows.filter((x) => x.id !== row.id))}
-                          title="Удалить строку"
-                          aria-label="Удалить строку"
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M5 7h14" />
-                            <path d="M10 11v6M14 11v6" />
-                            <path d="M8 7l1-3h6l1 3" />
-                            <path d="M7 7l1 13h8l1-13" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <MassBatchRows
+                  rows={batchRows}
+                  operators={operators}
+                  aircraftTypes={aircraftTypes}
+                  eventTypes={eventTypes}
+                  workshops={workshops}
+                  onUpdate={updateBatchRow}
+                  onRemove={removeBatchRow}
+                />
                 {batchRows.length === 0 ? <div className="massEmptyHint">Добавьте хотя бы одну строку для планирования.</div> : null}
               </div>
             )}
@@ -1014,7 +983,8 @@ export function MassPlanView(props: { hideHero?: boolean }) {
             <div className="massAdvancedBody">
               {inputMode === "batch" ? (
                 <p className="massAdvancedNote">
-                  Эти параметры применяются ко всем строкам списка. После изменения снова нажмите «Предпросмотр».
+                  Пустые ячейки режима, паузы и шага берут значение отсюда: одно число применяется ко всем таким строкам. Заполненная ячейка файла важнее. Изменение полей здесь записывает новое значение во все строки.
+                  {scheduleMixed ? " Сейчас в строках разные режим, пауза или шаг." : ""}
                 </p>
               ) : null}
 
@@ -1202,7 +1172,22 @@ export function MassPlanView(props: { hideHero?: boolean }) {
 
               <div className="massFieldGroup">
                 <p className="massFieldGroupTitle">Приоритет ангаров</p>
-                <p className="massAdvancedNote">Если список пуст, ангары перебираются по имени.</p>
+                <p className="massAdvancedNote">
+                  {hangarPriority.length === 0
+                    ? "Список пуст: поиск идёт по всем активным ангарам."
+                    : strictHangars
+                      ? "Жёсткое ограничение: свободные места ищутся только среди ангаров ниже."
+                      : "Сначала ангары из списка. Если места нет, можно использовать другой активный ангар."}
+                </p>
+                <SwitchToggle
+                  compact
+                  checked={strictHangars}
+                  onChange={(next) => {
+                    setStrictHangars(next);
+                    clearPlanOutput();
+                  }}
+                  label="Только выбранные ангары"
+                />
                 <div className="massHangarPriority">
                   {hangarPriority.map((id, index) => (
                     <span key={id} className="massHangarChip">
@@ -1210,7 +1195,16 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                       <span>{hangarById.get(id)?.name ?? id}</span>
                       <button type="button" onClick={() => moveHangar(index, -1)} disabled={index === 0} title="Выше">↑</button>
                       <button type="button" onClick={() => moveHangar(index, 1)} disabled={index === hangarPriority.length - 1} title="Ниже">↓</button>
-                      <button type="button" onClick={() => setHangarPriority((p) => p.filter((x) => x !== id))} title="Убрать">✕</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHangarPriority((p) => p.filter((x) => x !== id));
+                          clearPlanOutput();
+                        }}
+                        title="Убрать"
+                      >
+                        ✕
+                      </button>
                     </span>
                   ))}
                   {availableHangarIds.length > 0 && (
@@ -1219,7 +1213,9 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                       value=""
                       onChange={(e) => {
                         const v = e.target.value;
-                        if (v) setHangarPriority((p) => [...p, v]);
+                        if (!v) return;
+                        setHangarPriority((p) => [...p, v]);
+                        clearPlanOutput();
                       }}
                     >
                       <option value="">+ ангар</option>
@@ -1234,16 +1230,27 @@ export function MassPlanView(props: { hideHero?: boolean }) {
           </details>
 
           <div className="massActions massActionsSticky">
+            {formBlockMessage ? (
+              <div className="massFormAlert" role="alert">
+                {formBlockMessage}
+              </div>
+            ) : null}
             <div className="massActionsMeta muted small">
               {plannedEventsCount} событий
               {inputMode === "batch" ? ` · ${batchRows.length} строк` : null}
               {" · "}
               {scheduleLabel(scheduleMode)}
+              {hangarPriority.length > 0
+                ? strictHangars
+                  ? " · только выбранные ангары"
+                  : " · приоритет ангаров"
+                : null}
             </div>
             <button
               type="submit"
               className="btn btnPrimary"
-              disabled={previewM.isPending || (inputMode === "single" ? !operatorId || !aircraftTypeId || !eventTypeId : !isBatchReady)}
+              disabled={previewM.isPending || formBlockMessage != null}
+              title={formBlockMessage ?? undefined}
             >
               {previewM.isPending ? "Загрузка…" : "Предпросмотр"}
             </button>
@@ -1410,7 +1417,8 @@ export function MassPlanView(props: { hideHero?: boolean }) {
             <button
               type="button"
               className="btn btnPrimary"
-              disabled={applyM.isPending || (inputMode === "single" ? !operatorId || !aircraftTypeId || !eventTypeId : !isBatchReady)}
+              disabled={applyM.isPending || formBlockMessage != null}
+              title={formBlockMessage ?? undefined}
               onClick={handleApply}
             >
               {applyM.isPending ? "Создание…" : activeSandbox ? "Создать в песочнице" : "Перенести в план"}

@@ -77,6 +77,8 @@ export async function dispatchChangeDigest(
     subject: string;
     text?: string;
     html?: string;
+    /** Текст передан отправителем: не подменять пустые поля автосборкой. */
+    explicitBody?: boolean;
     columns?: unknown;
     target: DigestSendTarget;
     actorEmail?: string | null;
@@ -119,7 +121,7 @@ export async function dispatchChangeDigest(
   let text = params.text?.trim() ?? "";
   let html = params.html?.trim() ?? "";
   let stats: ChangeDigestStats | null = null;
-  if (!text || !html) {
+  if (!params.explicitBody && (!text || !html)) {
     const digest = await buildChangeDigest(prisma, {
       from: params.from,
       to: params.to,

@@ -1640,6 +1640,10 @@ export const ER_TABLES: ErTable[] = [
         "type": "EventLineBase?"
       },
       {
+        "name": "deadlineAt",
+        "type": "DateTime?"
+      },
+      {
         "name": "notes",
         "type": "String?"
       },
@@ -2363,6 +2367,38 @@ export const ER_TABLES: ErTable[] = [
       {
         "name": "startChangeReason",
         "type": "String?"
+      },
+      {
+        "name": "createdAt",
+        "type": "DateTime"
+      },
+      {
+        "name": "updatedAt",
+        "type": "DateTime"
+      }
+    ]
+  },
+  {
+    "id": "TowNorm",
+    "label": "Норматив буксировки",
+    "group": "fleet",
+    "columns": [
+      {
+        "name": "code",
+        "type": "String",
+        "pk": true
+      },
+      {
+        "name": "name",
+        "type": "String"
+      },
+      {
+        "name": "minutes",
+        "type": "Int"
+      },
+      {
+        "name": "isActive",
+        "type": "Boolean"
       },
       {
         "name": "createdAt",

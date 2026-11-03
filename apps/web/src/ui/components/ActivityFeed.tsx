@@ -210,6 +210,8 @@ export type ActivityFeedProps = {
   hint?: string;
   /** Список email для фильтра (админка). Пустой actor = все. */
   actors?: Array<{ email: string; label: string }>;
+  /** Журнал одного пользователя: фильтр зафиксирован. */
+  lockedActor?: string;
   compact?: boolean;
 };
 
@@ -217,20 +219,21 @@ export function ActivityFeed(props: ActivityFeedProps) {
   const { mode, actors } = props;
   const [actionFilter, setActionFilter] = useState<ActionFilter>("");
   const [search, setSearch] = useState("");
-  const [actor, setActor] = useState("");
+  const [actor, setActor] = useState(props.lockedActor ?? "");
+  const actorFilter = props.lockedActor ?? actor;
   const [limit, setLimit] = useState(25);
   const [offset, setOffset] = useState(0);
   const maps = useRefMaps();
 
   const activityQ = useQuery({
-    queryKey: [mode === "admin" ? "admin" : "me", "activity", actionFilter, search, actor, limit, offset],
+    queryKey: [mode === "admin" ? "admin" : "me", "activity", actionFilter, search, actorFilter, limit, offset],
     queryFn: (): Promise<MyActivityResponse> => {
       const params = {
         action: actionFilter || undefined,
         q: search.trim() || undefined,
         limit,
         offset,
-        ...(mode === "admin" && actor ? { actor } : {})
+        ...(mode === "admin" && actorFilter ? { actor: actorFilter } : {})
       };
       return mode === "admin" ? adminActivity(params) : authMyActivity(params);
     },
@@ -255,8 +258,10 @@ export function ActivityFeed(props: ActivityFeedProps) {
   const hint =
     props.hint ??
     (mode === "admin"
-      ? "Все изменения событий и операции с песочницами по всем пользователям."
-      : "Изменения событий и операции с песочницами — по всем контурам.");
+      ? props.lockedActor
+        ? "Изменения событий, доступного ресурса и операции с песочницами этого пользователя."
+        : "Все изменения событий, доступного ресурса и операции с песочницами по всем пользователям."
+      : "Изменения событий, доступного ресурса и операции с песочницами — по всем контурам.");
 
   return (
     <section className={`card profileCard${props.compact ? " profileCardCompact" : ""}`}>
@@ -275,7 +280,7 @@ export function ActivityFeed(props: ActivityFeedProps) {
       </header>
 
       <div className="profileActivityToolbar">
-        {mode === "admin" && actors && actors.length > 0 ? (
+        {mode === "admin" && !props.lockedActor && actors && actors.length > 0 ? (
           <label className="profileActivityActor">
             <span className="muted">Пользователь</span>
             <select
@@ -337,7 +342,7 @@ export function ActivityFeed(props: ActivityFeedProps) {
           <div className="profileEmpty">
             <div className="profileEmptyTitle">Пока ничего нет</div>
             <div className="muted">
-              {actionFilter || search.trim() || actor
+              {actionFilter || search.trim() || (actor && !props.lockedActor)
                 ? "По заданному фильтру записей нет — попробуйте сбросить."
                 : mode === "admin"
                   ? "Как только пользователи изменят события, здесь появятся записи."

@@ -77,7 +77,7 @@ const DATASETS: Array<{ id: ReportDataset; label: string; description: string }>
   {
     id: "primary_events",
     label: "Первичная таблица",
-    description: "190 реквизитов планирования, факта, трудоёмкости, стоимости и аналитических срезов"
+    description: "191 реквизит планирования, факта, трудоёмкости, стоимости и аналитических срезов"
   },
   {
     id: "tat_events",

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarElement,
@@ -1148,6 +1148,9 @@ function TatPanel(props: {
   );
 }
 
+const UTIL_BUCKET_ROW_PX = 34;
+const UTIL_BUCKET_OVERSCAN = 10;
+
 type TimelinePoint = {
   key: string;
   label: string;
@@ -1166,6 +1169,9 @@ type TimelinePoint = {
 
 function UtilizationTimelineChart(props: { points: TimelinePoint[] }) {
   const { points } = props;
+  // A year of days shares one chart width, so each column is a few pixels.
+  // Skip per-point markers and the entry animation — they cost draw time and don't read at this density.
+  const dense = points.length > 160;
 
   const chartData = useMemo<ChartData<"bar" | "line">>(() => {
     const labels = points.map((p) => dayjs(p.from).format("DD.MM"));
@@ -1179,7 +1185,10 @@ function UtilizationTimelineChart(props: { points: TimelinePoint[] }) {
           yAxisID: "yHours",
           backgroundColor: "rgba(14, 116, 144, 0.35)",
           hoverBackgroundColor: "rgba(14, 116, 144, 0.55)",
-          borderRadius: 3,
+          borderRadius: dense ? 0 : 3,
+          categoryPercentage: dense ? 1 : 0.8,
+          barPercentage: dense ? 1 : 0.9,
+          maxBarThickness: dense ? 8 : 36,
           order: 3
         },
         {
@@ -1190,10 +1199,11 @@ function UtilizationTimelineChart(props: { points: TimelinePoint[] }) {
           borderColor: "#0d9488",
           backgroundColor: "rgba(13, 148, 136, 0.18)",
           fill: true,
-          tension: 0.25,
-          pointRadius: 3,
-          pointHoverRadius: 5,
-          borderWidth: 2,
+          tension: dense ? 0.15 : 0.25,
+          pointRadius: dense ? 0 : 3,
+          pointHoverRadius: dense ? 3 : 5,
+          pointHitRadius: dense ? 6 : 4,
+          borderWidth: dense ? 1.5 : 2,
           order: 1
         },
         {
@@ -1204,21 +1214,23 @@ function UtilizationTimelineChart(props: { points: TimelinePoint[] }) {
           borderColor: "#b45309",
           backgroundColor: "#b45309",
           fill: false,
-          tension: 0.25,
-          pointRadius: 2,
-          pointHoverRadius: 4,
-          borderWidth: 2,
+          tension: dense ? 0.15 : 0.25,
+          pointRadius: dense ? 0 : 2,
+          pointHoverRadius: dense ? 3 : 4,
+          pointHitRadius: dense ? 6 : 4,
+          borderWidth: dense ? 1.5 : 2,
           borderDash: [5, 4],
           order: 2
         }
       ]
     };
-  }, [points]);
+  }, [dense, points]);
 
   const options = useMemo<ChartOptions<"bar" | "line">>(
     () => ({
       responsive: true,
       maintainAspectRatio: false,
+      animation: dense ? false : undefined,
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: {
@@ -1275,7 +1287,7 @@ function UtilizationTimelineChart(props: { points: TimelinePoint[] }) {
         }
       }
     }),
-    [points]
+    [dense, points]
   );
 
   if (points.length === 0) {
@@ -1335,6 +1347,55 @@ function UtilPanel(props: {
       })),
     [data?.efficiency?.buckets, filters.hangarIds]
   );
+
+  const bucketRows = useMemo(
+    () =>
+      buckets.flatMap((b) =>
+        b.hangars.map((h) => ({
+          key: `${b.key}-${h.hangarId}`,
+          label: b.label,
+          hangarName: h.hangarName,
+          capacityUtilizationPct: h.capacityUtilizationPct,
+          timeUtilizationPct: h.timeUtilizationPct,
+          standUtilizationPct: h.standUtilizationPct,
+          aircraftHours: h.aircraftHours,
+          capacityHours: h.capacityHours,
+          conflictPct: h.conflictPct
+        }))
+      ),
+    [buckets]
+  );
+  const bucketWrapRef = useRef<HTMLDivElement | null>(null);
+  const [bucketWin, setBucketWin] = useState({ start: 0, height: 520 });
+  const virtualBuckets = bucketRows.length > 160;
+  useLayoutEffect(() => {
+    if (!virtualBuckets) return;
+    const el = bucketWrapRef.current;
+    if (!el) return;
+    const sync = () => {
+      const height = el.clientHeight || 520;
+      const start = Math.max(0, Math.floor(el.scrollTop / UTIL_BUCKET_ROW_PX) - UTIL_BUCKET_OVERSCAN);
+      setBucketWin((prev) => (prev.start === start && prev.height === height ? prev : { start, height }));
+    };
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(sync);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", sync);
+      ro?.disconnect();
+    };
+  }, [virtualBuckets, bucketRows.length]);
+  const bucketStart = virtualBuckets ? bucketWin.start : 0;
+  const bucketEnd = virtualBuckets
+    ? Math.min(
+        bucketRows.length,
+        bucketStart + Math.ceil(bucketWin.height / UTIL_BUCKET_ROW_PX) + UTIL_BUCKET_OVERSCAN * 2
+      )
+    : bucketRows.length;
+  const bucketSlice = virtualBuckets ? bucketRows.slice(bucketStart, bucketEnd) : bucketRows;
+  const bucketTopPx = bucketStart * UTIL_BUCKET_ROW_PX;
+  const bucketBottomPx = virtualBuckets ? Math.max(0, (bucketRows.length - bucketEnd) * UTIL_BUCKET_ROW_PX) : 0;
 
   const timelinePoints = useMemo(() => {
     const raw = data?.efficiency?.timeline?.points ?? data?.efficiency?.buckets ?? [];
@@ -1522,8 +1583,8 @@ function UtilPanel(props: {
             <p className="muted small">{data.efficiency?.note}</p>
           </div>
         </div>
-        <div className="analyticsTableWrap">
-          <table className="analyticsTable">
+        <div className="analyticsTableWrap" ref={bucketWrapRef}>
+          <table className={virtualBuckets ? "analyticsTable analyticsUtilBuckets" : "analyticsTable"}>
             <thead>
               <tr>
                 <th>{grain === "period" ? "Ангар" : "Интервал"}</th>
@@ -1559,19 +1620,31 @@ function UtilPanel(props: {
                       <td>{fmtNum(h.efficiency.conflictPct)}%</td>
                     </tr>
                   ))
-                : buckets.flatMap((b) =>
-                    b.hangars.map((h) => (
-                      <tr key={`${b.key}-${h.hangarId}`}>
-                        <td>{b.label}</td>
-                        <td>{h.hangarName}</td>
-                        <td>{fmtNum(h.capacityUtilizationPct)}%</td>
-                        <td>{fmtNum(h.timeUtilizationPct)}%</td>
-                        <td>{fmtNum(h.standUtilizationPct)}%</td>
-                        <td>{fmtNum(h.aircraftHours)}</td>
-                        <td>{fmtNum(h.capacityHours)}</td>
-                        <td>{fmtNum(h.conflictPct)}%</td>
-                      </tr>
-                    ))
+                : (
+                    <>
+                      {bucketTopPx > 0 ? (
+                        <tr aria-hidden="true">
+                          <td colSpan={8} style={{ height: bucketTopPx, padding: 0, border: 0, lineHeight: 0 }} />
+                        </tr>
+                      ) : null}
+                      {bucketSlice.map((h) => (
+                        <tr key={h.key}>
+                          <td title={h.label}>{h.label}</td>
+                          <td title={h.hangarName}>{h.hangarName}</td>
+                          <td>{fmtNum(h.capacityUtilizationPct)}%</td>
+                          <td>{fmtNum(h.timeUtilizationPct)}%</td>
+                          <td>{fmtNum(h.standUtilizationPct)}%</td>
+                          <td>{fmtNum(h.aircraftHours)}</td>
+                          <td>{fmtNum(h.capacityHours)}</td>
+                          <td>{fmtNum(h.conflictPct)}%</td>
+                        </tr>
+                      ))}
+                      {bucketBottomPx > 0 ? (
+                        <tr aria-hidden="true">
+                          <td colSpan={8} style={{ height: bucketBottomPx, padding: 0, border: 0, lineHeight: 0 }} />
+                        </tr>
+                      ) : null}
+                    </>
                   )}
             </tbody>
           </table>

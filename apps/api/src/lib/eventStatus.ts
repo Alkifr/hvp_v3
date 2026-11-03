@@ -126,6 +126,22 @@ export function isDoneScheduleLocked(
 export const DONE_SCHEDULE_LOCK_MESSAGE =
   "Нельзя менять расписание, тип и размещение у завершённого события. Сначала смените статус.";
 
+export const DONE_DEADLINE_LOCK_MESSAGE =
+  "Нельзя менять DeadLine у завершённого события. Сначала смените статус.";
+
+/** DeadLine stays locked while DONE unless status is explicitly changed away. */
+export function deadlineChangeBlockedWhileDone(params: {
+  existingStatus: string;
+  requestedStatus?: string | null;
+  existingDeadlineAt?: Date | null;
+  requestedDeadlineAt?: Date | null;
+  requestedProvided: boolean;
+}): boolean {
+  if (!params.requestedProvided) return false;
+  if (!isDoneScheduleLocked(params.existingStatus, params.requestedStatus)) return false;
+  return !sameInstant(params.requestedDeadlineAt ?? null, params.existingDeadlineAt ?? null);
+}
+
 function sameInstant(a: Date | null | undefined, b: Date | null | undefined): boolean {
   if (a == null && b == null) return true;
   if (a == null || b == null) return false;

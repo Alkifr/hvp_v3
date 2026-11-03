@@ -11,6 +11,12 @@ import {
   type MonthlyBasePlanEventInput
 } from "../lib/monthlyBasePlan.js";
 import { serializeTowReportRow, resolveVirtualNames, towInclude } from "./planning/tows.js";
+import {
+  buildExclusiveLayoutSegments,
+  buildUtilizationBuckets,
+  clipHangarWindow,
+  type EfficiencyGrain
+} from "../lib/utilizationSeries.js";
 
 const MS_HOUR = 60 * 60 * 1000;
 
@@ -30,128 +36,11 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-type EfficiencyGrain = "day" | "week" | "month" | "period";
-
 function pickTimelineGrain(from: Date, to: Date): Exclude<EfficiencyGrain, "period"> {
   const days = hoursBetween(from, to) / 24;
   if (days <= 45) return "day";
   if (days <= 180) return "week";
   return "month";
-}
-
-/** Shift instant into "UTC wall clock" equal to local wall clock at tzOffsetMinutes (east of UTC). */
-function toTzWall(d: Date, tzOffsetMinutes: number): Date {
-  return new Date(d.getTime() + tzOffsetMinutes * 60_000);
-}
-
-function fromTzWall(wall: Date, tzOffsetMinutes: number): Date {
-  return new Date(wall.getTime() - tzOffsetMinutes * 60_000);
-}
-
-function tzDateLabel(d: Date, tzOffsetMinutes: number): string {
-  return toTzWall(d, tzOffsetMinutes).toISOString().slice(0, 10);
-}
-
-function startOfTzDay(d: Date, tzOffsetMinutes: number): Date {
-  const wall = toTzWall(d, tzOffsetMinutes);
-  const wallMidnight = new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate()));
-  return fromTzWall(wallMidnight, tzOffsetMinutes);
-}
-
-function startOfTzMonth(d: Date, tzOffsetMinutes: number): Date {
-  const wall = toTzWall(d, tzOffsetMinutes);
-  const wallMonth = new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), 1));
-  return fromTzWall(wallMonth, tzOffsetMinutes);
-}
-
-/**
- * Buckets aligned to the client's calendar (tzOffsetMinutes, east of UTC — same as dayjs.utcOffset()).
- * Avoids UTC label drift (e.g. 01.06 local → 31.05 UTC).
- */
-function buildBuckets(
-  from: Date,
-  to: Date,
-  grain: EfficiencyGrain,
-  tzOffsetMinutes = 0
-): Array<{ key: string; label: string; from: Date; to: Date }> {
-  if (grain === "period") {
-    return [{ key: "period", label: "Весь период", from, to }];
-  }
-
-  const out: Array<{ key: string; label: string; from: Date; to: Date }> = [];
-  const tz = Number.isFinite(tzOffsetMinutes) ? Math.trunc(tzOffsetMinutes) : 0;
-
-  if (grain === "day") {
-    let cursor = startOfTzDay(from, tz);
-    // If `from` is already start of local day, cursor === from; otherwise snap back then skip before from
-    if (cursor.getTime() < from.getTime()) {
-      const nextWall = toTzWall(cursor, tz);
-      cursor = fromTzWall(
-        new Date(Date.UTC(nextWall.getUTCFullYear(), nextWall.getUTCMonth(), nextWall.getUTCDate() + 1)),
-        tz
-      );
-    }
-    while (cursor.getTime() < to.getTime()) {
-      const wall = toTzWall(cursor, tz);
-      const next = fromTzWall(
-        new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + 1)),
-        tz
-      );
-      const start = cursor.getTime() < from.getTime() ? new Date(from) : cursor;
-      const end = next.getTime() > to.getTime() ? new Date(to) : next;
-      if (end.getTime() <= start.getTime()) break;
-      const label = tzDateLabel(start, tz);
-      out.push({ key: `day-${label}`, label, from: start, to: end });
-      cursor = next;
-      if (out.length > 120) break;
-    }
-    return out;
-  }
-
-  if (grain === "week") {
-    let cursor = startOfTzDay(from, tz);
-    if (cursor.getTime() < from.getTime()) cursor = new Date(from);
-    while (cursor.getTime() < to.getTime()) {
-      const wall = toTzWall(cursor, tz);
-      const next = fromTzWall(
-        new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + 7)),
-        tz
-      );
-      const start = cursor.getTime() < from.getTime() ? new Date(from) : cursor;
-      const end = next.getTime() > to.getTime() ? new Date(to) : next;
-      if (end.getTime() <= start.getTime()) break;
-      const labelFrom = tzDateLabel(start, tz);
-      const labelTo = tzDateLabel(new Date(end.getTime() - 1), tz);
-      out.push({
-        key: `week-${labelFrom}`,
-        label: `${labelFrom} – ${labelTo}`,
-        from: start,
-        to: end
-      });
-      cursor = next;
-      if (out.length > 120) break;
-    }
-    return out;
-  }
-
-  // month
-  let cursor = startOfTzMonth(from, tz);
-  if (cursor.getTime() < from.getTime()) {
-    const wall = toTzWall(cursor, tz);
-    cursor = fromTzWall(new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() + 1, 1)), tz);
-  }
-  while (cursor.getTime() < to.getTime()) {
-    const wall = toTzWall(cursor, tz);
-    const next = fromTzWall(new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() + 1, 1)), tz);
-    const start = cursor.getTime() < from.getTime() ? new Date(from) : cursor;
-    const end = next.getTime() > to.getTime() ? new Date(to) : next;
-    if (end.getTime() <= start.getTime()) break;
-    const label = `${wall.getUTCFullYear()}-${String(wall.getUTCMonth() + 1).padStart(2, "0")}`;
-    out.push({ key: `month-${label}`, label, from: start, to: end });
-    cursor = next;
-    if (out.length > 120) break;
-  }
-  return out;
 }
 
 type EffEvent = {
@@ -160,88 +49,6 @@ type EffEvent = {
   layoutId: string | null;
 };
 
-type LayoutSegment = {
-  startMs: number;
-  endMs: number;
-  /** null = empty hangar; conflict = mutually exclusive layouts overlapping */
-  layoutId: string | null;
-  conflict: boolean;
-  capacity: number;
-};
-
-/**
- * Time-varying hangar capacity (MRO / exclusive-layout model):
- * at any instant only one layout is available; other layouts are blocked and
- * must not contribute place-hours, idle or capacity.
- *
- * Empty intervals use nominal capacity = max stands among hangar layouts
- * (design capacity), matching HangarView Excel / academic hangar scheduling
- * where capacity varies with the active parking configuration.
- */
-function buildExclusiveLayoutSegments(params: {
-  from: Date;
-  to: Date;
-  standCountByLayoutId: Map<string, number>;
-  hangarLayoutIds: string[];
-  events: EffEvent[];
-}): { segments: LayoutSegment[]; referenceStandCount: number; referenceLayoutId: string | null } {
-  const { from, to, standCountByLayoutId, hangarLayoutIds, events } = params;
-  const hangarLayoutSet = new Set(hangarLayoutIds);
-
-  let referenceStandCount = 0;
-  let referenceLayoutId: string | null = null;
-  for (const id of hangarLayoutIds) {
-    const n = standCountByLayoutId.get(id) ?? 0;
-    if (n > referenceStandCount) {
-      referenceStandCount = n;
-      referenceLayoutId = id;
-    }
-  }
-
-  const hangarEvents = events.filter((e) => e.layoutId && hangarLayoutSet.has(e.layoutId));
-  const points = new Set<number>([from.getTime(), to.getTime()]);
-  for (const e of hangarEvents) {
-    const s = Math.max(from.getTime(), e.startAt.getTime());
-    const en = Math.min(to.getTime(), e.endAt.getTime());
-    if (s < en) {
-      points.add(s);
-      points.add(en);
-    }
-  }
-  const sorted = Array.from(points).sort((a, b) => a - b);
-  const segments: LayoutSegment[] = [];
-
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const s = sorted[i]!;
-    const en = sorted[i + 1]!;
-    if (en <= s) continue;
-    const active = hangarEvents.filter((e) => e.startAt.getTime() < en && e.endAt.getTime() > s);
-    if (active.length === 0) {
-      segments.push({
-        startMs: s,
-        endMs: en,
-        layoutId: null,
-        conflict: false,
-        capacity: referenceStandCount
-      });
-      continue;
-    }
-    const activeLayoutIds = Array.from(new Set(active.map((e) => e.layoutId).filter(Boolean) as string[]));
-    const conflict = activeLayoutIds.length > 1;
-    const primaryLayoutId = !conflict && activeLayoutIds.length === 1 ? activeLayoutIds[0]! : null;
-    const capacity = primaryLayoutId ? standCountByLayoutId.get(primaryLayoutId) ?? 0 : 0;
-    segments.push({
-      startMs: s,
-      endMs: en,
-      layoutId: primaryLayoutId,
-      conflict,
-      capacity
-    });
-  }
-
-  return { segments, referenceStandCount, referenceLayoutId };
-}
-
 function computeHangarEfficiency(params: {
   from: Date;
   to: Date;
@@ -249,43 +56,18 @@ function computeHangarEfficiency(params: {
   hangarLayoutIds: string[];
   events: EffEvent[];
 }) {
-  const { from, to, hangarLayoutIds, events } = params;
+  const { from, to } = params;
   const periodMs = Math.max(1, to.getTime() - from.getTime());
-  const hangarLayoutSet = new Set(hangarLayoutIds);
-  const hangarEvents = events.filter((e) => e.layoutId && hangarLayoutSet.has(e.layoutId));
   const { segments } = buildExclusiveLayoutSegments(params);
-
-  let occupiedMs = 0;
-  let aircraftHours = 0;
-  let capacityHours = 0;
-  let conflictMs = 0;
-  let conflictSegments = 0;
-
-  for (const seg of segments) {
-    const durationHours = (seg.endMs - seg.startMs) / MS_HOUR;
-    if (seg.conflict) {
-      conflictMs += seg.endMs - seg.startMs;
-      conflictSegments += 1;
-      const active = hangarEvents.filter((e) => e.startAt.getTime() < seg.endMs && e.endAt.getTime() > seg.startMs);
-      occupiedMs += seg.endMs - seg.startMs;
-      aircraftHours += active.length * durationHours;
-      continue;
-    }
-    if (seg.layoutId) {
-      const active = hangarEvents.filter((e) => e.startAt.getTime() < seg.endMs && e.endAt.getTime() > seg.startMs);
-      occupiedMs += seg.endMs - seg.startMs;
-      aircraftHours += active.length * durationHours;
-    }
-    if (seg.capacity > 0) capacityHours += seg.capacity * durationHours;
-  }
+  const clip = clipHangarWindow(segments, [], from.getTime(), to.getTime());
 
   return {
-    timeUtilizationPct: round1(Math.min(100, (occupiedMs / periodMs) * 100)),
-    capacityUtilizationPct: round1(capacityHours > 0 ? (aircraftHours / capacityHours) * 100 : 0),
-    aircraftHours: round2(aircraftHours),
-    capacityHours: round2(capacityHours),
-    conflictPct: round1(Math.min(100, (conflictMs / periodMs) * 100)),
-    conflictSegments
+    timeUtilizationPct: round1(Math.min(100, (clip.occupiedMs / periodMs) * 100)),
+    capacityUtilizationPct: round1(clip.capacityHours > 0 ? (clip.aircraftHours / clip.capacityHours) * 100 : 0),
+    aircraftHours: round2(clip.aircraftHours),
+    capacityHours: round2(clip.capacityHours),
+    conflictPct: round1(Math.min(100, (clip.conflictMs / periodMs) * 100)),
+    conflictSegments: clip.conflictSegments
   };
 }
 
@@ -773,39 +555,51 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     const overallCapacity = hangarRows.reduce((s, h) => s + h.capacityH, 0);
     const overallOccupied = hangarRows.reduce((s, h) => s + h.occupiedH, 0);
 
-    const mapBucketSeries = (grain: EfficiencyGrain) =>
-      buildBuckets(query.from, query.to, grain, query.tzOffset).map((b) => {
-        const hangarBucket = hangars.map((h) => {
-          const hangarLayoutIds = layoutsByHangar.get(h.id) ?? [];
-          const hangarStandIds = new Set(
-            stands.filter((s) => s.layout.hangarId === h.id).map((s) => s.id)
-          );
-          const place = computeHangarPlaceUtilization({
-            from: b.from,
-            to: b.to,
-            standCountByLayoutId,
-            hangarLayoutIds,
-            events: effEvents,
-            reservations: reservations.filter((r) => hangarStandIds.has(r.standId)),
-            stands: stands
-              .filter((s) => s.layout.hangarId === h.id)
-              .map((s) => ({ standId: s.id, layoutId: s.layoutId }))
-          });
-          const eff = computeHangarEfficiency({
-            from: b.from,
-            to: b.to,
-            standCountByLayoutId,
-            hangarLayoutIds,
-            events: effEvents
-          });
+    // One segment sweep per hangar for the whole period. Day buckets only clip that sweep,
+    // so a year of days stays close to the cost of a single period, not 365 rebuilds.
+    const bucketHangars = hangars.map((h) => {
+      const hangarLayoutIds = layoutsByHangar.get(h.id) ?? [];
+      const hangarLayoutSet = new Set(hangarLayoutIds);
+      const hangarStandIds = new Set(stands.filter((s) => s.layout.hangarId === h.id).map((s) => s.id));
+      const { segments } = buildExclusiveLayoutSegments({
+        from: query.from,
+        to: query.to,
+        standCountByLayoutId,
+        hangarLayoutIds,
+        events: effEvents
+      });
+      const reservationSpans = reservations
+        .filter((r) => hangarStandIds.has(r.standId) && hangarLayoutSet.has(r.layoutId))
+        .map((r) => ({ startMs: r.startAt.getTime(), endMs: r.endAt.getTime() }));
+      return { hangar: h, segments, reservationSpans };
+    });
+
+    const mapBucketSeries = (grain: EfficiencyGrain) => {
+      const defs = buildUtilizationBuckets(query.from, query.to, grain, query.tzOffset);
+      const segCursor = bucketHangars.map(() => 0);
+      return defs.map((b) => {
+        const fromMs = b.from.getTime();
+        const toMs = b.to.getTime();
+        const periodMs = Math.max(1, toMs - fromMs);
+        const hangarBucket = bucketHangars.map((p, idx) => {
+          const clip = clipHangarWindow(p.segments, p.reservationSpans, fromMs, toMs, segCursor[idx] ?? 0);
+          segCursor[idx] = clip.segFromIdx;
+          const cappedOccupied = Math.min(clip.occupiedH, clip.capacityH);
           return {
-            hangarId: h.id,
-            hangarName: h.name,
-            standUtilizationPct: round1(place.utilizationPct),
-            occupiedH: round1(place.occupiedH),
-            capacityH: round1(place.capacityH),
-            idleH: round1(place.idleH),
-            ...eff
+            hangarId: p.hangar.id,
+            hangarName: p.hangar.name,
+            standUtilizationPct: round1(clip.capacityH > 0 ? (cappedOccupied / clip.capacityH) * 100 : 0),
+            occupiedH: round1(cappedOccupied),
+            capacityH: round1(clip.capacityH),
+            idleH: round1(Math.max(0, clip.capacityH - cappedOccupied)),
+            timeUtilizationPct: round1(Math.min(100, (clip.occupiedMs / periodMs) * 100)),
+            capacityUtilizationPct: round1(
+              clip.capacityHours > 0 ? (clip.aircraftHours / clip.capacityHours) * 100 : 0
+            ),
+            aircraftHours: round2(clip.aircraftHours),
+            capacityHours: round2(clip.capacityHours),
+            conflictPct: round1(Math.min(100, (clip.conflictMs / periodMs) * 100)),
+            conflictSegments: clip.conflictSegments
           };
         });
         const aircraftHours = hangarBucket.reduce((s, h) => s + h.aircraftHours, 0);
@@ -835,6 +629,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           hangars: hangarBucket.sort((a, b2) => b2.capacityUtilizationPct - a.capacityUtilizationPct)
         };
       });
+    };
 
     const buckets = mapBucketSeries(query.grain);
     const timelineGrain = query.grain === "period" ? pickTimelineGrain(query.from, query.to) : query.grain;

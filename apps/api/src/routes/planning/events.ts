@@ -12,8 +12,11 @@ import {
   resolveEventLineBase
 } from "../../lib/lineBase.js";
 import { eventHasExistingSlotOverlap, resolveAllowOverlap } from "../../lib/placementOverlap.js";
+import { resolveStandLocation } from "../../lib/standLocation.js";
 import {
+  DONE_DEADLINE_LOCK_MESSAGE,
   DONE_SCHEDULE_LOCK_MESSAGE,
+  deadlineChangeBlockedWhileDone,
   isDoneScheduleLocked,
   patchTouchesDoneScheduleLock,
   reconcileEventStatus
@@ -27,8 +30,13 @@ import {
   resolveImportEventStatus
 } from "../../lib/eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
+import { patchNeedsChangeReason } from "../../lib/changeReason.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { inferTowRoute, type TowPlacementInput } from "../../lib/towReport.js";
+import { EDGE_TOW_NORM_CODE, planEdgeTows, remapTowPlacementId, type TowLinkPlacement } from "../../lib/edgeTows.js";
+import { ensureTowNorms } from "../../lib/towNorm.js";
+import { laborPresenceFromMetrics } from "../../lib/laborPresence.js";
+import { LABOR_EDITABLE_BLOCKS } from "../../lib/primaryMetricDepartments.js";
 import {
   isVirtualAircraftPlaceholder,
   statusAllowsVirtualAircraft,
@@ -133,6 +141,16 @@ function getActor(req: any) {
   return String(h["x-actor"] ?? h["x-user"] ?? "browser").slice(0, 80);
 }
 
+function towPlacementCaption(
+  row: { hangar?: { name?: string | null } | null; stand?: { code?: string | null; name?: string | null } | null } | null | undefined
+) {
+  if (!row) return null;
+  const hangar = row.hangar?.name?.trim() || "";
+  const stand = row.stand?.code?.trim() || row.stand?.name?.trim() || "";
+  const text = [hangar, stand].filter(Boolean).join(" · ");
+  return text || null;
+}
+
 /** Подпись борта для сообщений (реальный или виртуальный) */
 function eventAircraftLabel(event: { aircraft?: { tailNumber: string } | null; virtualAircraft?: unknown } | null): string {
   if (!event) return "—";
@@ -174,18 +192,68 @@ function diffEvent(before: any, after: any) {
     "virtualAircraft",
     "allowOverlap",
     "workshopId",
-    "lineBase"
+    "lineBase",
+    "deadlineAt"
   ] as const;
 
   const changes: Record<string, { from: any; to: any }> = {};
   for (const f of fields) {
     const b = before[f];
     const a = after[f];
-    const bv = b instanceof Date ? b.toISOString() : b;
-    const av = a instanceof Date ? a.toISOString() : a;
-    if (bv !== av) changes[f] = { from: bv ?? null, to: av ?? null };
+    if (b instanceof Date || a instanceof Date) {
+      if (clockMinute(b) === clockMinute(a)) continue;
+      changes[f] = {
+        from: b instanceof Date ? b.toISOString() : (b ?? null),
+        to: a instanceof Date ? a.toISOString() : (a ?? null)
+      };
+      continue;
+    }
+    if (b !== a) changes[f] = { from: b ?? null, to: a ?? null };
   }
   return changes;
+}
+
+/** Карточка хранит время до минуты. Секунды импорта не считаются правкой. */
+function clockMinute(value: Date | string | null | undefined): number | null {
+  if (value == null) return null;
+  const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return Number.isFinite(time) ? Math.floor(time / 60_000) : null;
+}
+
+function keepStoredInstant<T extends Date | null | undefined>(stored: Date | null | undefined, incoming: T): T {
+  if (!(incoming instanceof Date) || !(stored instanceof Date)) return incoming;
+  return (clockMinute(stored) === clockMinute(incoming) ? stored : incoming) as T;
+}
+
+function placementHistoryEqual(
+  from: Array<{
+    startAt: Date | string;
+    endAt: Date | string;
+    budgetStartAt?: Date | string | null;
+    budgetEndAt?: Date | string | null;
+    actualStartAt?: Date | string | null;
+    actualEndAt?: Date | string | null;
+    origin?: string | null;
+    hangarId?: string | null;
+    layoutId?: string | null;
+    standId?: string | null;
+  }>,
+  to: typeof from
+): boolean {
+  const key = (p: (typeof from)[number]) =>
+    JSON.stringify({
+      startAt: clockMinute(p.startAt),
+      endAt: clockMinute(p.endAt),
+      budgetStartAt: clockMinute(p.budgetStartAt),
+      budgetEndAt: clockMinute(p.budgetEndAt),
+      actualStartAt: clockMinute(p.actualStartAt),
+      actualEndAt: clockMinute(p.actualEndAt),
+      origin: p.origin ?? "MANUAL",
+      hangarId: p.hangarId ?? null,
+      layoutId: p.layoutId ?? null,
+      standId: p.standId ?? null
+    });
+  return from.length === to.length && from.every((p, i) => key(p) === key(to[i]!));
 }
 
 function planningKindFromBudget(budgetStartAt: Date | null | undefined, budgetEndAt: Date | null | undefined): PlanningKind {
@@ -260,16 +328,22 @@ const eventInclude: Prisma.MaintenanceEventInclude = {
   workshop: true,
   reservations: { include: { stand: true }, orderBy: [{ startAt: "asc" }] },
   placements: { include: placementInclude, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
-  towSegments: { orderBy: [{ startAt: "asc" }] }
+  towSegments: { orderBy: [{ startAt: "asc" }] },
+  reportMetrics: {
+    where: { manHours: { not: null }, block: { in: [...LABOR_EDITABLE_BLOCKS] } },
+    select: { block: true, manHours: true }
+  }
 };
 
 function serializeEvent(event: any) {
-  const reservations = event.reservations ?? [];
-  const placements = event.placements ?? [];
+  const { reportMetrics, ...rest } = event;
+  const reservations = rest.reservations ?? [];
+  const placements = rest.placements ?? [];
   return {
-    ...event,
+    ...rest,
     reservation: reservations[0] ?? null,
-    placements
+    placements,
+    laborPresence: Array.isArray(reportMetrics) ? laborPresenceFromMetrics(reportMetrics) : null
   };
 }
 
@@ -371,8 +445,10 @@ async function assertPlacementConflicts(tx: any, params: {
   allowOverlap?: boolean;
 }) {
   if (params.allowOverlap) return;
+  // Ангар или схема без места слот не занимают и чужую схему не блокируют.
+  if (!params.standId) return;
 
-  if (params.standId) {
+  {
     const conflict = await tx.standReservation.findFirst({
       where: {
         sandboxId: params.sandboxId,
@@ -441,19 +517,39 @@ async function replaceEventPlacements(tx: any, params: {
 
   assertPlacementPeriods(placements, params.eventStart, params.eventEnd);
 
+  const previousPlacements: TowLinkPlacement[] = (
+    await tx.eventPlacement.findMany({
+      where: { eventId: params.eventId },
+      select: { id: true, origin: true, startAt: true, endAt: true, standId: true, hangarId: true }
+    })
+  ).map((placement: TowLinkPlacement) => ({
+    id: placement.id,
+    origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
+    startAt: placement.startAt,
+    endAt: placement.endAt,
+    standId: placement.standId,
+    hangarId: placement.hangarId
+  }));
+  const linkedTows = await tx.eventTow.findMany({
+    where: { eventId: params.eventId, placementId: { not: null } },
+    select: { id: true, placementId: true, startAt: true, endAt: true }
+  });
+
   await tx.standReservation.deleteMany({ where: { eventId: params.eventId } });
   await tx.eventPlacement.deleteMany({ where: { eventId: params.eventId } });
 
   let firstLocation: { hangarId: string | null; layoutId: string | null } = { hangarId: null, layoutId: null };
+  const createdPlacements: TowLinkPlacement[] = [];
   for (const [idx, p] of placements.entries()) {
-    const location = await resolvePlacementLocation(tx, p);
+    const located = await resolvePlacementLocation(tx, p);
+    const location = resolveStandLocation(located);
     if (idx === 0) firstLocation = { hangarId: location.hangarId, layoutId: location.layoutId };
     await assertPlacementConflicts(tx, {
       sandboxId: params.sandboxId,
       eventId: params.eventId,
       hangarId: location.hangarId,
       layoutId: location.layoutId,
-      standId: location.standId,
+      standId: location.occupiesStand ? location.standId : null,
       startAt: p.startAt,
       endAt: p.endAt,
       allowOverlap: params.allowOverlap
@@ -476,8 +572,16 @@ async function replaceEventPlacements(tx: any, params: {
         sortOrder: idx
       }
     });
+    createdPlacements.push({
+      id: placement.id,
+      origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
+      startAt: placement.startAt,
+      endAt: placement.endAt,
+      standId: placement.standId,
+      hangarId: placement.hangarId
+    });
 
-    if (location.layoutId && location.standId) {
+    if (location.occupiesStand && location.layoutId && location.standId) {
       await tx.standReservation.create({
         data: {
           eventId: params.eventId,
@@ -489,6 +593,13 @@ async function replaceEventPlacements(tx: any, params: {
           endAt: p.endAt
         }
       });
+    }
+  }
+
+  for (const tow of linkedTows) {
+    const placementId = remapTowPlacementId(tow, previousPlacements, createdPlacements);
+    if (placementId) {
+      await tx.eventTow.update({ where: { id: tow.id }, data: { placementId } });
     }
   }
 
@@ -563,6 +674,106 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       include: { placement: { include: { hangar: true, stand: true } } },
       orderBy: [{ startAt: "asc" }]
     });
+  });
+
+  app.post("/:id/tows/edges", async (req) => {
+    assertCanWriteTow(req);
+    const eventId = zUuid.parse((req.params as any).id);
+    const body = z
+      .object({
+        changeReason: z.string().trim().min(1).max(1000).optional()
+      })
+      .parse(req.body ?? {});
+
+    const ev = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) },
+      include: {
+        placements: { include: { stand: true }, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
+        towSegments: { orderBy: [{ startAt: "asc" }] }
+      }
+    });
+    if (!ev) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+    if (isDoneScheduleLocked(ev.status)) {
+      throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    }
+
+    await ensureTowNorms(app.prisma);
+    const norm = await app.prisma.towNorm.findUnique({ where: { code: EDGE_TOW_NORM_CODE } });
+    if (!norm || !norm.isActive || norm.minutes < 1) {
+      throw app.httpErrors.badRequest("Не задан норматив буксировки");
+    }
+
+    const plan = planEdgeTows({
+      minutes: norm.minutes,
+      placements: ev.placements.map((placement) => ({
+        id: placement.id,
+        origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
+        startAt: placement.startAt,
+        endAt: placement.endAt,
+        standCode: placement.stand?.code || placement.stand?.name || null
+      })),
+      existing: ev.towSegments.map((tow) => ({ startAt: tow.startAt, endAt: tow.endAt }))
+    });
+
+    assertChangeReasonIfNeeded(req, plan.create.length > 0, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
+
+    const sbId = sandboxIdFor(req);
+    const created = await app.prisma.$transaction(async (tx) => {
+      const rows = [];
+      for (const tow of plan.create) {
+        rows.push(
+          await tx.eventTow.create({
+            data: {
+              eventId,
+              sandboxId: sbId,
+              startAt: tow.startAt,
+              endAt: tow.endAt,
+              placementId: tow.placementId,
+              fromLabel: tow.fromLabel || null,
+              toLabel: tow.toLabel || null
+            }
+          })
+        );
+      }
+      if (rows.length > 0) {
+        await tx.maintenanceEventAudit.create({
+          data: {
+            eventId,
+            sandboxId: sbId,
+            action: EventAuditAction.UPDATE,
+            actor: getActor(req),
+            reason: body.changeReason ?? "Буксировка",
+            changes: {
+              tow: {
+                add: rows.map((row) => ({
+                  id: row.id,
+                  startAt: row.startAt.toISOString(),
+                  endAt: row.endAt.toISOString(),
+                  placementId: row.placementId,
+                  fromLabel: row.fromLabel,
+                  toLabel: row.toLabel
+                }))
+              }
+            }
+          }
+        });
+      }
+      return rows;
+    });
+
+    return {
+      minutes: norm.minutes,
+      created: created.map((row) => ({
+        id: row.id,
+        startAt: row.startAt.toISOString(),
+        endAt: row.endAt.toISOString(),
+        placementId: row.placementId,
+        fromLabel: row.fromLabel,
+        toLabel: row.toLabel
+      })),
+      skipped: plan.skipped,
+      kept: plan.kept
+    };
   });
 
   app.post("/:id/tows", async (req) => {
@@ -698,7 +909,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const existing = await app.prisma.eventTow.findFirst({
-      where: { id: towId, eventId, ...sandboxFilter(req) }
+      where: { id: towId, eventId, ...sandboxFilter(req) },
+      include: { placement: { include: { hangar: true, stand: true } } }
     });
     if (!existing) throw app.httpErrors.notFound(UserMsg.RECORD_NOT_FOUND);
 
@@ -766,27 +978,34 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       include: { placement: { include: { hangar: true, stand: true } } }
     });
 
-    await app.prisma.maintenanceEventAudit.create({
-      data: {
-        eventId,
-        sandboxId: sandboxIdFor(req),
-        action: EventAuditAction.UPDATE,
-        actor: getActor(req),
-        reason: body.changeReason ?? body.startChangeReason ?? "Буксировка",
-        changes: {
-          tow: {
-            id: towId,
-            startAt: startChanged ? { from: existing.startAt.toISOString(), to: nextStart.toISOString() } : undefined,
-            endAt: endChanged ? { from: existing.endAt.toISOString(), to: nextEnd.toISOString() } : undefined,
-            placementId: nextPlacementId,
-            fromLabel,
-            toLabel,
-            notes: body.notes,
-            startChangeReason: body.startChangeReason ?? (startChanged ? body.changeReason : undefined)
-          }
+    const beforePlace = towPlacementCaption(existing.placement);
+    const afterPlace = towPlacementCaption(updated.placement);
+    const labelChanged = (existing.fromLabel ?? null) !== (fromLabel ?? null);
+    const toLabelChanged = (existing.toLabel ?? null) !== (toLabel ?? null);
+    const placeChanged = (existing.placementId ?? null) !== (nextPlacementId ?? null) || beforePlace !== afterPlace;
+    const notesChanged = body.notes !== undefined && (existing.notes ?? null) !== (body.notes ?? null);
+    const towChanges: Record<string, unknown> = {};
+    if (startChanged) towChanges.startAt = { from: existing.startAt.toISOString(), to: nextStart.toISOString() };
+    if (endChanged) towChanges.endAt = { from: existing.endAt.toISOString(), to: nextEnd.toISOString() };
+    if (labelChanged) towChanges.fromLabel = { from: existing.fromLabel ?? null, to: fromLabel ?? null };
+    if (toLabelChanged) towChanges.toLabel = { from: existing.toLabel ?? null, to: toLabel ?? null };
+    if (placeChanged) towChanges.placementLabel = { from: beforePlace, to: afterPlace };
+    if (notesChanged) towChanges.notes = { from: existing.notes ?? null, to: body.notes ?? null };
+    if (startChanged && (body.startChangeReason ?? body.changeReason)) {
+      towChanges.startChangeReason = body.startChangeReason ?? body.changeReason;
+    }
+    if (Object.keys(towChanges).length > 0) {
+      await app.prisma.maintenanceEventAudit.create({
+        data: {
+          eventId,
+          sandboxId: sandboxIdFor(req),
+          action: EventAuditAction.UPDATE,
+          actor: getActor(req),
+          reason: body.changeReason ?? body.startChangeReason ?? "Буксировка",
+          changes: { tow: towChanges } as Prisma.InputJsonValue
         }
-      }
-    });
+      });
+    }
 
     return updated;
   });
@@ -823,7 +1042,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         action: EventAuditAction.UPDATE,
         actor: getActor(req),
         reason: query.changeReason ?? "Буксировка",
-        changes: { tow: { delete: { id: towId } } }
+        changes: {
+          tow: {
+            delete: {
+              id: towId,
+              startAt: existing.startAt.toISOString(),
+              endAt: existing.endAt.toISOString(),
+              fromLabel: existing.fromLabel,
+              toLabel: existing.toLabel
+            }
+          }
+        }
       }
     });
     return { ok: true, deleted: 1 };
@@ -1469,12 +1698,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
         wouldCreateEvents += 1;
         if (towStartAt && towEndAt) wouldCreateTows += 1;
-        if (resolvedStand && hangar) {
+        const importedLocation = resolveStandLocation({
+          hangarId: hangar?.id ?? null,
+          layoutId: resolvedStand?.layoutId ?? null,
+          standId: resolvedStand?.standId ?? null
+        });
+        if (importedLocation.occupiesStand && importedLocation.standId && importedLocation.layoutId && hangar) {
           wouldCreateReservations += 1;
           plannedReservations.push({
-            standId: resolvedStand.standId,
+            standId: importedLocation.standId,
             hangarId: hangar.id,
-            layoutId: resolvedStand.layoutId,
+            layoutId: importedLocation.layoutId,
             startAt,
             endAt,
             label: `${aircraftTail} • ${title}`
@@ -1611,39 +1845,22 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             }
           });
 
-          if (!standCode) {
-            await tx.eventPlacement.create({
-              data: {
-                eventId: created.id,
-                sandboxId: sbId,
-                startAt,
-                endAt,
-                budgetStartAt,
-                budgetEndAt,
-                actualStartAt,
-                actualEndAt,
-                hangarId: hangar?.id ?? null,
-                layoutId: null,
-                standId: null,
-                sortOrder: 0
-              }
-            });
+          const preview = previewRows[i]!;
+          const location = resolveStandLocation({
+            hangarId: preview.hangarId ?? hangar?.id ?? null,
+            layoutId: preview.layoutId ?? null,
+            standId: preview.standId ?? null
+          });
+          if (standCode && !location.occupiesStand) {
+            throw new Error("Не удалось определить активное место/схему из предпросмотра");
           }
 
-          if (standCode) {
-            const preview = previewRows[i]!;
-            const standId = preview.standId;
-            const layoutId = preview.layoutId;
-            const hangarId = preview.hangarId ?? hangar?.id ?? null;
-            if (!standId || !layoutId || !hangarId) {
-              throw new Error("Не удалось определить активное место/схему из предпросмотра");
-            }
-
+          if (location.occupiesStand && location.standId && location.layoutId && location.hangarId) {
             const [standConflicts, layoutConflictRows] = await Promise.all([
               tx.standReservation.findMany({
                 where: {
                   sandboxId: sbId,
-                  standId,
+                  standId: location.standId,
                   startAt: { lt: endAt },
                   endAt: { gt: startAt },
                   event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
@@ -1653,10 +1870,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               tx.standReservation.findMany({
                 where: {
                   sandboxId: sbId,
-                  layoutId: { not: layoutId },
+                  layoutId: { not: location.layoutId },
                   startAt: { lt: endAt },
                   endAt: { gt: startAt },
-                  layout: { hangarId },
+                  layout: { hangarId: location.hangarId },
                   event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
                 },
                 select: { eventId: true }
@@ -1668,43 +1885,44 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             if (overlapsExisting) {
               await tx.maintenanceEvent.update({ where: { id: created.id }, data: { allowOverlap: true } });
             }
+          }
 
-            const placement = await tx.eventPlacement.create({
-              data: {
-                eventId: created.id,
-                sandboxId: sbId,
-                startAt,
-                endAt,
-                budgetStartAt,
-                budgetEndAt,
-                actualStartAt,
-                actualEndAt,
-                hangarId,
-                layoutId,
-                standId,
-                sortOrder: 0
-              }
-            });
+          const placement = await tx.eventPlacement.create({
+            data: {
+              eventId: created.id,
+              sandboxId: sbId,
+              startAt,
+              endAt,
+              budgetStartAt,
+              budgetEndAt,
+              actualStartAt,
+              actualEndAt,
+              hangarId: location.hangarId,
+              layoutId: location.layoutId,
+              standId: location.standId,
+              sortOrder: 0
+            }
+          });
 
+          if (location.occupiesStand && location.layoutId && location.standId) {
             await tx.standReservation.create({
               data: {
                 eventId: created.id,
                 placementId: placement.id,
-                layoutId,
-                standId,
+                layoutId: location.layoutId,
+                standId: location.standId,
                 startAt,
                 endAt,
                 sandboxId: sbId
               }
             });
-
-            await tx.maintenanceEvent.update({
-              where: { id: created.id },
-              data: { layoutId, hangarId }
-            });
-
             createdReservation = true;
           }
+
+          await tx.maintenanceEvent.update({
+            where: { id: created.id },
+            data: { hangarId: location.hangarId, layoutId: location.layoutId }
+          });
           if (towStartAt && towEndAt) {
             await tx.eventTow.create({
               data: { eventId: created.id, sandboxId: sbId, startAt: towStartAt, endAt: towEndAt }
@@ -1780,6 +1998,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         layoutId: zUuid.optional(),
         workshopId: zUuid.nullable().optional(),
         lineBase: z.enum(["LINE", "BASE"]).nullable().optional(),
+        deadlineAt: zDateTime.nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         comment: z.string().trim().min(1).max(5000).nullable().optional(),
@@ -1902,6 +2121,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               layoutId: event.layoutId ?? null,
               workshopId: (event as any).workshopId ?? null,
               lineBase: (event as any).lineBase ?? null,
+              deadlineAt: (event as any).deadlineAt?.toISOString?.() ?? null,
               placements: normalizedPlacements.map((p) => ({
                 startAt: p.startAt.toISOString(),
                 endAt: p.endAt.toISOString(),
@@ -2094,6 +2314,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         layoutId: zUuid.nullable().optional(),
         workshopId: zUuid.nullable().optional(),
         lineBase: z.enum(["LINE", "BASE"]).nullable().optional(),
+        deadlineAt: zDateTime.nullable().optional(),
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         comment: z.string().trim().min(1).max(5000).nullable().optional(),
@@ -2113,6 +2334,47 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     });
     if (!existing) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+
+    // Поле даты в карточке — до минуты. Повторное сохранение не должно срезать секунды импорта.
+    if (body.startAt) body.startAt = keepStoredInstant(existing.startAt, body.startAt);
+    if (body.endAt) body.endAt = keepStoredInstant(existing.endAt, body.endAt);
+    if (body.budgetStartAt) body.budgetStartAt = keepStoredInstant(existing.budgetStartAt, body.budgetStartAt);
+    if (body.budgetEndAt) body.budgetEndAt = keepStoredInstant(existing.budgetEndAt, body.budgetEndAt);
+    if (body.actualStartAt) body.actualStartAt = keepStoredInstant(existing.actualStartAt, body.actualStartAt);
+    if (body.actualEndAt) body.actualEndAt = keepStoredInstant(existing.actualEndAt, body.actualEndAt);
+    if (body.placements) {
+      const storedPlacements = [...(existing.placements ?? [])].sort(
+        (a, b) => a.sortOrder - b.sortOrder || a.startAt.getTime() - b.startAt.getTime()
+      );
+      const used = new Set<string>();
+      body.placements = body.placements.map((placement, index) => {
+        const prev =
+          storedPlacements.find(
+            (item) =>
+              !used.has(item.id) &&
+              item.sortOrder === (placement.sortOrder ?? index) &&
+              (item.standId ?? null) === (placement.standId ?? null) &&
+              (item.layoutId ?? null) === (placement.layoutId ?? null)
+          ) ??
+          storedPlacements.find((item) => !used.has(item.id) && item.sortOrder === (placement.sortOrder ?? index)) ??
+          (storedPlacements.length === body.placements!.length ? storedPlacements[index] : undefined);
+        if (!prev) return placement;
+        used.add(prev.id);
+        return {
+          ...placement,
+          startAt: keepStoredInstant(prev.startAt, placement.startAt)!,
+          endAt: keepStoredInstant(prev.endAt, placement.endAt)!,
+          budgetStartAt:
+            placement.budgetStartAt == null ? placement.budgetStartAt : keepStoredInstant(prev.budgetStartAt, placement.budgetStartAt),
+          budgetEndAt:
+            placement.budgetEndAt == null ? placement.budgetEndAt : keepStoredInstant(prev.budgetEndAt, placement.budgetEndAt),
+          actualStartAt:
+            placement.actualStartAt == null ? placement.actualStartAt : keepStoredInstant(prev.actualStartAt, placement.actualStartAt),
+          actualEndAt:
+            placement.actualEndAt == null ? placement.actualEndAt : keepStoredInstant(prev.actualEndAt, placement.actualEndAt)
+        };
+      });
+    }
 
     if (body.status && body.status !== existing.status) {
       const selectable = await loadSelectableEventStatusCodes(app.prisma);
@@ -2172,6 +2434,17 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     ) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }
+    if (
+      deadlineChangeBlockedWhileDone({
+        existingStatus: existing.status,
+        requestedStatus: body.status,
+        existingDeadlineAt: (existing as { deadlineAt?: Date | null }).deadlineAt ?? null,
+        requestedDeadlineAt: body.deadlineAt,
+        requestedProvided: body.deadlineAt !== undefined
+      })
+    ) {
+      throw app.httpErrors.badRequest(DONE_DEADLINE_LOCK_MESSAGE);
+    }
     if (scheduleLocked) {
       // UI always resends the full form; keep schedule immutable while DONE.
       placements = undefined;
@@ -2185,6 +2458,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       delete patch.actualEndAt;
       delete patch.hangarId;
       delete patch.layoutId;
+      delete patch.deadlineAt;
     }
 
     const nextStatus = body.status ?? existing.status;
@@ -2302,6 +2576,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           autoFillGapPlacements
         });
       } else if (singlePlacementSyncNeeded) {
+        const previousLocation = defaultPlacementFromEvent(existing);
+        const hangarId = body.hangarId === undefined ? previousLocation.hangarId : body.hangarId;
+        const layoutId = body.layoutId === undefined ? previousLocation.layoutId : body.layoutId;
+        const layoutChanged =
+          body.layoutId !== undefined && (body.layoutId ?? null) !== (previousLocation.layoutId ?? null);
+        const location = resolveStandLocation({
+          hangarId,
+          layoutId,
+          standId: layoutChanged ? null : previousLocation.standId
+        });
         normalizedPlacements = await replaceEventPlacements(tx, {
           eventId: id,
           sandboxId: sandboxIdFor(req),
@@ -2309,16 +2593,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           eventEnd: nextEnd,
           placements: [
             {
-              ...defaultPlacementFromEvent(existing),
+              ...previousLocation,
               startAt: nextStart,
               endAt: nextEnd,
               budgetStartAt: nextBudgetStart ?? null,
               budgetEndAt: nextBudgetEnd ?? null,
               actualStartAt: statusReconciled.actualStartAt,
               actualEndAt: statusReconciled.actualEndAt,
-              hangarId: body.hangarId === undefined ? defaultPlacementFromEvent(existing).hangarId : body.hangarId,
-              layoutId: body.layoutId === undefined ? defaultPlacementFromEvent(existing).layoutId : body.layoutId,
-              standId: body.layoutId === null ? null : defaultPlacementFromEvent(existing).standId,
+              hangarId: location.hangarId,
+              layoutId: location.layoutId,
+              standId: location.standId,
               sortOrder: 0
             }
           ],
@@ -2332,37 +2616,50 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
 
     const changes = diffEvent(existing, updated);
     if (placementChanged) {
-      (changes as any).placements = {
-        from: (existing.placements ?? []).map((p: any) => ({
-          startAt: p.startAt.toISOString(),
-          endAt: p.endAt.toISOString(),
-          budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
-          budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
-          actualStartAt: p.actualStartAt?.toISOString() ?? null,
-          actualEndAt: p.actualEndAt?.toISOString() ?? null,
-          origin: p.origin ?? EventPlacementOrigin.MANUAL,
-          hangarId: p.hangarId ?? null,
-          layoutId: p.layoutId ?? null,
-          standId: p.standId ?? null
-        })),
-        to: (normalizedPlacements ?? placements ?? []).map((p) => ({
-          startAt: p.startAt.toISOString(),
-          endAt: p.endAt.toISOString(),
-          budgetStartAt: p.budgetStartAt?.toISOString() ?? null,
-          budgetEndAt: p.budgetEndAt?.toISOString() ?? null,
-          actualStartAt: p.actualStartAt?.toISOString() ?? null,
-          actualEndAt: p.actualEndAt?.toISOString() ?? null,
-          origin: p.origin ?? EventPlacementOrigin.MANUAL,
-          hangarId: p.hangarId ?? null,
-          layoutId: p.layoutId ?? null,
-          standId: p.standId ?? null
-        }))
-      };
+      const placementFrom = (existing.placements ?? []).map((p: any) => ({
+        startAt: p.startAt,
+        endAt: p.endAt,
+        budgetStartAt: p.budgetStartAt ?? null,
+        budgetEndAt: p.budgetEndAt ?? null,
+        actualStartAt: p.actualStartAt ?? null,
+        actualEndAt: p.actualEndAt ?? null,
+        origin: p.origin ?? EventPlacementOrigin.MANUAL,
+        hangarId: p.hangarId ?? null,
+        layoutId: p.layoutId ?? null,
+        standId: p.standId ?? null
+      }));
+      const placementTo = (normalizedPlacements ?? placements ?? []).map((p) => ({
+        startAt: p.startAt,
+        endAt: p.endAt,
+        budgetStartAt: p.budgetStartAt ?? null,
+        budgetEndAt: p.budgetEndAt ?? null,
+        actualStartAt: p.actualStartAt ?? null,
+        actualEndAt: p.actualEndAt ?? null,
+        origin: p.origin ?? EventPlacementOrigin.MANUAL,
+        hangarId: p.hangarId ?? null,
+        layoutId: p.layoutId ?? null,
+        standId: p.standId ?? null
+      }));
+      if (!placementHistoryEqual(placementFrom, placementTo)) {
+        const asIso = (value: Date | string | null | undefined) =>
+          value instanceof Date ? value.toISOString() : (value ?? null);
+        const snapshot = (rows: typeof placementFrom) =>
+          rows.map((p) => ({
+            ...p,
+            startAt: asIso(p.startAt),
+            endAt: asIso(p.endAt),
+            budgetStartAt: asIso(p.budgetStartAt),
+            budgetEndAt: asIso(p.budgetEndAt),
+            actualStartAt: asIso(p.actualStartAt),
+            actualEndAt: asIso(p.actualEndAt)
+          }));
+        (changes as any).placements = { from: snapshot(placementFrom), to: snapshot(placementTo) };
+      }
     }
     const changedKeys = Object.keys(changes);
     assertChangeReasonIfNeeded(
       req,
-      changedKeys.length > 0,
+      patchNeedsChangeReason(changedKeys),
       changeReason,
       UserMsg.CHANGE_REASON_REQUIRED
     );

@@ -17,6 +17,9 @@ import { warehousesRoutes } from "./warehouses.js";
 import { placementPrioritiesRoutes } from "./placement-priorities.js";
 import { optimizationProfilesRoutes, optimizationScoreRulesRoutes } from "./optimization.js";
 import { eventStatusesRoutes } from "./event-statuses.js";
+import { towNormsRoutes } from "./tow-norms.js";
+import { aircraftWorkshopRoutes } from "./aircraft-workshops.js";
+import { workshopSkillsRoutes } from "./workshop-skills.js";
 
 export const referenceRoutes: FastifyPluginAsync = async (app) => {
   await app.register(operatorsRoutes, { prefix: "/operators" });
@@ -25,6 +28,9 @@ export const referenceRoutes: FastifyPluginAsync = async (app) => {
   await app.register(aircraftTypePaletteRoutes, { prefix: "/aircraft-type-palette" });
   await app.register(eventTypesRoutes, { prefix: "/event-types" });
   await app.register(eventStatusesRoutes, { prefix: "/event-statuses" });
+  await app.register(towNormsRoutes, { prefix: "/tow-norms" });
+  await app.register(aircraftWorkshopRoutes, { prefix: "/aircraft-workshops" });
+  await app.register(workshopSkillsRoutes, { prefix: "/workshop-skills" });
   await app.register(workshopsRoutes, { prefix: "/workshops" });
   await app.register(hangarsRoutes, { prefix: "/hangars" });
   await app.register(layoutsRoutes, { prefix: "/layouts" });

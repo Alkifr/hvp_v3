@@ -1,5 +1,5 @@
 /** Подразделения первичной таблицы / EventReportMetric. */
-export const PRIMARY_METRIC_DEPARTMENTS = ["ME", "AV", "INT", "NDT", "SHOP", "CAB_REP"] as const;
+export const PRIMARY_METRIC_DEPARTMENTS = ["ME", "AV", "INT", "NDT", "SHOP", "CAB_REP", "PAINT"] as const;
 
 export type PrimaryMetricDepartmentCode = (typeof PRIMARY_METRIC_DEPARTMENTS)[number];
 
@@ -9,7 +9,8 @@ export const PRIMARY_METRIC_DEPARTMENT_LABEL: Record<PrimaryMetricDepartmentCode
   INT: "INT",
   NDT: "NDT",
   SHOP: "SHOP",
-  CAB_REP: "CabRep"
+  CAB_REP: "CabRep",
+  PAINT: "Paint"
 };
 
 /** Skill.code → PrimaryMetricDepartment (включая legacy MECH/AVIO). */
@@ -21,6 +22,7 @@ const SKILL_CODE_TO_DEPARTMENT: Record<string, PrimaryMetricDepartmentCode> = {
   SHOP: "SHOP",
   CAB_REP: "CAB_REP",
   CABREP: "CAB_REP",
+  PAINT: "PAINT",
   // legacy
   MECH: "ME",
   AVIO: "AV"
@@ -159,7 +161,7 @@ export type LaborImportColumn = {
   title: string;
 };
 
-/** Канонические колонки импорта трудоёмкости (9 блоков × 6 квалификаций). */
+/** Канонические импортные колонки (9 блоков × 6 квалификаций); Paint вводится только вручную. */
 export function laborImportColumns(): LaborImportColumn[] {
   return LABOR_IMPORT_BLOCK_PREFIXES.flatMap((block) =>
     LABOR_IMPORT_DEPARTMENT_SUFFIXES.map((dep) => ({

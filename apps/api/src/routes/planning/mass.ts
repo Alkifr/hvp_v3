@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { EventAuditAction, PlanningLevel } from "@prisma/client";
 
 import { zDateTime, zUuid } from "../../lib/zod.js";
@@ -11,6 +11,12 @@ import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { VIRTUAL_AIRCRAFT_LABEL, virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 import { parseLineBase, resolveEventLineBase, type LineBase } from "../../lib/lineBase.js";
+import { resolveStandLocation } from "../../lib/standLocation.js";
+import {
+  MASS_OUTSIDE_PREFERRED_HANGAR_WARNING,
+  pickScopedPlacement,
+  resolveMassHangarSearch
+} from "../../lib/massHangarScope.js";
 
 function assertCanWrite(req: any) {
   if (!canWriteInContext(req)) {
@@ -389,6 +395,30 @@ const OR_TOOLS_SCHEDULING_MAX_LAYOUT_PAIR_CHECKS = 600_000;
 const OR_TOOLS_SCARCE_CANDIDATE_THRESHOLD = 4;
 const OR_TOOLS_LONG_EVENT_HOURS = 24;
 const OR_TOOLS_PLACED_OBJECTIVE_WEIGHT = 1_000_000_000_000;
+/** Меньше веса «разместить событие», больше любого score места: предпочтительный ангар выигрывает, пока в нём есть слот. */
+const PREFERRED_HANGAR_OBJECTIVE_BONUS = 1_000_000_000;
+
+/**
+ * Расчёт расстановки не должен занимать главный поток: иначе API не отвечает,
+ * и другая вкладка не открывает сервис, пока solver не закончит.
+ * OR-Tools считается в worker thread; длинные JS-циклы периодически отдают цикл событий.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+let orToolsSolveChain: Promise<void> = Promise.resolve();
+
+function withOrToolsSolveSlot<T>(task: () => Promise<T>): Promise<T> {
+  const run = orToolsSolveChain.then(task, task);
+  orToolsSolveChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
 type PlacementPreview = {
   index: number;
   title: string;
@@ -434,6 +464,8 @@ type BuildPlacementsParams = {
   cadenceMs: number | null;
   scheduleMode: ScheduleMode;
   placementMode: PlacementMode;
+  preferredHangarIds?: ReadonlySet<string>;
+  strictHangars?: boolean;
   towBeforeMs: number;
   towAfterMs: number;
   towBlocksStand: boolean;
@@ -476,20 +508,36 @@ function isEventStartFree(
   return !busy.some((b) => overlapsMs(blockStart, blockEnd, b.start, b.end));
 }
 
+async function loadMassHangars(
+  prisma: PrismaClient,
+  params: { strictHangars?: boolean; hangarIds?: string[] }
+) {
+  const activeHangars = await prisma.hangar.findMany({
+    where: { isActive: true },
+    orderBy: [{ name: "asc" }]
+  });
+  const search = resolveMassHangarSearch({
+    strictHangars: params.strictHangars,
+    selectedIds: params.hangarIds ?? [],
+    activeHangars
+  });
+  const byId = new Map(activeHangars.map((hangar) => [hangar.id, hangar]));
+  return {
+    hangarsOrdered: search.orderedIds
+      .map((id) => byId.get(id))
+      .filter((hangar): hangar is (typeof activeHangars)[number] => hangar != null),
+    preferredHangarIds: new Set(search.preferredIds),
+    strictHangarSearch: search.mode === "only",
+    layoutHangarIds: search.orderedIds
+  };
+}
+
 function pickBestPlacementCandidate(
   entries: StandEntry[],
-  slotFor: (entry: StandEntry) => number | null
+  slotFor: (entry: StandEntry) => number | null,
+  options?: { preferredHangarIds?: ReadonlySet<string>; strict?: boolean }
 ): { entry: StandEntry; slot: number } | null {
-  let best: { entry: StandEntry; slot: number; score: number } | null = null;
-  for (const entry of entries) {
-    const slot = slotFor(entry);
-    if (slot == null) continue;
-    const score = entry.priorityScore ?? 0;
-    if (!best || score > best.score || (score === best.score && slot < best.slot)) {
-      best = { entry, slot, score };
-    }
-  }
-  return best ? { entry: best.entry, slot: best.slot } : null;
+  return pickScopedPlacement(entries, slotFor, options);
 }
 
 function bestScoreSummary(entries: StandEntry[], freeEntryIds?: Set<string>) {
@@ -855,11 +903,15 @@ function buildBatchPlacement(
   entry: StandEntry,
   startAt: number,
   towBeforeMs: number,
-  towAfterMs: number
+  towAfterMs: number,
+  preferredHangarIds?: ReadonlySet<string>
 ): BatchPlacementPreview {
   const endAt = startAt + job.tatMs;
   const warnings: string[] = [];
   if (startAt > job.nominalStartAt && job.scheduleMode === "fixedCadence") warnings.push("Сдвинуто относительно фиксированного шага из-за занятости");
+  if (preferredHangarIds && preferredHangarIds.size > 0 && !preferredHangarIds.has(entry.hangarId)) {
+    warnings.push(MASS_OUTSIDE_PREFERRED_HANGAR_WARNING);
+  }
   return addTowFields(
     {
       index: job.flatIndex,
@@ -887,10 +939,10 @@ function buildBatchPlacement(
   ) as BatchPlacementPreview;
 }
 
-function buildMassPlanPlacements(params: BuildPlacementsParams): {
+async function buildMassPlanPlacements(params: BuildPlacementsParams): Promise<{
   placements: PlacementPreview[];
   unplaced: UnplacedPreview[];
-} {
+}> {
   const {
     count,
     titleBase,
@@ -905,6 +957,8 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
     cadenceMs,
     scheduleMode,
     placementMode,
+    preferredHangarIds,
+    strictHangars,
     towBeforeMs,
     towAfterMs,
     towBlocksStand
@@ -946,6 +1000,7 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
   };
 
   for (let i = 0; i < count; i++) {
+    if (i > 0 && i % 8 === 0) await yieldToEventLoop();
     const title = titleBase.includes("%") ? titleBase.replace("%", String(i + 1)) : `${titleBase} #${i + 1}`;
     const label = virtualLabel(i);
     const intendedStart =
@@ -955,19 +1010,24 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
           ? nextSequentialStart
           : Math.max(startFromMs, nextSequentialStart);
 
-    const picked = pickBestPlacementCandidate(standOrder, (entry) => {
-      const standBusy = busyByStandWork.get(entry.standId) ?? [];
-      const incompatibleLayoutLocks = (layoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
-      const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
-      const slot =
-        placementMode === "draftOnConflict"
-          ? isEventStartFree(busy, intendedStart, tatMs, blockBefore, blockAfter)
-            ? intendedStart
-            : null
-          : findFirstEventStart(busy, intendedStart, tatMs, endToMs, blockBefore, blockAfter);
-      if (slot == null || slot > endToMs) return null;
-      return slot;
-    });
+    const placementOptions = { preferredHangarIds, strict: Boolean(strictHangars) };
+    const picked = pickBestPlacementCandidate(
+      standOrder,
+      (entry) => {
+        const standBusy = busyByStandWork.get(entry.standId) ?? [];
+        const incompatibleLayoutLocks = (layoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
+        const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
+        const slot =
+          placementMode === "draftOnConflict"
+            ? isEventStartFree(busy, intendedStart, tatMs, blockBefore, blockAfter)
+              ? intendedStart
+              : null
+            : findFirstEventStart(busy, intendedStart, tatMs, endToMs, blockBefore, blockAfter);
+        if (slot == null || slot > endToMs) return null;
+        return slot;
+      },
+      placementOptions
+    );
 
     if (picked == null) {
       const scoreSummary = bestScoreSummary(standOrder);
@@ -984,7 +1044,9 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
       const warnings = [
         placementMode === "draftOnConflict"
           ? "Целевой слот занят, событие будет создано черновиком"
-          : "Не найден свободный слот в выбранном периоде"
+          : strictHangars
+            ? "Не найден свободный слот в выбранных ангарах"
+            : "Не найден свободный слот в выбранном периоде"
       ];
       if (draftStartAt !== intendedStart) warnings.push("Время черновика назначено внутри выбранного периода");
       unplaced.push({
@@ -1005,6 +1067,9 @@ function buildMassPlanPlacements(params: BuildPlacementsParams): {
     const warnings: string[] = [];
     if (bestStart > intendedStart && scheduleMode === "fixedCadence") {
       warnings.push("Сдвинуто относительно фиксированного шага из-за занятости");
+    }
+    if (preferredHangarIds && preferredHangarIds.size > 0 && !preferredHangarIds.has(bestEntry.hangarId)) {
+      warnings.push(MASS_OUTSIDE_PREFERRED_HANGAR_WARNING);
     }
     const priorityScore = bestEntry.priorityScore ?? 0;
     const scoreDetails = bestEntry.scoreDetails ?? [];
@@ -1059,6 +1124,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         startFrom: z.string().transform((s) => new Date(s)),
         endTo: z.string().transform((s) => new Date(s)),
         hangarIds: z.array(zUuid).optional(),
+        strictHangars: z.boolean().optional(),
         titleTemplate: z.string().trim().min(1).max(200).optional(),
         spacingHours: z.number().min(0).max(8760).optional().default(0),
         scheduleMode: z.enum(["compact", "sequential", "fixedCadence"]).optional().default("compact"),
@@ -1099,29 +1165,17 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     const startFromMs = body.startFrom.getTime();
     const endToMs = body.endTo.getTime();
     const windowEnd = new Date(Math.max(endToMs + tatMs + towAfterMs, startFromMs + body.count * (tatMs + spacingMs)));
+    const { hangarsOrdered, preferredHangarIds, strictHangarSearch, layoutHangarIds } = await loadMassHangars(app.prisma, body);
 
-    const [eventType, aircraftType, hangarsOrdered, layoutsWithStands, reservations, bodyTypeScoreRules] = await Promise.all([
+    const [eventType, aircraftType, layoutsWithStands, reservations, bodyTypeScoreRules] = await Promise.all([
       app.prisma.eventType.findUniqueOrThrow({ where: { id: body.eventTypeId } }).then((row) => {
         if (!row.isActive) throw app.httpErrors.badRequest(`Тип события «${row.name}» неактивен`);
         return row;
       }),
       app.prisma.aircraftType.findUniqueOrThrow({ where: { id: body.aircraftTypeId } }),
-      body.hangarIds?.length
-        ? app.prisma.hangar.findMany({
-            where: { id: { in: body.hangarIds }, isActive: true },
-            orderBy: []
-          }).then((list) => {
-            const byId = new Map(list.map((h) => [h.id, h]));
-            return body.hangarIds!.map((id) => byId.get(id)).filter(Boolean) as typeof list;
-          })
-        : app.prisma.hangar.findMany({
-            where: { isActive: true },
-            orderBy: [{ name: "asc" }]
-          }),
       (async () => {
-        const hid = body.hangarIds?.length
-          ? body.hangarIds
-          : (await app.prisma.hangar.findMany({ where: { isActive: true }, select: { id: true }, orderBy: [{ name: "asc" }] })).map((h) => h.id);
+        const hid = layoutHangarIds;
+        if (hid.length === 0) return [];
         const layouts = await app.prisma.hangarLayout.findMany({
           where: { hangarId: { in: hid }, isActive: true },
           orderBy: [{ isActive: "desc" }, { name: "asc" }],
@@ -1256,7 +1310,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     const titleBase = body.titleTemplate ?? eventType.name;
     const virtualLabel = (_i: number) => VIRTUAL_AIRCRAFT_LABEL;
 
-    const { placements: placementsPreview, unplaced: unplacedPreview } = buildMassPlanPlacements({
+    const { placements: placementsPreview, unplaced: unplacedPreview } = await buildMassPlanPlacements({
       count: body.count,
       titleBase,
       virtualLabel,
@@ -1270,6 +1324,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       cadenceMs,
       scheduleMode: body.scheduleMode,
       placementMode: body.placementMode,
+      preferredHangarIds,
+      strictHangars: strictHangarSearch,
       towBeforeMs,
       towAfterMs,
       towBlocksStand: body.towBlocksStand
@@ -1344,6 +1400,11 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         if (p) {
           const startAt = new Date(p.startAt);
           const endAt = new Date(p.endAt);
+          const location = resolveStandLocation({
+            hangarId: p.hangarId,
+            layoutId: p.layoutId,
+            standId: p.standId
+          });
           const ev = await tx.maintenanceEvent.create({
             data: {
               level: PlanningLevel.OPERATIONAL,
@@ -1358,8 +1419,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               budgetEndAt: body.budgetEndAt ?? null,
               actualStartAt: body.actualStartAt ?? null,
               actualEndAt: body.actualEndAt ?? null,
-              hangarId: p.hangarId,
-              layoutId: p.layoutId,
+              hangarId: location.hangarId,
+              layoutId: location.layoutId,
               workshopId: workshopFields.workshopId,
               lineBase: workshopFields.lineBase,
               virtualAircraft: virtualAircraft as Prisma.InputJsonValue
@@ -1375,15 +1436,25 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               budgetEndAt: body.budgetEndAt ?? null,
               actualStartAt: body.actualStartAt ?? null,
               actualEndAt: body.actualEndAt ?? null,
-              hangarId: p.hangarId,
-              layoutId: p.layoutId,
-              standId: p.standId,
+              hangarId: location.hangarId,
+              layoutId: location.layoutId,
+              standId: location.standId,
               sortOrder: 0
             }
           });
-          await tx.standReservation.create({
-            data: { eventId: ev.id, placementId: placement.id, sandboxId: sbId, layoutId: p.layoutId, standId: p.standId, startAt, endAt }
-          });
+          if (location.occupiesStand && location.layoutId && location.standId) {
+            await tx.standReservation.create({
+              data: {
+                eventId: ev.id,
+                placementId: placement.id,
+                sandboxId: sbId,
+                layoutId: location.layoutId,
+                standId: location.standId,
+                startAt,
+                endAt
+              }
+            });
+          }
           const towRows = [
             p.towBeforeStartAt != null && p.towBeforeEndAt != null
               ? { eventId: ev.id, sandboxId: sbId, startAt: new Date(p.towBeforeStartAt), endAt: new Date(p.towBeforeEndAt) }
@@ -1403,13 +1474,14 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               changes: {
                 massPlan: {
                   placed: true,
-                  hangarId: p.hangarId,
-                  layoutId: p.layoutId,
-                  standId: p.standId,
+                  hangarId: location.hangarId,
+                  layoutId: location.layoutId,
+                  standId: location.standId,
                   scheduleMode: body.scheduleMode,
                   spacingHours: body.spacingHours,
                   cadenceHours: body.cadenceHours ?? null,
                   placementMode: body.placementMode,
+                  strictHangars: body.strictHangars === true,
                   towBeforeMinutes: body.towBeforeMinutes,
                   towAfterMinutes: body.towAfterMinutes,
                   towBlocksStand: body.towBlocksStand,
@@ -1435,9 +1507,9 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             budgetEndAt: body.budgetEndAt ?? null,
             actualStartAt: body.actualStartAt ?? null,
             actualEndAt: body.actualEndAt ?? null,
-            hangarId: p.hangarId,
-            layoutId: p.layoutId,
-            standId: p.standId,
+            hangarId: location.hangarId,
+            layoutId: location.layoutId,
+            standId: location.standId,
             status: EventStatus.PENDING_EXECUTOR_APPROVAL,
             towBeforeStartAt: p.towBeforeStartAt != null ? new Date(p.towBeforeStartAt) : undefined,
             towBeforeEndAt: p.towBeforeEndAt != null ? new Date(p.towBeforeEndAt) : undefined,
@@ -1496,6 +1568,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
                   spacingHours: body.spacingHours,
                   cadenceHours: body.cadenceHours ?? null,
                   placementMode: body.placementMode,
+                  strictHangars: body.strictHangars === true,
                   towBeforeMinutes: body.towBeforeMinutes,
                   towAfterMinutes: body.towAfterMinutes,
                   towBlocksStand: body.towBlocksStand,
@@ -1585,6 +1658,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       .object({
         items: z.array(zBatchItem).min(1),
         hangarIds: z.array(zUuid).optional(),
+        strictHangars: z.boolean().optional(),
         placementMode: z.enum(["auto", "preferredHangars", "draftOnConflict"]).optional().default("auto"),
         budgetStartAt: zDateTime.nullable().optional(),
         budgetEndAt: zDateTime.nullable().optional(),
@@ -1618,26 +1692,15 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     );
     const aircraftTypeIds = Array.from(new Set(body.items.map((item) => item.aircraftTypeId)));
     const eventTypeIds = Array.from(new Set(body.items.map((item) => item.eventTypeId)));
+    const { hangarsOrdered, preferredHangarIds, strictHangarSearch, layoutHangarIds } = await loadMassHangars(app.prisma, body);
 
-    const [eventTypes, aircraftTypes, allWideAircraftTypes, hangarsOrdered, layoutsWithStands, reservations, priorityRules, bodyTypeScoreRules] = await Promise.all([
+    const [eventTypes, aircraftTypes, allWideAircraftTypes, layoutsWithStands, reservations, priorityRules, bodyTypeScoreRules] = await Promise.all([
       app.prisma.eventType.findMany({ where: { id: { in: eventTypeIds } } }),
       app.prisma.aircraftType.findMany({ where: { id: { in: aircraftTypeIds } } }),
       app.prisma.aircraftType.findMany({ where: { bodyType: "WIDE_BODY" }, select: { id: true } }),
-      body.hangarIds?.length
-        ? app.prisma.hangar
-            .findMany({
-              where: { id: { in: body.hangarIds }, isActive: true },
-              orderBy: []
-            })
-            .then((list) => {
-              const byId = new Map(list.map((h) => [h.id, h]));
-              return body.hangarIds!.map((id) => byId.get(id)).filter(Boolean) as typeof list;
-            })
-        : app.prisma.hangar.findMany({ where: { isActive: true }, orderBy: [{ name: "asc" }] }),
       (async () => {
-        const hid = body.hangarIds?.length
-          ? body.hangarIds
-          : (await app.prisma.hangar.findMany({ where: { isActive: true }, select: { id: true }, orderBy: [{ name: "asc" }] })).map((h) => h.id);
+        const hid = layoutHangarIds;
+        if (hid.length === 0) return [];
         const layouts = await app.prisma.hangarLayout.findMany({
           where: { hangarId: { in: hid }, isActive: true },
           include: {
@@ -1793,6 +1856,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
     let sequentialCursorMs: number | null = null;
 
     for (const [itemIndex, item] of body.items.entries()) {
+      if (itemIndex > 0 && itemIndex % 2 === 0) await yieldToEventLoop();
       const eventType = eventTypeById.get(item.eventTypeId)!;
       const aircraftType = aircraftTypeById.get(item.aircraftTypeId)!;
       const tatMs = item.tatHours * 60 * 60 * 1000;
@@ -1863,7 +1927,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const assembleDiagnostics = (params: {
+    const assembleDiagnostics = async (params: {
       solverMode: BatchSolverMode;
       solverEngine: "heuristic" | "ortools";
       solverStatus: string | null;
@@ -1876,13 +1940,14 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       unplaced: BatchUnplacedPreview[];
       candidateMetaByJob: Map<number, ReturnType<typeof selectOrToolsCandidateEntries>>;
       orToolsSelection?: Map<string, boolean>;
-    }): SolverDiagnosticsPayload => {
+    }): Promise<SolverDiagnosticsPayload> => {
       const placementByJob = new Map(params.placements.map((placement) => [placement.index, placement]));
       const unplacedByJob = new Map(params.unplaced.map((item) => [item.index, item]));
       const jobRows: SolverJobDiagnosticRow[] = [];
       const standRows: SolverStandDiagnosticRow[] = [];
 
       for (const job of jobs) {
+        if (jobRows.length > 0 && jobRows.length % 12 === 0) await yieldToEventLoop();
         const meta =
           params.candidateMetaByJob.get(job.flatIndex) ??
           selectOrToolsCandidateEntries(job, busyCtx, OR_TOOLS_SCHEDULING_MAX_STANDS_PER_JOB);
@@ -2002,7 +2067,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       };
     };
 
-    const runHeuristicSolver = (): BatchSolverResult => {
+    const runHeuristicSolver = async (): Promise<BatchSolverResult> => {
       const placements: BatchPlacementPreview[] = [];
       const unplaced: BatchUnplacedPreview[] = [];
       const localBusyWork = new Map<string, Array<{ start: number; end: number }>>();
@@ -2027,22 +2092,27 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       const candidateMetaByJob = new Map<number, ReturnType<typeof selectOrToolsCandidateEntries>>();
 
       for (const job of [...jobs].sort((a, b) => a.flatIndex - b.flatIndex)) {
+        if (placements.length + unplaced.length > 0 && (placements.length + unplaced.length) % 8 === 0) await yieldToEventLoop();
         const decisionCtx = { busyByStand: localBusyWork, layoutLocksByHangar: localLayoutLocksWork, blockBefore, blockAfter };
         candidateMetaByJob.set(job.flatIndex, selectOrToolsCandidateEntries(job, decisionCtx, OR_TOOLS_SCHEDULING_MAX_STANDS_PER_JOB));
         const intendedStart = batchJobIntendedStartMs(job, nextSequentialStart);
-        const picked = pickBestPlacementCandidate(job.compatibleEntries, (entry) => {
-          const standBusy = localBusyWork.get(entry.standId) ?? [];
-          const incompatibleLayoutLocks = (localLayoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
-          const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
-          const slot =
-            body.placementMode === "draftOnConflict"
-              ? isEventStartFree(busy, intendedStart, job.tatMs, blockBefore, blockAfter)
-                ? intendedStart
-                : null
-              : findFirstEventStart(busy, intendedStart, job.tatMs, job.endToMs, blockBefore, blockAfter);
-          if (slot == null || slot > job.endToMs) return null;
-          return slot;
-        });
+        const picked = pickBestPlacementCandidate(
+          job.compatibleEntries,
+          (entry) => {
+            const standBusy = localBusyWork.get(entry.standId) ?? [];
+            const incompatibleLayoutLocks = (localLayoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
+            const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
+            const slot =
+              body.placementMode === "draftOnConflict"
+                ? isEventStartFree(busy, intendedStart, job.tatMs, blockBefore, blockAfter)
+                  ? intendedStart
+                  : null
+                : findFirstEventStart(busy, intendedStart, job.tatMs, job.endToMs, blockBefore, blockAfter);
+            if (slot == null || slot > job.endToMs) return null;
+            return slot;
+          },
+          { preferredHangarIds, strict: strictHangarSearch }
+        );
 
         if (picked == null) {
           const scoreSummary = unplacedScoreSummary(job, { busyByStand: localBusyWork, layoutLocksByHangar: localLayoutLocksWork, blockBefore, blockAfter });
@@ -2050,7 +2120,9 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         const warnings = [
           body.placementMode === "draftOnConflict"
             ? "Целевой слот занят, событие будет создано черновиком"
-            : "Не найден свободный слот в выбранном периоде"
+            : strictHangarSearch
+              ? "Не найден свободный слот в выбранных ангарах"
+              : "Не найден свободный слот в выбранном периоде"
         ];
         if (draftStartAt !== intendedStart) warnings.push("Время черновика назначено внутри выбранного периода");
           unplaced.push({
@@ -2073,7 +2145,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         const bestEntry = picked.entry;
         const bestStart = picked.slot;
         const endAt = bestStart + job.tatMs;
-        placements.push(buildBatchPlacement(job, bestEntry, bestStart, towBeforeMs, towAfterMs));
+        placements.push(buildBatchPlacement(job, bestEntry, bestStart, towBeforeMs, towAfterMs, preferredHangarIds));
         addLocalBusy(bestEntry.standId, bestStart, endAt);
         addLocalLayoutLock(bestEntry, bestStart, endAt);
         if (job.scheduleMode === "sequential") nextSequentialStart = endAt + job.spacingMs;
@@ -2085,7 +2157,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         placements,
         unplaced,
         solver: "heuristic",
-        diagnostics: assembleDiagnostics({
+        diagnostics: await assembleDiagnostics({
           solverMode: body.solverMode,
           solverEngine: "heuristic",
           solverStatus: null,
@@ -2103,13 +2175,16 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
 
     const runOrToolsSolver = async (solverMode: BatchSolverMode): Promise<BatchSolverResult | null> => {
       if (body.placementMode === "draftOnConflict") throw new Error("OR-Tools пропущен: режим draftOnConflict требует фиксированного целевого старта");
-      const { CpModel, CpSolver, CpSat, LinearExpr } = (await import("or-tools-wasm/cp-sat")) as any;
-      CpSat.setWorkerBridgeEnabled(false);
+      const { CpModel, CpSolver, CpSat, LinearExpr, isWorkerBridgeAvailable } = (await import("or-tools-wasm/cp-sat")) as any;
+      if (typeof isWorkerBridgeAvailable === "function" && !isWorkerBridgeAvailable()) {
+        throw new Error("OR-Tools worker недоступен, расчёт на главном потоке заблокировал бы сервис");
+      }
+      CpSat.setWorkerBridgeEnabled(true);
 
       const placements: BatchPlacementPreview[] = [];
       const unplaced: BatchUnplacedPreview[] = [];
       const useHeuristicFallback = solverMode === "hybrid";
-      const heuristicSeed = runHeuristicSolver();
+      const heuristicSeed = await runHeuristicSolver();
       const heuristicPlacementByJob = new Map(heuristicSeed.placements.map((placement) => [placement.index, placement]));
       const sortedJobs = [...jobs].sort(compareBatchPlanningJobs);
       const optimizedJobIds = new Set(
@@ -2172,22 +2247,26 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         const intendedStart = batchJobIntendedStartMs(job);
         const decisionCtx = { busyByStand: localBusyWork, layoutLocksByHangar: localLayoutLocksWork, blockBefore, blockAfter };
         candidateMetaByJob.set(job.flatIndex, selectOrToolsCandidateEntries(job, decisionCtx, OR_TOOLS_SCHEDULING_MAX_STANDS_PER_JOB));
-        const picked = pickBestPlacementCandidate(job.compatibleEntries, (entry) => {
-          const standBusy = localBusyWork.get(entry.standId) ?? [];
-          const incompatibleLayoutLocks = (localLayoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
-          const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
-          const slot = findFirstEventStart(busy, intendedStart, job.tatMs, job.endToMs, blockBefore, blockAfter);
-          if (slot == null || slot > job.endToMs) return null;
-          return slot;
-        });
+        const picked = pickBestPlacementCandidate(
+          job.compatibleEntries,
+          (entry) => {
+            const standBusy = localBusyWork.get(entry.standId) ?? [];
+            const incompatibleLayoutLocks = (localLayoutLocksWork.get(entry.hangarId) ?? []).filter((lock) => lock.layoutId !== entry.layoutId);
+            const busy = [...standBusy, ...incompatibleLayoutLocks].sort((a, b) => a.start - b.start);
+            const slot = findFirstEventStart(busy, intendedStart, job.tatMs, job.endToMs, blockBefore, blockAfter);
+            if (slot == null || slot > job.endToMs) return null;
+            return slot;
+          },
+          { preferredHangarIds, strict: strictHangarSearch }
+        );
         if (picked != null) {
           const endAt = picked.slot + job.tatMs;
-          placements.push(buildBatchPlacement(job, picked.entry, picked.slot, towBeforeMs, towAfterMs));
+          placements.push(buildBatchPlacement(job, picked.entry, picked.slot, towBeforeMs, towAfterMs, preferredHangarIds));
           addLocalBusy(picked.entry.standId, picked.slot, endAt);
           addLocalLayoutLock(picked.entry, picked.slot, endAt);
           return;
         }
-        markUnplaced(job, "Не найден свободный слот в выбранном периоде");
+        markUnplaced(job, strictHangarSearch ? "Не найден свободный слот в выбранных ангарах" : "Не найден свободный слот в выбранном периоде");
       };
 
       type SchedulingAssignment = {
@@ -2274,12 +2353,14 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         return checks;
       };
 
+      let occupancySteps = 0;
       for (const [standId, busy] of busyByStand.entries()) {
         for (const [idx, block] of busy.entries()) {
           const blockStartH = toHourFloor(block.start);
           const blockEndH = toHourCeil(block.end);
           const sizeH = Math.max(1, blockEndH - blockStartH);
           addStandInterval(standExistingIntervals, standId, model.newFixedSizeIntervalVar(blockStartH, sizeH, `busy_${standId}_${idx}`));
+          if (++occupancySteps % 100 === 0) await yieldToEventLoop();
         }
       }
       for (const [hangarId, locks] of layoutLocksByHangar.entries()) {
@@ -2288,11 +2369,13 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           const blockEndH = toHourCeil(lock.end);
           const sizeH = Math.max(1, blockEndH - blockStartH);
           addLayoutInterval(layoutExistingIntervals, hangarId, lock.layoutId, model.newFixedSizeIntervalVar(blockStartH, sizeH, `layout_busy_${hangarId}_${idx}`));
+          if (++occupancySteps % 100 === 0) await yieldToEventLoop();
         }
       }
 
       const candidateMetaByJob = new Map<number, ReturnType<typeof selectOrToolsCandidateEntries>>();
       for (const job of jobs) {
+        if (candidateMetaByJob.size > 0 && candidateMetaByJob.size % 8 === 0) await yieldToEventLoop();
         const maxEntries = optimizedModelJobIds.has(job.flatIndex)
           ? dynamicMaxStandsPerJob
           : OR_TOOLS_SCHEDULING_MAX_STANDS_PER_JOB;
@@ -2300,6 +2383,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       }
 
       for (const job of optimizedJobs) {
+        if (job.flatIndex > 0 && job.flatIndex % 4 === 0) await yieldToEventLoop();
         const durationH = Math.max(1, Math.ceil(job.tatMs / hourMs));
         const startMinH = Math.max(toHourCeil(job.startFromMs), toHourCeil(job.nominalStartAt));
         const startMaxH = toHourFloor(job.endToMs);
@@ -2311,11 +2395,14 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         const nominalStartH = toHourCeil(job.nominalStartAt);
         const placed = model.newBoolVar(`placed_${job.flatIndex}`);
         const jobVars = { placed };
-        const candidateEntries = [...(candidateMetaByJob.get(job.flatIndex)?.entries ?? [])];
+        const allowHangar = (hangarId: string) => !strictHangarSearch || preferredHangarIds.has(hangarId);
+        const candidateEntries = [...(candidateMetaByJob.get(job.flatIndex)?.entries ?? [])].filter((entry) =>
+          allowHangar(entry.hangarId)
+        );
         const heuristicPlacement = heuristicPlacementByJob.get(job.flatIndex);
         const heuristicEntry =
           heuristicPlacement != null && !candidateEntries.some((entry) => entry.standId === heuristicPlacement.standId)
-            ? job.compatibleEntries.find((entry) => entry.standId === heuristicPlacement.standId)
+            ? job.compatibleEntries.find((entry) => entry.standId === heuristicPlacement.standId && allowHangar(entry.hangarId))
             : undefined;
         if (heuristicEntry) candidateEntries.push(heuristicEntry);
         const entriesByLayout = new Map<string, { hangarId: string; layoutId: string; entries: StandEntry[] }>();
@@ -2350,7 +2437,9 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               model.add(presence.le(layoutPresence));
               model.add(presence.le(placed));
               const delayH = Math.max(0, startH - nominalStartH);
+              const preferredBonus = preferredHangarIds.has(entry.hangarId) ? PREFERRED_HANGAR_OBJECTIVE_BONUS : 0;
               const score =
+                preferredBonus +
                 bodyTypeRank(job.bodyType) * 1_000_000 +
                 (entry.priorityScore ?? 0) * 1_000 -
                 delayH * 100 -
@@ -2361,6 +2450,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               layoutAssignments.push(assignment);
               addStandInterval(standIntervals, entry.standId, interval);
               addLayoutInterval(layoutIntervals, layoutGroup.hangarId, layoutGroup.layoutId, layoutInterval);
+              if (assignments.length % 64 === 0) await yieldToEventLoop();
               if (assignments.length > OR_TOOLS_SCHEDULING_MAX_ASSIGNMENTS) {
                 throw new Error(`OR-Tools scheduling-модель слишком большая: больше ${OR_TOOLS_SCHEDULING_MAX_ASSIGNMENTS} event-stand интервалов`);
               }
@@ -2380,12 +2470,16 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const standIds = new Set([...standIntervals.keys(), ...standExistingIntervals.keys()]);
+      let standConstraintSteps = 0;
       for (const standId of standIds) {
         const newIntervals = standIntervals.get(standId) ?? [];
         const existingIntervals = standExistingIntervals.get(standId) ?? [];
         if (newIntervals.length > 1) model.addNoOverlap(newIntervals);
         for (const newInterval of newIntervals) {
-          for (const existingInterval of existingIntervals) model.addNoOverlap([newInterval, existingInterval]);
+          for (const existingInterval of existingIntervals) {
+            model.addNoOverlap([newInterval, existingInterval]);
+            if (++standConstraintSteps % 2_000 === 0) await yieldToEventLoop();
+          }
         }
       }
 
@@ -2395,6 +2489,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const hangarIds = new Set([...layoutIntervals.keys(), ...layoutExistingIntervals.keys()]);
+      let layoutConstraintSteps = 0;
       for (const hangarId of hangarIds) {
         const newByLayout = layoutIntervals.get(hangarId) ?? new Map<string, any[]>();
         const existingByLayout = layoutExistingIntervals.get(hangarId) ?? new Map<string, any[]>();
@@ -2408,11 +2503,20 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
             const existingA = existingByLayout.get(a) ?? [];
             const existingB = existingByLayout.get(b) ?? [];
             for (const intervalA of newA) {
-              for (const intervalB of newB) model.addNoOverlap([intervalA, intervalB]);
-              for (const fixedB of existingB) model.addNoOverlap([intervalA, fixedB]);
+              for (const intervalB of newB) {
+                model.addNoOverlap([intervalA, intervalB]);
+                if (++layoutConstraintSteps % 2_000 === 0) await yieldToEventLoop();
+              }
+              for (const fixedB of existingB) {
+                model.addNoOverlap([intervalA, fixedB]);
+                if (++layoutConstraintSteps % 2_000 === 0) await yieldToEventLoop();
+              }
             }
             for (const intervalB of newB) {
-              for (const fixedA of existingA) model.addNoOverlap([intervalB, fixedA]);
+              for (const fixedA of existingA) {
+                model.addNoOverlap([intervalB, fixedA]);
+                if (++layoutConstraintSteps % 2_000 === 0) await yieldToEventLoop();
+              }
             }
           }
         }
@@ -2429,7 +2533,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       const solver = new CpSolver();
       solver.parameters.maxTimeInSeconds = solverTimeLimitSeconds;
       solver.parameters.numSearchWorkers = 1;
-      const status = await solver.solve(model);
+      const status = await withOrToolsSolveSlot(() => solver.solve(model));
       const statusName = solver.statusName(status);
       let solverHasValues = statusName === "OPTIMAL" || statusName === "FEASIBLE";
       if (!solverHasValues && statusName === "UNKNOWN") {
@@ -2442,15 +2546,19 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       const placedCount = solverHasValues ? scheduledJobs.reduce((sum, scheduledJob) => sum + Number(solver.value(scheduledJob.placed)), 0) : 0;
       const orToolsSelection = new Map<string, boolean>();
       if (solverHasValues) {
+        let readSteps = 0;
         for (const assignment of assignments) {
+          if (++readSteps % 400 === 0) await yieldToEventLoop();
           const key = `${assignment.job.flatIndex}:${assignment.entry.standId}`;
           orToolsSelection.set(key, (orToolsSelection.get(key) ?? false) || solver.value(assignment.presence) === 1);
         }
       }
 
-      const extractPlacementsFromSolver = () => {
+      const extractPlacementsFromSolver = async () => {
         const selectedByJob = new Map<number, SchedulingAssignment>();
+        let readSteps = 0;
         for (const assignment of assignments) {
+          if (++readSteps % 400 === 0) await yieldToEventLoop();
           if (solver.value(assignment.presence) === 1) selectedByJob.set(assignment.job.flatIndex, assignment);
         }
         for (const job of optimizedJobs) {
@@ -2461,18 +2569,18 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           }
           const startAt = fromHour(selected.startH);
           const endAt = startAt + job.tatMs;
-          placements.push(buildBatchPlacement(job, selected.entry, startAt, towBeforeMs, towAfterMs));
+          placements.push(buildBatchPlacement(job, selected.entry, startAt, towBeforeMs, towAfterMs, preferredHangarIds));
           addLocalBusy(selected.entry.standId, startAt, endAt);
           addLocalLayoutLock(selected.entry, startAt, endAt);
         }
       };
 
-      const returnHeuristicFallback = (reason: string): BatchSolverResult => ({
+      const returnHeuristicFallback = async (reason: string): Promise<BatchSolverResult> => ({
         placements: heuristicSeed.placements,
         unplaced: heuristicSeed.unplaced,
         solver: "ortools",
         fallbackReason: reason,
-        diagnostics: assembleDiagnostics({
+        diagnostics: await assembleDiagnostics({
           solverMode,
           solverEngine: "ortools",
           solverStatus: statusName,
@@ -2490,10 +2598,10 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
 
       let solverFallbackReason: string | undefined;
       if (statusName === "OPTIMAL" || statusName === "FEASIBLE") {
-        extractPlacementsFromSolver();
+        await extractPlacementsFromSolver();
       } else if (statusName === "UNKNOWN") {
         if (solverHasValues) {
-          extractPlacementsFromSolver();
+          await extractPlacementsFromSolver();
           solverFallbackReason = `OR-Tools job-shop: частичное решение за ${solverTimeLimitSeconds}с (${statusName}), размещено ${placedCount}`;
         } else {
           if (!useHeuristicFallback) {
@@ -2509,7 +2617,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               unplaced,
               solver: "ortools",
               fallbackReason: reason,
-              diagnostics: assembleDiagnostics({
+              diagnostics: await assembleDiagnostics({
                 solverMode,
                 solverEngine: "ortools",
                 solverStatus: statusName,
@@ -2525,7 +2633,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
               })
             };
           }
-          return returnHeuristicFallback(
+          return await returnHeuristicFallback(
             `OR-Tools не успел за ${solverTimeLimitSeconds}с (${statusName}); показан эвристический результат (${heuristicSeed.placements.length} размещено)`
           );
         }
@@ -2550,7 +2658,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         unplaced,
         solver: solverMode === "hybrid" && placements.length === 0 ? "heuristic" : "ortools",
         fallbackReason,
-        diagnostics: assembleDiagnostics({
+        diagnostics: await assembleDiagnostics({
           solverMode,
           solverEngine: "ortools",
           solverStatus: statusName,
@@ -2569,12 +2677,18 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
 
     let solverResult: BatchSolverResult;
     if (body.solverMode === "heuristic") {
-      solverResult = runHeuristicSolver();
+      solverResult = await runHeuristicSolver();
     } else if (body.solverMode === "hybrid") {
       try {
-        solverResult = (await runOrToolsSolver("hybrid")) ?? { ...runHeuristicSolver(), fallbackReason: "OR-Tools не вернул допустимое решение" };
+        solverResult = (await runOrToolsSolver("hybrid")) ?? {
+          ...(await runHeuristicSolver()),
+          fallbackReason: "OR-Tools не вернул допустимое решение"
+        };
       } catch (error) {
-        solverResult = { ...runHeuristicSolver(), fallbackReason: error instanceof Error ? error.message : "OR-Tools недоступен" };
+        solverResult = {
+          ...(await runHeuristicSolver()),
+          fallbackReason: error instanceof Error ? error.message : "OR-Tools недоступен"
+        };
       }
     } else {
       try {
@@ -2597,7 +2711,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : "OR-Tools недоступен";
-        const heuristic = runHeuristicSolver();
+        const heuristic = await runHeuristicSolver();
         solverResult = {
           ...heuristic,
           solver: "ortools",
@@ -2669,6 +2783,11 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
         const placementId = randomUUID();
         const startAt = new Date(p.startAt);
         const endAt = new Date(p.endAt);
+        const location = resolveStandLocation({
+          hangarId: p.hangarId,
+          layoutId: p.layoutId,
+          standId: p.standId
+        });
         eventRows.push({
           id: eventId,
           level: PlanningLevel.OPERATIONAL,
@@ -2683,8 +2802,8 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           budgetEndAt: body.budgetEndAt ?? null,
           actualStartAt: body.actualStartAt ?? null,
           actualEndAt: body.actualEndAt ?? null,
-          hangarId: p.hangarId,
-          layoutId: p.layoutId,
+          hangarId: location.hangarId,
+          layoutId: location.layoutId,
           workshopId: workshopFieldsByRow[p.rowIndex]?.workshopId ?? null,
           lineBase: workshopFieldsByRow[p.rowIndex]?.lineBase ?? null,
           virtualAircraft: { operatorId: p.operatorId, aircraftTypeId: p.aircraftTypeId, label: p.label } as Prisma.InputJsonValue
@@ -2699,27 +2818,39 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
           budgetEndAt: body.budgetEndAt ?? null,
           actualStartAt: body.actualStartAt ?? null,
           actualEndAt: body.actualEndAt ?? null,
-          hangarId: p.hangarId,
-          layoutId: p.layoutId,
-          standId: p.standId,
+          hangarId: location.hangarId,
+          layoutId: location.layoutId,
+          standId: location.standId,
           sortOrder: 0
         });
-        reservationRows.push({
-          eventId,
-          placementId,
-          sandboxId: sbId,
-          layoutId: p.layoutId,
-          standId: p.standId,
-          startAt,
-          endAt
-        });
+        if (location.occupiesStand && location.layoutId && location.standId) {
+          reservationRows.push({
+            eventId,
+            placementId,
+            sandboxId: sbId,
+            layoutId: location.layoutId,
+            standId: location.standId,
+            startAt,
+            endAt
+          });
+        }
         if (p.towBeforeStartAt != null && p.towBeforeEndAt != null) {
           towRows.push({ eventId, sandboxId: sbId, startAt: new Date(p.towBeforeStartAt), endAt: new Date(p.towBeforeEndAt) });
         }
         if (p.towAfterStartAt != null && p.towAfterEndAt != null) {
           towRows.push({ eventId, sandboxId: sbId, startAt: new Date(p.towAfterStartAt), endAt: new Date(p.towAfterEndAt) });
         }
-        created.push({ eventId, label: p.label, title: p.title, startAt, endAt, hangarId: p.hangarId, layoutId: p.layoutId, standId: p.standId, status: EventStatus.PENDING_EXECUTOR_APPROVAL });
+        created.push({
+          eventId,
+          label: p.label,
+          title: p.title,
+          startAt,
+          endAt,
+          hangarId: location.hangarId,
+          layoutId: location.layoutId,
+          standId: location.standId,
+          status: EventStatus.PENDING_EXECUTOR_APPROVAL
+        });
       }
 
       for (const u of unplacedPreview) {

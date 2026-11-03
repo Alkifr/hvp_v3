@@ -77,6 +77,15 @@ export function buildGanttRowOffsets(heights: number[]): number[] {
   return offsets;
 }
 
+/**
+ * Позиция указателя в координатах прокручиваемого содержимого.
+ * `origin` — край viewport-скроллера (его getBoundingClientRect не едет вместе со scroll).
+ * Край самого содержимого уже сдвинут на scroll, прибавлять scroll ещё раз нельзя.
+ */
+export function pointerContentOffset(client: number, origin: number, scroll: number): number {
+  return client - origin + scroll;
+}
+
 export function ganttRowIndexAtY(offsets: number[], y: number): number {
   const count = Math.max(0, offsets.length - 1);
   if (count <= 0) return 0;
@@ -154,6 +163,15 @@ export const EMPTY_GANTT_VIRT: GanttVirtState = {
   x: { left: 0, width: 4000 },
   rows: { startIdx: 0, endIdx: 48 }
 };
+
+export function sameGanttVirtState(a: GanttVirtState, b: GanttVirtState): boolean {
+  return (
+    a.x.left === b.x.left &&
+    a.x.width === b.x.width &&
+    a.rows.startIdx === b.rows.startIdx &&
+    a.rows.endIdx === b.rows.endIdx
+  );
+}
 
 export function nextGanttVirtState(
   current: GanttVirtState,

@@ -53,6 +53,14 @@ export function durationMs(start?: Date | null, end?: Date | null): number | nul
   return Number.isFinite(ms) && ms > 0 ? ms : null;
 }
 
+export function directionFromTowLabels(fromLabel?: string | null, toLabel?: string | null): TowDirection | null {
+  const fromApron = text(fromLabel) === APRON_STAND_LABEL;
+  const toApron = text(toLabel) === APRON_STAND_LABEL;
+  if (fromApron && !toApron) return "IN";
+  if (toApron && !fromApron) return "OUT";
+  return null;
+}
+
 export function towDirectionLabel(direction: TowDirection): string {
   if (direction === "IN") return "Закатка";
   if (direction === "OUT") return "Выкатка";
@@ -90,10 +98,17 @@ export function inferTowRoute(
   const overlap =
     sorted.find((p) => p.startAt.getTime() < towEnd.getTime() && p.endAt.getTime() > towStart.getTime()) ?? null;
 
+  const insideBound =
+    bound != null &&
+    towStart.getTime() >= bound.startAt.getTime() - MATCH_SLACK_MS &&
+    towEnd.getTime() <= bound.endAt.getTime() + MATCH_SLACK_MS;
+
   let direction: TowDirection = "UNKNOWN";
   if (bound) {
     if (near(towEnd, bound.startAt) && !near(towStart, bound.endAt)) direction = "IN";
     else if (near(towStart, bound.endAt) && !near(towEnd, bound.startAt)) direction = "OUT";
+    else if (insideBound && near(towStart, bound.startAt) && !near(towEnd, bound.endAt)) direction = "IN";
+    else if (insideBound && near(towEnd, bound.endAt) && !near(towStart, bound.startAt)) direction = "OUT";
     else if (prev && next && prev.id !== next.id) direction = "TRANSFER";
     else if (near(towEnd, bound.startAt)) direction = "IN";
     else if (near(towStart, bound.endAt)) direction = "OUT";
@@ -226,6 +241,8 @@ export function buildTowReportRow(src: TowReportSource): TowReportRow {
   );
   const fromStand = text(src.fromLabel) || text(src.fromStandCode) || text(inferred.fromStand);
   const toStand = text(src.toLabel) || text(src.toStandCode) || text(inferred.toStand);
+  const labeledDirection = directionFromTowLabels(src.fromLabel, src.toLabel) ?? directionFromTowLabels(fromStand, toStand);
+  const direction = labeledDirection ?? inferred.direction;
   const slotEnd = bound?.endAt ?? src.eventEndAt;
   const occupancyEnd = src.occupancyEndAt ?? slotEnd;
   const occupancyMs = durationMs(src.startAt, occupancyEnd);
@@ -241,8 +258,8 @@ export function buildTowReportRow(src: TowReportSource): TowReportRow {
     eventTypeId: text(src.eventTypeId),
     eventType: text(src.eventType),
     seq: 0,
-    direction: inferred.direction,
-    directionLabel: towDirectionLabel(inferred.direction),
+    direction,
+    directionLabel: towDirectionLabel(direction),
     towDurationMinutes: movementMs == null ? null : Math.round(movementMs / 60_000),
     hangarId: text(inferred.hangarId) || text(src.hangarId),
     hangarNumber,

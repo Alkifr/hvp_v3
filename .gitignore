@@ -46,6 +46,8 @@ venv/
 
 *.xlsx
 *.xls
+*.docx
+*.doc
 
 # DB dumps
 backups/

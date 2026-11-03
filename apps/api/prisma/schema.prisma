@@ -156,6 +156,28 @@ enum PrimaryMetricDepartment {
   NDT
   SHOP
   CAB_REP
+  PAINT
+}
+
+enum PersonnelCategoryCode {
+  B1
+  LBMM
+  B2
+  LBMA
+  AM
+  SM
+  NDT
+  SHOP
+  INT
+  CAB_REP
+  PAINT
+}
+
+enum PersonnelAuthorizationGroup {
+  ME
+  AV
+  SHARED
+  DIRECT
 }
 
 enum PrimaryMetricSource {
@@ -176,9 +198,10 @@ model Shift {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  planLines   EventWorkPlanLine[]
-  actualLines EventWorkActualLine[]
-  timeEntries TimeEntry[]
+  planLines             EventWorkPlanLine[]
+  actualLines           EventWorkActualLine[]
+  timeEntries           TimeEntry[]
+  personnelAvailability PersonnelAvailability[]
 
   @@index([isActive])
 }
@@ -206,10 +229,12 @@ model Skill {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  people      PersonSkill[]
-  planLines   EventWorkPlanLine[]
-  actualLines EventWorkActualLine[]
-  timeEntries TimeEntry[]
+  people                PersonSkill[]
+  planLines             EventWorkPlanLine[]
+  actualLines           EventWorkActualLine[]
+  timeEntries           TimeEntry[]
+  workshopSkills        WorkshopSkill[]
+  personnelAvailability PersonnelAvailability[]
 
   @@index([isActive])
 }
@@ -417,40 +442,44 @@ model MaterialIssue {
 }
 
 model User {
-  id                 String   @id @default(uuid())
-  email              String   @unique
-  displayName        String?
-  passwordHash       String
-  isActive           Boolean  @default(true)
-  mustChangePassword Boolean  @default(true)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  lastLoginAt        DateTime?
-  lastSeenAt         DateTime?
+  id                     String    @id @default(uuid())
+  email                  String    @unique
+  displayName            String?
+  passwordHash           String
+  isActive               Boolean   @default(true)
+  mustChangePassword     Boolean   @default(true)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  lastLoginAt            DateTime?
+  lastSeenAt             DateTime?
   /// Инкремент инвалидирует все JWT этого пользователя.
-  tokenVersion       Int      @default(0)
+  tokenVersion           Int       @default(0)
   /// Стартовый раздел SPA: gantt, hangar, analytics, …; пусто — первый доступный.
-  homePage           String?
+  homePage               String?
   /// kind[] колокольчика, которые пользователь скрыл: EVENT_OVERDUE_NO_FACT, …
-  mutedNotificationKinds Json @default("[]")
+  mutedNotificationKinds Json      @default("[]")
   /// Админ выдал доступ к БД из DBeaver / SQL IDE (отдельная read-only роль Postgres).
-  dbAccessEnabled Boolean @default(false)
-  pgRoleName      String?
-  pgPassword      String?
+  dbAccessEnabled        Boolean   @default(false)
+  pgRoleName             String?
+  pgPassword             String?
 
-  roles                UserRole[]
-  permissionOverrides  UserPermission[]
+  roles               UserRole[]
+  permissionOverrides UserPermission[]
 
-  ownedSandboxes     Sandbox[]             @relation("SandboxOwner")
-  sandboxMemberships SandboxMember[]
-  activityLogs       UserActivityLog[]
-  presenceEvents     UserPresenceEvent[]
-  ownedReports       SavedReport[]         @relation("ReportOwner")
-  reportShares       SavedReportShare[]
-  savedTableViews          SavedTableView[]
-  notificationReads        AppNotificationRead[]
-  authoredAnnouncements    AppAnnouncement[] @relation("AnnouncementAuthor")
-  announcementDismissals   AppAnnouncementDismissal[]
+  ownedSandboxes         Sandbox[]                   @relation("SandboxOwner")
+  sandboxMemberships     SandboxMember[]
+  activityLogs           UserActivityLog[]
+  presenceEvents         UserPresenceEvent[]
+  ownedReports           SavedReport[]               @relation("ReportOwner")
+  reportShares           SavedReportShare[]
+  savedTableViews        SavedTableView[]
+  notificationReads      AppNotificationRead[]
+  authoredAnnouncements  AppAnnouncement[]           @relation("AnnouncementAuthor")
+  announcementDismissals AppAnnouncementDismissal[]
+  eventChangeSubscriptions    EventChangeSubscription[]
+  personnelWeekLocks          PersonnelPlanningWeek[]        @relation("PersonnelWeekLockedBy")
+  personnelSnapshots          PersonnelPlanningSnapshot[]    @relation("PersonnelSnapshotCreatedBy")
+  personnelAvailabilityChanges PersonnelAvailabilityChange[] @relation("PersonnelAvailabilityChangedBy")
 
   @@index([isActive])
 }
@@ -605,6 +634,8 @@ model AircraftType {
   palettes               AircraftTypePalette[]
   hangarStandRules       HangarStandAircraftType[]
   placementPriorityRules PlacementPriorityRuleAircraftType[]
+  personnelAvailability  PersonnelAvailability[]
+  personnelMpsFactors    PersonnelAircraftTypeMpsFactor[]
 }
 
 // Палитра: цвет для связки "оператор + тип ВС"
@@ -642,6 +673,7 @@ model Aircraft {
   type     AircraftType @relation(fields: [typeId], references: [id])
 
   events MaintenanceEvent[]
+  workshopAssignments AircraftWorkshopAssignment[]
 
   @@index([operatorId])
   @@index([typeId])
@@ -662,18 +694,18 @@ model EventType {
 
 /// Подписи, палитра и пользовательские статусы события. Системные коды задают логику планирования.
 model EventStatusCatalog {
-  code                 String @id
+  code                 String   @id
   name                 String
   /// hex полоски на Гантте, например #FFC182; пусто — без полоски
   color                String?
-  sortOrder            Int         @default(0)
-  selectable           Boolean     @default(true)
+  sortOrder            Int      @default(0)
+  selectable           Boolean  @default(true)
   /// После опер. начала автоматически переводить во «В работе»
-  allowsAutoInProgress Boolean     @default(false)
+  allowsAutoInProgress Boolean  @default(false)
   /// Автоматика не трогает (нет авто «В работе» и просрочки без факта)
-  manualOnly           Boolean     @default(false)
-  createdAt            DateTime    @default(now())
-  updatedAt            DateTime    @updatedAt
+  manualOnly           Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   @@index([sortOrder])
 }
@@ -688,9 +720,210 @@ model Workshop {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  events MaintenanceEvent[]
+  events                MaintenanceEvent[]
+  personnelCategories   PersonnelWorkshopCategory[]
+  workshopSkills        WorkshopSkill[]
+  personnelAvailability PersonnelAvailability[]
+  personnelAvailabilityChanges PersonnelAvailabilityChange[]
+  personnelWeeks        PersonnelPlanningWeek[]
+  aircraftAssignments   AircraftWorkshopAssignment[]
 
   @@index([isActive])
+}
+
+/// Production-only personnel category catalog. These records are never sandbox-scoped.
+model PersonnelCategory {
+  code               PersonnelCategoryCode       @id
+  name               String
+  authorizationGroup PersonnelAuthorizationGroup
+  department         PrimaryMetricDepartment?
+  isAuthorized       Boolean
+  isActive           Boolean                     @default(true)
+  sortOrder          Int                         @default(0)
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+
+  workshopMappings PersonnelWorkshopCategory[]
+  availability     PersonnelAvailability[]
+}
+
+/// Optional workshop-specific enablement/mapping for direct and shared categories.
+model PersonnelWorkshopCategory {
+  workshopId   String
+  categoryCode PersonnelCategoryCode
+  department   PrimaryMetricDepartment?
+  isActive     Boolean                  @default(true)
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+
+  workshop Workshop          @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  category PersonnelCategory @relation(fields: [categoryCode], references: [code], onDelete: Cascade)
+
+  @@id([workshopId, categoryCode])
+  @@index([categoryCode])
+}
+
+/// Qualifications from the Skills catalog enabled for a workshop.
+model WorkshopSkill {
+  workshopId String
+  skillId    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  workshop Workshop @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  skill    Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([workshopId, skillId])
+  @@index([skillId])
+}
+
+/// Production availability by local calendar day, shift, aircraft type and category.
+model PersonnelAvailability {
+  id             String                @id @default(uuid())
+  date           DateTime              @db.Date
+  workshopId     String
+  shiftId        String
+  aircraftTypeId String
+  categoryCode   PersonnelCategoryCode?
+  skillId        String?
+  headcount      Int
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  workshop     Workshop          @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  shift        Shift             @relation(fields: [shiftId], references: [id])
+  aircraftType AircraftType      @relation(fields: [aircraftTypeId], references: [id])
+  category     PersonnelCategory? @relation(fields: [categoryCode], references: [code])
+  skill        Skill?            @relation(fields: [skillId], references: [id])
+
+  @@unique([date, workshopId, shiftId, aircraftTypeId, categoryCode], map: "PersonnelAvailability_date_workshopId_shiftId_aircraftTypeId_ca")
+  @@unique([date, workshopId, shiftId, aircraftTypeId, skillId], map: "PersonnelAvailability_date_workshopId_shiftId_aircraftTypeId_sk")
+  @@index([workshopId, date])
+  @@index([aircraftTypeId, date])
+}
+
+/// Кто и когда менял численность доступного ресурса. Пустое «было» или «стало» — ячейка была пустой или её очистили.
+model PersonnelAvailabilityChange {
+  id             String   @id @default(uuid())
+  workshopId     String
+  date           DateTime @db.Date
+  shiftId        String
+  aircraftTypeId String
+  categoryCode   String
+  skillId        String?
+  headcountFrom  Int?
+  headcountTo    Int?
+  actorId        String?
+  createdAt      DateTime @default(now())
+
+  workshop Workshop @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  actor    User?    @relation("PersonnelAvailabilityChangedBy", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workshopId, createdAt])
+  @@index([workshopId, date])
+}
+
+/// Global effective-dated productive hours per person/shift.
+model PersonnelHoursNorm {
+  id            String   @id @default(uuid())
+  effectiveFrom DateTime @unique @db.Date
+  hours         Decimal  @db.Decimal(8, 3)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+/// Effective-dated MPS multiplier by aircraft type.
+model PersonnelAircraftTypeMpsFactor {
+  id             String   @id @default(uuid())
+  aircraftTypeId String
+  effectiveFrom  DateTime @db.Date
+  factor         Decimal  @db.Decimal(8, 4)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  aircraftType AircraftType @relation(fields: [aircraftTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([aircraftTypeId, effectiveFrom])
+  @@index([aircraftTypeId, effectiveFrom])
+}
+
+enum AircraftCheckKind {
+  A
+  C
+}
+
+enum AircraftWorkshopChoice {
+  FIXED
+  PRIMARY
+  ALTERNATE
+}
+
+/// Tail number bound to a workshop for an A-check or C-check.
+/// Workshops outside this catalog have no tail binding.
+model AircraftWorkshopAssignment {
+  id                     String                 @id @default(uuid())
+  aircraftId             String
+  checkKind              AircraftCheckKind
+  workshopId             String
+  choice                 AircraftWorkshopChoice @default(FIXED)
+  dependsOnCustomerPlan  Boolean                @default(false)
+  note                   String?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+
+  aircraft Aircraft                @relation(fields: [aircraftId], references: [id], onDelete: Cascade)
+  workshop Workshop                @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  hangars  AircraftWorkshopHangar[]
+
+  @@unique([aircraftId, checkKind, workshopId])
+  @@index([workshopId, checkKind])
+  @@index([checkKind, choice])
+}
+
+model AircraftWorkshopHangar {
+  assignmentId String
+  hangarId     String
+
+  assignment AircraftWorkshopAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  hangar     Hangar                     @relation(fields: [hangarId], references: [id], onDelete: Cascade)
+
+  @@id([assignmentId, hangarId])
+  @@index([hangarId])
+}
+
+/// Optimistic version and lock state for one workshop's Monday-Sunday week.
+model PersonnelPlanningWeek {
+  id         String    @id @default(uuid())
+  workshopId String
+  weekStart  DateTime  @db.Date
+  version    Int       @default(0)
+  isLocked   Boolean   @default(false)
+  lockedAt   DateTime?
+  lockedById String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  workshop  Workshop                    @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+  lockedBy  User?                       @relation("PersonnelWeekLockedBy", fields: [lockedById], references: [id], onDelete: SetNull)
+  snapshots PersonnelPlanningSnapshot[]
+
+  @@unique([workshopId, weekStart])
+  @@index([weekStart, isLocked])
+}
+
+model PersonnelPlanningSnapshot {
+  id          String   @id @default(uuid())
+  weekId      String
+  version     Int
+  payload     Json
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  week      PersonnelPlanningWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  createdBy User?                 @relation("PersonnelSnapshotCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([weekId, version])
+  @@index([createdAt])
 }
 
 model Hangar {
@@ -709,6 +942,7 @@ model Hangar {
   events                 MaintenanceEvent[]
   placements             EventPlacement[]
   placementPriorityRules PlacementPriorityRule[]
+  aircraftWorkshops      AircraftWorkshopHangar[]
 }
 
 model HangarLayout {
@@ -894,7 +1128,7 @@ model MaintenanceEvent {
   actualStartAt DateTime?
   actualEndAt   DateTime?
 
-  // Опционально можно заранее закрепить в ангаре/варианте (даже без конкретного места)
+  // Ангар можно задать без места: событие попадает в «Ангар / без места» и слот не занимает.
   hangarId String?
   layoutId String?
 
@@ -903,6 +1137,9 @@ model MaintenanceEvent {
 
   /// Контур ТО L (Line) / B (Base). Авто из цеха, можно переопределить вручную.
   lineBase EventLineBase?
+
+  /// DeadLine: дата/время, до которого должен завершиться слот. Меняется, пока событие не завершено.
+  deadlineAt DateTime?
 
   notes String?
 
@@ -944,6 +1181,7 @@ model MaintenanceEvent {
   stockMovements       StockMovement[]
   technicalPlan        EventTechnicalPlan?
   notifications        AppNotification[]
+  changeSubscriptions  EventChangeSubscription[]
   primaryExtension     EventPrimaryExtension?
   customerSlot         EventCustomerSlot?
   slotDeviations       EventSlotDeviation[]
@@ -1227,26 +1465,26 @@ model EventPlacement {
 
 // Буксировки (закатка/выкатка) как интервалы внутри события (могут быть несколько раз)
 model EventTow {
-  id        String   @id @default(uuid())
-  eventId   String
-  sandboxId String?
-  startAt   DateTime
-  endAt     DateTime
-  placementId String?
-  fromStandId String?
-  toStandId   String?
+  id                String    @id @default(uuid())
+  eventId           String
+  sandboxId         String?
+  startAt           DateTime
+  endAt             DateTime
+  placementId       String?
+  fromStandId       String?
+  toStandId         String?
   /// Свободный текст МС, если места нет в справочнике ангара
-  fromLabel String?
-  toLabel   String?
-  notes     String?
+  fromLabel         String?
+  toLabel           String?
+  notes             String?
   /// Комментарий к позиции / месту
-  positionComment String?
+  positionComment   String?
   /// Почему сдвинули плановое начало буксировки
   startChangeReason String?
   /// Плановое окончание занятия МС; если пусто — конец этапа/оперативного слота
-  occupancyEndAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  occupancyEndAt    DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   event     MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
   sandbox   Sandbox?         @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
@@ -1259,6 +1497,16 @@ model EventTow {
   @@index([placementId])
   @@index([fromStandId])
   @@index([toStandId])
+}
+
+/// Норматив длительности буксировки на краях события и автоматического разрыва.
+model TowNorm {
+  code      String   @id
+  name      String
+  minutes   Int
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// Уведомления (колокольчик): просрочка без факта, ошибки пользователей (только админам) и др.
@@ -1310,7 +1558,7 @@ model AppAnnouncement {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  createdBy  User?                       @relation("AnnouncementAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy  User?                      @relation("AnnouncementAuthor", fields: [createdById], references: [id], onDelete: SetNull)
   dismissals AppAnnouncementDismissal[]
 
   @@index([isActive, createdAt])
@@ -1402,30 +1650,30 @@ model MailDigestSettings {
 
 /// Сохранённый вариант рассылки (тема, период, колонки, получатели, расписание).
 model MailDigestVariant {
-  id               String   @id @default(uuid())
+  id               String              @id @default(uuid())
   name             String
   /// Тема письма; пустая — берётся name
-  subjectTemplate  String   @default("Изменения плана ТО")
+  subjectTemplate  String              @default("Изменения плана ТО")
   description      String?
   /// string[] — список email получателей
-  recipients       Json     @default("[]")
+  recipients       Json                @default("[]")
   /// last1 | last7 | last30 | custom
-  periodMode       String   @default("last7")
+  periodMode       String              @default("last7")
   periodCustomFrom String?
   periodCustomTo   String?
   /// manual | daily | weekly | monthly
-  scheduleMode     String   @default("manual")
+  scheduleMode     String              @default("manual")
   /// HH:mm, время по МСК
-  scheduleTime     String   @default("09:00")
+  scheduleTime     String              @default("09:00")
   /// number[] ISO weekday 1=Пн … 7=Вс
-  scheduleWeekdays Json     @default("[1,2,3,4,5]")
-  scheduleMonthDay Int      @default(1)
-  isActive         Boolean  @default(true)
+  scheduleWeekdays Json                @default("[1,2,3,4,5]")
+  scheduleMonthDay Int                 @default(1)
+  isActive         Boolean             @default(true)
   lastAutoSentAt   DateTime?
   /// string[] — колонки письма (см. mailDigestColumns)
-  columns          Json     @default("[\"kind\",\"aircraftType\",\"aircraft\",\"title\",\"detail\",\"previous\"]")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  columns          Json                @default("[\"kind\",\"aircraftType\",\"aircraft\",\"title\",\"detail\",\"previous\"]")
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
   sendLogs         MailDigestSendLog[]
 
   @@index([updatedAt])
@@ -1433,8 +1681,8 @@ model MailDigestVariant {
 
 /// История отправок дайджеста (ручных и по расписанию).
 model MailDigestSendLog {
-  id          String   @id @default(uuid())
-  createdAt   DateTime @default(now())
+  id          String    @id @default(uuid())
+  createdAt   DateTime  @default(now())
   variantId   String?
   /// Снимок названия на момент отправки
   variantName String?
@@ -1443,7 +1691,7 @@ model MailDigestSendLog {
   /// self | all | schedule
   target      String
   actorEmail  String?
-  recipients  Json     @default("[]")
+  recipients  Json      @default("[]")
   subject     String
   error       String?
   stats       Json?
@@ -1487,16 +1735,16 @@ model StandReservation {
 
 /// Пользовательский отчёт конструктора аналитики (СКД-подобный конфиг в JSON).
 model SavedReport {
-  id          String   @id @default(uuid())
-  name        String
-  description String?
-  ownerId     String
+  id                String           @id @default(uuid())
+  name              String
+  description       String?
+  ownerId           String
   /// NULL = только владелец и явно добавленные участники.
   sharedWithAllRole ReportShareRole?
   /// { dataset, fields[], filters, sort[], grain?, compareA?, compareB?, periodMode?, freezeRows?, showColumnIndex? }
-  config      Json
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  config            Json
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   owner  User               @relation("ReportOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   shares SavedReportShare[]
@@ -1534,6 +1782,20 @@ model SavedTableView {
 
   @@unique([userId, tableKey, name])
   @@index([userId, tableKey])
+}
+
+/// Подписка пользователя на письма при изменении конкретного события.
+model EventChangeSubscription {
+  userId    String
+  eventId   String
+  createdAt DateTime @default(now())
+
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([userId, eventId])
+  @@index([eventId])
+  @@index([userId, createdAt])
 }
 
 /// Синглтон техрежима контура (id = default).

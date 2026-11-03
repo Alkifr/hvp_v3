@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 
@@ -14,6 +14,21 @@ import { parseRefViewShare, syncRefViewHash, type RefShareKind } from "../../lib
 import { authMe } from "../auth/authApi";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { SwitchToggle } from "../components/SwitchToggle";
+import {
+  AircraftCardModal,
+  AircraftLibrary,
+  AircraftTypeCardModal,
+  AircraftTypesTable,
+  HangarCardModal,
+  HangarsTable,
+  PaletteCardModal,
+  PaletteTable
+} from "./FleetRefCards";
+import { downloadRemainingRefXlsx, isRemainingRefKind, RemainingRefCard, RemainingRefTable, type RemainingRefKind, type RemainingRefValues } from "./CatalogRefCards";
+import { LayoutCardModal, LayoutsLibrary, StandCardModal, StandsLibrary } from "./LayoutStandCards";
+import { OperatorCardModal, OperatorsTable } from "./OperatorCard";
+import { TowNormCardModal, TowNormsTable, type TowNormRow } from "./TowNormsTable";
+import { isPersonnelCatalogKind, PersonnelCatalogPanel } from "./PersonnelCatalogPanels";
 
 type RefKind = RefShareKind;
 
@@ -25,7 +40,7 @@ const REF_GROUPS: RefGroup[] = [
     items: [
       { kind: "operators", title: "Операторы" },
       { kind: "aircraft-types", title: "Типы ВС" },
-      { kind: "aircraft", title: "Бортовые номера" },
+      { kind: "aircraft", title: "Бортовые номера", hint: "тип → борт" },
       { kind: "aircraft-type-palette", title: "Палитра ВС", hint: "оператор × тип" }
     ]
   },
@@ -33,15 +48,16 @@ const REF_GROUPS: RefGroup[] = [
     label: "Инфраструктура",
     items: [
       { kind: "hangars", title: "Ангары" },
-      { kind: "layouts", title: "Варианты расстановки" },
-      { kind: "stands", title: "Места (стоянки)" }
+      { kind: "layouts", title: "Варианты расстановки", hint: "ангар → вариант" },
+      { kind: "stands", title: "Места (стоянки)", hint: "ангар → место" }
     ]
   },
   {
     label: "События",
     items: [
       { kind: "event-types", title: "Типы событий" },
-      { kind: "event-statuses", title: "Статусы", hint: "название и цвет на Гантте" }
+      { kind: "event-statuses", title: "Статусы", hint: "название и цвет на Гантте" },
+      { kind: "tow-norms", title: "Нормативы буксировки", hint: "минуты на край события" }
     ]
   },
   {
@@ -57,6 +73,11 @@ const REF_GROUPS: RefGroup[] = [
     items: [
       { kind: "workshops", title: "Цеха" },
       { kind: "skills", title: "Квалификации" },
+      { kind: "personnel-composition", title: "Состав категорий", hint: "категория и квалификации" },
+      { kind: "personnel-categories", title: "Категории цеха", hint: "цех и категории" },
+      { kind: "personnel-hours", title: "Норма часов", hint: "часов на человека в смене" },
+      { kind: "personnel-factors", title: "Коэффициенты MPS", hint: "по типу ВС" },
+      { kind: "aircraft-workshops", title: "Борт и цех", hint: "A/C-check, ангар" },
       { kind: "persons", title: "Сотрудники" },
       { kind: "shifts", title: "Смены" }
     ]
@@ -81,6 +102,7 @@ const REF_SINGULAR: Record<RefKind, string> = {
   "aircraft-type-palette": "Правило палитры",
   "event-types": "Тип события",
   "event-statuses": "Статус события",
+  "tow-norms": "Норматив буксировки",
   workshops: "Цех",
   hangars: "Ангар",
   layouts: "Вариант расстановки",
@@ -91,6 +113,11 @@ const REF_SINGULAR: Record<RefKind, string> = {
   skills: "Квалификация",
   persons: "Сотрудник",
   shifts: "Смена",
+  "personnel-hours": "Норма часов",
+  "personnel-factors": "Коэффициент MPS",
+  "personnel-composition": "Состав категории",
+  "personnel-categories": "Категории цеха",
+  "aircraft-workshops": "Привязка борта к цеху",
   materials: "Материал",
   warehouses: "Склад"
 };
@@ -128,6 +155,7 @@ type Layout = {
   capacitySummary?: string;
   standsSummary?: string;
   isActive: boolean;
+  hangar?: { id?: string; name?: string | null } | null;
 };
 type LayoutDetail = Layout & {
   widthMeters?: number | null;
@@ -170,32 +198,6 @@ function NumberInput(props: { value: number; onChange: (v: number) => void; step
 
 function BoolToggle(props: { value: boolean; onChange: (v: boolean) => void; label?: string; disabled?: boolean }) {
   return <SwitchToggle compact checked={props.value} onChange={props.onChange} label={props.label ?? "активен"} disabled={props.disabled} />;
-}
-
-function refNum(v: unknown, fallback = 0): number {
-  const n = Number(String(v ?? "").replace(",", ".").trim());
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function refStr(v: unknown): string {
-  return String(v ?? "").trim();
-}
-
-function pickCell(row: Record<string, unknown>, keys: string[]): unknown {
-  const normalized = new Map(Object.entries(row).map(([k, v]) => [k.trim().toLowerCase(), v]));
-  for (const key of keys) {
-    const found = normalized.get(key.toLowerCase());
-    if (found != null && String(found).trim() !== "") return found;
-  }
-  return "";
-}
-
-function normalizeBodyType(v: unknown): "NARROW_BODY" | "WIDE_BODY" | null {
-  const s = refStr(v).toLowerCase();
-  if (!s) return null;
-  if (s.includes("wide") || s.includes("шир")) return "WIDE_BODY";
-  if (s.includes("narrow") || s.includes("узк")) return "NARROW_BODY";
-  return null;
 }
 
 function aircraftTypeNameLabel(t: Pick<AircraftType, "name">): string {
@@ -251,50 +253,6 @@ function scoreScopeLabel(v: unknown): string {
   return map[String(v)] ?? "—";
 }
 
-function buildLayoutImportPayload(rows: Array<Record<string, unknown>>) {
-  const hangars = new Map<string, any>();
-  for (const row of rows) {
-    const hangarCode = refStr(pickCell(row, ["hangarCode", "код ангара", "ангар код", "ангар"]));
-    const hangarName = refStr(pickCell(row, ["hangarName", "название ангара", "ангар название"])) || hangarCode;
-    const layoutCode = refStr(pickCell(row, ["layoutCode", "код схемы", "код варианта", "схема код", "вариант код"]));
-    const layoutName = refStr(pickCell(row, ["layoutName", "название схемы", "название варианта", "схема", "вариант"])) || layoutCode;
-    const standCode = refStr(pickCell(row, ["standCode", "код места", "место код", "место"]));
-    if (!hangarCode || !layoutCode || !standCode) continue;
-
-    const hangar = hangars.get(hangarCode) ?? { code: hangarCode, name: hangarName, layouts: new Map<string, any>() };
-    hangars.set(hangarCode, hangar);
-    const layouts = hangar.layouts as Map<string, any>;
-    const layout =
-      layouts.get(layoutCode) ??
-      {
-        code: layoutCode,
-        name: layoutName,
-        description: refStr(pickCell(row, ["description", "описание"])) || undefined,
-        widthMeters: refNum(pickCell(row, ["widthMeters", "ширина ангара", "ширина схемы", "width"]), 80),
-        heightMeters: refNum(pickCell(row, ["heightMeters", "высота ангара", "высота схемы", "height"]), 50),
-        stands: []
-      };
-    layouts.set(layoutCode, layout);
-    layout.stands.push({
-      code: standCode,
-      name: refStr(pickCell(row, ["standName", "название места", "место название"])) || standCode,
-      bodyType: normalizeBodyType(pickCell(row, ["bodyType", "тип фюзеляжа", "фюзеляж"])),
-      x: refNum(pickCell(row, ["x", "X"])),
-      y: refNum(pickCell(row, ["y", "Y"])),
-      w: refNum(pickCell(row, ["w", "ширина места", "standWidth"]), 10),
-      h: refNum(pickCell(row, ["h", "высота места", "standHeight"]), 10),
-      rotate: refNum(pickCell(row, ["rotate", "поворот"]), 0)
-    });
-  }
-  return {
-    hangars: Array.from(hangars.values()).map((h) => ({
-      code: h.code,
-      name: h.name,
-      layouts: Array.from((h.layouts as Map<string, any>).values())
-    }))
-  };
-}
-
 function LayoutSchemePreview(props: { detail?: LayoutDetail | null; selectedStandId?: string }) {
   const detail = props.detail;
   if (!detail) return <div className="muted">Выберите вариант расстановки, чтобы увидеть схему.</div>;
@@ -346,76 +304,235 @@ function LayoutSchemePreview(props: { detail?: LayoutDetail | null; selectedStan
     </div>
   );
 }
-
-function csvCell(value: unknown): string {
-  const s = String(value ?? "");
-  if (/[;"\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
+function downloadOperatorsXlsx(rows: Array<{ code?: string; name?: string; isActive?: boolean }>) {
+  const sorted = [...rows].sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "ru"));
+  const sheet = XLSX.utils.json_to_sheet(
+    sorted.map((row) => ({
+      Код: row.code ?? "",
+      Название: row.name ?? "",
+      Статус: row.isActive === false ? "Неактивен" : "Активен"
+    }))
+  );
+  sheet["!cols"] = [{ wch: 16 }, { wch: 42 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "Операторы");
+  XLSX.writeFile(wb, "operators.xlsx");
 }
 
-function downloadAircraftDirectoryCsv(rows: any[]) {
-  const header = ["tailNumber", "operator", "aircraftType", "manufactureDate", "serialNumber"];
-  const lines = [header.join(";")];
+function bodyTypeExcel(v: unknown): string {
+  if (v === "NARROW_BODY") return "Узкий";
+  if (v === "WIDE_BODY") return "Широкий";
+  return "";
+}
+
+function downloadAircraftTypesXlsx(rows: Array<{ icaoType?: string | null; name?: string | null; manufacturer?: string | null; bodyType?: string | null; isActive?: boolean }>) {
+  const sorted = [...rows].sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "ru"));
+  const sheet = XLSX.utils.json_to_sheet(
+    sorted.map((row) => ({
+      ICAO: row.icaoType ?? "",
+      Название: row.name ?? "",
+      Производитель: row.manufacturer ?? "",
+      Фюзеляж: bodyTypeExcel(row.bodyType),
+      Статус: row.isActive === false ? "Неактивен" : "Активен"
+    }))
+  );
+  sheet["!cols"] = [{ wch: 12 }, { wch: 36 }, { wch: 24 }, { wch: 14 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "Типы ВС");
+  XLSX.writeFile(wb, "aircraft-types.xlsx");
+}
+
+function downloadAircraftXlsx(
+  rows: Array<{
+    tailNumber?: string | null;
+    serialNumber?: string | null;
+    manufactureDate?: string | null;
+    isActive?: boolean;
+    operator?: { name?: string | null } | null;
+    type?: { name?: string | null; icaoType?: string | null } | null;
+  }>
+) {
   const sorted = [...rows].sort((a, b) => String(a.tailNumber ?? "").localeCompare(String(b.tailNumber ?? ""), "ru"));
-  for (const row of sorted) {
-    lines.push(
-      [
-        row.tailNumber ?? "",
-        row.operator?.code ?? row.operator?.name ?? "",
-        row.type?.name ?? row.type?.icaoType ?? "",
-        toDateInputValue(row.manufactureDate),
-        row.serialNumber ?? ""
-      ]
-        .map(csvCell)
-        .join(";")
-    );
-  }
-  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "aircraft-directory.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  const sheet = XLSX.utils.json_to_sheet(
+    sorted.map((row) => ({
+      Борт: row.tailNumber ?? "",
+      Оператор: row.operator?.name ?? "",
+      "Тип ВС": row.type?.name ?? "",
+      "Зав. №": row.serialNumber ?? "",
+      "Дата производства": formatManufactureDateRu(row.manufactureDate) ?? "",
+      Возраст: formatAircraftAge(row.manufactureDate) ?? "",
+      Статус: row.isActive === false ? "Неактивен" : "Активен"
+    }))
+  );
+  sheet["!cols"] = [{ wch: 16 }, { wch: 28 }, { wch: 32 }, { wch: 16 }, { wch: 20 }, { wch: 22 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "Борта");
+  XLSX.writeFile(wb, "aircraft.xlsx");
 }
 
-function parseSimpleCsv(text: string): string[][] {
-  const lines = text.replace(/\r/g, "").split("\n").filter((line) => line.trim());
-  if (lines.length < 2) throw new Error("CSV должен содержать шапку и хотя бы одну строку данных.");
-  const headerLine = lines[0] ?? "";
-  const delimiter = [";", "\t", ","].sort((a, b) => headerLine.split(b).length - headerLine.split(a).length)[0] ?? ";";
-  return lines.map((line) => {
-    const cells: string[] = [];
-    let cell = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      const next = line[i + 1];
-      if (ch === '"' && inQuotes && next === '"') {
-        cell += '"';
-        i += 1;
-      } else if (ch === '"') {
-        inQuotes = !inQuotes;
-      } else if (ch === delimiter && !inQuotes) {
-        cells.push(cell.trim().replace(/^"+|"+$/g, ""));
-        cell = "";
-      } else {
-        cell += ch;
-      }
-    }
-    cells.push(cell.trim().replace(/^"+|"+$/g, ""));
-    return cells;
+function downloadPaletteXlsx(
+  rows: Array<{
+    color?: string | null;
+    isActive?: boolean;
+    operator?: { name?: string | null } | null;
+    aircraftType?: { name?: string | null } | null;
+  }>
+) {
+  const sorted = [...rows].sort((a, b) => {
+    const byOperator = String(a.operator?.name ?? "").localeCompare(String(b.operator?.name ?? ""), "ru");
+    if (byOperator) return byOperator;
+    return String(a.aircraftType?.name ?? "").localeCompare(String(b.aircraftType?.name ?? ""), "ru");
   });
+  const sheet = XLSX.utils.json_to_sheet(
+    sorted.map((row) => ({
+      Оператор: row.operator?.name ?? "",
+      "Тип ВС": row.aircraftType?.name ?? "",
+      Цвет: row.color ?? "",
+      Статус: row.isActive === false ? "Неактивен" : "Активен"
+    }))
+  );
+  sheet["!cols"] = [{ wch: 28 }, { wch: 28 }, { wch: 12 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "Палитра");
+  XLSX.writeFile(wb, "aircraft-type-palette.xlsx");
 }
 
-function csvHeaderIndex(headers: string[], aliases: string[]): number {
-  const norm = (v: string) => v.replace(/^\uFEFF/, "").trim().toLowerCase().replace(/[\s_-]+/g, "");
-  const keys = headers.map(norm);
-  return keys.findIndex((h) => aliases.includes(h));
+function downloadHangarsXlsx(
+  rows: Array<{ code?: string | null; name?: string | null; station?: string | null; isPhysical?: boolean; isActive?: boolean }>
+) {
+  const sorted = [...rows].sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "ru"));
+  const sheet = XLSX.utils.json_to_sheet(
+    sorted.map((row) => ({
+      Код: row.code ?? "",
+      Название: row.name ?? "",
+      Станция: row.station ?? "",
+      Тип: row.isPhysical === false ? "Внешний MRO" : "Физический",
+      Статус: row.isActive === false ? "Неактивен" : "Активен"
+    }))
+  );
+  sheet["!cols"] = [{ wch: 12 }, { wch: 28 }, { wch: 12 }, { wch: 16 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "Ангары");
+  XLSX.writeFile(wb, "hangars.xlsx");
 }
 
+function downloadLayoutsXlsx(
+  rows: Array<{
+    code?: string | null;
+    name?: string | null;
+    description?: string | null;
+    widthMeters?: number | null;
+    heightMeters?: number | null;
+    standsSummary?: string | null;
+    isActive?: boolean;
+    hangar?: { name?: string | null } | null;
+  }>
+) {
+  const sorted = [...rows].sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? ""), "ru"));
+  const sheet = XLSX.utils.json_to_sheet(
+    sorted.map((row) => ({
+      Ангар: row.hangar?.name ?? "",
+      Код: row.code ?? "",
+      Название: row.name ?? "",
+      Описание: row.description ?? "",
+      "Ширина, м": row.widthMeters ?? "",
+      "Высота, м": row.heightMeters ?? "",
+      Места: row.standsSummary ?? "",
+      Статус: row.isActive === false ? "Неактивен" : "Активен"
+    }))
+  );
+  sheet["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 28 }, { wch: 36 }, { wch: 12 }, { wch: 12 }, { wch: 42 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "Варианты");
+  XLSX.writeFile(wb, "layouts.xlsx");
+}
+
+function downloadStandsXlsx(
+  rows: Array<{
+    code?: string | null;
+    name?: string | null;
+    x?: number | null;
+    y?: number | null;
+    w?: number | null;
+    h?: number | null;
+    rotate?: number | null;
+    isActive?: boolean;
+    layout?: { name?: string | null; hangar?: { name?: string | null } | null } | null;
+    allowedAircraftTypes?: Array<{ aircraftType?: { name?: string | null } | null } | null>;
+  }>
+) {
+  const sorted = [...rows].sort((a, b) => String(a.code ?? "").localeCompare(String(b.code ?? ""), "ru", { numeric: true }));
+  const sheet = XLSX.utils.json_to_sheet(
+    sorted.map((row) => {
+      const types = (row.allowedAircraftTypes ?? [])
+        .map((link) => link?.aircraftType?.name)
+        .filter((name): name is string => Boolean(name));
+      return {
+        Ангар: row.layout?.hangar?.name ?? "",
+        Вариант: row.layout?.name ?? "",
+        Код: row.code ?? "",
+        Название: row.name ?? "",
+        "Типы ВС": types.length ? types.join(", ") : "Любой ВС",
+        "X, м": row.x ?? "",
+        "Y, м": row.y ?? "",
+        "Ширина, м": row.w ?? "",
+        "Высота, м": row.h ?? "",
+        "Поворот, °": row.rotate ?? 0,
+        Статус: row.isActive === false ? "Неактивен" : "Активен"
+      };
+    })
+  );
+  sheet["!cols"] = [{ wch: 22 }, { wch: 24 }, { wch: 12 }, { wch: 22 }, { wch: 36 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "Места");
+  XLSX.writeFile(wb, "stands.xlsx");
+}
+
+function RefExcelButton(props: { disabled: boolean; onClick: () => void }) {
+  return (
+    <button
+      className="btn ganttIconBtn"
+      type="button"
+      disabled={props.disabled}
+      title="Выгрузить справочник в Excel"
+      aria-label="Выгрузить справочник в Excel"
+      onClick={props.onClick}
+    >
+      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M5 2h7l4 4v12H5z" />
+        <path d="M12 2v4h4" />
+        <path d="M7 14l2-4" />
+        <path d="M11 14l-2-4" />
+        <path d="M12.5 14h2.5" />
+        <path d="M12.5 10h2.5" />
+      </svg>
+    </button>
+  );
+}
+function isRefCardKind(kind: RefKind) {
+  return (
+    kind === "operators" ||
+    kind === "aircraft-types" ||
+    kind === "aircraft" ||
+    kind === "aircraft-type-palette" ||
+    kind === "hangars" ||
+    kind === "tow-norms" ||
+    kind === "layouts" ||
+    kind === "stands" ||
+    isRemainingRefKind(kind)
+  );
+}
+
+function cardMutationError(...errors: unknown[]) {
+  const err = errors.find(Boolean);
+  if (!err) return null;
+  const message = (err as { message?: string }).message;
+  return String(message ?? err);
+}
+
+function showInlineRefEditor(mode: "create" | "edit" | null, kind: RefKind) {
+  return mode != null && !isRefCardKind(kind);
+}
 export function ReferenceView() {
   const initialShare = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -431,8 +548,10 @@ export function ReferenceView() {
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
   const isAdmin = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("SUPER_ADMIN"));
   const canWrite = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER") || me?.roles?.includes("SUPER_ADMIN"));
-  const canMutate = kind === "event-statuses" ? isAdmin : canWrite;
-  const canCreate = canMutate;
+  const canMutate = kind === "event-statuses" || kind === "tow-norms" ? isAdmin : canWrite;
+  const catalogKind = isPersonnelCatalogKind(kind);
+  const canCreate = canMutate && !catalogKind;
+  const splitRef = kind === "aircraft" || kind === "stands" || kind === "layouts";
 
   const url = useMemo(() => `/api/ref/${kind}`, [kind]);
 
@@ -450,6 +569,9 @@ export function ReferenceView() {
     queryFn: () => apiGet<OptimizationProfile[]>("/api/ref/optimization-profiles")
   });
 
+  const [filterAircraftTypeId, setFilterAircraftTypeId] = useState("");
+  const [filterProfileId, setFilterProfileId] = useState("");
+  const detailDirtyRef = useRef(false);
   const [filterHangarId, setFilterHangarId] = useState<string>(() => initialShare?.filterHangarId ?? "");
   const [filterLayoutId, setFilterLayoutId] = useState<string>(() => initialShare?.filterLayoutId ?? "");
   const [feedback, setFeedback] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
@@ -479,12 +601,14 @@ export function ReferenceView() {
     if (kind === "stands" && filterHangarId) return `/api/ref/stands?hangarId=${encodeURIComponent(filterHangarId)}`;
     if (kind === "placement-priorities" && filterLayoutId) return `/api/ref/placement-priorities?layoutId=${encodeURIComponent(filterLayoutId)}`;
     if (kind === "placement-priorities" && filterHangarId) return `/api/ref/placement-priorities?hangarId=${encodeURIComponent(filterHangarId)}`;
+    if (kind === "optimization-score-rules" && filterProfileId) return `/api/ref/optimization-score-rules?profileId=${encodeURIComponent(filterProfileId)}`;
     return url;
-  }, [kind, filterHangarId, filterLayoutId, url]);
+  }, [kind, filterHangarId, filterLayoutId, filterProfileId, url]);
 
   const listQ = useQuery({
-    queryKey: ["ref", kind, filterHangarId, filterLayoutId],
-    queryFn: () => apiGet<any[]>(listUrl)
+    queryKey: ["ref", kind, filterHangarId, filterLayoutId, filterProfileId],
+    queryFn: () => apiGet<any[]>(listUrl),
+    enabled: !catalogKind
   });
 
   const layoutsForStandsQ = useQuery({
@@ -541,202 +665,8 @@ export function ReferenceView() {
     onError: (err) => showFeedback("error", `Не удалось удалить запись: ${String((err as any)?.message ?? err)}`)
   });
 
-  // Импорт CSV для "Бортовые номера"
-  const [aircraftCsvFile, setAircraftCsvFile] = useState<File | null>(null);
-  const [aircraftCsvText, setAircraftCsvText] = useState<string>("");
-  const [aircraftCsvParseError, setAircraftCsvParseError] = useState<string | null>(null);
-  const [aircraftImportResult, setAircraftImportResult] = useState<any>(null);
-  const [operatorCsvText, setOperatorCsvText] = useState("");
-  const [operatorImportResult, setOperatorImportResult] = useState<any>(null);
-  const [aircraftTypeCsvText, setAircraftTypeCsvText] = useState("");
-  const [aircraftTypeImportResult, setAircraftTypeImportResult] = useState<any>(null);
-  const [layoutImportFile, setLayoutImportFile] = useState<File | null>(null);
-  const [layoutImportRows, setLayoutImportRows] = useState<Array<Record<string, unknown>>>([]);
-  const [layoutImportError, setLayoutImportError] = useState<string | null>(null);
-  const [layoutImportResult, setLayoutImportResult] = useState<any>(null);
-  const [priorityImportFile, setPriorityImportFile] = useState<File | null>(null);
-  const [priorityImportRows, setPriorityImportRows] = useState<Array<Record<string, unknown>>>([]);
-  const [priorityImportError, setPriorityImportError] = useState<string | null>(null);
-  const [priorityImportResult, setPriorityImportResult] = useState<any>(null);
   const [previewLayoutId, setPreviewLayoutId] = useState<string>("");
   const [previewStandId, setPreviewStandId] = useState<string>("");
-
-  const decodeAircraftCsv = (buffer: ArrayBuffer) => {
-    const utf8 = new TextDecoder("utf-8").decode(buffer);
-    const cp1251 = new TextDecoder("windows-1251").decode(buffer);
-    const replacementCount = (utf8.match(/\uFFFD/g) ?? []).length;
-    const mojibakeCount = (utf8.match(/[ÐÑ][\u0080-\u00BF]/g) ?? []).length;
-    return replacementCount > 0 || mojibakeCount > 1 ? cp1251 : utf8;
-  };
-
-  const parseAircraftCsvRows = (text: string) => {
-    const lines = text.replace(/\r/g, "").split("\n").filter((line) => line.trim());
-    if (lines.length < 2) throw new Error("CSV должен содержать шапку и хотя бы одну строку данных.");
-
-    const headerLine = lines[0] ?? "";
-    const delimiter = [";", "\t", ","].sort((a, b) => headerLine.split(b).length - headerLine.split(a).length)[0] ?? ";";
-    const parseLine = (line: string) => {
-      const cells: string[] = [];
-      let cell = "";
-      let inQuotes = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        const next = line[i + 1];
-        if (ch === '"' && inQuotes && next === '"') {
-          cell += '"';
-          i += 1;
-        } else if (ch === '"') {
-          inQuotes = !inQuotes;
-        } else if (ch === delimiter && !inQuotes) {
-          cells.push(cell.trim().replace(/^"+|"+$/g, ""));
-          cell = "";
-        } else {
-          cell += ch;
-        }
-      }
-      cells.push(cell.trim().replace(/^"+|"+$/g, ""));
-      return cells;
-    };
-
-    const rows = lines.map(parseLine);
-    if (rows.length < 2) throw new Error("CSV должен содержать шапку и хотя бы одну строку данных.");
-
-    const normHeader = (v: unknown) =>
-      String(v ?? "")
-        .replace(/^\uFEFF/, "")
-        .trim()
-        .toLowerCase()
-        .replace(/[\s_-]+/g, "");
-    const headers = rows[0]!.map(normHeader);
-    const tailIdx = headers.findIndex((h) => ["tailnumber", "aircraft", "boardnumber", "борт", "бортовойномер"].includes(h));
-    const operatorIdx = headers.findIndex((h) => ["operator", "operatorcode", "operatorname", "оператор"].includes(h));
-    const typeIdx = headers.findIndex((h) => ["aircrafttype", "type", "icaotype", "типвс", "тип"].includes(h));
-    const manufactureIdx = headers.findIndex((h) =>
-      ["manufacturedate", "productiondate", "manufacturedat", "датапроизводства", "датапроизводствавс"].includes(h)
-    );
-    const serialIdx = headers.findIndex((h) => ["serialnumber", "sn", "завномер", "заводскойномер"].includes(h));
-
-    if (tailIdx < 0 || operatorIdx < 0 || typeIdx < 0) {
-      throw new Error("В CSV нужны колонки: tailNumber, operator, aircraftType.");
-    }
-
-    return rows.slice(1).map((row) => ({
-      tailNumber: String(row[tailIdx] ?? "").trim(),
-      operator: String(row[operatorIdx] ?? "").trim(),
-      aircraftType: String(row[typeIdx] ?? "").trim(),
-      ...(manufactureIdx >= 0 ? { manufactureDate: String(row[manufactureIdx] ?? "").trim() } : {}),
-      ...(serialIdx >= 0 ? { serialNumber: String(row[serialIdx] ?? "").trim() } : {})
-    }));
-  };
-
-  const aircraftImportM = useMutation({
-    mutationFn: async (payload: {
-      dryRun?: boolean;
-      rows: Array<{ tailNumber: string; operator: string; aircraftType: string; manufactureDate?: string; serialNumber?: string }>;
-    }) => apiPost("/api/ref/aircraft/import", payload),
-    onSuccess: async (res) => {
-      setAircraftImportResult(res);
-      await qc.invalidateQueries({ queryKey: ["ref", "aircraft"] });
-      await qc.invalidateQueries({ queryKey: ["ref", "aircraft", filterHangarId, filterLayoutId] });
-      const summary = (res as any)?.summary;
-      if (summary?.dryRun) {
-        showFeedback("info", `Предпросмотр готов: ${summary.okRows ?? 0} строк можно импортировать, ошибок: ${summary.errorRows ?? 0}.`);
-      } else {
-        showFeedback("success", `Импорт бортов завершён: создано ${(res as any)?.created ?? 0}, пропущено ${(res as any)?.skipped ?? 0}.`);
-      }
-    },
-    onError: (err) => showFeedback("error", `Импорт бортов не выполнен: ${String((err as any)?.message ?? err)}`)
-  });
-
-  const parseOperatorCsvRows = (text: string) => {
-    const rows = parseSimpleCsv(text);
-    const headers = rows[0] ?? [];
-    const codeIdx = csvHeaderIndex(headers, ["code", "код", "operator", "operatorcode"]);
-    const nameIdx = csvHeaderIndex(headers, ["name", "название", "operatorname"]);
-    if (codeIdx < 0 || nameIdx < 0) throw new Error("В CSV нужны колонки: code, name.");
-    return rows.slice(1).map((row) => ({
-      code: String(row[codeIdx] ?? "").trim(),
-      name: String(row[nameIdx] ?? "").trim()
-    }));
-  };
-
-  const parseAircraftTypeCsvRows = (text: string) => {
-    const rows = parseSimpleCsv(text);
-    const headers = rows[0] ?? [];
-    const nameIdx = csvHeaderIndex(headers, ["name", "название", "aircrafttype", "тип"]);
-    const icaoIdx = csvHeaderIndex(headers, ["icaotype", "icao"]);
-    const manufacturerIdx = csvHeaderIndex(headers, ["manufacturer", "производитель"]);
-    const bodyIdx = csvHeaderIndex(headers, ["bodytype", "фюзеляж"]);
-    if (nameIdx < 0) throw new Error("В CSV нужна колонка name.");
-    return rows.slice(1).map((row) => ({
-      name: String(row[nameIdx] ?? "").trim(),
-      ...(icaoIdx >= 0 ? { icaoType: String(row[icaoIdx] ?? "").trim() } : {}),
-      ...(manufacturerIdx >= 0 ? { manufacturer: String(row[manufacturerIdx] ?? "").trim() } : {}),
-      ...(bodyIdx >= 0 ? { bodyType: String(row[bodyIdx] ?? "").trim() } : {})
-    }));
-  };
-
-  const operatorImportM = useMutation({
-    mutationFn: async (payload: { dryRun?: boolean; rows: Array<{ code: string; name: string }> }) =>
-      apiPost("/api/ref/operators/import", payload),
-    onSuccess: async (res) => {
-      setOperatorImportResult(res);
-      await qc.invalidateQueries({ queryKey: ["ref", "operators"] });
-      const summary = (res as any)?.summary;
-      showFeedback(
-        summary?.dryRun ? "info" : "success",
-        summary?.dryRun
-          ? `Предпросмотр операторов: можно добавить ${summary.okRows ?? 0}, ошибок ${summary.errorRows ?? 0}.`
-          : `Операторы загружены: создано ${(res as any)?.created ?? 0}.`
-      );
-    },
-    onError: (err) => showFeedback("error", `Импорт операторов не выполнен: ${String((err as any)?.message ?? err)}`)
-  });
-
-  const aircraftTypeImportM = useMutation({
-    mutationFn: async (payload: {
-      dryRun?: boolean;
-      rows: Array<{ name: string; icaoType?: string; manufacturer?: string; bodyType?: string }>;
-    }) => apiPost("/api/ref/aircraft-types/import", payload),
-    onSuccess: async (res) => {
-      setAircraftTypeImportResult(res);
-      await qc.invalidateQueries({ queryKey: ["ref", "aircraft-types"] });
-      const summary = (res as any)?.summary;
-      showFeedback(
-        summary?.dryRun ? "info" : "success",
-        summary?.dryRun
-          ? `Предпросмотр типов ВС: можно добавить ${summary.okRows ?? 0}, ошибок ${summary.errorRows ?? 0}.`
-          : `Типы ВС загружены: создано ${(res as any)?.created ?? 0}.`
-      );
-    },
-    onError: (err) => showFeedback("error", `Импорт типов ВС не выполнен: ${String((err as any)?.message ?? err)}`)
-  });
-
-  const layoutImportM = useMutation({
-    mutationFn: async (payload: any) => apiPost("/api/ref/layouts/import", payload),
-    onSuccess: async (res) => {
-      setLayoutImportResult(res);
-      await qc.invalidateQueries({ queryKey: ["ref", "hangars"] });
-      await qc.invalidateQueries({ queryKey: ["ref", "layouts"] });
-      await qc.invalidateQueries({ queryKey: ["ref", "stands"] });
-      await qc.invalidateQueries({ queryKey: ["layout"] });
-      await qc.invalidateQueries({ queryKey: ["hangar-planning"] });
-      showFeedback("success", `Импорт схем завершён: ангаров ${(res as any)?.hangars ?? 0}, схем ${(res as any)?.layouts ?? 0}, мест ${(res as any)?.stands ?? 0}.`);
-    },
-    onError: (err) => showFeedback("error", `Импорт схем не выполнен: ${String((err as any)?.message ?? err)}`)
-  });
-
-  const priorityImportM = useMutation({
-    mutationFn: async (payload: any) => apiPost("/api/ref/placement-priorities/import", payload),
-    onSuccess: async (res) => {
-      setPriorityImportResult(res);
-      await qc.invalidateQueries({ queryKey: ["ref", "placement-priorities"] });
-      await qc.invalidateQueries({ queryKey: ["ref", "placement-priorities", filterHangarId, filterLayoutId] });
-      const warnings = (res as any)?.warnings?.length ?? 0;
-      showFeedback("success", `Импорт приоритетов завершён: загружено ${(res as any)?.imported ?? 0}, предупреждений ${warnings}.`);
-    },
-    onError: (err) => showFeedback("error", `Импорт приоритетов не выполнен: ${String((err as any)?.message ?? err)}`)
-  });
 
   const [mode, setMode] = useState<"create" | "edit" | null>(null);
   const [editId, setEditId] = useState<string>("");
@@ -787,6 +717,7 @@ export function ReferenceView() {
   const [fScoreValue, setFScoreValue] = useState(0);
   const [fScoreUnit, setFScoreUnit] = useState("POINTS");
   const [fSortOrder, setFSortOrder] = useState(0);
+  const [fMinutes, setFMinutes] = useState(30);
   const [fAllowsAutoInProgress, setFAllowsAutoInProgress] = useState(false);
   const [fManualOnly, setFManualOnly] = useState(false);
 
@@ -800,6 +731,7 @@ export function ReferenceView() {
     setFIsActive(true);
     setFCode("");
     setFName("");
+    setFMinutes(30);
     setFIcaoType("");
     setFManufacturer("");
     setFTailNumber("");
@@ -843,91 +775,133 @@ export function ReferenceView() {
     setFBodyType("");
 
     if (k === "operators") {
-      setFCode("NEW");
-      setFName("Новый оператор");
+      setFCode("");
+      setFName("");
     } else if (k === "aircraft-types") {
-      setFIcaoType("A320");
-      setFName("Тип ВС");
-      setFManufacturer("Производитель");
+      setFIcaoType("");
+      setFName("");
+      setFManufacturer("");
+      setFBodyType("");
     } else if (k === "aircraft") {
-      setFTailNumber("RA-XXXXX");
+      setFTailNumber("");
       setFSerialNumber("");
       setFManufactureDate("");
+      setFOperatorId("");
+      setFTypeId("");
     } else if (k === "aircraft-type-palette") {
-      setFOperatorId(operatorsQ.data?.[0]?.id ?? "");
-      setFTypeId(aircraftTypesQ.data?.[0]?.id ?? "");
+      setFOperatorId("");
+      setFTypeId("");
       setFColor("#f59e0b");
     } else if (k === "event-types") {
-      setFCode("NEW_EVENT");
-      setFName("Событие");
+      setFCode("");
+      setFName("");
       setFColor("#3b82f6");
     } else if (k === "event-statuses") {
-      setFCode("CUSTOM_STATUS");
-      setFName("Новый статус");
-      setFColor("#3b82f6");
-      setFSortOrder(90);
+      setFCode("");
+      setFName("");
+      setFColor("");
+      setFSortOrder(0);
       setFAllowsAutoInProgress(false);
       setFManualOnly(false);
     } else if (k === "workshops") {
-      setFCode("SHOP1");
-      setFName("Цех");
+      setFCode("");
+      setFName("");
       setFDefaultLineBase("");
     } else if (k === "hangars") {
-      setFCode("HNEW");
-      setFName("Ангар");
+      setFCode("");
+      setFName("");
       setFStation("");
       setFIsPhysical(true);
     } else if (k === "layouts") {
-      setFCode("BASE");
-      setFName("Вариант");
+      setFHangarId("");
+      setFCode("");
+      setFName("");
+      setFDescription("");
+      setFWidth(0);
+      setFHeight(0);
     } else if (k === "stands") {
-      setFCode("S1");
-      setFName("Место");
+      setFLayoutId("");
+      setFCode("");
+      setFName("");
+      setFStandAircraftTypeIds([]);
+      setFX(0);
+      setFY(0);
+      setFW(0);
+      setFH(0);
+      setFRotate(0);
     } else if (k === "skills") {
-      setFCode("ME");
-      setFName("ME (Mechanic)");
+      setFCode("");
+      setFName("");
     } else if (k === "persons") {
-      setFCode("P001");
-      setFName("Сотрудник");
+      setFCode("");
+      setFName("");
       setFPersonSkillIds([]);
     } else if (k === "shifts") {
-      setFCode("DAY");
-      setFName("Смена");
-      setFStartMin(8 * 60);
-      setFEndMin(20 * 60);
+      setFCode("");
+      setFName("");
+      setFStartMin(0);
+      setFEndMin(0);
     } else if (k === "materials") {
-      setFCode("MAT-001");
-      setFName("Материал");
-      setFUom("EA");
+      setFCode("");
+      setFName("");
+      setFUom("");
     } else if (k === "warehouses") {
-      setFCode("MAIN");
-      setFName("Склад");
+      setFCode("");
+      setFName("");
     } else if (k === "placement-priorities") {
-      setFPriorityScore(500);
-      setFHangarId(hangarsQ.data?.[0]?.id ?? "");
-      setFLayoutId(layoutsForStandsQ.data?.[0]?.id ?? "");
-      setFSource("manual");
+      setFHangarId("");
+      setFLayoutId("");
+      setFTypeId("");
+      setFPriorityScore(0);
+      setFPriorityEventTypeIds([]);
+      setFPriorityAircraftTypeIds([]);
+      setFSourceEventName("");
+      setFSourceAircraftTypeText("");
+      setFConditionText("");
+      setFComment("");
+      setFSource("");
     } else if (k === "optimization-profiles") {
-      setFCode("PROFILE");
-      setFName("Профиль оптимизации");
+      setFCode("");
+      setFName("");
+      setFDescription("");
+      setFIsDefault(false);
     } else if (k === "optimization-score-rules") {
-      setFProfileId(optimizationProfilesQ.data?.[0]?.id ?? "");
-      setFCode("rule_code");
-      setFName("Правило scoring");
+      setFProfileId("");
+      setFCode("");
+      setFName("");
       setFScoreCategory("REWARD");
       setFScoreScope("PLACEMENT");
-      setFScoreValue(100);
+      setFScoreValue(0);
       setFScoreUnit("POINTS");
     }
   };
 
+  const confirmLeaveDetail = () => {
+    if (!detailDirtyRef.current) return true;
+    return window.confirm("Закрыть карточку без сохранения?");
+  };
+
   const openCreate = () => {
+    if (splitRef && !confirmLeaveDetail()) return;
     resetFormForKind(kind);
+    if (kind === "aircraft" && filterAircraftTypeId) setFTypeId(filterAircraftTypeId);
+    if (kind === "stands" && filterLayoutId) setFLayoutId(filterLayoutId);
+    if (kind === "layouts" && filterHangarId) setFHangarId(filterHangarId);
+    if (kind === "optimization-score-rules" && filterProfileId) setFProfileId(filterProfileId);
+    if (isRefCardKind(kind)) {
+      createM.reset();
+      updateM.reset();
+    }
     setMode("create");
     setEditId("");
   };
 
   const openEdit = (row: any) => {
+    if (isRefCardKind(kind)) {
+      createM.reset();
+      updateM.reset();
+      deleteM.reset();
+    }
     setMode("edit");
     setEditId(row.id);
     setFIsActive(Boolean(row.isActive ?? true));
@@ -935,6 +909,7 @@ export function ReferenceView() {
     setFDefaultLineBase(row.defaultLineBase === "LINE" || row.defaultLineBase === "BASE" ? row.defaultLineBase : "");
     setFCode(String(row.code ?? ""));
     setFName(String(row.name ?? ""));
+    setFMinutes(Number(row.minutes ?? 30));
     setFStation(String(row.station ?? ""));
     setFIcaoType(String(row.icaoType ?? ""));
     setFManufacturer(String(row.manufacturer ?? ""));
@@ -948,12 +923,12 @@ export function ReferenceView() {
     setFHangarId(String(row.hangarId ?? ""));
     setFLayoutId(String(row.layoutId ?? ""));
     setFDescription(String(row.description ?? ""));
-    setFWidth(Number(row.widthMeters ?? 60));
-    setFHeight(Number(row.heightMeters ?? 40));
+    setFWidth(kind === "layouts" ? Number(row.widthMeters ?? 0) : Number(row.widthMeters ?? 60));
+    setFHeight(kind === "layouts" ? Number(row.heightMeters ?? 0) : Number(row.heightMeters ?? 40));
     setFX(Number(row.x ?? 0));
     setFY(Number(row.y ?? 0));
-    setFW(Number(row.w ?? 18));
-    setFH(Number(row.h ?? 10));
+    setFW(kind === "stands" ? Number(row.w ?? 0) : Number(row.w ?? 18));
+    setFH(kind === "stands" ? Number(row.h ?? 0) : Number(row.h ?? 10));
     setFRotate(Number(row.rotate ?? 0));
     setFBodyType(String(row.bodyType ?? ""));
     setFStartMin(Number(row.startMin ?? 8 * 60));
@@ -987,14 +962,15 @@ export function ReferenceView() {
   };
 
   useEffect(() => {
-    if (mode !== "edit" || !editId) return;
+    if (isRefCardKind(kind) || mode !== "edit" || !editId) return;
     window.setTimeout(() => {
       document.getElementById("ref-editor-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }, 0);
-  }, [editId, mode]);
+  }, [editId, mode, kind]);
 
   const buildPayload = () => {
     if (kind === "operators") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
+    if (kind === "tow-norms") return { name: fName.trim(), minutes: fMinutes, isActive: fIsActive };
     if (kind === "aircraft-types")
       return {
         icaoType: fIcaoType.trim() ? fIcaoType.trim() : undefined,
@@ -1022,12 +998,12 @@ export function ReferenceView() {
     if (kind === "skills") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
     if (kind === "persons")
       return {
-        code: fCode.trim() ? fCode.trim() : undefined,
+        code: fCode.trim() ? fCode.trim() : mode === "edit" ? null : undefined,
         name: fName.trim(),
         isActive: fIsActive
       };
     if (kind === "shifts") return { code: fCode.trim(), name: fName.trim(), startMin: fStartMin, endMin: fEndMin, isActive: fIsActive };
-    if (kind === "materials") return { code: fCode.trim(), name: fName.trim(), uom: fUom.trim() ? fUom.trim() : "EA", isActive: fIsActive };
+    if (kind === "materials") return { code: fCode.trim(), name: fName.trim(), uom: fUom.trim(), isActive: fIsActive };
     if (kind === "warehouses") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
     if (kind === "placement-priorities")
       return {
@@ -1094,17 +1070,17 @@ export function ReferenceView() {
     }
     if (kind === "layouts")
       return {
-        hangarId: fHangarId,
+        ...(mode === "create" ? { hangarId: fHangarId } : {}),
         code: fCode.trim(),
         name: fName.trim(),
-        description: fDescription.trim() ? fDescription.trim() : undefined,
-        widthMeters: Number.isFinite(fWidth) ? fWidth : undefined,
-        heightMeters: Number.isFinite(fHeight) ? fHeight : undefined,
+        description: fDescription.trim() ? fDescription.trim() : mode === "edit" ? null : undefined,
+        widthMeters: fWidth > 0 ? fWidth : mode === "edit" ? null : undefined,
+        heightMeters: fHeight > 0 ? fHeight : mode === "edit" ? null : undefined,
         isActive: fIsActive
       };
     if (kind === "stands")
       return {
-        layoutId: fLayoutId,
+        ...(mode === "create" ? { layoutId: fLayoutId } : {}),
         code: fCode.trim(),
         name: fName.trim(),
         bodyType: fBodyType === "NARROW_BODY" || fBodyType === "WIDE_BODY" ? fBodyType : null,
@@ -1129,7 +1105,12 @@ export function ReferenceView() {
             id: row.code,
             isActive: row.selectable !== false
           }))
-        : raw;
+        : kind === "tow-norms"
+          ? raw.map((row: any) => ({
+              ...row,
+              id: row.code
+            }))
+          : raw;
     const q = search.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((row: any) => {
@@ -1155,7 +1136,30 @@ export function ReferenceView() {
         row.profile?.name,
         row.hangar?.name,
         row.layout?.name,
-        row.stand?.name
+        row.layout?.hangar?.name,
+        row.stand?.name,
+        row.standsSummary,
+        row.uom,
+        row.profile?.code,
+        ...(Array.isArray(row.skills)
+          ? row.skills.flatMap((link: { skill?: { code?: string | null; name?: string | null } | null }) => [link?.skill?.code, link?.skill?.name])
+          : []),
+        ...(Array.isArray(row.eventTypes)
+          ? row.eventTypes.flatMap((link: { eventType?: { code?: string | null; name?: string | null } | null }) => [link?.eventType?.code, link?.eventType?.name])
+          : []),
+        ...(Array.isArray(row.aircraftTypes)
+          ? row.aircraftTypes.flatMap((link: { aircraftType?: { name?: string | null; icaoType?: string | null } | null }) => [
+              link?.aircraftType?.name,
+              link?.aircraftType?.icaoType
+            ])
+          : []),
+        ...(Array.isArray(row.allowedAircraftTypes)
+          ? row.allowedAircraftTypes.flatMap((link: { aircraftType?: { name?: string | null; icaoType?: string | null } | null }) => [
+              link?.aircraftType?.name,
+              link?.aircraftType?.icaoType
+            ])
+          : []),
+        ...(Array.isArray(row.aircraftTypeNames) ? row.aircraftTypeNames : [])
       ];
       return fields.some((f) => f != null && String(f).toLowerCase().includes(q));
     });
@@ -1171,14 +1175,131 @@ export function ReferenceView() {
     queryFn: () => apiGet<LayoutDetail>(`/api/ref/layouts/${effectivePreviewLayoutId}`),
     enabled: (kind === "layouts" || kind === "stands") && Boolean(effectivePreviewLayoutId)
   });
-  const aircraftCsvRows = useMemo(() => {
-    if (!aircraftCsvText) return [];
-    try {
-      return parseAircraftCsvRows(aircraftCsvText);
-    } catch {
-      return [];
-    }
-  }, [aircraftCsvText]);
+
+  const renderRemainingCard = (docked: boolean) => (
+    <RemainingRefCard
+      key={`${kind}:${mode}:${editId}`}
+      kind={kind as RemainingRefKind}
+      docked={docked}
+      onDirtyChange={
+        docked
+          ? (dirty) => {
+              detailDirtyRef.current = dirty;
+            }
+          : undefined
+      }
+      mode={mode === "create" ? "create" : "edit"}
+      values={{
+        code: fCode,
+        name: fName,
+        isActive: fIsActive,
+        color: fColor,
+        sortOrder: fSortOrder,
+        allowsAutoInProgress: fAllowsAutoInProgress,
+        manualOnly: fManualOnly,
+        defaultLineBase: fDefaultLineBase,
+        uom: fUom,
+        personSkillIds: fPersonSkillIds,
+        startMin: fStartMin,
+        endMin: fEndMin,
+        description: fDescription,
+        isDefault: fIsDefault,
+        profileId: fProfileId,
+        scoreCategory: fScoreCategory,
+        scoreScope: fScoreScope,
+        scoreValue: fScoreValue,
+        scoreUnit: fScoreUnit,
+        hangarId: fHangarId,
+        layoutId: fLayoutId,
+        standId: fTypeId,
+        priorityScore: fPriorityScore,
+        priorityEventTypeIds: fPriorityEventTypeIds,
+        priorityAircraftTypeIds: fPriorityAircraftTypeIds,
+        sourceEventName: fSourceEventName,
+        sourceAircraftTypeText: fSourceAircraftTypeText,
+        conditionText: fConditionText,
+        comment: fComment,
+        source: fSource
+      }}
+      canEdit={canMutate}
+      saving={createM.isPending || updateM.isPending}
+      deleting={deleteM.isPending}
+      error={cardMutationError(createM.error, updateM.error, deleteM.error)}
+      record={mode === "edit" ? ((listQ.data ?? []).find((row: { id?: string }) => row.id === editId) ?? null) : null}
+      showTech={isAdmin && mode === "edit"}
+      skills={(skillsQ.data ?? []).map((item) => ({ id: item.id, label: `${item.code} • ${item.name}` }))}
+      eventTypes={eventTypeOptions}
+      aircraftTypes={aircraftTypeOptions}
+      hangars={(hangarsQ.data ?? []).map((item) => ({ id: item.id, label: item.name }))}
+      layouts={(layoutsForStandsQ.data ?? []).map((item) => ({ id: item.id, label: item.name, hangarId: item.hangarId }))}
+      stands={(standsForPriorityQ.data ?? []).map((item) => ({ id: item.id, label: item.code ? `${item.code} · ${item.name ?? ""}`.trim() : item.name }))}
+      profiles={(optimizationProfilesQ.data ?? []).map((item) => ({ id: item.id, label: item.isDefault ? `${item.name} · по умолчанию` : item.name }))}
+      onChange={(patch: Partial<RemainingRefValues>) => {
+        if (patch.code != null) setFCode(patch.code);
+        if (patch.name != null) setFName(patch.name);
+        if (patch.isActive != null) setFIsActive(patch.isActive);
+        if (patch.color != null) setFColor(patch.color);
+        if (patch.sortOrder != null) setFSortOrder(patch.sortOrder);
+        if (patch.allowsAutoInProgress != null) setFAllowsAutoInProgress(patch.allowsAutoInProgress);
+        if (patch.manualOnly != null) setFManualOnly(patch.manualOnly);
+        if (patch.defaultLineBase != null) setFDefaultLineBase(patch.defaultLineBase);
+        if (patch.uom != null) setFUom(patch.uom);
+        if (patch.personSkillIds != null) setFPersonSkillIds(patch.personSkillIds);
+        if (patch.startMin != null) setFStartMin(patch.startMin);
+        if (patch.endMin != null) setFEndMin(patch.endMin);
+        if (patch.description != null) setFDescription(patch.description);
+        if (patch.isDefault != null) setFIsDefault(patch.isDefault);
+        if (patch.profileId != null) setFProfileId(patch.profileId);
+        if (patch.scoreCategory != null) setFScoreCategory(patch.scoreCategory);
+        if (patch.scoreScope != null) setFScoreScope(patch.scoreScope);
+        if (patch.scoreValue != null) setFScoreValue(patch.scoreValue);
+        if (patch.scoreUnit != null) setFScoreUnit(patch.scoreUnit);
+        if (patch.hangarId != null) setFHangarId(patch.hangarId);
+        if (patch.layoutId != null) setFLayoutId(patch.layoutId);
+        if (patch.standId != null) setFTypeId(patch.standId);
+        if (patch.priorityScore != null) setFPriorityScore(patch.priorityScore);
+        if (patch.priorityEventTypeIds != null) setFPriorityEventTypeIds(patch.priorityEventTypeIds);
+        if (patch.priorityAircraftTypeIds != null) setFPriorityAircraftTypeIds(patch.priorityAircraftTypeIds);
+        if (patch.sourceEventName != null) setFSourceEventName(patch.sourceEventName);
+        if (patch.sourceAircraftTypeText != null) setFSourceAircraftTypeText(patch.sourceAircraftTypeText);
+        if (patch.conditionText != null) setFConditionText(patch.conditionText);
+        if (patch.comment != null) setFComment(patch.comment);
+        if (patch.source != null) setFSource(patch.source);
+      }}
+      onClose={() => {
+        detailDirtyRef.current = false;
+        setMode(null);
+      }}
+      onSave={() => {
+        const payload = buildPayload();
+        const finish = async (id: string) => {
+          try {
+            if (kind === "persons" && id) {
+              await apiPut(`/api/ref/persons/${id}/skills`, {
+                skills: fPersonSkillIds.map((skillId) => ({ skillId }))
+              });
+              await qc.invalidateQueries({ queryKey: ["ref", "persons"] });
+            }
+            detailDirtyRef.current = false;
+            setMode(null);
+          } catch (err) {
+            showFeedback("error", `Не удалось сохранить квалификации: ${String((err as { message?: string })?.message ?? err)}`);
+          }
+        };
+        if (mode === "create") createM.mutate(payload, { onSuccess: (created) => void finish(String(created?.id ?? "")) });
+        else updateM.mutate({ id: editId, payload }, { onSuccess: (updated) => void finish(String(updated?.id ?? editId)) });
+      }}
+      onDelete={() => {
+        if (!editId || !confirm("Удалить запись?")) return;
+        deleteM.mutate(editId, {
+          onSuccess: () => {
+            detailDirtyRef.current = false;
+            setMode(null);
+          }
+        });
+      }}
+    />
+  );
 
   return (
     <div className="refPage">
@@ -1200,8 +1321,12 @@ export function ReferenceView() {
                       type="button"
                       className={`refNavItem${active ? " refNavItemActive" : ""}`}
                       onClick={() => {
+                        if (splitRef && it.kind !== kind && !confirmLeaveDetail()) return;
                         setKind(it.kind);
                         setSearch("");
+                        setFilterAircraftTypeId("");
+                        setFilterProfileId("");
+                        detailDirtyRef.current = false;
                         setMode(null);
                         setFeedback(null);
                       }}
@@ -1247,20 +1372,7 @@ export function ReferenceView() {
                 </button>
               ) : null}
             </div>
-            {kind === "layouts" ? (
-              <label className="refHeaderFilter">
-                <span className="muted">Ангар</span>
-                <select value={filterHangarId} onChange={(e) => setFilterHangarId(e.target.value)}>
-                  <option value="">все</option>
-                  {(hangarsQ.data ?? []).map((h) => (
-                    <option key={h.id} value={h.id}>
-                      {h.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            {kind === "stands" || kind === "placement-priorities" ? (
+            {kind === "placement-priorities" ? (
               <>
                 <label className="refHeaderFilter">
                   <span className="muted">Ангар</span>
@@ -1292,17 +1404,35 @@ export function ReferenceView() {
                 </label>
               </>
             ) : null}
-            {kind === "aircraft" ? (
-              <button
-                className="btn"
-                type="button"
-                disabled={!listQ.data?.length}
-                onClick={() => downloadAircraftDirectoryCsv(listQ.data ?? [])}
-              >
-                Выгрузить CSV
-              </button>
+            {kind === "optimization-score-rules" ? (
+              <label className="refHeaderFilter">
+                <span className="muted">Профиль</span>
+                <select value={filterProfileId} onChange={(e) => setFilterProfileId(e.target.value)}>
+                  <option value="">все</option>
+                  {(optimizationProfilesQ.data ?? []).map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : null}
-            {canCreate ? (
+            {isRefCardKind(kind) && kind !== "tow-norms" ? (
+              <RefExcelButton
+                disabled={!listQ.data?.length}
+                onClick={() => {
+                  if (kind === "operators") downloadOperatorsXlsx(listQ.data ?? []);
+                  else if (kind === "aircraft-types") downloadAircraftTypesXlsx(listQ.data ?? []);
+                  else if (kind === "aircraft") downloadAircraftXlsx(listQ.data ?? []);
+                  else if (kind === "aircraft-type-palette") downloadPaletteXlsx(listQ.data ?? []);
+                  else if (kind === "hangars") downloadHangarsXlsx(listQ.data ?? []);
+                  else if (kind === "layouts") downloadLayoutsXlsx(listQ.data ?? []);
+                  else if (kind === "stands") downloadStandsXlsx(listQ.data ?? []);
+                  else if (isRemainingRefKind(kind)) downloadRemainingRefXlsx(kind, listQ.data ?? []);
+                }}
+              />
+            ) : null}
+            {canCreate && !splitRef && kind !== "tow-norms" ? (
               <button className="btn btnPrimary" onClick={openCreate}>
                 + Добавить
               </button>
@@ -1318,443 +1448,8 @@ export function ReferenceView() {
             </button>
           </div>
         ) : null}
-
-      {kind === "aircraft" && canWrite ? (
-        <div className="card refSection">
-          <div className="refSectionHeader">
-            <div>
-              <div className="refSectionTitleWithInfo">
-                <strong>Импорт бортовых номеров из CSV</strong>
-                <span className="refInfoTip">
-                  <button type="button" className="refInfoButton" aria-label="Как подготовить CSV для импорта бортовых номеров">
-                    i
-                  </button>
-                  <span className="refInfoPopover" role="tooltip">
-                    <strong>Как подготовить файл</strong>
-                    <span>Подойдёт CSV/TXT в UTF-8 или Windows-1251.</span>
-                    <span>Разделитель может быть запятая, точка с запятой или табуляция.</span>
-                    <span>Обязательные колонки: tailNumber, operator, aircraftType.</span>
-                    <span>Опционально: manufactureDate (дата производства), serialNumber.</span>
-                    <span>operator ищется по коду или названию оператора.</span>
-                    <span>aircraftType ищется по ICAO-коду или названию типа ВС.</span>
-                  </span>
-                </span>
-              </div>
-              <div className="muted refSectionHint">Формат: tailNumber;operator;aircraftType[;manufactureDate;serialNumber]. Разделитель: запятая/точка с запятой/таб. Кнопка «Выгрузить CSV» сохраняет текущий справочник в этом формате.</div>
-            </div>
-          </div>
-          <div className="row" style={{ alignItems: "flex-end" }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span className="muted">CSV файл</span>
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={async (e) => {
-                  const f = e.target.files?.[0] ?? null;
-                  setAircraftCsvFile(f);
-                  setAircraftImportResult(null);
-                  setAircraftCsvParseError(null);
-                  setAircraftCsvText("");
-                  if (!f) return;
-                  try {
-                    const text = decodeAircraftCsv(await f.arrayBuffer());
-                    setAircraftCsvText(text);
-                  } catch (err: any) {
-                    const msg = String(err?.message ?? err);
-                    setAircraftCsvParseError(msg);
-                    showFeedback("error", `Не удалось прочитать CSV: ${msg}`);
-                  }
-                }}
-                style={{ width: 360 }}
-              />
-            </label>
-            <button
-              className="btn"
-              disabled={aircraftImportM.isPending || !aircraftCsvText}
-              onClick={() => {
-                try {
-                  const rows = parseAircraftCsvRows(aircraftCsvText);
-                  if (rows.length === 0) throw new Error("В CSV не найдено строк для импорта.");
-                  aircraftImportM.mutate({ dryRun: true, rows });
-                } catch (err: any) {
-                  const msg = String(err?.message ?? err);
-                  setAircraftCsvParseError(msg);
-                  showFeedback("error", msg);
-                }
-              }}
-            >
-              Предпросмотр
-            </button>
-            <button
-              className="btn btnPrimary"
-              disabled={aircraftImportM.isPending || !aircraftCsvText || !((aircraftImportResult as any)?.summary?.okRows > 0)}
-              onClick={() => {
-                try {
-                  const rows = parseAircraftCsvRows(aircraftCsvText);
-                  if (rows.length === 0) throw new Error("В CSV не найдено строк для импорта.");
-                  aircraftImportM.mutate({ rows });
-                } catch (err: any) {
-                  const msg = String(err?.message ?? err);
-                  setAircraftCsvParseError(msg);
-                  showFeedback("error", msg);
-                }
-              }}
-            >
-              Импортировать
-            </button>
-            {aircraftImportM.error ? <span className="error">{String((aircraftImportM.error as any)?.message ?? aircraftImportM.error)}</span> : null}
-          </div>
-          {aircraftCsvParseError ? <div className="error">{aircraftCsvParseError}</div> : null}
-          {aircraftCsvFile ? (
-            <div className="muted">
-              Файл: <strong>{aircraftCsvFile.name}</strong>{" "}
-              {aircraftCsvText ? (
-                <>
-                  • строк данных: {aircraftCsvRows.length}
-                </>
-              ) : null}
-            </div>
-          ) : null}
-          {aircraftImportResult ? (
-            <div className="refImportResult">
-              <div className="row">
-                <strong>Результат</strong>
-                <span className="gpChip gpChipInfo">режим: {aircraftImportResult.summary?.dryRun ? "предпросмотр" : "импорт"}</span>
-                <span className="gpChip gpChipInfo">готово: {aircraftImportResult.summary?.okRows ?? 0}</span>
-                <span className="gpChip gpChipError">ошибок: {aircraftImportResult.summary?.errorRows ?? 0}</span>
-                {"created" in aircraftImportResult ? <span className="gpChip">создано: {aircraftImportResult.created ?? 0}</span> : null}
-              </div>
-              {(aircraftImportResult.rows ?? []).length ? (
-                <div className="refAircraftImportTableWrap">
-                  <table className="table refAircraftImportTable">
-                    <thead>
-                      <tr>
-                        <th>Строка</th>
-                        <th>Статус</th>
-                        <th>Борт</th>
-                        <th>Оператор</th>
-                        <th>Тип ВС</th>
-                        <th>Комментарий</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(aircraftImportResult.rows ?? []).map((row: any) => (
-                        <tr key={row.rowIndex} className={row.ok ? undefined : "eventImportRowError"}>
-                          <td>{row.rowIndex}</td>
-                          <td>
-                            <span className={row.ok ? "eventImportBadge eventImportBadgeOk" : "eventImportBadge eventImportBadgeError"}>
-                              {row.ok ? "Готово" : "Ошибка"}
-                            </span>
-                          </td>
-                          <td>{row.tailNumber || "—"}</td>
-                          <td>{row.operator || "—"}</td>
-                          <td>{row.aircraftType || "—"}</td>
-                          <td className="eventImportMessageCell">
-                            {row.error ? <span className="eventImportErrorText">{row.error}</span> : <span className="muted">Можно импортировать</span>}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {kind === "operators" && canWrite ? (
-        <div className="card refSection">
-          <div className="refSectionHeader">
-            <div>
-              <strong>Импорт операторов из CSV</strong>
-              <div className="muted refSectionHint">Колонки: code, name. Уже существующие коды пропускаются.</div>
-            </div>
-          </div>
-          <div className="row" style={{ alignItems: "flex-end" }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span className="muted">CSV файл</span>
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={async (e) => {
-                  const f = e.target.files?.[0] ?? null;
-                  setOperatorImportResult(null);
-                  setOperatorCsvText("");
-                  if (!f) return;
-                  setOperatorCsvText(decodeAircraftCsv(await f.arrayBuffer()));
-                }}
-                style={{ width: 360 }}
-              />
-            </label>
-            <button
-              className="btn"
-              disabled={operatorImportM.isPending || !operatorCsvText}
-              onClick={() => {
-                try {
-                  operatorImportM.mutate({ dryRun: true, rows: parseOperatorCsvRows(operatorCsvText) });
-                } catch (err: any) {
-                  showFeedback("error", String(err?.message ?? err));
-                }
-              }}
-            >
-              Предпросмотр
-            </button>
-            <button
-              className="btn btnPrimary"
-              disabled={operatorImportM.isPending || !((operatorImportResult as any)?.summary?.okRows > 0)}
-              onClick={() => {
-                try {
-                  operatorImportM.mutate({ rows: parseOperatorCsvRows(operatorCsvText) });
-                } catch (err: any) {
-                  showFeedback("error", String(err?.message ?? err));
-                }
-              }}
-            >
-              Импортировать
-            </button>
-          </div>
-          {operatorImportResult?.rows?.some((row: any) => row.error) ? (
-            <div className="error" style={{ marginTop: 8 }}>
-              {operatorImportResult.rows
-                .filter((row: any) => row.error)
-                .map((row: any) => `Строка ${row.rowIndex}: ${row.error}`)
-                .join(" ")}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {kind === "aircraft-types" && canWrite ? (
-        <div className="card refSection">
-          <div className="refSectionHeader">
-            <div>
-              <strong>Импорт типов ВС из CSV</strong>
-              <div className="muted refSectionHint">Колонки: name; опционально icaoType, manufacturer, bodyType (NARROW_BODY или WIDE_BODY).</div>
-            </div>
-          </div>
-          <div className="row" style={{ alignItems: "flex-end" }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span className="muted">CSV файл</span>
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={async (e) => {
-                  const f = e.target.files?.[0] ?? null;
-                  setAircraftTypeImportResult(null);
-                  setAircraftTypeCsvText("");
-                  if (!f) return;
-                  setAircraftTypeCsvText(decodeAircraftCsv(await f.arrayBuffer()));
-                }}
-                style={{ width: 360 }}
-              />
-            </label>
-            <button
-              className="btn"
-              disabled={aircraftTypeImportM.isPending || !aircraftTypeCsvText}
-              onClick={() => {
-                try {
-                  aircraftTypeImportM.mutate({ dryRun: true, rows: parseAircraftTypeCsvRows(aircraftTypeCsvText) });
-                } catch (err: any) {
-                  showFeedback("error", String(err?.message ?? err));
-                }
-              }}
-            >
-              Предпросмотр
-            </button>
-            <button
-              className="btn btnPrimary"
-              disabled={aircraftTypeImportM.isPending || !((aircraftTypeImportResult as any)?.summary?.okRows > 0)}
-              onClick={() => {
-                try {
-                  aircraftTypeImportM.mutate({ rows: parseAircraftTypeCsvRows(aircraftTypeCsvText) });
-                } catch (err: any) {
-                  showFeedback("error", String(err?.message ?? err));
-                }
-              }}
-            >
-              Импортировать
-            </button>
-          </div>
-          {aircraftTypeImportResult?.rows?.some((row: any) => row.error) ? (
-            <div className="error" style={{ marginTop: 8 }}>
-              {aircraftTypeImportResult.rows
-                .filter((row: any) => row.error)
-                .map((row: any) => `Строка ${row.rowIndex}: ${row.error}`)
-                .join(" ")}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {(kind === "layouts" || kind === "stands") && canWrite ? (
-        <details className="card refSection refCollapsibleSection">
-          <summary className="refCollapsibleSummary">
-            <div>
-              <strong>Импорт схем из Excel / CSV</strong>
-              <div className="muted refSectionHint">
-                Каждая строка — одно место стоянки. Обязательные колонки: hangarCode, layoutCode, standCode, x, y, w, h.
-              </div>
-            </div>
-            <span className="btn btnGhost refDisclosureButton">
-              <span className="refDisclosureClosed">Открыть форму</span>
-              <span className="refDisclosureOpen">Скрыть форму</span>
-            </span>
-          </summary>
-          <div className="refLayoutImportGrid">
-            <label className="refLabel">
-              <span>Файл Excel / CSV</span>
-              <input
-                className="refInput"
-                type="file"
-                accept=".xlsx,.xls,.csv,text/csv"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0] ?? null;
-                  setLayoutImportFile(file);
-                  setLayoutImportRows([]);
-                  setLayoutImportError(null);
-                  setLayoutImportResult(null);
-                  if (!file) return;
-                  try {
-                    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-                    const sheet = wb.Sheets[wb.SheetNames[0]!];
-                    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-                    setLayoutImportRows(rows);
-                  } catch (err: any) {
-                    const msg = String(err?.message ?? err);
-                    setLayoutImportError(msg);
-                    showFeedback("error", `Не удалось прочитать файл схем: ${msg}`);
-                  }
-                }}
-              />
-            </label>
-            <button
-              className="btn btnPrimary"
-              disabled={layoutImportRows.length === 0 || layoutImportM.isPending}
-              onClick={() => {
-                try {
-                  const payload = buildLayoutImportPayload(layoutImportRows);
-                  if (payload.hangars.length === 0) {
-                    throw new Error("Не найдено строк с hangarCode, layoutCode и standCode.");
-                  }
-                  layoutImportM.mutate(payload);
-                } catch (err: any) {
-                  const msg = String(err?.message ?? err);
-                  setLayoutImportError(msg);
-                  showFeedback("error", msg);
-                }
-              }}
-            >
-              {layoutImportM.isPending ? "Импорт…" : "Импортировать схемы"}
-            </button>
-          </div>
-          <div className="muted small">
-            Рекомендуемые колонки: hangarCode, hangarName, layoutCode, layoutName, widthMeters, heightMeters, standCode,
-            standName, bodyType, x, y, w, h, rotate. Значения bodyType: narrow/узкий или wide/широкий.
-          </div>
-          {layoutImportFile ? (
-            <div className="muted">
-              Файл: <strong>{layoutImportFile.name}</strong> · строк: {layoutImportRows.length}
-            </div>
-          ) : null}
-          {layoutImportRows.length > 0 ? (
-            <div className="refImportPreview">
-              <strong>Предпросмотр первых строк</strong>
-              <pre>{JSON.stringify(layoutImportRows.slice(0, 3), null, 2)}</pre>
-            </div>
-          ) : null}
-          {layoutImportResult ? (
-            <div className="refImportResult">
-              <span className="gpChip gpChipInfo">ангаров: {layoutImportResult.hangars ?? 0}</span>
-              <span className="gpChip">схем: {layoutImportResult.layouts ?? 0}</span>
-              <span className="gpChip">мест: {layoutImportResult.stands ?? 0}</span>
-            </div>
-          ) : null}
-          {layoutImportError || layoutImportM.error ? (
-            <div className="error">{layoutImportError || String((layoutImportM.error as any)?.message ?? layoutImportM.error)}</div>
-          ) : null}
-        </details>
-      ) : null}
-
-      {kind === "placement-priorities" && canWrite ? (
-        <details className="card refSection refCollapsibleSection">
-          <summary className="refCollapsibleSummary">
-            <div>
-              <strong>Импорт приоритетов из Excel</strong>
-              <div className="muted refSectionHint">Источник: лист «Список_приоритетов_в_ангарах» из файла планировщиков.</div>
-            </div>
-            <span className="btn btnGhost refDisclosureButton">
-              <span className="refDisclosureClosed">Открыть форму</span>
-              <span className="refDisclosureOpen">Скрыть форму</span>
-            </span>
-          </summary>
-          <div className="refLayoutImportGrid">
-            <label className="refLabel">
-              <span>Файл Excel</span>
-              <input
-                className="refInput"
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0] ?? null;
-                  setPriorityImportFile(file);
-                  setPriorityImportRows([]);
-                  setPriorityImportError(null);
-                  setPriorityImportResult(null);
-                  if (!file) return;
-                  try {
-                    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-                    const sheetName = wb.SheetNames.find((name) => name.trim().toLowerCase() === "список_приоритетов_в_ангарах") ?? wb.SheetNames[0]!;
-                    const sheet = wb.Sheets[sheetName];
-                    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-                    setPriorityImportRows(rows);
-                  } catch (err: any) {
-                    const msg = String(err?.message ?? err);
-                    setPriorityImportError(msg);
-                    showFeedback("error", `Не удалось прочитать файл приоритетов: ${msg}`);
-                  }
-                }}
-              />
-            </label>
-            <button
-              className="btn btnPrimary"
-              disabled={priorityImportRows.length === 0 || priorityImportM.isPending}
-              onClick={() =>
-                priorityImportM.mutate({
-                  rows: priorityImportRows,
-                  replace: true,
-                  source: "Список_приоритетов_в_ангарах"
-                })
-              }
-            >
-              {priorityImportM.isPending ? "Импорт…" : "Заменить и импортировать"}
-            </button>
-          </div>
-          <div className="muted small">Ожидаемые колонки: Номер ангара, Вариант расстановки, Номер стоянки, Наименование события, Тип ВС, Комментарий.</div>
-          {priorityImportFile ? (
-            <div className="muted">
-              Файл: <strong>{priorityImportFile.name}</strong> · строк: {priorityImportRows.length}
-            </div>
-          ) : null}
-          {priorityImportResult ? (
-            <div className="refImportResult">
-              <span className="gpChip gpChipInfo">загружено: {priorityImportResult.imported ?? 0}</span>
-              <span className="gpChip">предупреждений: {(priorityImportResult.warnings ?? []).length}</span>
-              {(priorityImportResult.warnings ?? []).slice(0, 8).map((w: string, i: number) => (
-                <span key={i} className="muted small">
-                  {w}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {priorityImportError || priorityImportM.error ? (
-            <div className="error">{priorityImportError || String((priorityImportM.error as any)?.message ?? priorityImportM.error)}</div>
-          ) : null}
-        </details>
-      ) : null}
-
       {(kind === "layouts" || kind === "stands") && effectivePreviewLayoutId ? (
-        <div className="card refSection">
+        <div id="ref-scheme-preview" className="card refSection">
           <div className="refSectionHeader">
             <div>
               <strong>Визуальная схема</strong>
@@ -1774,7 +1469,7 @@ export function ReferenceView() {
         </div>
       ) : null}
 
-      {mode ? (
+      {showInlineRefEditor(mode, kind) ? (
         <div id="ref-editor-panel" className="card refSection refEditorPanel">
           <div className="refSectionHeader">
             <div>
@@ -2348,12 +2043,14 @@ export function ReferenceView() {
       ) : null}
 
       <div className="card refList">
-        {listQ.error ? (
+        {isPersonnelCatalogKind(kind) ? (
+          <PersonnelCatalogPanel kind={kind} search={search} canWrite={canWrite} />
+        ) : listQ.error ? (
           <div className="error" style={{ marginBottom: 8 }}>
             {String(listQ.error.message || listQ.error)}
           </div>
         ) : null}
-        {(listQ.data ?? []).length === 0 && !listQ.isFetching ? (
+        {!catalogKind && !splitRef && (listQ.data ?? []).length === 0 && !listQ.isFetching ? (
           <div className="refEmpty">
             <div className="refEmptyTitle">
               {search ? "Ничего не найдено" : "Записей пока нет"}
@@ -2368,279 +2065,413 @@ export function ReferenceView() {
                     : "Обратитесь к администратору для наполнения справочника."}
             </div>
           </div>
-        ) : (
-          <table className="table refTable">
-            <thead>
-              <tr>
-                <th>Название</th>
-                <th>Код / идентификация</th>
-                <th>Связи и параметры</th>
-                <th>Статус</th>
-                {isAdmin ? <th className="refTechColumn">Технические</th> : null}
-                <th className="refActionsColumn">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map((row: any) => {
-                const displayName =
-                  kind === "aircraft-type-palette"
-                    ? `${row.operator?.name ?? "Оператор"} × ${row.aircraftType?.icaoType ? `${row.aircraftType.icaoType} • ` : ""}${row.aircraftType?.name ?? "Тип ВС"}`
-                    : kind === "placement-priorities"
-                      ? `${row.hangar?.name ?? "Ангар"} · ${row.stand?.code ?? "место"}`
-                      : kind === "optimization-score-rules"
-                        ? row.name ?? row.code ?? "Правило scoring"
-                    : row.name ?? row.tailNumber ?? "—";
-                const idCodeLines: string[] = [];
-                if (row.code) idCodeLines.push(String(row.code));
-                if (row.icaoType) idCodeLines.push(`ICAO ${row.icaoType}`);
-                if (row.tailNumber && kind !== "aircraft") idCodeLines.push(String(row.tailNumber));
-                if (row.serialNumber) idCodeLines.push(`S/N ${row.serialNumber}`);
-                if (kind === "placement-priorities") idCodeLines.push(`score ${row.priorityScore ?? 0}`);
-                if (kind === "optimization-score-rules" && row.code) idCodeLines.push(String(row.code));
-                const bodyLabel = bodyTypeLabel(row.bodyType);
-
-                return (
-                  <tr key={row.id} className={mode === "edit" && editId === row.id ? "refRowEditing" : undefined}>
-                    <td>
-                      <div className="refCellTitle">
-                        {row.color ? (
-                          <span
-                            className="refRowSwatch"
-                            style={{ background: String(row.color) }}
-                            title={String(row.color)}
-                          />
-                        ) : null}
-                        <strong>{displayName}</strong>
-                      </div>
-                      {row.description ? (
-                        <div className="muted refCellHint">{row.description}</div>
-                      ) : null}
-                    </td>
-                    <td>
-                      {idCodeLines.length > 0 ? (
-                        <div className="refCellLines">
-                          {idCodeLines.map((s, i) => (
-                            <span className="refCellLine" key={i}>
-                              {s}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td>
-                      <div className="refLinks">
-                        {row.operator?.name ? (
-                          <span className="refLink">Оператор: <strong>{row.operator.name}</strong></span>
-                        ) : null}
-                        {row.type?.name ? (
-                          <span className="refLink">
-                            Тип ВС: <strong>{row.type.icaoType ? `${row.type.icaoType} • ` : ""}{row.type.name}</strong>
-                          </span>
-                        ) : null}
-                        {kind === "aircraft" && row.manufactureDate ? (
-                          <>
-                            <span className="refLink">
-                              Дата производства: <strong>{formatManufactureDateRu(row.manufactureDate) ?? "—"}</strong>
-                            </span>
-                            <span className="refLink">
-                              Возраст ВС: <strong>{formatAircraftAge(row.manufactureDate) ?? "—"}</strong>
-                            </span>
-                          </>
-                        ) : null}
-                        {kind === "workshops" && (row.defaultLineBase === "LINE" || row.defaultLineBase === "BASE") ? (
-                          <span className="refLink">
-                            L/B: <strong>{row.defaultLineBase === "LINE" ? "L (Line)" : "B (Base)"}</strong>
-                          </span>
-                        ) : null}
-                        {kind === "hangars" && row.station ? (
-                          <span className="refLink">
-                            Станция: <strong>{row.station}</strong>
-                          </span>
-                        ) : null}
-                        {row.aircraftType?.name ? (
-                          <span className="refLink">
-                            Тип ВС: <strong>{row.aircraftType.icaoType ? `${row.aircraftType.icaoType} • ` : ""}{row.aircraftType.name}</strong>
-                          </span>
-                        ) : null}
-                        {row.manufacturer ? (
-                          <span className="refLink">Производитель: <strong>{row.manufacturer}</strong></span>
-                        ) : null}
-                        {row.hangar?.name || row.layout?.hangar?.name ? (
-                          <span className="refLink">Ангар: <strong>{row.hangar?.name ?? row.layout?.hangar?.name}</strong></span>
-                        ) : null}
-                        {row.layout?.name ? (
-                          <span className="refLink">Вариант: <strong>{row.layout.name}</strong></span>
-                        ) : null}
-                        {row.stand?.name ? (
-                          <span className="refLink">Место: <strong>{row.stand.code ? `${row.stand.code} · ` : ""}{row.stand.name}</strong></span>
-                        ) : null}
-                        {kind === "placement-priorities" ? (
-                          <>
-                            <span className="refLink">События: <strong>{priorityLinkedEventTypes(row)}</strong></span>
-                            <span className="refLink">Типы ВС: <strong>{priorityLinkedAircraftTypes(row)}</strong></span>
-                            {row.conditionText ? <span className="refLink">Условие: <strong>{row.conditionText}</strong></span> : null}
-                            {row.comment ? <span className="refLink">Комментарий: <strong>{row.comment}</strong></span> : null}
-                          </>
-                        ) : null}
-                        {kind === "optimization-profiles" ? (
-                          <span className="refLink">Роль: <strong>{row.isDefault ? "по умолчанию" : "обычный профиль"}</strong></span>
-                        ) : null}
-                        {kind === "optimization-score-rules" ? (
-                          <>
-                            <span className="refLink">Профиль: <strong>{row.profile?.name ?? row.profileId}</strong></span>
-                            <span className="refLink">Категория: <strong>{scoreCategoryLabel(row.category)}</strong></span>
-                            <span className="refLink">Область: <strong>{scoreScopeLabel(row.scope)}</strong></span>
-                            <span className="refLink">Значение: <strong>{row.value} · {row.unit}</strong></span>
-                          </>
-                        ) : null}
-                        {kind === "event-statuses" ? (
-                          <>
-                            <span className="refLink">
-                              Полоска Гантта: <strong>{row.color || "нет"}</strong>
-                            </span>
-                            <span className="refLink">
-                              Порядок: <strong>{row.sortOrder ?? "—"}</strong>
-                            </span>
-                            <span className="refLink">
-                              В форме: <strong>{row.selectable ? "да" : "нет"}</strong>
-                            </span>
-                            <span className="refLink">
-                              Авто «В работе»: <strong>{row.allowsAutoInProgress ? "да" : "нет"}</strong>
-                            </span>
-                            <span className="refLink">
-                              Только вручную: <strong>{row.manualOnly ? "да" : "нет"}</strong>
-                            </span>
-                            {row.isSystem ? <span className="refLink">Код системный</span> : null}
-                          </>
-                        ) : null}
-                        {(row as any).standsSummary ? (
-                          <span className="refLink">Места: <strong>{(row as any).standsSummary}</strong></span>
-                        ) : (row as any).capacitySummary ? (
-                          <span className="refLink">Вместимость: <strong>{(row as any).capacitySummary}</strong></span>
-                        ) : null}
-                        {kind === "stands" ? (
-                          <span className="refLink">Типы ВС: <strong>{standAllowedAircraftTypeLabel(row)}</strong></span>
-                        ) : null}
-                        {bodyLabel ? (
-                          <span className="refLink">Фюзеляж: <strong>{bodyLabel}</strong></span>
-                        ) : null}
-                        {row.uom ? <span className="refLink">Ед. изм.: <strong>{row.uom}</strong></span> : null}
-                        {kind === "shifts" && row.startMin != null && row.endMin != null ? (
-                          <span className="refLink">
-                            Смена: <strong>{formatMinutesOfDay(row.startMin)} – {formatMinutesOfDay(row.endMin)}</strong>
-                          </span>
-                        ) : null}
-                        {Array.isArray(row.skills) && row.skills.length > 0 ? (
-                          <span className="refLink">
-                            Квалификации:{" "}
-                            <strong>
-                              {row.skills
-                                .map((s: any) => s.skill?.code || s.skill?.name || s.skillId)
-                                .filter(Boolean)
-                                .join(", ")}
-                            </strong>
-                          </span>
-                        ) : null}
-                        {(row as any).widthMeters != null && (row as any).heightMeters != null ? (
-                          <span className="refLink">
-                            Размер: <strong>{(row as any).widthMeters} × {(row as any).heightMeters} м</strong>
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td>
-                      {row.isActive === false ? (
-                        <span className="refStatus refStatusInactive">Неактивен</span>
-                      ) : (
-                        <span className="refStatus refStatusActive">Активен</span>
-                      )}
-                      {kind === "hangars" && row.isPhysical === false ? (
-                        <span className="gpChip gpChipInfo" style={{ marginLeft: 6 }}>внешний MRO</span>
-                      ) : null}
-                    </td>
-                    {isAdmin ? (
-                      <td className="refTechColumn">
-                        <details className="refTechDetails">
-                          <summary title="Технические данные записи">ID / JSON</summary>
-                          <div className="refTechBody">
-                            <div className="refTechId" title="ID записи">
-                              <span className="muted">id:</span>{" "}
-                              <code>{row.id}</code>
-                            </div>
-                            {row.hangarId ? (
-                              <div className="refTechId">
-                                <span className="muted">hangarId:</span> <code>{row.hangarId}</code>
-                              </div>
-                            ) : null}
-                            {row.layoutId ? (
-                              <div className="refTechId">
-                                <span className="muted">layoutId:</span> <code>{row.layoutId}</code>
-                              </div>
-                            ) : null}
-                            <pre className="refTechJson">{JSON.stringify(row, null, 2)}</pre>
-                          </div>
-                        </details>
-                      </td>
-                    ) : null}
-                    <td className="refActionsColumn">
-                      <div className="refRowActions">
-                        {canMutate ? (
-                          <>
-                            <button className="btn btnGhost refIconButton" onClick={() => openEdit(row)} title="Редактировать" aria-label="Редактировать">
-                              <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <path d="M4 20h4.4L18.7 9.7a2.1 2.1 0 0 0 0-3L17.3 5.3a2.1 2.1 0 0 0-3 0L4 15.6V20Z" />
-                                <path d="m13.5 6.1 4.4 4.4" />
-                              </svg>
-                            </button>
-                            {(kind === "layouts" || kind === "stands") ? (
-                              <button
-                                className="btn btnGhost refIconButton"
-                                onClick={() => {
-                                  setPreviewLayoutId(String(kind === "layouts" ? row.id : row.layoutId ?? ""));
-                                  setPreviewStandId(String(kind === "stands" ? row.id : ""));
-                                }}
-                                title="Показать на схеме"
-                                aria-label="Показать на схеме"
-                              >
-                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                  <path d="M4 6.5 9.5 4l5 2.5L20 4v13.5L14.5 20l-5-2.5L4 20V6.5Z" />
-                                  <path d="M9.5 4v13.5M14.5 6.5V20" />
-                                </svg>
-                              </button>
-                            ) : null}
-                            {canMutate && (kind !== "event-statuses" || !row.isSystem) ? (
-                            <button
-                              className="btn btnGhost refIconButton refBtnDanger"
-                              onClick={() => {
-                                if (confirm("Удалить запись?")) deleteM.mutate(row.id);
-                              }}
-                              disabled={deleteM.isPending}
-                              title="Удалить запись"
-                              aria-label="Удалить запись"
-                            >
-                              <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <path d="M5 7h14" />
-                                <path d="M10 11v6M14 11v6" />
-                                <path d="M8 7l1-3h6l1 3" />
-                                <path d="M7 7l1 13h8l1-13" />
-                              </svg>
-                            </button>
-                            ) : null}
-                          </>
-                        ) : (
-                          <span className="muted">только просмотр</span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+        ) : kind === "tow-norms" ? (
+          <TowNormsTable rows={filteredRows as TowNormRow[]} editingId={mode === "edit" ? editId : ""} onOpen={openEdit} />
+        ) : kind === "operators" ? (
+          <OperatorsTable rows={filteredRows} editingId={mode === "edit" ? editId : ""} onOpen={openEdit} />
+        ) : kind === "aircraft-types" ? (
+          <AircraftTypesTable rows={filteredRows} editingId={mode === "edit" ? editId : ""} onOpen={openEdit} />
+        ) : kind === "aircraft" ? (
+          <AircraftLibrary
+            types={aircraftTypesQ.data ?? []}
+            rows={filteredRows}
+            typeId={filterAircraftTypeId}
+            selectedId={mode === "edit" ? editId : ""}
+            canAdd={canMutate}
+            onSelectType={setFilterAircraftTypeId}
+            onOpen={(row) => {
+              if ((mode !== "edit" || editId !== row.id) && !confirmLeaveDetail()) return;
+              openEdit(row);
+            }}
+            onAdd={openCreate}
+            detail={
+              mode ? (
+                <AircraftCardModal
+                  key={`${mode}:${editId}`}
+                  docked
+                  mode={mode}
+                  tailNumber={fTailNumber}
+                  operatorId={fOperatorId}
+                  typeId={fTypeId}
+                  serialNumber={fSerialNumber}
+                  manufactureDate={fManufactureDate}
+                  isActive={fIsActive}
+                  operators={(operatorsQ.data ?? []).map((item) => ({ id: item.id, label: item.name }))}
+                  types={(aircraftTypesQ.data ?? []).map((item) => ({ id: item.id, label: item.name }))}
+                  canEdit={canMutate}
+                  saving={createM.isPending || updateM.isPending}
+                  deleting={deleteM.isPending}
+                  error={cardMutationError(createM.error, updateM.error, deleteM.error)}
+                  record={mode === "edit" ? ((listQ.data ?? []).find((row: { id?: string }) => row.id === editId) ?? null) : null}
+                  showTech={isAdmin && mode === "edit"}
+                  onDirtyChange={(dirty) => {
+                    detailDirtyRef.current = dirty;
+                  }}
+                  onChange={(patch) => {
+                    if (patch.tailNumber != null) setFTailNumber(patch.tailNumber);
+                    if (patch.operatorId != null) setFOperatorId(patch.operatorId);
+                    if (patch.typeId != null) setFTypeId(patch.typeId);
+                    if (patch.serialNumber != null) setFSerialNumber(patch.serialNumber);
+                    if (patch.manufactureDate != null) setFManufactureDate(patch.manufactureDate);
+                    if (patch.isActive != null) setFIsActive(patch.isActive);
+                  }}
+                  onClose={() => {
+                    detailDirtyRef.current = false;
+                    setMode(null);
+                  }}
+                  onSave={() => {
+                    const payload = buildPayload();
+                    if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
+                    else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+                  }}
+                  onDelete={() => {
+                    if (!editId || !confirm("Удалить борт?")) return;
+                    deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+                  }}
+                />
+              ) : (
+                <div className="refDetailEmpty">Выберите борт слева или добавьте новый.</div>
+              )
+            }
+          />
+        ) : kind === "aircraft-type-palette" ? (
+          <PaletteTable rows={filteredRows} editingId={mode === "edit" ? editId : ""} onOpen={openEdit} />
+        ) : kind === "hangars" ? (
+          <HangarsTable rows={filteredRows} editingId={mode === "edit" ? editId : ""} onOpen={openEdit} />
+        ) : kind === "layouts" ? (
+          <LayoutsLibrary
+            hangars={hangarsQ.data ?? []}
+            rows={filteredRows}
+            hangarId={filterHangarId}
+            selectedId={mode === "edit" ? editId : ""}
+            canAdd={canMutate}
+            onSelectHangar={setFilterHangarId}
+            onOpen={(row) => {
+              if ((mode !== "edit" || editId !== row.id) && !confirmLeaveDetail()) return;
+              openEdit(row);
+            }}
+            onAdd={openCreate}
+            detail={
+              mode ? (
+                <LayoutCardModal
+                  key={`${mode}:${editId}`}
+                  docked
+                  mode={mode}
+                  hangarId={fHangarId}
+                  code={fCode}
+                  name={fName}
+                  description={fDescription}
+                  width={fWidth}
+                  height={fHeight}
+                  isActive={fIsActive}
+                  hangars={(hangarsQ.data ?? []).map((item) => ({ id: item.id, label: item.name }))}
+                  canEdit={canMutate}
+                  saving={createM.isPending || updateM.isPending}
+                  deleting={deleteM.isPending}
+                  error={cardMutationError(createM.error, updateM.error, deleteM.error)}
+                  record={mode === "edit" ? ((listQ.data ?? []).find((row: { id?: string }) => row.id === editId) ?? null) : null}
+                  showTech={isAdmin && mode === "edit"}
+                  onDirtyChange={(dirty) => {
+                    detailDirtyRef.current = dirty;
+                  }}
+                  onChange={(patch) => {
+                    if (patch.hangarId != null) setFHangarId(patch.hangarId);
+                    if (patch.code != null) setFCode(patch.code);
+                    if (patch.name != null) setFName(patch.name);
+                    if (patch.description != null) setFDescription(patch.description);
+                    if (patch.width != null) setFWidth(patch.width);
+                    if (patch.height != null) setFHeight(patch.height);
+                    if (patch.isActive != null) setFIsActive(patch.isActive);
+                  }}
+                  onClose={() => {
+                    detailDirtyRef.current = false;
+                    setMode(null);
+                  }}
+                  onSave={() => {
+                    const payload = buildPayload();
+                    if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
+                    else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+                  }}
+                  onDelete={() => {
+                    if (!editId || !confirm("Удалить вариант расстановки?")) return;
+                    deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+                  }}
+                  onShowScheme={() => {
+                    detailDirtyRef.current = false;
+                    setPreviewLayoutId(editId);
+                    setPreviewStandId("");
+                    setMode(null);
+                    window.setTimeout(() => document.getElementById("ref-scheme-preview")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
+                  }}
+                />
+              ) : (
+                <div className="refDetailEmpty">Выберите вариант слева или добавьте новый.</div>
+              )
+            }
+          />
+        ) : kind === "stands" ? (
+          <StandsLibrary
+            hangars={hangarsQ.data ?? []}
+            layouts={layoutsForStandsQ.data ?? []}
+            rows={filteredRows}
+            hangarId={filterHangarId}
+            layoutId={filterLayoutId}
+            selectedId={mode === "edit" ? editId : ""}
+            canAdd={canMutate}
+            onSelectHangar={(id) => {
+              setFilterHangarId(id);
+              setFilterLayoutId("");
+            }}
+            onSelectLayout={setFilterLayoutId}
+            onOpen={(row) => {
+              if ((mode !== "edit" || editId !== row.id) && !confirmLeaveDetail()) return;
+              openEdit(row);
+            }}
+            onAdd={openCreate}
+            detail={
+              mode ? (
+                <StandCardModal
+                  key={`${mode}:${editId}`}
+                  docked
+                  mode={mode}
+                  layoutId={fLayoutId}
+                  code={fCode}
+                  name={fName}
+                  aircraftTypeIds={fStandAircraftTypeIds}
+                  x={fX}
+                  y={fY}
+                  w={fW}
+                  h={fH}
+                  rotate={fRotate}
+                  isActive={fIsActive}
+                  layouts={(layoutsForStandsQ.data ?? []).map((item) => ({
+                    id: item.id,
+                    label: item.hangar?.name ? `${item.hangar.name} · ${item.name}` : item.name
+                  }))}
+                  aircraftTypes={aircraftTypeOptions}
+                  canEdit={canMutate}
+                  saving={createM.isPending || updateM.isPending}
+                  deleting={deleteM.isPending}
+                  error={cardMutationError(createM.error, updateM.error, deleteM.error)}
+                  record={mode === "edit" ? ((listQ.data ?? []).find((row: { id?: string }) => row.id === editId) ?? null) : null}
+                  showTech={isAdmin && mode === "edit"}
+                  onDirtyChange={(dirty) => {
+                    detailDirtyRef.current = dirty;
+                  }}
+                  onChange={(patch) => {
+                    if (patch.layoutId != null) setFLayoutId(patch.layoutId);
+                    if (patch.code != null) setFCode(patch.code);
+                    if (patch.name != null) setFName(patch.name);
+                    if (patch.aircraftTypeIds != null) setFStandAircraftTypeIds(patch.aircraftTypeIds);
+                    if (patch.x != null) setFX(patch.x);
+                    if (patch.y != null) setFY(patch.y);
+                    if (patch.w != null) setFW(patch.w);
+                    if (patch.h != null) setFH(patch.h);
+                    if (patch.rotate != null) setFRotate(patch.rotate);
+                    if (patch.isActive != null) setFIsActive(patch.isActive);
+                  }}
+                  onClose={() => {
+                    detailDirtyRef.current = false;
+                    setMode(null);
+                  }}
+                  onSave={() => {
+                    const payload = buildPayload();
+                    if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
+                    else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+                  }}
+                  onDelete={() => {
+                    if (!editId || !confirm("Удалить место стоянки?")) return;
+                    deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+                  }}
+                  onShowScheme={() => {
+                    detailDirtyRef.current = false;
+                    setPreviewLayoutId(fLayoutId);
+                    setPreviewStandId(editId);
+                    setMode(null);
+                    window.setTimeout(() => document.getElementById("ref-scheme-preview")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
+                  }}
+                />
+              ) : (
+                <div className="refDetailEmpty">Выберите место слева или добавьте новое.</div>
+              )
+            }
+          />
+        ) : isRemainingRefKind(kind) ? (
+          <RemainingRefTable kind={kind} rows={filteredRows} editingId={mode === "edit" ? editId : ""} onOpen={openEdit} />
+        ) : null}
       </div>
+      {kind === "operators" && mode ? (
+        <OperatorCardModal
+          key={`${mode}:${editId}`}
+          mode={mode}
+          code={fCode}
+          name={fName}
+          isActive={fIsActive}
+          canEdit={canMutate}
+          saving={createM.isPending || updateM.isPending}
+          deleting={deleteM.isPending}
+          error={
+            createM.error || updateM.error || deleteM.error
+              ? String(
+                  (createM.error ?? updateM.error ?? deleteM.error)?.message ??
+                    createM.error ??
+                    updateM.error ??
+                    deleteM.error
+                )
+              : null
+          }
+          record={
+            mode === "edit"
+              ? ((listQ.data ?? []).find((row: { id?: string }) => row.id === editId) ?? null)
+              : null
+          }
+          showTech={isAdmin && mode === "edit"}
+          onChange={(patch) => {
+            if (patch.code != null) setFCode(patch.code);
+            if (patch.name != null) setFName(patch.name);
+            if (patch.isActive != null) setFIsActive(patch.isActive);
+          }}
+          onClose={() => setMode(null)}
+          onSave={() => {
+            const payload = { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
+            if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
+            else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+          }}
+          onDelete={() => {
+            if (!editId || !confirm("Удалить оператора?")) return;
+            deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+          }}
+        />
+      ) : null}
+      {kind === "aircraft-types" && mode ? (
+        <AircraftTypeCardModal
+          key={`${mode}:${editId}`}
+          mode={mode}
+          icaoType={fIcaoType}
+          name={fName}
+          manufacturer={fManufacturer}
+          bodyType={fBodyType}
+          isActive={fIsActive}
+          canEdit={canMutate}
+          saving={createM.isPending || updateM.isPending}
+          deleting={deleteM.isPending}
+          error={cardMutationError(createM.error, updateM.error, deleteM.error)}
+          record={mode === "edit" ? ((listQ.data ?? []).find((row: { id?: string }) => row.id === editId) ?? null) : null}
+          showTech={isAdmin && mode === "edit"}
+          onChange={(patch) => {
+            if (patch.icaoType != null) setFIcaoType(patch.icaoType);
+            if (patch.name != null) setFName(patch.name);
+            if (patch.manufacturer != null) setFManufacturer(patch.manufacturer);
+            if (patch.bodyType != null) setFBodyType(patch.bodyType);
+            if (patch.isActive != null) setFIsActive(patch.isActive);
+          }}
+          onClose={() => setMode(null)}
+          onSave={() => {
+            const payload = buildPayload();
+            if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
+            else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+          }}
+          onDelete={() => {
+            if (!editId || !confirm("Удалить тип ВС?")) return;
+            deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+          }}
+        />
+      ) : null}
+      {kind === "aircraft-type-palette" && mode ? (
+        <PaletteCardModal
+          key={`${mode}:${editId}`}
+          mode={mode}
+          operatorId={fOperatorId}
+          typeId={fTypeId}
+          color={fColor}
+          isActive={fIsActive}
+          operators={(operatorsQ.data ?? []).map((item) => ({ id: item.id, label: item.name }))}
+          types={(aircraftTypesQ.data ?? []).map((item) => ({ id: item.id, label: item.name }))}
+          canEdit={canMutate}
+          saving={createM.isPending || updateM.isPending}
+          deleting={deleteM.isPending}
+          error={cardMutationError(createM.error, updateM.error, deleteM.error)}
+          record={mode === "edit" ? ((listQ.data ?? []).find((row: { id?: string }) => row.id === editId) ?? null) : null}
+          showTech={isAdmin && mode === "edit"}
+          onChange={(patch) => {
+            if (patch.operatorId != null) setFOperatorId(patch.operatorId);
+            if (patch.typeId != null) setFTypeId(patch.typeId);
+            if (patch.color != null) setFColor(patch.color);
+            if (patch.isActive != null) setFIsActive(patch.isActive);
+          }}
+          onClose={() => setMode(null)}
+          onSave={() => {
+            const payload = buildPayload();
+            if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
+            else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+          }}
+          onDelete={() => {
+            if (!editId || !confirm("Удалить правило палитры?")) return;
+            deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+          }}
+        />
+      ) : null}
+      {kind === "tow-norms" && mode === "edit" ? (
+        <TowNormCardModal
+          key={editId}
+          code={fCode}
+          name={fName}
+          minutes={fMinutes}
+          isActive={fIsActive}
+          canEdit={canMutate}
+          saving={updateM.isPending}
+          error={cardMutationError(updateM.error)}
+          record={(() => {
+            const row = (listQ.data ?? []).find((item: { code?: string }) => item.code === editId);
+            return row ? { ...row, id: row.code } : null;
+          })()}
+          showTech={isAdmin}
+          onChange={(patch) => {
+            if (patch.name != null) setFName(patch.name);
+            if (patch.minutes != null) setFMinutes(patch.minutes);
+            if (patch.isActive != null) setFIsActive(patch.isActive);
+          }}
+          onClose={() => setMode(null)}
+          onSave={() => {
+            updateM.mutate({ id: editId, payload: { name: fName.trim(), minutes: fMinutes, isActive: fIsActive } }, { onSuccess: () => setMode(null) });
+          }}
+        />
+      ) : null}
+      {kind === "hangars" && mode ? (
+        <HangarCardModal
+          key={`${mode}:${editId}`}
+          mode={mode}
+          code={fCode}
+          name={fName}
+          station={fStation}
+          isPhysical={fIsPhysical}
+          isActive={fIsActive}
+          canEdit={canMutate}
+          saving={createM.isPending || updateM.isPending}
+          deleting={deleteM.isPending}
+          error={cardMutationError(createM.error, updateM.error, deleteM.error)}
+          record={mode === "edit" ? ((listQ.data ?? []).find((row: { id?: string }) => row.id === editId) ?? null) : null}
+          showTech={isAdmin && mode === "edit"}
+          onChange={(patch) => {
+            if (patch.code != null) setFCode(patch.code);
+            if (patch.name != null) setFName(patch.name);
+            if (patch.station != null) setFStation(patch.station);
+            if (patch.isPhysical != null) setFIsPhysical(patch.isPhysical);
+            if (patch.isActive != null) setFIsActive(patch.isActive);
+          }}
+          onClose={() => setMode(null)}
+          onSave={() => {
+            const payload = buildPayload();
+            if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
+            else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+          }}
+          onDelete={() => {
+            if (!editId || !confirm("Удалить ангар?")) return;
+            deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+          }}
+        />
+      ) : null}
+      {isRemainingRefKind(kind) && !splitRef && mode ? renderRemainingCard(false) : null}
       </div>
     </div>
   );

@@ -24,6 +24,7 @@ export type GanttCellKind =
   | "eventTypeId"
   | "workshopId"
   | "lineBase"
+  | "deadlineAt"
   | "startAtLocal"
   | "endAtLocal"
   | "tatPlanDays"
@@ -120,6 +121,7 @@ const KIND_BY_ID: Record<string, GanttCellKind> = {
   "primary.l": "eventTypeId",
   "primary.ah": "workshopId",
   lineBase: "lineBase",
+  "primary.gi": "deadlineAt",
   "primary.y": "startAtLocal",
   "primary.z": "endAtLocal",
   "primary.x": "timeOfStart",
@@ -171,6 +173,7 @@ export const DEFAULT_VISIBLE_IDS: GanttTableColId[] = [
   "primary.l",
   "primary.ah",
   "lineBase",
+  "primary.gi",
   "primary.y",
   "primary.z",
   "primary.ab",
@@ -194,8 +197,8 @@ const EXTRA_COLUMNS: GanttTableColDef[] = [
     label: "Действия",
     group: "План (Гантт)",
     subgroup: null,
-    defaultWidth: 108,
-    minWidth: 96,
+    defaultWidth: 148,
+    minWidth: 132,
     sticky: "left",
     hideable: false,
     kind: "actions"
@@ -268,8 +271,35 @@ const FALLBACK_PRIMARY_LABELS: Record<string, { label: string; group: string }> 
   "primary.ao": { label: "Продолжительность слота (Дни) (Факт)", group: "Слот Факт (Фактический слот)" },
   "primary.af": { label: "Номер ангара", group: "Слот План (Согласованный слот)" },
   "primary.ag": { label: "Номер МС в ангаре", group: "Слот План (Согласованный слот)" },
-  "primary.ae": { label: "Примечание", group: "Слот План (Согласованный слот)" }
+  "primary.ae": { label: "Примечание", group: "Слот План (Согласованный слот)" },
+  "primary.gi": { label: "DeadLine", group: "Слот План (Согласованный слот)" }
 };
+
+export const DEADLINE_COL_ID = "primary.gi";
+
+function insertAfterId(ids: string[], afterId: string, id: string): string[] {
+  if (ids.includes(id)) return ids;
+  const next = [...ids];
+  const at = next.indexOf(afterId);
+  next.splice(at >= 0 ? at + 1 : next.length, 0, id);
+  return next;
+}
+
+/** Колонка появилась позже сохранённых наборов: показать её справа от L/B, пока пользователь сам её не скрыл. */
+export function ensureDeadlineColumn<T extends { visible?: string[]; hidden?: string[]; order?: string[] }>(
+  config: T | null | undefined
+): T | null | undefined {
+  if (!config) return config;
+  if ((config.hidden ?? []).includes(DEADLINE_COL_ID)) return config;
+  const visibleHas = config.visible?.includes(DEADLINE_COL_ID) ?? false;
+  const orderHas = !Array.isArray(config.order) || config.order.includes(DEADLINE_COL_ID);
+  if (visibleHas && orderHas) return config;
+  return {
+    ...config,
+    visible: Array.isArray(config.visible) ? insertAfterId(config.visible, "lineBase", DEADLINE_COL_ID) : config.visible,
+    order: Array.isArray(config.order) ? insertAfterId(config.order, "lineBase", DEADLINE_COL_ID) : config.order
+  };
+}
 
 function kindForId(id: string): GanttCellKind {
   return KIND_BY_ID[id] ?? "primary";
@@ -527,7 +557,7 @@ export function safeReadTableCols(): GanttTableColConfig | null {
       null;
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { widths?: Record<string, number>; hidden?: string[]; order?: string[] };
-    return migrateConfig(parsed);
+    return ensureDeadlineColumn(migrateConfig(parsed)) ?? null;
   } catch {
     return null;
   }

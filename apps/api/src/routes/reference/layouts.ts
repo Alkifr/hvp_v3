@@ -28,8 +28,28 @@ function compactAircraftLabel(icaoType: string): string {
 
 type StandForSummary = {
   code: string;
-  allowedAircraftTypes?: Array<{ aircraftType?: { icaoType: string | null } | null } | null>;
+  allowedAircraftTypes?: Array<{ aircraftType?: { name?: string | null; icaoType: string | null } | null } | null>;
 };
+
+/** Наименования и коды типов ВС мест схемы — для поиска в справочнике. */
+function aircraftTypeSearchLabels(stands: StandForSummary[]): string[] {
+  const labels = new Set<string>();
+  for (const stand of stands) {
+    for (const link of stand.allowedAircraftTypes ?? []) {
+      const name = link?.aircraftType?.name?.trim();
+      const icao = link?.aircraftType?.icaoType?.trim();
+      if (name) {
+        labels.add(name);
+        labels.add(compactAircraftLabel(name));
+      }
+      if (icao) {
+        labels.add(icao);
+        labels.add(compactAircraftLabel(icao));
+      }
+    }
+  }
+  return [...labels];
+}
 
 /** Компактная сводка мест схемы: «MC-1/MC-2: A321 · MC-3: B738». */
 function standsSummaryFromStands(stands: StandForSummary[]): string {
@@ -121,6 +141,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
       },
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
       include: {
+        hangar: { select: { id: true, code: true, name: true } },
         stands: {
           where: { isActive: true },
           orderBy: { code: "asc" },
@@ -129,7 +150,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
             allowedAircraftTypes: {
               select: {
                 aircraftTypeId: true,
-                aircraftType: { select: { icaoType: true } }
+                aircraftType: { select: { name: true, icaoType: true } }
               }
             }
           }
@@ -142,6 +163,7 @@ export const layoutsRoutes: FastifyPluginAsync = async (app) => {
         ...rest,
         capacitySummary: capacitySummaryFromStands(stands),
         standsSummary: standsSummaryFromStands(stands),
+        aircraftTypeNames: aircraftTypeSearchLabels(stands),
         isCompatible: stands.some((stand) => standAcceptsAircraftType(stand, aircraftTypeId))
       };
     });

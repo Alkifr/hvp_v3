@@ -288,7 +288,7 @@ export function EventPlacementsEditor(props: {
           <button className="btn" type="button" onClick={props.onAdd} disabled={props.disabled}>
             Добавить этап
           </button>
-          <div className="muted small">Сохраните событие, чтобы применить этапы и пересчитать резервы мест.</div>
+          <div className="muted small">Сохраните событие, чтобы применить этапы. Место занимает слот только вместе со схемой.</div>
         </div>
       </div>
       ) : null}

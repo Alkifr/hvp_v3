@@ -37,6 +37,7 @@ export type MonthlyBasePlanResponse = {
       NDT: number;
       SHOP: number;
       CAB_REP: number;
+      PAINT: number;
     };
     occupied: Array<{ day: boolean; evening: boolean }>;
     labor: Array<{ day: number; evening: number }>;
@@ -278,7 +279,7 @@ export function MonthlyBasePlanPanel(props: {
           endAt: ev.endAt,
           occupied: ev.occupied,
           labor: ev.labor,
-          qualifications: ev.qualifications ?? { ME: 0, AV: 0, INT: 0, NDT: 0, SHOP: 0, CAB_REP: 0 }
+          qualifications: ev.qualifications ?? { ME: 0, AV: 0, INT: 0, NDT: 0, SHOP: 0, CAB_REP: 0, PAINT: 0 }
         })),
         shops
       });
@@ -298,8 +299,8 @@ export function MonthlyBasePlanPanel(props: {
           <div>
             <h3>Месячный план Base</h3>
             <div className="muted">
-              Слоты ТО и плановые ч/ч по дням. Ёмкость цеха в интерфейсе не хранится — пустые строки в Excel
-              заполняются вручную. NRC {String(data.nrcFactor).replace(".", ",")} к объёму работ.
+              Слоты ТО и плановые ч/ч по дням. Доступность и баланс ведутся в «РМ Персонал» только в рабочем
+              контуре; методика описана в Инструкции. NRC {String(data.nrcFactor).replace(".", ",")} к объёму работ.
             </div>
           </div>
           <button
@@ -436,10 +437,10 @@ export function MonthlyBasePlanPanel(props: {
               </div>
               {shops.length > 0 ? (
                 <>
-                  <h3 className="monthlyPlanShopTitle">Объём по цехам и заглушки ёмкости</h3>
+                  <h3 className="monthlyPlanShopTitle">Объём по цехам</h3>
                   <div className="muted monthlyPlanShopNote">
-                    «План + NRC» считается автоматически. Расчётные ресурсы в этой вкладке не задаются — внесите их в
-                    жёлтые ячейки Excel после выгрузки.
+                    «План + NRC» считается автоматически. Эта таблица не является источником ёмкости:
+                    планируйте доступность и фиксируйте неделю в «РМ Персонал».
                   </div>
                   <div className="monthlyPlanFooterWrap">
                     <table className="analyticsTable monthlyPlanTable" style={{ width: planTableWidth(data.days.length) }}>
@@ -479,7 +480,7 @@ export function MonthlyBasePlanPanel(props: {
                             </td>
                             <td className="monthlyPlanSticky monthlyPlanMeta" style={stickyStyle(META_COL_PX, 6)} />
                             <td className="monthlyPlanSticky monthlyPlanMeta" style={stickyStyle(META_COL_PX * 2, 6)}>
-                              Ёмкость
+                              Ёмкость — см. РМ Персонал
                             </td>
                             {data.days.flatMap((d) => [
                               <td

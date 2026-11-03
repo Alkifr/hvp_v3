@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import { Prisma, PrismaClient } from "@prisma/client";
 
+import { bindEventWatchMail, enqueueEventAuditMails, notesFromAuditWrite } from "../lib/eventWatchMail.js";
 import { errorBody } from "../lib/userErrors.js";
 
 declare module "fastify" {
@@ -29,28 +30,41 @@ export function isDbConnectionError(err: unknown): boolean {
     return CONNECTION_ERROR_CODES.has(err.code);
   }
   const msg = String((err as any)?.message ?? err);
-  return /Can't reach database server|Server has closed the connection|Connection reset|ECONNREFUSED|ETIMEDOUT|ENOTFOUND/i.test(
+  return /Can't reach database server|Server has closed the connection|Connection reset|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|Engine is not yet connected/i.test(
     msg
   );
 }
 
 export const prismaPlugin = fp(async (app) => {
   let markDisconnected: (err?: unknown) => void = () => undefined;
+  let inflight = 0;
 
-  const base = new PrismaClient();
-  // Ловим обрыв на любом запросе — иначе connected=true «залипает» после P1001
-  const prisma = base.$extends({
-    query: {
-      $allOperations: async ({ args, query }) => {
-        try {
-          return await query(args);
-        } catch (e) {
-          if (isDbConnectionError(e)) markDisconnected(e);
-          throw e;
+  const attach = (base: PrismaClient) => {
+    bindEventWatchMail({ prisma: base, log: app.log });
+    return base.$extends({
+      query: {
+        $allOperations: async ({ model, operation, args, query }) => {
+          inflight += 1;
+          try {
+            const result = await query(args);
+            if (model === "MaintenanceEventAudit" && (operation === "create" || operation === "createMany")) {
+              const notes = notesFromAuditWrite(operation, args as { data?: unknown }, result);
+              if (notes.length) enqueueEventAuditMails(notes);
+            }
+            return result;
+          } catch (e) {
+            if (isDbConnectionError(e)) markDisconnected(e);
+            throw e;
+          } finally {
+            inflight -= 1;
+          }
         }
       }
-    }
-  }) as unknown as PrismaClient;
+    }) as unknown as PrismaClient;
+  };
+
+  // Ловим обрыв на любом запросе — иначе connected=true «залипает» после P1001
+  let prisma = attach(new PrismaClient());
 
   markDisconnected = (err?: unknown) => {
     if (err != null && !isDbConnectionError(err)) return;
@@ -73,10 +87,18 @@ export const prismaPlugin = fp(async (app) => {
     if (connectInFlight) return false;
     connectInFlight = true;
     try {
-      // Сброс пула после обрыва, иначе мёртвые сокеты могут висеть.
-      // Только одна попытка за раз: параллельные $disconnect/$connect
-      // оставляют движок в "Engine is not yet connected" навсегда.
-      await prisma.$disconnect().catch(() => undefined);
+      const stuck = /Engine is not yet connected/i.test(app.db.lastError ?? "");
+      if (stuck && inflight === 0) {
+        const previous = prisma;
+        prisma = attach(new PrismaClient());
+        app.prisma = prisma;
+        await previous.$disconnect().catch(() => undefined);
+      } else if (inflight === 0) {
+        // Сброс пула после обрыва, иначе мёртвые сокеты могут висеть.
+        // $disconnect во время чужого запроса оставляет движок в
+        // "Engine is not yet connected" навсегда, поэтому ждём тишины.
+        await prisma.$disconnect().catch(() => undefined);
+      }
       await prisma.$connect();
       await prisma.$queryRaw`SELECT 1`;
       app.db.connected = true;

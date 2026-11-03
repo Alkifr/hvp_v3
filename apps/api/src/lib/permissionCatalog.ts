@@ -36,6 +36,7 @@ export const CONTENT_TYPES: ContentTypeDef[] = [
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "AircraftTypePalette", name: "палитра типа ВС", actions: ["view", "add", "change", "delete"] },
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "EventType", name: "тип события", actions: ["view", "add", "change", "delete"] },
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "EventStatusCatalog", name: "статус события", actions: ["view", "add", "change", "delete"] },
+  { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "TowNorm", name: "норматив буксировки", actions: ["view", "change"] },
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "Workshop", name: "цех", actions: ["view", "add", "change", "delete"] },
   { appLabel: "hangar", appTitle: "Ангары и расстановка", model: "Hangar", name: "ангар", actions: ["view", "add", "change", "delete"] },
   { appLabel: "hangar", appTitle: "Ангары и расстановка", model: "HangarLayout", name: "схема расстановки", actions: ["view", "add", "change", "delete"] },
@@ -57,6 +58,13 @@ export const CONTENT_TYPES: ContentTypeDef[] = [
   { appLabel: "labor", appTitle: "Персонал и трудоёмкость", model: "EventWorkPlanLine", name: "строка плана трудоёмкости", actions: ["view", "add", "change", "delete"] },
   { appLabel: "labor", appTitle: "Персонал и трудоёмкость", model: "EventWorkActualLine", name: "строка факта трудоёмкости", actions: ["view", "add", "change", "delete"] },
   { appLabel: "labor", appTitle: "Персонал и трудоёмкость", model: "TimeEntry", name: "учёт времени", actions: ["view", "add", "change", "delete"] },
+  { appLabel: "personnel", appTitle: "Планирование персонала", model: "PersonnelCategory", name: "категория персонала", actions: ["view", "add", "change", "delete"] },
+  { appLabel: "personnel", appTitle: "Планирование персонала", model: "PersonnelWorkshopCategory", name: "категория персонала цеха", actions: ["view", "add", "change", "delete"] },
+  { appLabel: "personnel", appTitle: "Планирование персонала", model: "PersonnelAvailability", name: "доступность персонала", actions: ["view", "add", "change", "delete"] },
+  { appLabel: "personnel", appTitle: "Планирование персонала", model: "PersonnelHoursNorm", name: "норматив часов", actions: ["view", "add", "change", "delete"] },
+  { appLabel: "personnel", appTitle: "Планирование персонала", model: "PersonnelAircraftTypeMpsFactor", name: "коэффициент MPS", actions: ["view", "add", "change", "delete"] },
+  { appLabel: "personnel", appTitle: "Планирование персонала", model: "PersonnelPlanningWeek", name: "неделя плана персонала", actions: ["view", "change"] },
+  { appLabel: "personnel", appTitle: "Планирование персонала", model: "PersonnelPlanningSnapshot", name: "снимок плана персонала", actions: ["view", "add"] },
   { appLabel: "material", appTitle: "Материалы и склады", model: "Warehouse", name: "склад", actions: ["view", "add", "change", "delete"] },
   { appLabel: "material", appTitle: "Материалы и склады", model: "Material", name: "материал", actions: ["view", "add", "change", "delete"] },
   { appLabel: "material", appTitle: "Материалы и склады", model: "StockMovement", name: "движение запаса", actions: ["view", "add", "change", "delete"] },
@@ -108,6 +116,10 @@ const SCREEN_PERMISSIONS: PermissionSeed[] = [
   { code: "resources:actual", name: "Can change факт трудоёмкости", appLabel: "labor", model: "EventWorkActualLine", action: "change" },
   { code: "workforce:read", name: "Can view персонал и смены", appLabel: "labor", model: "Person", action: "view" },
   { code: "workforce:write", name: "Can change персонал и смены", appLabel: "labor", model: "Person", action: "change" },
+  { code: "personnel:read", name: "Can view планирование персонала", appLabel: "personnel", model: "PersonnelAvailability", action: "view" },
+  { code: "personnel:write", name: "Can change планирование персонала", appLabel: "personnel", model: "PersonnelAvailability", action: "change" },
+  { code: "personnel:lock", name: "Can lock неделю планирования персонала", appLabel: "personnel", model: "PersonnelPlanningWeek", action: "custom" },
+  { code: "personnel:unlock", name: "Can unlock неделю планирования персонала", appLabel: "personnel", model: "PersonnelPlanningWeek", action: "custom" },
   { code: "warehouse:read", name: "Can view склад", appLabel: "material", model: "Material", action: "view" },
   { code: "warehouse:write", name: "Can change склад", appLabel: "material", model: "Material", action: "change" },
   { code: "events:read", name: "Can view событие ТО (данные)", appLabel: "event", model: "MaintenanceEvent", action: "view", hidden: true },
@@ -126,6 +138,9 @@ const WRITE_IMPLIES_READ: Record<string, string> = {
   "hangar:write": "hangar:read",
   "ref:write": "ref:read",
   "workforce:write": "workforce:read",
+  "personnel:write": "personnel:read",
+  "personnel:lock": "personnel:read",
+  "personnel:unlock": "personnel:read",
   "warehouse:write": "warehouse:read",
   "resources:plan": "resources:read",
   "resources:actual": "resources:read",
@@ -140,6 +155,7 @@ const REF_MODELS = [
   "AircraftTypePalette",
   "EventType",
   "EventStatusCatalog",
+  "TowNorm",
   "Workshop",
   "Hangar",
   "HangarLayout",
@@ -149,6 +165,15 @@ const REF_MODELS = [
 ];
 
 const WORKFORCE_MODELS = ["Shift", "Person", "Skill"];
+const PERSONNEL_MODELS = [
+  "PersonnelCategory",
+  "PersonnelWorkshopCategory",
+  "PersonnelAvailability",
+  "PersonnelHoursNorm",
+  "PersonnelAircraftTypeMpsFactor",
+  "PersonnelPlanningWeek",
+  "PersonnelPlanningSnapshot"
+];
 const WAREHOUSE_MODELS = ["Warehouse", "Material", "StockMovement", "MaterialReservation", "MaterialIssue"];
 
 function modelCodes(models: string[], actions: DjangoAction[]): string[] {
@@ -164,6 +189,19 @@ export const PERMISSION_ALIASES: Record<string, string[]> = {
   "ref:write": modelCodes(REF_MODELS, ["add", "change", "delete"]),
   "workforce:read": modelCodes(WORKFORCE_MODELS, ["view"]),
   "workforce:write": modelCodes(WORKFORCE_MODELS, ["add", "change", "delete"]),
+  "personnel:read": modelCodes(PERSONNEL_MODELS, ["view"]),
+  "personnel:write": modelCodes(
+    [
+      "PersonnelCategory",
+      "PersonnelWorkshopCategory",
+      "PersonnelAvailability",
+      "PersonnelHoursNorm",
+      "PersonnelAircraftTypeMpsFactor"
+    ],
+    ["add", "change", "delete"]
+  ),
+  "personnel:lock": ["change_personnelplanningweek", "add_personnelplanningsnapshot"],
+  "personnel:unlock": ["change_personnelplanningweek"],
   "warehouse:read": modelCodes(WAREHOUSE_MODELS, ["view"]),
   "warehouse:write": modelCodes(WAREHOUSE_MODELS, ["add", "change", "delete"]),
   "resources:read": ["view_eventworkplanline", "view_eventworkactualline", "view_timeentry"],
@@ -292,7 +330,7 @@ export function viewerModelCodes(): string[] {
 }
 
 export function plannerModelCodes(): string[] {
-  const writeApps = new Set(["sandbox", "fleet", "hangar", "event", "eventExt", "tech", "labor", "material", "analytics"]);
+  const writeApps = new Set(["sandbox", "fleet", "hangar", "event", "eventExt", "tech", "labor", "personnel", "material", "analytics"]);
   const codes = viewerModelCodes();
   for (const ct of CONTENT_TYPES) {
     if (!writeApps.has(ct.appLabel) || ct.model === "User" || ct.model === "Role" || ct.model === "Permission") continue;

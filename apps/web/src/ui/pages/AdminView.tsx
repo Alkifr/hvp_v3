@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
+import { statusCatalogLabel } from "../../lib/eventStatusCatalog";
 import {
   adminTabFromHash,
   buildAdminHash,
@@ -17,8 +19,14 @@ import type { SandboxSummary } from "../components/SandboxSwitcher";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { formatPresenceWhen, UserPresencePanel } from "../components/UserPresencePanel";
 import { AdminAnnouncementsPanel } from "./AdminAnnouncementsPanel";
+import { AdminAircraftImportPanel, AdminAircraftTypeImportPanel } from "./AdminFleetImportPanels";
+import { AdminLayoutImportPanel } from "./AdminLayoutImportPanel";
+import { AdminPriorityImportPanel } from "./AdminPriorityImportPanel";
+import { AdminOperatorImportPanel } from "./AdminOperatorImportPanel";
+import { AdminWorkshopImportPanel } from "./AdminWorkshopImportPanel";
 import { AdminOverview } from "./AdminOverview";
 import { AdminReportsPanel } from "./AdminReportsPanel";
+import { AdminServerPanel } from "./AdminServerPanel";
 import { AdminSandboxesPanel } from "./AdminSandboxesPanel";
 
 type Role = {
@@ -57,7 +65,52 @@ type CleanupEventItem = {
   virtualAircraft?: { operatorId?: string; aircraftTypeId?: string; label?: string } | null;
   eventType?: { name: string; code?: string | null } | null;
 };
-type CleanupPreview = { ok: true; total: number; items: CleanupEventItem[] };
+type CleanupPreview = { ok: true; total: number; items: CleanupEventItem[]; truncated?: boolean };
+
+function cleanupAircraftLabel(item: CleanupEventItem): string {
+  return item.aircraft?.tailNumber ?? item.virtualAircraft?.label ?? (item.virtualAircraft ? "VIRT" : "—");
+}
+
+function exportCleanupEvents(items: CleanupEventItem[]) {
+  const rows = items.map((item) => ({
+    Событие: item.title,
+    ID: item.id,
+    Борт: cleanupAircraftLabel(item),
+    "Тип события": item.eventType?.name ?? "—",
+    Начало: new Date(item.startAt).toLocaleString("ru-RU"),
+    Окончание: new Date(item.endAt).toLocaleString("ru-RU"),
+    Статус: statusCatalogLabel(item.status)
+  }));
+  const sheet = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ Событие: "" }]);
+  sheet["!cols"] = [
+    { wch: 36 },
+    { wch: 38 },
+    { wch: 16 },
+    { wch: 24 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 22 }
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "К удалению");
+  XLSX.writeFile(wb, "события-к-удалению.xlsx");
+}
+
+function CleanupSelectAll(props: { checked: boolean; indeterminate: boolean; onChange: (checked: boolean) => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = props.indeterminate;
+  }, [props.indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={props.checked}
+      onChange={(e) => props.onChange(e.target.checked)}
+      aria-label="Отметить все события к удалению"
+    />
+  );
+}
 type CleanupApplyResult = { ok: true; updated: number };
 
 type MailDigestSettings = {
@@ -72,17 +125,24 @@ type MailDigestSettings = {
 };
 
 type AdminTab = AdminHashTab;
-type AdminGroup = "overview" | "people" | "access" | "comms" | "risk";
+type AdminGroup = "overview" | "people" | "access" | "comms" | "imports" | "risk";
 type AdminUserFilter = "all" | "active" | "inactive" | "password";
 
 const TAB_META: Record<AdminTab, { label: string; group: AdminGroup; danger?: boolean }> = {
   overview: { label: "Обзор", group: "overview" },
+  server: { label: "Сервер", group: "overview" },
   users: { label: "Пользователи", group: "people" },
   activity: { label: "Журнал", group: "people" },
   presence: { label: "Присутствие", group: "people" },
   roles: { label: "Группы", group: "access" },
   announce: { label: "Объявления", group: "comms" },
   mail: { label: "SMTP", group: "comms" },
+  imports: { label: "Операторы", group: "imports" },
+  "import-types": { label: "Типы ВС", group: "imports" },
+  "import-aircraft": { label: "Борта", group: "imports" },
+  "import-workshops": { label: "Борт и цех", group: "imports" },
+  "import-layouts": { label: "Схемы", group: "imports" },
+  "import-priorities": { label: "Приоритеты", group: "imports" },
   cleanup: { label: "Очистка", group: "risk", danger: true },
   sandboxes: { label: "Песочницы", group: "risk" },
   reports: { label: "Отчёты", group: "risk" }
@@ -93,6 +153,7 @@ const ADMIN_GROUPS: Array<{ id: AdminGroup; label: string; danger?: boolean }> =
   { id: "people", label: "Люди" },
   { id: "access", label: "Доступ" },
   { id: "comms", label: "Коммуникации" },
+  { id: "imports", label: "Импорт" },
   { id: "risk", label: "Данные и риск", danger: true }
 ];
 
@@ -225,12 +286,19 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
     const tabs: Array<{ id: AdminTab; label: string; group: AdminGroup; danger?: boolean }> = [];
     const add = (id: AdminTab) => tabs.push({ id, ...TAB_META[id] });
     add("overview");
+    add("server");
     if (canUsers) add("users");
     if (canUsers) add("activity");
     if (canUsers) add("presence");
     if (canRoles) add("roles");
     if (canUsers) add("announce");
     if (canMail) add("mail");
+    if (canUsers) add("imports");
+    if (canUsers) add("import-types");
+    if (canUsers) add("import-aircraft");
+    if (canUsers) add("import-workshops");
+    if (canUsers) add("import-layouts");
+    if (canUsers) add("import-priorities");
     if (canCleanup) add("cleanup");
     if (canUsers) add("sandboxes");
     if (canUsers) add("reports");
@@ -299,6 +367,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const [cleanupPassword, setCleanupPassword] = useState("");
   const [cleanupReason, setCleanupReason] = useState("");
   const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null);
+  const [cleanupKeepIds, setCleanupKeepIds] = useState<Set<string>>(() => new Set());
 
   const [mailSmtpHost, setMailSmtpHost] = useState("");
   const [mailSmtpPort, setMailSmtpPort] = useState("25");
@@ -377,19 +446,32 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
       ? `песочницы «${(cleanupSandboxesQ.data ?? []).find((sandbox) => sandbox.id === cleanupSandboxId)?.name ?? "—"}»`
       : "рабочего контура";
 
+  const cleanupMarked = useMemo(
+    () => (cleanupPreview?.items ?? []).filter((item) => !cleanupKeepIds.has(item.id)),
+    [cleanupPreview, cleanupKeepIds]
+  );
+  const cleanupAllMarked =
+    (cleanupPreview?.items.length ?? 0) > 0 && cleanupMarked.length === cleanupPreview!.items.length;
+  const cleanupSomeMarked = cleanupMarked.length > 0 && !cleanupAllMarked;
+
   const cleanupPreviewM = useMutation({
     mutationFn: () => apiPost<CleanupPreview>("/api/admin/cleanup/events/preview", cleanupPayload()),
-    onSuccess: (res) => setCleanupPreview(res)
+    onSuccess: (res) => {
+      setCleanupKeepIds(new Set());
+      setCleanupPreview(res);
+    }
   });
   const cleanupApplyM = useMutation({
     mutationFn: () =>
       apiPost<CleanupApplyResult>("/api/admin/cleanup/events/apply", {
         ...cleanupPayload(),
+        eventIds: cleanupMarked.map((item) => item.id),
         password: cleanupPassword,
         reason: cleanupReason.trim() || undefined
       }),
     onSuccess: async () => {
       setCleanupPassword("");
+      setCleanupKeepIds(new Set());
       setCleanupPreview(null);
       await qc.invalidateQueries({ queryKey: ["events"] });
       await qc.invalidateQueries({ queryKey: ["reservations"] });
@@ -641,6 +723,8 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           </div>
         ) : null}
       </nav>
+
+      {activeTab === "server" ? <AdminServerPanel /> : null}
 
       {activeTab === "overview" ? (
         <AdminOverview
@@ -1195,13 +1279,48 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           {cleanupPreview ? (
             <div className="adminCleanupPreview">
               <div className="adminSectionHead">
-                <strong>Найдено: {cleanupPreview.total}</strong>
-                <span className="muted">показаны первые {cleanupPreview.items.length}</span>
+                <strong>
+                  Найдено: {cleanupPreview.total}. К удалению: {cleanupMarked.length}
+                </strong>
+                <button
+                  className="btn ganttIconBtn"
+                  type="button"
+                  disabled={cleanupMarked.length === 0}
+                  title="Выгрузить отмеченные события в Excel"
+                  aria-label="Выгрузить отмеченные события в Excel"
+                  onClick={() => exportCleanupEvents(cleanupMarked)}
+                >
+                  <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M5 2h7l4 4v12H5z" />
+                    <path d="M12 2v4h4" />
+                    <path d="M7 14l2-4" />
+                    <path d="M11 14l-2-4" />
+                    <path d="M12.5 14h2.5" />
+                    <path d="M12.5 10h2.5" />
+                  </svg>
+                </button>
               </div>
+              {cleanupPreview.truncated ? (
+                <div className="muted">
+                  В списке первые {cleanupPreview.items.length} из {cleanupPreview.total}. Остальные не удаляются. Сузьте
+                  фильтр, чтобы увидеть их.
+                </div>
+              ) : (
+                <div className="muted">Снимите галочку, чтобы оставить событие. Выгрузка содержит только отмеченные.</div>
+              )}
               <div className="adminTableWrap">
                 <table className="table adminTable">
                   <thead>
                     <tr>
+                      <th className="adminCleanupCheck">
+                        <CleanupSelectAll
+                          checked={cleanupAllMarked}
+                          indeterminate={cleanupSomeMarked}
+                          onChange={(checked) =>
+                            setCleanupKeepIds(checked ? new Set() : new Set(cleanupPreview.items.map((item) => item.id)))
+                          }
+                        />
+                      </th>
                       <th>Событие</th>
                       <th>Борт</th>
                       <th>Тип</th>
@@ -1210,19 +1329,41 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                     </tr>
                   </thead>
                   <tbody>
+                    {cleanupPreview.items.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="muted">
+                          Ничего не найдено
+                        </td>
+                      </tr>
+                    ) : null}
                     {cleanupPreview.items.map((item) => (
                       <tr key={item.id}>
+                        <td className="adminCleanupCheck">
+                          <input
+                            type="checkbox"
+                            checked={!cleanupKeepIds.has(item.id)}
+                            onChange={(e) =>
+                              setCleanupKeepIds((prev) => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.delete(item.id);
+                                else next.add(item.id);
+                                return next;
+                              })
+                            }
+                            aria-label={`Удалить «${item.title}»`}
+                          />
+                        </td>
                         <td>
                           <strong>{item.title}</strong>
                           <div className="muted adminMono">{item.id}</div>
                         </td>
-                        <td>{item.aircraft?.tailNumber ?? (item.virtualAircraft ? "VIRT" : "—")}</td>
+                        <td>{cleanupAircraftLabel(item)}</td>
                         <td>{item.eventType?.name ?? "—"}</td>
                         <td>
                           {new Date(item.startAt).toLocaleString("ru-RU")}
                           <div className="muted">до {new Date(item.endAt).toLocaleString("ru-RU")}</div>
                         </td>
-                        <td>{item.status}</td>
+                        <td>{statusCatalogLabel(item.status)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1247,9 +1388,14 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                 </label>
                 <button
                   className="btn btnDanger"
-                  disabled={cleanupPreview.total === 0 || !cleanupPassword || cleanupApplyM.isPending}
+                  disabled={cleanupMarked.length === 0 || !cleanupPassword || cleanupApplyM.isPending}
                   onClick={() => {
-                    if (!confirm(`Перевести в статус «Удалено» ${cleanupPreview.total} событий ${cleanupTargetLabel}?`))
+                    if (cleanupMarked.length === 0) return;
+                    if (
+                      !confirm(
+                        `Перевести в статус «Удалено» ${cleanupMarked.length} из ${cleanupPreview.items.length} событий ${cleanupTargetLabel}?`
+                      )
+                    )
                       return;
                     cleanupApplyM.mutate();
                   }}
@@ -1261,6 +1407,13 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
           ) : null}
         </section>
       ) : null}
+
+      {activeTab === "imports" && canUsers ? <AdminOperatorImportPanel /> : null}
+      {activeTab === "import-types" && canUsers ? <AdminAircraftTypeImportPanel /> : null}
+      {activeTab === "import-aircraft" && canUsers ? <AdminAircraftImportPanel /> : null}
+      {activeTab === "import-workshops" && canUsers ? <AdminWorkshopImportPanel /> : null}
+      {activeTab === "import-layouts" && canUsers ? <AdminLayoutImportPanel /> : null}
+      {activeTab === "import-priorities" && canUsers ? <AdminPriorityImportPanel /> : null}
 
       {activeTab === "sandboxes" && canUsers ? (
         <AdminSandboxesPanel canDelete={canDeleteSandboxes} search={listSearch} />
@@ -1582,6 +1735,12 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                     </button>
                   </div>
                 ) : null}
+                <ActivityFeed
+                  mode="admin"
+                  compact
+                  lockedActor={props.u.email}
+                  title="Журнал изменений"
+                />
                 </div>
               ) : null}
               {resetOpen ? (

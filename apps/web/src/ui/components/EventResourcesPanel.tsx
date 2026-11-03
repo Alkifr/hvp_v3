@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Fragment, forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiGet, apiPut } from "../../lib/api";
+import { laborSeriesEditable, type LaborSeriesKey } from "../../lib/laborEditability";
 
-type LaborDepartment = "ME" | "AV" | "INT" | "NDT" | "SHOP" | "CAB_REP";
+type LaborDepartment = "ME" | "AV" | "INT" | "NDT" | "SHOP" | "CAB_REP" | "PAINT";
 type LaborEditableBlock =
   | "LABOR_BUDGET"
   | "ADD_BUDGET"
@@ -14,7 +15,6 @@ type LaborEditableBlock =
   | "NRC_PLAN"
   | "ADD_ACTUAL"
   | "NRC_ACTUAL";
-type LaborSeriesKey = "budget" | "mps" | "actual";
 
 type LaborSeries = {
   key: LaborSeriesKey;
@@ -44,6 +44,11 @@ type LaborMetricsResponse = {
 type DraftMap = Record<string, string>;
 
 const SERIES_ORDER: LaborSeriesKey[] = ["budget", "mps", "actual"];
+
+export type LaborMetricsHandle = {
+  isDirty: () => boolean;
+  save: () => Promise<void>;
+};
 
 function colClass(key: LaborSeriesKey, start = false) {
   return `laborMetricsCol laborMetricsCol--${key}${start ? " laborMetricsColStart" : ""}`;
@@ -96,7 +101,30 @@ function perTat(total: number | null, tatDays: number | null): number | null {
   return total / tatDays;
 }
 
-export function EventResourcesPanel(props: { eventId: string }) {
+function baselineFrom(data: LaborMetricsResponse | undefined): DraftMap {
+  const next: DraftMap = {};
+  if (!data) return next;
+  for (const series of data.series) {
+    for (const row of series.departments) {
+      next[cellKey(series.hoursBlock, row.department)] = formatHours(row.manHours);
+      next[cellKey(series.addBlock, row.department)] = formatHours(row.addHours);
+      next[cellKey(series.nrcBlock, row.department)] = formatHours(row.nrcHours);
+    }
+  }
+  return next;
+}
+
+export const EventResourcesPanel = forwardRef<
+  LaborMetricsHandle,
+  {
+    eventId: string;
+    status: string;
+    statusSortOrder?: number | null;
+    inProgressSortOrder?: number | null;
+    readOnly?: boolean;
+    onDirtyChange?: (dirty: boolean) => void;
+  }
+>(function EventResourcesPanel(props, ref) {
   const qc = useQueryClient();
   const laborQ = useQuery({
     queryKey: ["resources", "labor-metrics", props.eventId],
@@ -104,54 +132,72 @@ export function EventResourcesPanel(props: { eventId: string }) {
   });
 
   const [draft, setDraft] = useState<DraftMap>({});
-  const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    if (!laborQ.data) return;
-    const next: DraftMap = {};
-    for (const series of laborQ.data.series) {
-      for (const row of series.departments) {
-        next[cellKey(series.hoursBlock, row.department)] = formatHours(row.manHours);
-        next[cellKey(series.addBlock, row.department)] = formatHours(row.addHours);
-        next[cellKey(series.nrcBlock, row.department)] = formatHours(row.nrcHours);
-      }
-    }
-    setDraft(next);
-    setDirty(false);
+    setDraft(baselineFrom(laborQ.data));
   }, [laborQ.data]);
 
-  const saveM = useMutation({
-    mutationFn: async () => {
-      if (!laborQ.data) return;
-      const values: Array<{ block: LaborEditableBlock; department: LaborDepartment; manHours: number | null }> = [];
-      for (const series of laborQ.data.series) {
-        for (const row of series.departments) {
-          const cells: Array<{ block: LaborEditableBlock; label: string }> = [
-            { block: series.hoursBlock, label: `${series.label} / routine / ${row.label}` },
-            { block: series.addBlock, label: `${series.label} / ADD / ${row.label}` },
-            { block: series.nrcBlock, label: `${series.label} / NRC / ${row.label}` }
-          ];
-          for (const cell of cells) {
-            const raw = draft[cellKey(cell.block, row.department)] ?? "";
-            const parsed = parseHours(raw);
-            if (raw.trim() && parsed == null) {
-              throw new Error(`Некорректное значение: ${cell.label}`);
-            }
-            values.push({ block: cell.block, department: row.department, manHours: parsed });
-          }
+  const seriesEditable = (series: LaborSeriesKey) =>
+    !props.readOnly &&
+    laborSeriesEditable({
+      status: props.status,
+      series,
+      statusSortOrder: props.statusSortOrder,
+      inProgressSortOrder: props.inProgressSortOrder
+    });
+
+  const baseline = useMemo(() => baselineFrom(laborQ.data), [laborQ.data]);
+
+  const dirty = useMemo(() => {
+    if (!laborQ.data) return false;
+    for (const series of laborQ.data.series) {
+      if (!seriesEditable(series.key)) continue;
+      for (const row of series.departments) {
+        for (const block of [series.hoursBlock, series.addBlock, series.nrcBlock]) {
+          const key = cellKey(block, row.department);
+          if ((draft[key] ?? "") !== (baseline[key] ?? "")) return true;
         }
       }
-      return apiPut<{ ok: true }>(`/api/resources/events/${props.eventId}/labor-metrics`, { values });
-    },
-    onSuccess: async () => {
-      setDirty(false);
-      await qc.invalidateQueries({ queryKey: ["resources", "labor-metrics", props.eventId] });
     }
-  });
+    return false;
+  }, [baseline, draft, laborQ.data, props.readOnly, props.status, props.statusSortOrder, props.inProgressSortOrder]);
+
+  useEffect(() => {
+    props.onDirtyChange?.(dirty);
+  }, [dirty, props.onDirtyChange]);
+
+  useEffect(() => () => props.onDirtyChange?.(false), [props.onDirtyChange]);
+
+  const save = async () => {
+    if (!laborQ.data || !dirty) return;
+    const values: Array<{ block: LaborEditableBlock; department: LaborDepartment; manHours: number | null }> = [];
+    for (const series of laborQ.data.series) {
+      if (!seriesEditable(series.key)) continue;
+      for (const row of series.departments) {
+        const cells: Array<{ block: LaborEditableBlock; label: string }> = [
+          { block: series.hoursBlock, label: `${series.label} / routine / ${row.label}` },
+          { block: series.addBlock, label: `${series.label} / ADD / ${row.label}` },
+          { block: series.nrcBlock, label: `${series.label} / NRC / ${row.label}` }
+        ];
+        for (const cell of cells) {
+          const raw = draft[cellKey(cell.block, row.department)] ?? "";
+          const parsed = parseHours(raw);
+          if (raw.trim() && parsed == null) {
+            throw new Error(`Некорректное значение: ${cell.label}`);
+          }
+          values.push({ block: cell.block, department: row.department, manHours: parsed });
+        }
+      }
+    }
+    if (values.length === 0) return;
+    await apiPut<{ ok: true }>(`/api/resources/events/${props.eventId}/labor-metrics`, { values });
+    await qc.invalidateQueries({ queryKey: ["resources", "labor-metrics", props.eventId] });
+  };
+
+  useImperativeHandle(ref, () => ({ isDirty: () => dirty, save }), [dirty, save]);
 
   const patchCell = (block: LaborEditableBlock, department: LaborDepartment, value: string) => {
     setDraft((prev) => ({ ...prev, [cellKey(block, department)]: value }));
-    setDirty(true);
   };
 
   const seriesByKey = useMemo(() => {
@@ -162,6 +208,7 @@ export function EventResourcesPanel(props: { eventId: string }) {
 
   const departments = laborQ.data?.departments ?? [];
   const tatDays = laborQ.data?.tatDays;
+  const planOpen = seriesEditable("budget") || seriesEditable("mps");
 
   const totals = useMemo(() => {
     const out: Record<
@@ -173,9 +220,10 @@ export function EventResourcesPanel(props: { eventId: string }) {
       actual: { routine: null, add: null, nrc: null, total: null, perTat: null }
     };
     for (const series of laborQ.data?.series ?? []) {
-      const routine = sumParsed(series.departments.map((row) => draft[cellKey(series.hoursBlock, row.department)]));
-      const add = sumParsed(series.departments.map((row) => draft[cellKey(series.addBlock, row.department)]));
-      const nrc = sumParsed(series.departments.map((row) => draft[cellKey(series.nrcBlock, row.department)]));
+      const source = seriesEditable(series.key) ? draft : baseline;
+      const routine = sumParsed(series.departments.map((row) => source[cellKey(series.hoursBlock, row.department)]));
+      const add = sumParsed(series.departments.map((row) => source[cellKey(series.addBlock, row.department)]));
+      const nrc = sumParsed(series.departments.map((row) => source[cellKey(series.nrcBlock, row.department)]));
       const total = combine([routine, add, nrc]);
       out[series.key] = {
         routine,
@@ -186,26 +234,36 @@ export function EventResourcesPanel(props: { eventId: string }) {
       };
     }
     return out;
-  }, [draft, laborQ.data, tatDays]);
+  }, [baseline, draft, laborQ.data, props.readOnly, props.status, props.statusSortOrder, props.inProgressSortOrder, tatDays]);
 
-  const renderInput = (block: LaborEditableBlock | undefined, department: LaborDepartment) => {
+  const renderInput = (series: LaborSeriesKey, block: LaborEditableBlock | undefined, department: LaborDepartment) => {
     if (!block) return <span className="laborMetricsDash">—</span>;
     const key = cellKey(block, department);
+    const editable = seriesEditable(series);
     return (
       <input
         className="evInput laborMetricsInput"
         type="text"
         inputMode="decimal"
         placeholder="—"
-        value={draft[key] ?? ""}
+        value={editable ? (draft[key] ?? "") : (baseline[key] ?? "")}
+        disabled={!editable}
         onChange={(e) => patchCell(block, department, e.target.value)}
       />
     );
   };
 
+  const hint = props.readOnly
+    ? "Карточка открыта только для просмотра."
+    : planOpen
+      ? "Бюджет и MPS можно менять до статуса «В работе» включительно. Факт откроется после «Завершено»."
+      : seriesEditable("actual")
+        ? ""
+        : "В этом статусе трудоёмкость не редактируется.";
+
   return (
     <div className="laborMetricsPanel">
-      <strong>Трудоёмкость</strong>
+      {hint ? <div className="muted laborMetricsHint">{hint}</div> : null}
 
       {laborQ.isLoading ? <div className="muted">Загрузка…</div> : null}
       {laborQ.error ? <div className="error">{String((laborQ.error as any)?.message ?? laborQ.error)}</div> : null}
@@ -241,10 +299,10 @@ export function EventResourcesPanel(props: { eventId: string }) {
                     return (
                       <Fragment key={`${dept.department}:${key}`}>
                         <td className={colClass(key, key !== "budget")}>
-                          {renderInput(series?.hoursBlock, dept.department)}
+                          {renderInput(key, series?.hoursBlock, dept.department)}
                         </td>
-                        <td className={colClass(key)}>{renderInput(series?.addBlock, dept.department)}</td>
-                        <td className={colClass(key)}>{renderInput(series?.nrcBlock, dept.department)}</td>
+                        <td className={colClass(key)}>{renderInput(key, series?.addBlock, dept.department)}</td>
+                        <td className={colClass(key)}>{renderInput(key, series?.nrcBlock, dept.department)}</td>
                       </Fragment>
                     );
                   })}
@@ -280,18 +338,6 @@ export function EventResourcesPanel(props: { eventId: string }) {
           </table>
         </div>
       ) : null}
-
-      <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-        {saveM.error ? <span className="error">{String((saveM.error as any)?.message ?? saveM.error)}</span> : null}
-        <button
-          type="button"
-          className="btn btnPrimary"
-          disabled={!dirty || saveM.isPending || !laborQ.data}
-          onClick={() => saveM.mutate()}
-        >
-          {saveM.isPending ? "Сохранение…" : "Сохранить трудоёмкость"}
-        </button>
-      </div>
     </div>
   );
-}
+});

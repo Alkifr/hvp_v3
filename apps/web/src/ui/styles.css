@@ -1,3 +1,1081 @@
+.personnelPage,
+.personnelStack,
+.personnelNormGrid {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.personnelPage > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.personnelToolbar,
+.personnelSectionHead,
+.personnelFilters,
+.personnelLockActions {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.personnelFilters label {
+  display: grid;
+  gap: 4px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.personnelFilters select,
+.personnelFilters input {
+  min-height: 36px;
+  min-width: 150px;
+}
+
+.personnelTabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #cbd5e1;
+}
+
+.personnelTabs button {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 10px 14px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.personnelTabs button.active {
+  border-bottom-color: #2563eb;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.personnelSectionHead {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.personnelPlanHead {
+  align-items: flex-start;
+}
+
+.personnelPlanHead > div:first-child {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.personnelSectionHead h2,
+.personnelEmpty h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.personnelTableScroll,
+.personnelTimelineScroll {
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+}
+
+.personnelStack > .card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.personnelResourceScroll {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: calc(100dvh - 280px);
+  min-height: 240px;
+  overflow: auto;
+}
+
+.personnelMatrix,
+.personnelBalance,
+.personnelEvents,
+.personnelSimpleTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.personnelMatrix.personnelMatrixRange {
+  width: max-content;
+  table-layout: fixed;
+}
+
+.personnelColLabel { width: 104px; }
+.personnelColType { width: 76px; }
+.personnelColShift { width: 40px; }
+
+.personnelMatrixRange thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.personnelMatrixRange thead tr:first-child th[colspan] {
+  height: 28px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  box-sizing: border-box;
+}
+
+.personnelMatrixRange thead tr:last-child th {
+  top: 28px;
+}
+
+.personnelMatrixRange thead tr:last-child th,
+.personnelMatrixRange thead tr:first-child th[rowspan] {
+  box-shadow: inset 0 -1px 0 #cbd5e1;
+}
+
+.personnelMatrixRange thead tr:first-child th:first-child,
+.personnelMatrixRange thead tr:first-child th:nth-child(2) {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: #f1f5f9;
+}
+
+.personnelMatrixRange thead tr:first-child th:first-child {
+  left: 0;
+}
+
+.personnelMatrixRange thead tr:first-child th:nth-child(2) {
+  left: 104px;
+}
+
+.personnelMatrixRange thead tr:first-child th[colspan] {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.personnelMatrixRange thead tr:last-child th {
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  padding: 4px 2px;
+  text-align: center;
+}
+
+.personnelMatrix th,
+.personnelMatrix td,
+.personnelBalance th,
+.personnelBalance td,
+.personnelEvents th,
+.personnelEvents td,
+.personnelSimpleTable th,
+.personnelSimpleTable td {
+  border: 1px solid #dbe3ee;
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.personnelMatrix thead th.isPast {
+  background: #d5dbe3;
+  color: #475569;
+}
+
+.personnelMatrix thead th,
+.personnelBalance thead th,
+.personnelEvents thead th,
+.personnelSimpleTable thead th {
+  background: #f1f5f9;
+  white-space: nowrap;
+}
+
+.personnelBalance {
+  width: max-content;
+  table-layout: fixed;
+}
+
+.personnelBalance th,
+.personnelBalance td {
+  box-sizing: border-box;
+  padding: 3px 4px;
+}
+
+.personnelColDrill { width: 32px; }
+.personnelColDate { width: 74px; }
+.personnelColHours { width: 64px; }
+.personnelColSupply { width: 108px; }
+.personnelColDiff { width: 132px; }
+.personnelColMetric { width: 62px; }
+
+.personnelBalance thead th {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.personnelBalance thead th[title] {
+  cursor: help;
+}
+
+.personnelBalance .personnelNum {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.personnelDrillRow td {
+  overflow-wrap: anywhere;
+}
+
+.personnelBalance tr.personnelTotalRow th,
+.personnelBalance tr.personnelTotalRow td {
+  background: #e2e8f0;
+  font-weight: 700;
+}
+
+.personnelDrillCol {
+  width: 32px;
+  min-width: 32px;
+  padding-left: 4px;
+  padding-right: 4px;
+  text-align: center;
+}
+
+.personnelDrillBtn {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  line-height: 20px;
+}
+
+.personnelDrillRow td {
+  background: #f8fafc;
+  white-space: normal;
+}
+
+.personnelDrillRow small {
+  display: block;
+  margin-top: 2px;
+  color: #64748b;
+  font-weight: 400;
+}
+
+.personnelMatrix tbody th,
+.personnelMatrix tbody td:nth-child(2) {
+  position: sticky;
+  background: #fff;
+  z-index: 1;
+}
+
+.personnelMatrix tbody th {
+  left: 0;
+  min-width: 92px;
+}
+
+.personnelMatrix tbody td:nth-child(2) {
+  left: 92px;
+  min-width: 88px;
+}
+
+.personnelMatrix tbody tr.personnelSumRow th,
+.personnelMatrix tbody tr.personnelSumRow td {
+  background: #eef6ff;
+  font-weight: 700;
+}
+
+.personnelMatrix tbody tr.personnelTotalRow th,
+.personnelMatrix tbody tr.personnelTotalRow td {
+  background: #e2e8f0;
+  font-weight: 700;
+}
+
+.personnelMatrix tbody tr.personnelGrandTotalRow th,
+.personnelMatrix tbody tr.personnelGrandTotalRow td {
+  background: #cbd5e1;
+  font-weight: 700;
+  border-top: 2px solid #64748b;
+}
+
+.personnelMatrix tbody tr.personnelWorkshopBanner th {
+  position: static;
+  width: auto;
+  min-width: 0;
+  left: auto;
+  background: #1e293b;
+  color: #f8fafc;
+  border-top: 2px solid #0f172a;
+  font-size: 13px;
+  text-align: left;
+}
+
+.personnelWorkshopBannerLabel {
+  position: sticky;
+  left: 8px;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.personnelWorkshopNote {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.personnelMatrix small,
+.personnelEvents small,
+.personnelTimelineRow small {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-weight: 400;
+}
+
+.personnelMatrix input {
+  width: 58px;
+  padding: 5px;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+}
+
+.personnelMatrix.personnelMatrixRange tbody th {
+  width: 104px;
+  min-width: 104px;
+}
+
+.personnelMatrix.personnelMatrixRange tbody td:nth-child(2) {
+  left: 104px;
+  width: 76px;
+  min-width: 76px;
+}
+
+.personnelMatrix.personnelMatrixRange tbody td:nth-child(n + 3) {
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  padding: 3px 2px;
+  text-align: center;
+}
+
+.personnelMatrix.personnelMatrixRange input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 0;
+  text-align: center;
+}
+
+.personnelMatrix th.isPast,
+.personnelMatrix td.isPast,
+.personnelMatrix tbody tr.personnelSumRow td.isPast,
+.personnelMatrix tbody tr.personnelTotalRow td.isPast,
+.personnelMatrix tbody tr.personnelGrandTotalRow td.isPast,
+.personnelMatrix .isPast input {
+  background: #d5dbe3;
+  color: #64748b;
+}
+
+.personnelMatrix .isPast input {
+  border-color: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.personnelMatrix input.isDirty {
+  background: #fde68a;
+  border-color: #d97706;
+  color: #78350f;
+}
+
+.personnelSaveRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.personnelSaved {
+  color: #15803d;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.personnelNotice {
+  margin-top: 10px;
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.balance-positive { color: #15803d; background: #f0fdf4; font-weight: 700; }
+.balance-negative { color: #b91c1c; background: #fef2f2; font-weight: 700; }
+.balance-neutral { color: #475569; }
+
+.personnelCapacity {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.personnelCapacity > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.personnelCapacity .analyticsStats {
+  margin-top: 4px;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(168px, 100%), 1fr));
+}
+
+.personnelCapacity .analyticsStatValue.balance-positive,
+.personnelCapacity .analyticsStatValue.balance-negative,
+.personnelCapacity .analyticsStatValue.balance-neutral {
+  background: transparent;
+}
+
+.personnelCapacityCharts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.personnelCapacityCharts > .card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.personnelCapacityCharts h3,
+.personnelCapacity h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.personnelCapacityChart {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 280px;
+  overflow: hidden;
+}
+
+.personnelCapacity .personnelTableScroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.personnelHeatLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.personnelHeatSwatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  border-radius: 3px;
+  vertical-align: -1px;
+}
+
+.personnelHeatSwatch.isOver { background: rgba(185, 28, 28, 0.72); }
+.personnelHeatSwatch.isFit { background: #e2e8f0; }
+.personnelHeatSwatch.isSlack { background: rgba(21, 128, 61, 0.55); }
+
+.personnelHeat {
+  --heat-days: 31;
+  --heat-label: 72px;
+  --heat-total: 58px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  width: calc(var(--heat-label) + var(--heat-total) + (100% - var(--heat-label) - var(--heat-total)) * max(var(--heat-days), 31) / 31);
+  font-size: 10px;
+}
+
+.personnelHeatLabel { width: var(--heat-label); }
+.personnelHeatTotal { width: var(--heat-total); }
+
+.personnelHeat th,
+.personnelHeat td {
+  min-width: 0;
+  padding: 3px 1px;
+  border: 2px solid #fff;
+  border-radius: 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.personnelHeat th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: var(--heat-label);
+  background: #fff;
+  text-align: left;
+  font-size: 11px;
+}
+
+.personnelSlackList {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.personnelSlackRow {
+  display: grid;
+  grid-template-columns: minmax(72px, 88px) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.personnelSlackTrack {
+  position: relative;
+  height: 14px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: #f1f5f9;
+}
+
+.personnelSlackTrack i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: #94a3b8;
+}
+
+.personnelSlackTrack span {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 5px;
+}
+
+.personnelSlackTrack span.isSlack { background: #15803d; }
+.personnelSlackTrack span.isOver { background: #b91c1c; }
+.personnelSlackRow b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.personnelSlackRow .isSlackText { color: #15803d; }
+.personnelSlackRow .isOverText { color: #b91c1c; }
+
+.personnelCapacityTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.personnelCapacityTable th {
+  padding: 6px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.personnelCapacityTable td {
+  padding: 7px 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.personnelCapacityTable .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .personnelCapacityCharts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.personnelBalance td small { display: block; margin-top: 2px; font-weight: 400; }
+
+.personnelBaseline { margin-top: 10px; }
+.personnelEvents { min-width: 1050px; }
+.personnelEvents td:nth-child(5) { min-width: 270px; }
+.personnelPlacement + .personnelPlacement { border-top: 1px dashed #cbd5e1; margin-top: 6px; padding-top: 6px; }
+.personnelNewBadge { margin-left: 6px; border-radius: 10px; padding: 2px 6px; background: #dcfce7; color: #166534; font-size: 10px; }
+
+.personnelPlan {
+  --plan-identity: 148px;
+  --plan-slot-columns: 3;
+  --plan-bands: calc(40px * var(--plan-slot-columns));
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 12px;
+  table-layout: fixed;
+}
+
+.personnelPlan th,
+.personnelPlan td {
+  border: 0;
+  border-right: 1px solid #dbe3ee;
+  border-bottom: 1px solid #dbe3ee;
+  padding: 4px 6px;
+  vertical-align: top;
+  background: #fff;
+}
+
+.personnelPlan th:first-child,
+.personnelPlan td:first-child {
+  border-left: 1px solid #dbe3ee;
+}
+
+.personnelPlan thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  border-top: 1px solid #dbe3ee;
+  background: #f1f5f9;
+  white-space: nowrap;
+}
+
+.personnelPlanIdentity {
+  box-sizing: border-box;
+  width: var(--plan-identity);
+  min-width: var(--plan-identity);
+  max-width: var(--plan-identity);
+  padding: 4px 6px !important;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.personnelPlanIdentity b,
+.personnelPlanIdentity span,
+.personnelPlanIdentity small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personnelPlanIdentity small {
+  color: #64748b;
+  font-weight: 400;
+}
+
+.personnelPlan thead .personnelPlanIdentity,
+.personnelPlan tbody .personnelPlanIdentity {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: #fff;
+}
+
+.personnelPlan thead .personnelPlanIdentity {
+  z-index: 6;
+  background: #f1f5f9;
+}
+
+.personnelPlanScale {
+  padding: 0 !important;
+}
+
+.personnelPlanBandsCol {
+  box-sizing: border-box;
+  width: var(--plan-bands);
+  min-width: var(--plan-bands);
+  max-width: var(--plan-bands);
+  padding: 4px 0 !important;
+  position: sticky;
+  left: var(--plan-identity);
+  z-index: 4;
+  background: #fff;
+}
+
+.personnelPlan thead .personnelPlanBandsCol {
+  z-index: 6;
+  padding: 4px 6px !important;
+  background: #f1f5f9;
+  font-size: 11px;
+}
+
+.personnelPlanNumbers {
+  padding: 4px 0 !important;
+}
+
+.personnelPlanDays,
+.personnelPlanHours {
+  display: grid;
+}
+
+.personnelPlanDays span,
+.personnelPlanHours span {
+  padding: 2px 0;
+  text-align: center;
+  border-left: 1px solid #e2e8f0;
+}
+
+.personnelPlanDays span {
+  padding: 6px 0;
+  border-left-color: #94a3b8;
+}
+
+.personnelPlanHours {
+  color: #64748b;
+  font-size: 8px;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.personnelPlanTrack {
+  position: relative;
+  z-index: 0;
+  min-height: 48px;
+  padding: 4px 0 !important;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.personnelPlanLane {
+  position: relative;
+  height: 26px;
+}
+
+.personnelPlanBar {
+  position: absolute;
+  top: 4px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  min-width: 2px;
+  padding: 0 4px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #64748b;
+  container-type: inline-size;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.personnelPlanBarTitle {
+  position: relative;
+  z-index: 2;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personnelPlanBarTime {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+@container (max-width: 108px) {
+  .personnelPlanBarTitle { display: none; }
+}
+
+.personnelPlanLabor {
+  display: grid;
+}
+
+.personnelPlanLaborDay {
+  min-width: 0;
+}
+
+.personnelPlanBands {
+  display: flex;
+  flex-direction: column;
+}
+
+.personnelPlanSlots {
+  display: grid;
+  grid-template-columns: repeat(var(--plan-slot-columns), minmax(0, 1fr));
+  align-items: center;
+  height: 13px;
+  color: #0f172a;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 13px;
+  text-align: center;
+}
+
+.personnelPlanSlots + .personnelPlanSlots {
+  border-top: 1px solid #e2e8f0;
+}
+
+.personnelPlanBandLabels .personnelPlanSlots {
+  color: #475569;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.personnelPlanSlots span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personnelPlanSlots span.balance-positive,
+.personnelPlanSlots span.balance-negative,
+.personnelPlanSlots span.balance-neutral {
+  background: transparent;
+}
+
+.personnelPlanTow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  height: auto;
+  border-radius: 3px;
+  background: #ef4444;
+}
+
+.personnelPlanClock {
+  position: absolute;
+  top: 6px;
+  z-index: 3;
+  transform: translateX(calc(-100% - 3px));
+  padding: 0 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.personnelPlanClockEnd {
+  transform: translateX(3px);
+}
+
+.personnelScale {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+.personnelScale button {
+  border: 0;
+  border-right: 1px solid #cbd5e1;
+  background: #fff;
+  padding: 6px 10px;
+  color: #334155;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.personnelScale button:last-child {
+  border-right: 0;
+}
+
+.personnelScale button.active {
+  background: #0f172a;
+  color: #fff;
+}
+
+.personnelPlanMonth {
+  --plan-bands: 52px;
+}
+
+.personnelPlanMonth .personnelPlanDays span {
+  padding: 4px 0;
+  font-size: 9px;
+  letter-spacing: -0.03em;
+}
+
+.personnelPlanMonth thead .personnelPlanBandsCol {
+  padding: 4px 2px !important;
+  font-size: 8px;
+  letter-spacing: -0.03em;
+  white-space: normal;
+  line-height: 1.15;
+}
+
+.personnelPlanMonth .personnelPlanSlots {
+  grid-template-columns: minmax(0, 1fr);
+  height: auto;
+  font-size: 8px;
+  line-height: 11px;
+}
+
+.personnelPlanMonth .personnelPlanSlots span:empty {
+  display: none;
+}
+
+.personnelPlanMonth .personnelPlanSlots span {
+  height: 11px;
+  overflow: hidden;
+  text-overflow: clip;
+  line-height: 11px;
+}
+
+.personnelPlanMonth .personnelPlanBar,
+.personnelPlanMonth .personnelPlanBarTime {
+  font-size: 9px;
+}
+
+.personnelPlanSummary {
+  margin-top: 16px;
+}
+
+.personnelPlanSummary h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.personnelPlanSummary .personnelTotalRow td {
+  background: #e2e8f0;
+  font-weight: 700;
+}
+
+.personnelPlanLevels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  white-space: nowrap;
+}
+
+.personnelPlan tr.personnelHangarBar th {
+  position: static;
+  height: 26px;
+  padding: 0 0 0 8px;
+  border-color: #ea580c;
+  background: #f97316;
+  color: #431407;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 26px;
+  text-align: left;
+}
+
+.personnelHangarBarLabel {
+  position: sticky;
+  left: 8px;
+  z-index: 2;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.personnelPlan tr.personnelTotalRow td,
+.personnelPlan tr.personnelTotalRow .personnelPlanIdentity,
+.personnelPlan tr.personnelTotalRow .personnelPlanBandsCol {
+  background: #e2e8f0;
+  font-weight: 700;
+}
+
+.personnelTimelineHeader,
+.personnelTimelineRow {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+}
+
+.personnelTimelineHeader > div,
+.personnelTimelineRow > div {
+  border: 1px solid #dbe3ee;
+  padding: 7px;
+}
+
+.personnelTimelineAxis {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  padding: 0 !important;
+}
+
+.personnelTimelineAxis span {
+  padding: 7px;
+  border-left: 1px solid #dbe3ee;
+  text-align: center;
+  background: #f1f5f9;
+}
+
+.personnelTimelineTrack {
+  position: relative;
+  min-height: 38px;
+  padding: 0 !important;
+  background:
+    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / 7 - 1px), #94a3b8 calc(100% / 7 - 1px), #94a3b8 calc(100% / 7)),
+    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / 168 - 1px), #e8edf3 calc(100% / 168 - 1px), #e8edf3 calc(100% / 168));
+}
+
+.personnelTimelineBar {
+  position: absolute;
+  height: 7px;
+  min-width: 2px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #2563eb, #06b6d4);
+}
+
+.personnelNormGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.personnelInlineForm {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.personnelInlineForm label {
+  display: grid;
+  gap: 4px;
+  min-width: 130px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.personnelMappings {
+  grid-column: 1 / -1;
+}
+
+.personnelMappingChecks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.personnelMappingChecks label {
+  border: 1px solid #dbe3ee;
+  border-radius: 7px;
+  padding: 8px;
+}
+
+.personnelEmpty {
+  padding: 28px;
+  text-align: center;
+}
+
+@media (max-width: 1100px) {
+  .personnelNormGrid { grid-template-columns: 1fr; }
+}
 :root {
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Liberation Sans",
     sans-serif;
@@ -977,6 +2055,11 @@ a {
   color: #92400e;
 }
 
+.eventImportBadgeMuted {
+  background: #f1f5f9;
+  color: #475569;
+}
+
 .eventImportMessageCell {
   max-width: 420px;
   white-space: normal;
@@ -1219,25 +2302,45 @@ a {
   white-space: nowrap;
 }
 
+.massFieldInvalid select,
+.massFieldInvalid input {
+  border-color: #dc2626;
+  background: #fff1f2;
+}
+
+.massFormAlert {
+  flex: 1 0 100%;
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fef2f2;
+  border: 1px solid rgba(220, 38, 38, 0.28);
+}
+
 .massBatchRowGrid {
   display: grid;
   grid-template-columns:
     40px
-    minmax(120px, 1.2fr)
-    minmax(120px, 1.2fr)
-    minmax(120px, 1.2fr)
-    minmax(120px, 1.2fr)
-    88px
+    minmax(120px, 1.15fr)
+    minmax(120px, 1.15fr)
+    minmax(110px, 1.1fr)
+    minmax(110px, 1fr)
     72px
     64px
-    132px
-    132px
-    minmax(140px, 1.4fr)
+    58px
+    124px
+    72px
+    72px
+    124px
+    124px
+    minmax(120px, 1.2fr)
     36px;
   gap: 8px;
   align-items: start;
   padding: 8px 10px;
-  min-width: 1240px;
+  min-width: 1560px;
 }
 
 .massBatchHead {
@@ -1693,6 +2796,16 @@ a {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.86);
   overflow-x: auto;
+}
+
+.adminCleanupPreview .adminTableWrap {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.adminCleanupCheck {
+  width: 36px;
+  text-align: center;
 }
 
 .adminPage {
@@ -3133,6 +4246,96 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+.adminServerLayout {
+  display: grid;
+  gap: 12px;
+}
+
+.adminServerGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.adminServerCard {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.adminServerCard-warn {
+  border-color: #fcd34d;
+}
+
+.adminServerCard-down {
+  border-color: #fecaca;
+}
+
+.adminServerLevel {
+  font-size: 12px;
+  font-weight: 600;
+  color: #15803d;
+}
+
+.adminServerCard-warn .adminServerLevel {
+  color: #b45309;
+}
+
+.adminServerCard-down .adminServerLevel {
+  color: #b91c1c;
+}
+
+.adminServerCard-unknown .adminServerLevel {
+  color: #64748b;
+}
+
+.adminServerMetrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.adminServerMetrics > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.adminServerMetrics dt {
+  margin: 0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.adminServerMetrics dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.adminServerMetricWide {
+  grid-column: 1 / -1;
+}
+
+.adminServerNote {
+  margin: 0;
+  font-size: 12px;
+  color: #92400e;
+}
+
+.adminServerCard-unknown .adminServerNote {
+  color: #64748b;
+}
+
+.adminServerCard-down .adminServerNote {
+  color: #991b1b;
+}
+
 .adminUserAccess {
   margin-top: 4px;
   font-size: 12px;
@@ -3185,7 +4388,8 @@ a {
 
 @media (max-width: 1100px) {
   .adminOverviewGrid,
-  .adminRoleCardBody {
+  .adminRoleCardBody,
+  .adminServerGrid {
     grid-template-columns: 1fr;
   }
 }
@@ -4173,6 +5377,7 @@ main.content:has(.ganttPage) {
 
 .ganttTableWrap {
   overflow: auto;
+  container-type: inline-size;
   height: min(70vh, 720px); /* fallback; JS подгоняет под низ viewport */
   border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 12px;
@@ -4812,12 +6017,22 @@ main.content:has(.ganttPage) {
 }
 
 .ganttTableEmpty {
-  text-align: center !important;
-  color: #64748b;
-  padding: 24px 12px !important;
-  white-space: normal !important;
+  text-align: left !important;
+  padding: 0 !important;
   max-width: none !important;
   overflow: visible !important;
+}
+
+.ganttTableEmptyMsg {
+  position: sticky;
+  left: 0;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 100cqi;
+  padding: 24px 12px;
+  color: #64748b;
+  text-align: center;
+  white-space: normal;
 }
 
 .ganttToolbar {
@@ -4881,6 +6096,16 @@ main.content:has(.ganttPage) {
 
 .ganttDndHint {
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.ganttDndInlineNotice {
+  flex: 1 1 0;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ganttDndRange {
@@ -5060,6 +6285,63 @@ main.content:has(.ganttPage) {
   text-transform: uppercase;
   color: #64748b;
   padding: 0 0 10px;
+}
+
+.ganttAxisSortMenu {
+  min-width: 340px;
+  padding: 10px;
+}
+
+.ganttAxisHasSort {
+  cursor: context-menu;
+}
+
+.ganttAxisSortList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ganttAxisSortItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #0f172a;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ganttAxisSortItem:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.ganttAxisSortItemActive {
+  background: rgba(37, 99, 235, 0.12);
+  font-weight: 650;
+}
+
+.ganttAxisSortMark {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: 999px;
+  border: 2px solid #94a3b8;
+  flex: 0 0 14px;
+  box-sizing: border-box;
+}
+
+.ganttAxisSortItemActive .ganttAxisSortMark {
+  border-color: #2563eb;
+  background: radial-gradient(circle, #2563eb 0 3.5px, transparent 4px);
 }
 
 .tbPopover {
@@ -7453,6 +8735,11 @@ textarea {
   border-radius: 12px;
 }
 
+.refImportTableScroll {
+  max-height: 520px;
+  margin-top: 8px;
+}
+
 .refAircraftImportTable {
   min-width: 780px;
 }
@@ -7530,6 +8817,104 @@ textarea {
   height: 360px;
 }
 
+.refAircraftAdmin {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.refAircraftStack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.refPickCard {
+  padding: 0;
+  overflow: hidden;
+}
+
+.refPickHead,
+.refPickHeadActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.refPickHead {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.refPickSearch {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.refPickSearch input {
+  width: 100%;
+}
+
+.refPickScroll {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.refPickScrollTall {
+  max-height: 360px;
+}
+
+.refPickScrollShort {
+  max-height: 168px;
+}
+
+.refPickRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.refPickRowActive {
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.refPickEmpty {
+  padding: 16px 12px;
+}
+
+.refDetailEmpty {
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  border: 1px dashed rgba(148, 163, 184, 0.7);
+  border-radius: 14px;
+  background: #fff;
+  color: #64748b;
+  text-align: center;
+}
+
+.modalWindow.operatorCard.refDetailCard {
+  width: 100%;
+  max-height: calc(100vh - 170px);
+  box-shadow: none;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
 .refList {
   padding: 0;
   overflow: hidden;
@@ -7565,6 +8950,35 @@ textarea {
 .refTable tbody tr.refRowEditing {
   background: rgba(37, 99, 235, 0.08);
   box-shadow: inset 3px 0 0 #2563eb;
+}
+
+.refTable tbody tr.refRowClickable {
+  cursor: pointer;
+}
+
+.refTable tbody tr.refRowClickable:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.45);
+  outline-offset: -2px;
+}
+
+.refCodeChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.operatorCardTechDetails {
+  margin-top: 4px;
+}
+
+.operatorCardTechDetails .refTechJson {
+  max-height: 220px;
 }
 
 .refTable tbody td {
@@ -8298,6 +9712,42 @@ textarea {
   font-size: 13.5px;
 }
 
+.evFieldDeadline .evFieldLabel {
+  color: #6b7280;
+}
+
+.evFieldDeadline .evInput,
+.evFieldDeadline .evInput:disabled {
+  background: #e6e8eb;
+  color: #3f4754;
+  border-color: #c5cad3;
+}
+
+.evDeadlineHint {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #eef0f3;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ganttTableDeadline,
+.ganttTableDeadline .ganttTableInput {
+  background: #e6e8eb;
+}
+
+.ganttTableDeadlineHint {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #eef0f3;
+  color: #4b5563;
+  font-size: 12px;
+}
+
 .evFieldVirtualAircraft .evInput,
 .evFieldVirtualAircraft .evSelect .msdBtn,
 .evFieldVirtualAircraft .evSelect .ssdCombobox {
@@ -8403,6 +9853,10 @@ textarea {
   padding: 1px 6px 1px 4px;
 }
 
+.laborMetricsHint {
+  margin-bottom: 8px;
+}
+
 .laborMetricsInput {
   width: 100%;
   min-width: 42px;
@@ -8413,6 +9867,12 @@ textarea {
   line-height: 1.2;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.laborMetricsInput:disabled {
+  background: transparent;
+  color: #64748b;
+  border-color: transparent;
 }
 
 .laborMetricsDash,
@@ -9026,60 +10486,48 @@ textarea {
   align-items: baseline;
 }
 
-.evHistoryReason {
-  margin-top: 6px;
-  font-size: 13px;
-  color: #1f2937;
-}
-
-.evHistoryDiffList {
+.evHistoryTable {
+  width: 100%;
   margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.evHistoryDiffItem {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: stretch;
+  border-collapse: collapse;
+  table-layout: fixed;
   font-size: 12.5px;
   line-height: 1.4;
-  min-width: 0;
 }
 
-.evHistoryDiffField {
-  color: #64748b;
-  min-width: 0;
+.evHistoryColField {
+  width: 24%;
 }
 
-.evHistoryDiffValues {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: stretch;
-  min-width: 0;
+.evHistoryColVersion {
+  width: 38%;
 }
 
-.evHistoryDiffFrom,
-.evHistoryDiffTo,
-.evHistoryDiffItem > .muted {
-  min-width: 0;
+.evHistoryTable th,
+.evHistoryTable td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-.evHistoryDiffFrom {
-  color: #94a3b8;
-  text-decoration: line-through;
+.evHistoryTable thead th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
-.evHistoryDiffArrow {
-  display: none;
+.evHistoryTable tbody td:nth-child(2) {
+  color: #64748b;
 }
 
-.evHistoryDiffTo {
+.evHistoryTable tbody td:nth-child(3) {
   color: #0f172a;
   font-weight: 550;
 }
@@ -9195,9 +10643,47 @@ textarea {
   white-space: nowrap;
 }
 
+.evDisplaceTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.evDisplaceTable th,
+.evDisplaceTable td {
+  text-align: left;
+  vertical-align: top;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.evDisplaceTable th {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.evDisplaceTable td {
+  color: #0f172a;
+  white-space: pre-line;
+}
+
+.evDisplaceTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.evDisplaceEvent {
+  font-weight: 600;
+}
+
 /* В confirm-диалоге drawer делаем уже, чтобы он выглядел как утилитарное окно */
 .drawerV2:has(.evConfirm) {
   width: min(560px, 96vw);
+}
+
+.drawerV2:has(.evConfirmWide) {
+  width: min(920px, 96vw);
 }
 
 /* ===== Страница «Профиль» ===== */
@@ -10454,6 +11940,93 @@ textarea {
   border-bottom: 0;
 }
 
+.profileSubList li {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.profileSubTitle {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profileSubMeta {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.profileSubActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.profileSubActions .btnGhost,
+.profileSubList .btnGhost,
+.profileSectionHeader .btnGhost {
+  padding: 6px 10px;
+  font-size: 12.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.profileSubAll {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.mailLetterEditNote {
+  display: block;
+  margin-top: 6px;
+  color: #92400e;
+  font-size: 12px;
+}
+
+.eventWatchInlineBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.eventWatchInlineBtn:hover,
+.eventWatchBtnOn {
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.45);
+  background: #eff6ff;
+}
+
+.ganttTableIconBtn.eventWatchBtnOn,
+.drawerShareBtn.eventWatchBtnOn {
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.45);
+  background: #eff6ff;
+}
+
+.hangarEventRow {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.hangarEventRow .hangarEventItem {
+  flex: 1;
+  min-width: 0;
+}
+
 .profileSandboxName {
   color: #0f172a;
   font-weight: 500;
@@ -10947,6 +12520,160 @@ textarea {
   background: #f8fafc;
 }
 
+.modalWindow.operatorCard {
+  width: min(480px, 96vw);
+}
+
+.modalWindow.operatorCard.fleetCard {
+  width: min(520px, 96vw);
+}
+
+.operatorCardReadonly {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.operatorCardColor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.operatorCardSwatchPick {
+  position: relative;
+  width: 42px;
+  height: 38px;
+  flex: 0 0 42px;
+}
+
+.operatorCardSwatchPick input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.operatorCardSwatch {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  border-radius: 10px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.operatorCardColor .refInput {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.operatorCardHeader {
+  align-items: flex-start;
+}
+
+.operatorCardHeading {
+  min-width: 0;
+}
+
+.operatorCardKicker {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.operatorCardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.operatorCardTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f172a;
+  line-height: 1.25;
+}
+
+.operatorCardSubtitle {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.operatorCardBody {
+  display: grid;
+  gap: 14px;
+}
+
+.operatorCardFieldError {
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.refInputInvalid {
+  border-color: rgba(220, 38, 38, 0.7);
+}
+
+.refInputInvalid:focus {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.16);
+}
+
+.operatorCardFooter {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.operatorCardFooterStart,
+.operatorCardFooterActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modalWindow.operatorCard.schemeCard {
+  width: min(640px, 96vw);
+}
+
+.modalWindow.operatorCard.schemeCard.refDetailCard {
+  width: 100%;
+  max-width: none;
+}
+
+.operatorCardMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.operatorImportRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.operatorImportRow .refLabel {
+  flex: 1 1 280px;
+}
+
+.operatorImportActions {
+  display: flex;
+  gap: 8px;
+}
+
 .btnDanger {
   background: #fef2f2;
   color: #b91c1c;
@@ -11409,8 +13136,17 @@ textarea {
 
 .sandboxShareAddRow {
   display: grid;
-  grid-template-columns: 1fr 160px auto;
+  grid-template-columns: minmax(0, 1fr) 160px auto;
   gap: 8px;
+  align-items: center;
+}
+
+.sandboxShareAddRow .msdRoot {
+  min-width: 0;
+}
+
+.shareAccessHint {
+  margin: 8px 0 0;
 }
 
 .sandboxShareAll {
@@ -12065,6 +13801,11 @@ textarea {
 textarea.refInput {
   resize: vertical;
   min-height: 58px;
+}
+
+textarea.refInput.refMemo {
+  min-height: 168px;
+  line-height: 1.45;
 }
 
 .refLabel {
@@ -13094,6 +14835,21 @@ textarea.refInput {
   color: #475569;
 }
 
+.analyticsUtilBuckets {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.analyticsUtilBuckets tbody td {
+  height: 34px;
+  padding: 0 10px;
+  line-height: 33px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+
 .analyticsTableFreeze {
   border-collapse: separate;
   border-spacing: 0;
@@ -13573,6 +15329,11 @@ textarea.refInput {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.reportShareUser {
+  flex: 1 1 240px;
+  min-width: 200px;
 }
 
 .reportShareAll {

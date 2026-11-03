@@ -4,12 +4,12 @@ import test from "node:test";
 import { PRIMARY_TABLE_COLUMNS } from "./columnCatalog.generated.js";
 import { applyPrimaryTableFormulas, durationDays, durationHours, inclusiveCalendarDays, isSlotDurationColumn } from "./formulaEngine.js";
 
-test("catalog contains the complete A:GH specification", () => {
-  assert.equal(PRIMARY_TABLE_COLUMNS.length, 190);
+test("catalog contains the complete A:GI specification", () => {
+  assert.equal(PRIMARY_TABLE_COLUMNS.length, 191);
   assert.equal(PRIMARY_TABLE_COLUMNS[0]?.excelColumn, "A");
-  assert.equal(PRIMARY_TABLE_COLUMNS.at(-1)?.excelColumn, "GH");
+  assert.equal(PRIMARY_TABLE_COLUMNS.at(-1)?.excelColumn, "GI");
   assert.equal(PRIMARY_TABLE_COLUMNS.filter((column) => column.formula).length, 70);
-  assert.equal(new Set(PRIMARY_TABLE_COLUMNS.map((column) => column.key)).size, 190);
+  assert.equal(new Set(PRIMARY_TABLE_COLUMNS.map((column) => column.key)).size, 191);
 });
 
 test("keeps inclusive calendar days separate from elapsed duration", () => {

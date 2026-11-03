@@ -16,6 +16,7 @@ import {
 import { parseExcelColRange, resolveFieldPick, suggestFieldPick } from "../../lib/reportFieldPick";
 import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
 import { SwitchToggle } from "../components/SwitchToggle";
+import { grantAccessToUsers, isAllUsersShare, UserSharePicker, type DirectoryUser } from "../components/UserSharePicker";
 
 type ReportDataset =
   | "primary_events"
@@ -315,9 +316,8 @@ export function ReportBuilderPanel(props: Props) {
       to: dayjs().format("YYYY-MM-DD")
     })
   );
-  const [shareEmail, setShareEmail] = useState("");
+  const [shareUsers, setShareUsers] = useState<DirectoryUser[]>([]);
   const [shareRole, setShareRole] = useState<"VIEWER" | "EDITOR">("VIEWER");
-  const [shareAllRole, setShareAllRole] = useState<"VIEWER" | "EDITOR">("VIEWER");
   const [constructorTab, setConstructorTab] = useState<
     "source" | "fields" | "filters" | "summary" | "sort" | "access"
   >("source");
@@ -340,10 +340,6 @@ export function ReportBuilderPanel(props: Props) {
   const canEdit = !selectedId || Boolean(selected?.canEdit);
   const conditions = config.filters.conditions ?? [];
   const filterableFields = (currentMeta?.fields ?? []).filter((f) => config.fields.includes(f.key));
-
-  useEffect(() => {
-    setShareAllRole(selected?.sharedWithAllRole ?? "VIEWER");
-  }, [selectedId, selected?.sharedWithAllRole]);
 
   const fieldSearchNorm = fieldSearch.trim().toLocaleLowerCase("ru");
   const visibleFields = useMemo(() => {
@@ -566,10 +562,23 @@ export function ReportBuilderPanel(props: Props) {
   const shareMut = useMutation({
     mutationFn: async () => {
       if (!selectedId) throw new Error("Сначала сохраните отчёт");
-      return apiPost(`/api/reports/${selectedId}/shares`, { email: shareEmail.trim(), role: shareRole });
+      if (shareUsers.length === 0) throw new Error("Выберите пользователей");
+      const people = shareUsers.filter((user) => !isAllUsersShare(user));
+      if (shareUsers.some(isAllUsersShare)) {
+        await apiPatch(`/api/reports/${selectedId}`, { sharedWithAllRole: shareRole });
+      }
+      if (people.length) {
+        await grantAccessToUsers(people, (user) =>
+          apiPost(`/api/reports/${selectedId}/shares`, { email: user.email, role: shareRole })
+        );
+      }
     },
-    onSuccess: async () => {
-      setShareEmail("");
+    onSuccess: () => setShareUsers([]),
+    onError: (err) => {
+      const ids = (err as { failedIds?: string[] }).failedIds;
+      if (ids?.length) setShareUsers((prev) => prev.filter((user) => ids.includes(user.id)));
+    },
+    onSettled: async () => {
       await qc.invalidateQueries({ queryKey: ["reports", "list"] });
     }
   });
@@ -1592,40 +1601,12 @@ export function ReportBuilderPanel(props: Props) {
                 </div>
               ) : (
                 <>
-                  <div className="reportShareAll">
-                    <SwitchToggle
-                      checked={selected?.sharedWithAllRole != null}
-                      onChange={(enabled) => shareAllMut.mutate(enabled ? shareAllRole : null)}
-                      label="Поделиться со всеми"
-                      hint="Доступ получат все текущие и новые пользователи"
-                      disabled={shareAllMut.isPending}
-                    />
-                    <label className="tgField reportShareAllRole">
-                      <span className="tgFieldLabel">Роль для всех</span>
-                      <select
-                        value={shareAllRole}
-                        disabled={selected?.sharedWithAllRole == null || shareAllMut.isPending}
-                        onChange={(e) => {
-                          const nextRole = e.target.value as "VIEWER" | "EDITOR";
-                          setShareAllRole(nextRole);
-                          shareAllMut.mutate(nextRole);
-                        }}
-                      >
-                        <option value="VIEWER">Просмотр</option>
-                        <option value="EDITOR">Редактирование</option>
-                      </select>
-                    </label>
-                  </div>
-                  {shareAllMut.isError ? (
-                    <div className="error">{String((shareAllMut.error as any)?.message ?? shareAllMut.error)}</div>
-                  ) : null}
-                  <p className="muted small">Или выдайте доступ отдельным коллегам по email.</p>
                   <div className="reportShareForm">
-                    <input
-                      className="evInput"
-                      placeholder="email пользователя"
-                      value={shareEmail}
-                      onChange={(e) => setShareEmail(e.target.value)}
+                    <UserSharePicker
+                      className="reportShareUser"
+                      value={shareUsers.map((user) => user.id)}
+                      onChange={setShareUsers}
+                      placeholder="Выберите пользователей"
                     />
                     <select value={shareRole} onChange={(e) => setShareRole(e.target.value as "VIEWER" | "EDITOR")}>
                       <option value="VIEWER">Просмотр</option>
@@ -1634,7 +1615,7 @@ export function ReportBuilderPanel(props: Props) {
                     <button
                       type="button"
                       className="btn"
-                      disabled={!shareEmail.trim() || shareMut.isPending}
+                      disabled={shareUsers.length === 0 || shareMut.isPending}
                       onClick={() => shareMut.mutate()}
                     >
                       Поделиться
@@ -1643,7 +1624,23 @@ export function ReportBuilderPanel(props: Props) {
                   {shareMut.isError ? (
                     <div className="error">{String((shareMut.error as any)?.message ?? shareMut.error)}</div>
                   ) : null}
+                  <p className="muted small shareAccessHint">
+                    «Все пользователи» открывает доступ каждому, включая новых. Роль конкретного человека заменяет её: всем можно дать просмотр, а отдельным — редактирование.
+                  </p>
+                  {shareAllMut.isError ? (
+                    <div className="error">{String((shareAllMut.error as any)?.message ?? shareAllMut.error)}</div>
+                  ) : null}
                   <ul className="reportShareList">
+                    {selected?.sharedWithAllRole ? (
+                      <li>
+                        <span>
+                          Все пользователи · {selected.sharedWithAllRole === "EDITOR" ? "редактирование" : "просмотр"}
+                        </span>
+                        <button type="button" className="btn btnGhost" onClick={() => shareAllMut.mutate(null)} disabled={shareAllMut.isPending}>
+                          Забрать
+                        </button>
+                      </li>
+                    ) : null}
                     {(selected?.shares ?? []).map((s) => (
                       <li key={s.userId}>
                         <span>

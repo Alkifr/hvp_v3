@@ -44,6 +44,7 @@ test("gantt serialize omits defaults and round-trips filters", () => {
     showAllPlacementLinks: false,
     showExternalMroOnGantt: false,
     showGanttNotes: true,
+    hangarStandSort: "layout-stand",
     sandboxId: "sb1"
   });
   assert.equal(q.get("from"), "2026-01-01");
@@ -58,6 +59,7 @@ test("gantt serialize omits defaults and round-trips filters", () => {
   assert.equal(q.has("links"), false);
   assert.equal(q.get("ext"), "0");
   assert.equal(q.get("notes"), "1");
+  assert.equal(q.get("hsort"), "ly");
   assert.equal(q.get("hangar"), "h1");
   assert.equal(q.get("et"), null);
   assert.equal(q.get("sandbox"), "sb1");
@@ -72,6 +74,7 @@ test("gantt serialize omits defaults and round-trips filters", () => {
   assert.deepEqual(parsed.filterPlanningKinds, ["UNPLANNED"]);
   assert.equal(parsed.showExternalMroOnGantt, false);
   assert.equal(parsed.showGanttNotes, true);
+  assert.equal(parsed.hangarStandSort, "layout-stand");
 });
 
 test("gantt prod contour writes empty sandbox", () => {
@@ -97,9 +100,11 @@ test("gantt prod contour writes empty sandbox", () => {
     showAllPlacementLinks: false,
     showExternalMroOnGantt: true,
     showGanttNotes: false,
+    hangarStandSort: "stand-layout",
     sandboxId: null
   });
   assert.equal(q.get("sandbox"), "");
+  assert.equal(q.get("hsort"), null);
   assert.equal(q.get("group"), null);
   assert.equal(q.get("view"), null);
 });

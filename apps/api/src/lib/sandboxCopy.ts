@@ -213,6 +213,7 @@ export async function copyPlanToSandbox(
       layoutId: src.layoutId,
       workshopId: (src as any).workshopId ?? null,
       lineBase: (src as any).lineBase ?? null,
+      deadlineAt: (src as { deadlineAt?: Date | null }).deadlineAt ?? null,
       notes: src.notes,
       comment: src.comment ?? null,
       allowOverlap: Boolean((src as { allowOverlap?: boolean }).allowOverlap),

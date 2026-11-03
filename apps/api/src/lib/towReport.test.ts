@@ -103,6 +103,66 @@ test("bound placement on split event uses that stand for inbound", () => {
   assert.equal(route.placementId, "p2");
 });
 
+test("inside-stage tow with apron label is inbound", () => {
+  const placementStart = new Date("2026-09-18T10:00:00.000Z");
+  const placement = {
+    id: "p1",
+    startAt: placementStart,
+    endAt: new Date("2026-09-18T18:00:00.000Z"),
+    hangarId: "h1",
+    hangarCode: "1",
+    hangarName: "Ангар 1",
+    standCode: "A1"
+  };
+  const route = inferTowRoute(
+    placementStart,
+    new Date("2026-09-18T10:30:00.000Z"),
+    [placement],
+    undefined,
+    placement
+  );
+  assert.equal(route.direction, "IN");
+
+  const row = buildTowReportRow({
+    id: "t-in",
+    eventId: "e1",
+    startAt: placementStart,
+    endAt: new Date("2026-09-18T10:30:00.000Z"),
+    fromLabel: APRON_STAND_LABEL,
+    toLabel: "A1",
+    notes: null,
+    positionComment: null,
+    startChangeReason: null,
+    occupancyEndAt: null,
+    fromStandCode: null,
+    toStandCode: null,
+    placementId: "p1",
+    eventTitle: "C-check",
+    eventStatus: "IN_PROGRESS",
+    eventTypeId: "et1",
+    eventType: "C-check",
+    eventNotes: null,
+    eventStartAt: placementStart,
+    eventEndAt: placement.endAt,
+    hangarId: "h1",
+    hangarCode: "1",
+    hangarName: "Ангар 1",
+    reservationStandCode: "A1",
+    tailNumber: "VP-BXX",
+    aircraftId: "ac1",
+    aircraftType: "A320",
+    aircraftTypeId: "t1",
+    operator: "AFL",
+    operatorId: "op1",
+    customerSlotStartAt: null,
+    customerSlotEndAt: null,
+    placements: [placement]
+  });
+  assert.equal(row.directionLabel, "Закатка");
+  assert.equal(row.fromStand, APRON_STAND_LABEL);
+  assert.equal(row.toStand, "A1");
+});
+
 test("buildTowReportRow prefers stored labels and customer slot", () => {
   const row = buildTowReportRow({
     id: "t1",

@@ -16,4 +16,5 @@ test("write-blocked exempts admin and presence for admins", () => {
   assert.equal(isWriteBlockedExempt("/api/planning/events", ["admin:users"]), false);
   assert.equal(isWriteBlockedExempt("/api/presence/ping", ["gantt:read"]), true);
   assert.equal(isWriteBlockedExempt("/api/auth/me", []), true);
+  assert.equal(isWriteBlockedExempt("/api/subscriptions/events", ["gantt:read"]), true);
 });

@@ -15,6 +15,7 @@ test("maps skill codes to PrimaryMetricDepartment", () => {
   assert.equal(skillCodeToDepartment("SHOP"), "SHOP");
   assert.equal(skillCodeToDepartment("CAB_REP"), "CAB_REP");
   assert.equal(skillCodeToDepartment("CabRep"), "CAB_REP");
+  assert.equal(skillCodeToDepartment("PAINT"), "PAINT");
   assert.equal(skillCodeToDepartment("MECH"), "ME");
   assert.equal(skillCodeToDepartment("AVIO"), "AV");
   assert.equal(skillCodeToDepartment("UNKNOWN"), null);
@@ -75,4 +76,8 @@ test("recognizes live labor excel columns including ADD/NRC", () => {
   assert.equal(isLiveLaborExcelColumn("CJ"), true);
   assert.equal(isLiveLaborExcelColumn("ed"), true);
   assert.equal(isLiveLaborExcelColumn("BO"), false);
+});
+
+test("keeps Paint manual-only and out of import mappings", () => {
+  assert.deepEqual(collectLaborMetricsFromImportRow({ laborMps_PAINT: 12, laborMps_Paint: 8 }), []);
 });

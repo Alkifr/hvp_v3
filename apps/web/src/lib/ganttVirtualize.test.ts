@@ -10,10 +10,12 @@ import {
   ganttPxWindow,
   ganttPxWindowNeedsRefresh,
   ganttRowIndexAtY,
+  pointerContentOffset,
   ganttXHysteresis,
   ganttXOverscan,
   measureGanttVisibleY,
   nextGanttVirtState,
+  sameGanttVirtState,
   rangesOverlap,
   buildGanttRowOffsets
 } from "./ganttVirtualize.ts";
@@ -31,6 +33,34 @@ test("ganttPxWindowNeedsRefresh keeps window until hysteresis is eaten", () => {
   assert.equal(ganttPxWindowNeedsRefresh(win, 1000, 800, 10_000, 200), false);
   assert.equal(ganttPxWindowNeedsRefresh(win, 1100, 800, 10_000, 200), true);
   assert.equal(ganttPxWindowNeedsRefresh(win, 0, 800, 1500, 200), true);
+});
+
+test("sameGanttVirtState compares the window, not the object", () => {
+  assert.equal(sameGanttVirtState(EMPTY_GANTT_VIRT, EMPTY_GANTT_VIRT), true);
+  assert.equal(
+    sameGanttVirtState(EMPTY_GANTT_VIRT, { x: { left: 0, width: 4000 }, rows: { startIdx: 0, endIdx: 48 } }),
+    true
+  );
+  assert.equal(
+    sameGanttVirtState(EMPTY_GANTT_VIRT, { x: { left: 0, width: 800 }, rows: { startIdx: 0, endIdx: 48 } }),
+    false
+  );
+});
+
+test("pointerContentOffset follows scroll once so the bar stays under the pointer", () => {
+  const barX = 500;
+  const origin = 80;
+  const scroll0 = 300;
+  const down = 420;
+  const grab = pointerContentOffset(down, origin, scroll0) - barX;
+  const scroll1 = scroll0 + 120;
+  const move = down + 15;
+  assert.equal(pointerContentOffset(move, origin, scroll1) - grab, barX + 15 + 120);
+
+  // rect содержимого уже уехал на scroll, повторное прибавление даёт лишний сдвиг на ширину прокрутки
+  const doubled =
+    move - (origin - scroll1) + scroll1 - (down - (origin - scroll0) + scroll0 - barX);
+  assert.equal(doubled, barX + 15 + 240);
 });
 
 test("variable row offsets map Y to the taller notes row", () => {

@@ -253,7 +253,7 @@ function laborTotalOf(labor: MonthlyPlanHalfHours[]): number {
 }
 
 function emptyQualifications(): MonthlyPlanQualifications {
-  return { ME: 0, AV: 0, INT: 0, NDT: 0, SHOP: 0, CAB_REP: 0 };
+  return { ME: 0, AV: 0, INT: 0, NDT: 0, SHOP: 0, CAB_REP: 0, PAINT: 0 };
 }
 
 function qualificationsFor(

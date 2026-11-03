@@ -34,7 +34,7 @@ const zCondition = z.object({
 const zQueryBody = z.object({
   from: zDateTime,
   to: zDateTime,
-  fields: z.array(z.string()).min(1).max(190),
+  fields: z.array(z.string()).min(1).max(191),
   filters: z.object({ conditions: z.array(zCondition).max(20).optional().default([]) }).optional().default({ conditions: [] }),
   sort: z
     .array(z.object({ field: z.string().trim().min(1), dir: z.enum(["asc", "desc"]) }))

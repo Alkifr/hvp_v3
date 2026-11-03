@@ -16,6 +16,7 @@ test("maps a golden event row including metrics and external analytics", () => {
     budgetEndAt: new Date("2026-07-03T08:00:00.000Z"),
     actualStartAt: new Date("2026-07-01T08:00:00.000Z"),
     actualEndAt: new Date("2026-07-04T08:00:00.000Z"),
+    deadlineAt: new Date("2026-07-02T12:00:00.000Z"),
     notes: "Причина",
     aircraft: {
       id: "aircraft-1",
@@ -53,6 +54,7 @@ test("maps a golden event row including metrics and external analytics", () => {
   assert.equal(row["primary.n"], "SVO");
   assert.equal(row["primary.t"], 4);
   assert.equal(row["primary.ab"], 1);
+  assert.equal(row["primary.gi"], "2026-07-02T12:00:00.000Z");
   assert.equal(row["primary.ac"], 24);
   assert.equal(row["primary.ai"], "Завершено");
   assert.equal(row["primary.aq"], 0);

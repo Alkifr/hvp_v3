@@ -1,5 +1,6 @@
 import { isValidDateInput } from "./dateInput";
 import { parseHashPage, writePageHashQuery } from "./eventDeepLink";
+import { parseHangarStandSort, type HangarStandSort } from "./hangarStandSort";
 
 const TIME_SCALES = ["hour", "day", "week", "month", "quarter", "year"] as const;
 type TimeScale = (typeof TIME_SCALES)[number];
@@ -35,7 +36,8 @@ const VIEW_SHARE_KEYS = new Set([
   "cb",
   "kind",
   "q",
-  "layout"
+  "layout",
+  "hsort"
 ]);
 
 export type GanttViewShare = {
@@ -60,6 +62,7 @@ export type GanttViewShare = {
   showAllPlacementLinks: boolean;
   showExternalMroOnGantt: boolean;
   showGanttNotes: boolean;
+  hangarStandSort: HangarStandSort;
 };
 
 export type HangarViewShare = {
@@ -150,7 +153,8 @@ function defaultGanttShare(): GanttViewShare {
     fitWidth: false,
     showAllPlacementLinks: false,
     showExternalMroOnGantt: true,
-    showGanttNotes: false
+    showGanttNotes: false,
+    hangarStandSort: "stand-layout"
   };
 }
 
@@ -187,7 +191,8 @@ export function parseGanttViewShare(query: URLSearchParams): GanttViewShare | nu
     fitWidth: query.get("fit") === "1",
     showAllPlacementLinks: query.get("links") === "1",
     showExternalMroOnGantt: query.get("ext") !== "0",
-    showGanttNotes: query.get("notes") === "1"
+    showGanttNotes: query.get("notes") === "1",
+    hangarStandSort: parseHangarStandSort(query.get("hsort") === "ly" ? "layout-stand" : undefined)
   };
 }
 
@@ -205,6 +210,7 @@ export function serializeGanttViewShare(state: GanttViewShare & { sandboxId?: st
   setFlag(q, "links", state.showAllPlacementLinks);
   if (!state.showExternalMroOnGantt) q.set("ext", "0");
   setFlag(q, "notes", state.showGanttNotes);
+  if (state.hangarStandSort === "layout-stand") q.set("hsort", "ly");
   setCsv(q, "hangar", state.selectedHangarIds);
   setCsv(q, "op", state.filterOperatorIds);
   setCsv(q, "type", state.filterAircraftTypeIds);
@@ -383,6 +389,7 @@ export const REF_SHARE_KINDS = [
   "aircraft-type-palette",
   "event-types",
   "event-statuses",
+  "tow-norms",
   "workshops",
   "hangars",
   "layouts",
@@ -393,6 +400,11 @@ export const REF_SHARE_KINDS = [
   "skills",
   "persons",
   "shifts",
+  "personnel-hours",
+  "personnel-factors",
+  "personnel-composition",
+  "personnel-categories",
+  "aircraft-workshops",
   "materials",
   "warehouses"
 ] as const;

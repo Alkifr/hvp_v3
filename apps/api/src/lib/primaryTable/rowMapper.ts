@@ -103,6 +103,7 @@ export function toPrimaryTableRow(
   put("X", iso(event.startAt));
   put("Y", iso(event.startAt));
   put("Z", iso(event.endAt));
+  put("GI", iso(event.deadlineAt));
   put("AA", iso(event.endAt));
   put("AD", extension?.agreementStatus ?? eventStatusName(event.status, statusNames));
   put("AE", event.notes);

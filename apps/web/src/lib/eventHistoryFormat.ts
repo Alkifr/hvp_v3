@@ -52,8 +52,11 @@ export const FIELD_LABEL: Record<string, string> = {
   hangarId: "Ангар",
   layoutId: "Вариант размещения",
   standId: "Место",
+  placementLabel: "Этап размещения",
   workshopId: "Цех",
   lineBase: "L/B",
+  deadlineAt: "DeadLine",
+  deadlineAtLocal: "DeadLine",
   allowOverlap: "Разрешить пересечение",
   multiPlacement: "Несколько размещений",
   virtualAircraft: "Виртуальный борт",
@@ -66,6 +69,7 @@ export const FIELD_LABEL: Record<string, string> = {
   spacingHours: "Интервал между событиями, ч",
   cadenceHours: "Шаг запуска, ч",
   placementMode: "Режим размещения",
+  strictHangars: "Только выбранные ангары",
   towBeforeMinutes: "Буксировка до события, мин",
   towAfterMinutes: "Буксировка после события, мин",
   towBlocksStand: "Буксировка занимает место",
@@ -77,6 +81,11 @@ export const FIELD_LABEL: Record<string, string> = {
   Event_name: "Тип события",
   Hangar: "Ангар",
   HangarStand: "Место",
+  Status: "Статус",
+  Reason: "Причина",
+  Comment: "Комментарий",
+  LineBase: "L/B",
+  Workshop: "Цех",
   towStartAt: "Начало буксировки",
   towEndAt: "Окончание буксировки",
   fromLabel: "Откуда (с МС)",
@@ -108,7 +117,20 @@ export const FIELD_LABEL: Record<string, string> = {
   priorityRuleIds: "Применённые правила приоритета",
   sourceEventId: "Исходное событие",
   sourceSandboxId: "Исходная песочница",
-  originEventId: "Корневое событие"
+  originEventId: "Корневое событие",
+  laborMetrics: "Трудоёмкость"
+};
+
+const LABOR_HISTORY_BLOCK: Record<string, string> = {
+  LABOR_BUDGET: "Бюджет / routine",
+  ADD_BUDGET: "Бюджет / ADD",
+  NRC_BUDGET: "Бюджет / NRC",
+  WP_PLAN_MPS: "MPS / routine",
+  ADD_PLAN: "MPS / ADD",
+  NRC_PLAN: "MPS / NRC",
+  WP_ACTUAL: "Факт / routine",
+  ADD_ACTUAL: "Факт / ADD",
+  NRC_ACTUAL: "Факт / NRC"
 };
 
 export type HistoryRefMaps = {
@@ -129,6 +151,8 @@ export type DiffEntry = {
   from?: unknown;
   to?: unknown;
   note?: string;
+  /** Первое появление значения: импорт или создание карточки. */
+  initial?: boolean;
 };
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -229,12 +253,43 @@ function formatPlacement(placement: unknown, index: number, maps?: HistoryRefMap
       : hangar
         ? `${hangar}${stand ? `, место ${stand}` : ", без места"}`
         : "Без ангара";
-  return `${index + 1}. ${period ? `${period} · ` : ""}${location}`;
+  const budget = formatPeriod(placement.budgetStartAt, placement.budgetEndAt);
+  const actual = formatPeriod(placement.actualStartAt, placement.actualEndAt);
+  const extras = [budget ? `бюджет ${budget}` : "", actual ? `факт ${actual}` : ""].filter(Boolean);
+  return `${index + 1}. ${period ? `${period} · ` : ""}${location}${extras.length ? ` · ${extras.join(" · ")}` : ""}`;
 }
 
 function formatPlacements(value: unknown, maps?: HistoryRefMaps): string {
   if (!Array.isArray(value) || value.length === 0) return "Этапов нет";
   return `${value.length} ${pluralStages(value.length)}: ${value.map((placement, index) => formatPlacement(placement, index, maps)).join("; ")}`;
+}
+
+function formatLaborMetrics(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) return "—";
+  const groups = new Map<string, string[]>();
+  for (const item of value) {
+    if (!isPlainObject(item)) continue;
+    const block = String(item.block ?? "");
+    const department = String(item.department ?? "");
+    if (!block && !department) continue;
+    const label = LABOR_HISTORY_BLOCK[block] ?? (block || "Трудоёмкость");
+    const dept = department === "CAB_REP" ? "CabRep" : department;
+    const hours = item.manHours == null || item.manHours === "" ? "—" : String(item.manHours);
+    const cells = groups.get(label) ?? [];
+    cells.push(dept ? `${dept} ${hours}` : hours);
+    groups.set(label, cells);
+  }
+  if (groups.size === 0) return "—";
+  return [...groups.entries()].map(([label, cells]) => `${label}: ${cells.join(", ")}`).join("; ");
+}
+
+function isLaborMetricList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some(
+      (item) => isPlainObject(item) && typeof item.block === "string" && typeof item.department === "string"
+    )
+  );
 }
 
 function formatReservation(value: unknown, maps?: HistoryRefMaps): string {
@@ -248,7 +303,8 @@ function formatReservation(value: unknown, maps?: HistoryRefMaps): string {
 function comparableHistoryValue(value: unknown): unknown {
   if (looksLikeIsoDate(value)) {
     const timestamp = new Date(value as string).getTime();
-    return Number.isFinite(timestamp) ? timestamp : value;
+    // В карточке время до минуты: 23:59:43 и 23:59:00 — одна и та же запись.
+    return Number.isFinite(timestamp) ? Math.floor(timestamp / 60_000) : value;
   }
   if (Array.isArray(value)) return value.map(comparableHistoryValue);
   if (isPlainObject(value)) {
@@ -288,6 +344,24 @@ function diffSnapshots(from: Record<string, unknown>, to: Record<string, unknown
   return out;
 }
 
+function towIntervalNote(value: Record<string, unknown>, empty = "Период не указан"): string {
+  const period = formatPeriod(value.startAt, value.endAt);
+  const route = [value.fromLabel, value.toLabel]
+    .filter((part) => part != null && String(part).trim() !== "")
+    .join(" → ");
+  return [period, route].filter(Boolean).join(" · ") || empty;
+}
+
+function pushTowField(out: DiffEntry[], key: string, value: unknown) {
+  if (value == null || value === "") return;
+  if (isPlainObject(value) && ("from" in value || "to" in value)) {
+    if (historyValuesEqual(value.from, value.to)) return;
+    out.push({ field: labelFor(key), rawKey: key, from: value.from, to: value.to });
+    return;
+  }
+  out.push({ field: labelFor(key), rawKey: key, to: value });
+}
+
 export function extractDiffEntries(changes: unknown): DiffEntry[] {
   if (!changes || typeof changes !== "object") return [];
   const out: DiffEntry[] = [];
@@ -300,7 +374,7 @@ export function extractDiffEntries(changes: unknown): DiffEntry[] {
   }
 
   for (const [k, v] of Object.entries(ch)) {
-    if (k === "from" || k === "to") continue;
+    if (k === "from" || k === "to" || k === "kind") continue;
     if (isPlainObject(v) && "from" in v && "to" in v) {
       const vv = v as { from?: unknown; to?: unknown };
       if (historyValuesEqual(vv.from, vv.to)) continue;
@@ -320,19 +394,26 @@ export function extractDiffEntries(changes: unknown): DiffEntry[] {
     if (k === "created" && isPlainObject(v)) {
       for (const [ck, cv] of Object.entries(v)) {
         if (cv == null || cv === "") continue;
-        out.push({ field: `Создано › ${labelFor(ck)}`, rawKey: ck, to: cv });
+        out.push({ field: labelFor(ck), rawKey: ck, to: cv, initial: true });
       }
       continue;
     }
     if (k === "tow" && isPlainObject(v)) {
       const added = (v as { add?: unknown }).add;
-      if (isPlainObject(added)) {
+      const addedRows = Array.isArray(added) ? added : isPlainObject(added) ? [added] : [];
+      for (const row of addedRows) {
+        if (!isPlainObject(row)) continue;
         out.push({
           field: "Интервал буксировки добавлен",
-          note: formatPeriod(added.startAt, added.endAt) || "Период не указан"
+          note: towIntervalNote(row)
         });
       }
-      if ((v as { delete?: unknown }).delete) out.push({ field: "Интервал буксировки удалён", note: "Удалён из события" });
+      const deleted = (v as { delete?: unknown }).delete;
+      if (isPlainObject(deleted)) {
+        out.push({ field: "Интервал буксировки удалён", note: towIntervalNote(deleted, "Удалён из события") });
+      } else if (deleted) {
+        out.push({ field: "Интервал буксировки удалён", note: "Удалён из события" });
+      }
       const startAt = (v as { startAt?: { from?: unknown; to?: unknown } }).startAt;
       if (startAt && typeof startAt === "object") {
         out.push({ field: "Начало буксировки", from: startAt.from, to: startAt.to });
@@ -341,17 +422,23 @@ export function extractDiffEntries(changes: unknown): DiffEntry[] {
       if (endAt && typeof endAt === "object") {
         out.push({ field: "Окончание буксировки", from: endAt.from, to: endAt.to });
       }
-      for (const key of ["fromLabel", "toLabel", "notes", "positionComment", "startChangeReason"] as const) {
-        if (key in v && (v as Record<string, unknown>)[key] != null) {
-          out.push({ field: labelFor(key), to: (v as Record<string, unknown>)[key] });
-        }
+      for (const key of ["fromLabel", "toLabel", "placementLabel", "notes", "positionComment", "startChangeReason"] as const) {
+        pushTowField(out, key, (v as Record<string, unknown>)[key]);
       }
       continue;
     }
     if (k === "imported" && isPlainObject(v)) {
       for (const [ik, iv] of Object.entries(v)) {
         if (iv == null || iv === "") continue;
-        out.push({ field: `Импортировано › ${labelFor(ik)}`, rawKey: ik, to: iv });
+        if (ik === "laborMetrics" && Array.isArray(iv)) {
+          const filled = iv.filter(
+            (item) => isPlainObject(item) && Number(item.manHours) > 0 && Number.isFinite(Number(item.manHours))
+          );
+          if (filled.length === 0) continue;
+          out.push({ field: labelFor(ik), rawKey: ik, to: filled, initial: true });
+          continue;
+        }
+        out.push({ field: labelFor(ik), rawKey: ik, to: iv, initial: true });
       }
       continue;
     }
@@ -387,6 +474,7 @@ export function extractDiffEntries(changes: unknown): DiffEntry[] {
         "spacingHours",
         "cadenceHours",
         "placementMode",
+        "strictHangars",
         "towBeforeMinutes",
         "towAfterMinutes",
         "towBlocksStand",
@@ -457,6 +545,7 @@ export function resolveHistoryValue(rawKey: string | undefined, v: unknown, maps
 
   if (rawKey === "placements") return formatPlacements(v, maps);
   if (rawKey === "reservation") return formatReservation(v, maps);
+  if (rawKey === "laborMetrics" || isLaborMetricList(v)) return formatLaborMetrics(v);
   if (Array.isArray(v)) {
     if (v.length === 0) return "—";
     return v.map((item) => (isPlainObject(item) ? formatReservation(item, maps) : formatHistoryValue(item))).join("; ");
@@ -508,6 +597,32 @@ export function resolveHistoryValue(rawKey: string | undefined, v: unknown, maps
   return formatHistoryValue(v);
 }
 
+export type HistoryTableRow = {
+  field: string;
+  previous: string;
+  current: string;
+};
+
+/** Одна строка журнала: реквизит, предыдущая версия и текущая. У первичной записи предыдущая версия пустая. */
+export function historyTableRows(entry: DiffEntry, maps?: HistoryRefMaps): HistoryTableRow[] {
+  const hasFrom = "from" in entry;
+  const hasTo = "to" in entry;
+  if (!hasFrom && !hasTo) {
+    return [{ field: entry.field, previous: "", current: entry.note?.trim() || "" }];
+  }
+  return [
+    {
+      field: entry.field,
+      previous: hasFrom ? resolveHistoryValue(entry.rawKey, entry.from, maps) : "",
+      current: hasTo ? resolveHistoryValue(entry.rawKey, entry.to, maps) : ""
+    }
+  ];
+}
+
+export function historyCommentRow(reason: string): HistoryTableRow {
+  return { field: "Комментарий", previous: "", current: reason.trim() };
+}
+
 export function formatHistoryActor(actor: string | null | undefined): string {
   const a = String(actor ?? "").trim();
   if (!a || a === "system" || a === "browser") return a === "system" ? "Система" : a || "—";
@@ -520,6 +635,7 @@ export function formatActionLabel(action: string, changes?: unknown): string {
     if (isPlainObject(changes.massPlan)) return "Событие создано массовым планированием";
   }
   if (action === "UPDATE" && isPlainObject(changes)) {
+    if (changes.kind === "personnelAvailability") return "Изменён доступный ресурс";
     if (isPlainObject(changes.tow)) {
       if ((changes.tow as { add?: unknown }).add) return "Добавлена буксировка";
       if ((changes.tow as { delete?: unknown }).delete) return "Удалена буксировка";
@@ -533,6 +649,8 @@ export function formatActionLabel(action: string, changes?: unknown): string {
     const keys = extractDiffEntries(changes)
       .map((entry) => entry.rawKey)
       .filter((key): key is string => Boolean(key));
+    if (keys.length > 0 && keys.every((key) => key === "laborMetrics")) return "Изменена трудоёмкость";
+    if (keys.length === 1 && keys[0] === "allowOverlap") return "Изменено пересечение";
     if (keys.includes("placements")) return "Изменены этапы размещения";
     if (keys.length === 1 && keys[0] === "status") return "Изменён статус события";
     if (keys.length === 1 && keys[0] === "title") return "Изменено название события";

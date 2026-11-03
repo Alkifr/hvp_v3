@@ -56,6 +56,17 @@ export const PERMISSION_GROUPS: PermGroup[] = [
     ]
   },
   {
+    id: "personnel",
+    title: "РМ Персонал",
+    hint: "Доступность, баланс и фиксация недель",
+    actions: [
+      { code: "personnel:read", label: "Просмотр" },
+      { code: "personnel:write", label: "Редактирование" },
+      { code: "personnel:lock", label: "Фиксация" },
+      { code: "personnel:unlock", label: "Снятие фиксации" }
+    ]
+  },
+  {
     id: "import",
     title: "Импорт / массовое планирование",
     actions: [{ code: "import:write", label: "Запуск" }]
@@ -119,7 +130,10 @@ const WRITE_IMPLIES_READ: Record<string, string> = {
   "resources:plan": "resources:read",
   "resources:actual": "resources:read",
   "import:write": "gantt:read",
-  "tows:write": "tows:read"
+  "tows:write": "tows:read",
+  "personnel:write": "personnel:read",
+  "personnel:lock": "personnel:read",
+  "personnel:unlock": "personnel:read"
 };
 
 const PERMISSION_ALIASES: Record<string, string[]> = {
@@ -379,6 +393,7 @@ export function previewNavItems(perms: Iterable<string>): NavPreviewItem[] {
   if (hasPermission(perms, "analytics:read")) items.push({ id: "analytics", label: "Аналитика" });
   if (hasPermission(perms, "itp:read")) items.push({ id: "itp", label: "РМ ИТП" });
   if (hasPermission(perms, "tows:read")) items.push({ id: "tows", label: "РМ Буксировки" });
+  if (hasPermission(perms, "personnel:read")) items.push({ id: "personnel", label: "РМ Персонал" });
   if (hasPermission(perms, "mail:send") || hasPermission(perms, "admin:mail")) items.push({ id: "mail", label: "Рассылка" });
   if (hasPermission(perms, "import:write")) items.push({ id: "import", label: "Импорт/План" });
   if (hasPermission(perms, "ref:read")) items.push({ id: "ref", label: "Справочники" });

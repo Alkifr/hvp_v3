@@ -24,6 +24,7 @@ export function isWriteBlockedExempt(url: string, permissions: readonly string[]
   const path = (url.split("?")[0] ?? "").replace(/\/+$/, "") || "/";
   if (path.startsWith("/api/auth")) return true;
   if (path.startsWith("/api/presence")) return true;
+  if (path.startsWith("/api/subscriptions")) return true;
   if (path.startsWith("/api/admin")) {
     return (
       hasPermission(permissions, "admin:users") ||

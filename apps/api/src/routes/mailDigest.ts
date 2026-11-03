@@ -379,6 +379,7 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
       subject: body.subject?.trim() || variant.subjectTemplate || variant.name,
       text: body.text,
       html: body.html,
+      explicitBody: body.text !== undefined || body.html !== undefined,
       columns: body.columns,
       target,
       actorEmail: req.auth?.email ?? null

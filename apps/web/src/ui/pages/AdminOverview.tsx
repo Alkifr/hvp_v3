@@ -13,7 +13,7 @@ type MailDigestSettings = {
   mailFrom: string | null;
 };
 
-type OverviewTab = "users" | "roles" | "mail" | "announce" | "activity";
+type OverviewTab = "users" | "roles" | "mail" | "announce" | "activity" | "server";
 
 export function AdminOverview(props: {
   canUsers: boolean;
@@ -111,6 +111,11 @@ export function AdminOverview(props: {
             <span>{mailQ.data?.mailFrom || mailQ.data?.smtpHost || "Настройки почты"}</span>
           </button>
         ) : null}
+        <button type="button" className="adminOverviewCard" onClick={() => props.onGo("server")}>
+          <span className="muted">Сервер</span>
+          <strong>Сейчас</strong>
+          <span>процесс, диск и база</span>
+        </button>
         {props.canUsers ? (
           <button type="button" className="adminOverviewCard" onClick={() => props.onGo("announce")}>
             <span className="muted">Объявление</span>

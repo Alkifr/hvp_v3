@@ -1,4 +1,4 @@
-import { PrismaClient, PlanningLevel } from "@prisma/client";
+import { PrismaClient, PlanningLevel, type Permission } from "@prisma/client";
 import argon2 from "argon2";
 import path from "node:path";
 import dotenv from "dotenv";
@@ -36,15 +36,21 @@ async function main() {
   // --- RBAC/Users ---
   const permissionsSeed = PERMISSION_SEED;
 
-  const permissions = await Promise.all(
-    permissionsSeed.map((p) =>
-      prisma.permission.upsert({
-        where: { code: p.code },
-        update: { name: p.name, appLabel: p.appLabel, model: p.model, action: p.action },
-        create: { code: p.code, name: p.name, appLabel: p.appLabel, model: p.model, action: p.action }
-      })
-    )
-  );
+  // Keep concurrency bounded: an unbounded Promise.all can overwhelm managed
+  // PostgreSQL/PgBouncer, while fully sequential seeding is unnecessarily slow.
+  const permissions: Permission[] = [];
+  for (let i = 0; i < permissionsSeed.length; i += 8) {
+    const batch = await Promise.all(
+      permissionsSeed.slice(i, i + 8).map((p) =>
+        prisma.permission.upsert({
+          where: { code: p.code },
+          update: { name: p.name, appLabel: p.appLabel, model: p.model, action: p.action },
+          create: { code: p.code, name: p.name, appLabel: p.appLabel, model: p.model, action: p.action }
+        })
+      )
+    );
+    permissions.push(...batch);
+  }
   const permByCode = new Map(permissions.map((p) => [p.code, p] as const));
 
   const roleAdmin = await prisma.role.upsert({
@@ -70,15 +76,17 @@ async function main() {
 
   const setRolePerms = async (roleId: string, permCodes: string[]) => {
     const permIds = permCodes.map((c) => permByCode.get(c)!.id);
-    await Promise.all(
-      permIds.map((permissionId) =>
-        prisma.rolePermission.upsert({
-          where: { roleId_permissionId: { roleId, permissionId } },
-          update: {},
-          create: { roleId, permissionId }
-        })
-      )
-    );
+    for (let i = 0; i < permIds.length; i += 8) {
+      await Promise.all(
+        permIds.slice(i, i + 8).map((permissionId) =>
+          prisma.rolePermission.upsert({
+            where: { roleId_permissionId: { roleId, permissionId } },
+            update: {},
+            create: { roleId, permissionId }
+          })
+        )
+      );
+    }
   };
 
   await setRolePerms(
@@ -110,6 +118,10 @@ async function main() {
     "resources:plan",
     "resources:actual",
     "workforce:read",
+    "personnel:read",
+    "personnel:write",
+    "personnel:lock",
+    "personnel:unlock",
     "warehouse:read",
     ...plannerModelCodes()
   ]);
@@ -123,6 +135,7 @@ async function main() {
     "ref:read",
     "resources:read",
     "workforce:read",
+    "personnel:read",
     "warehouse:read",
     ...viewerModelCodes()
   ]);
@@ -185,6 +198,76 @@ async function main() {
       { code: EventStatus.DELETED, name: "Удалено", color: null, sortOrder: 80, selectable: false, allowsAutoInProgress: false, manualOnly: true }
     ],
     skipDuplicates: true
+  });
+
+  await prisma.towNorm.upsert({
+    where: { code: "EDGE_TOW_MINUTES" },
+    update: {},
+    create: {
+      code: "EDGE_TOW_MINUTES",
+      name: "Буксировка в начале и в конце события",
+      minutes: 30,
+      isActive: true
+    }
+  });
+
+  const personnelCategories = [
+    { code: "B1", name: "B1", authorizationGroup: "ME", department: "ME", isAuthorized: true, sortOrder: 10 },
+    { code: "LBMM", name: "LBMM", authorizationGroup: "ME", department: "ME", isAuthorized: true, sortOrder: 20 },
+    { code: "B2", name: "B2", authorizationGroup: "AV", department: "AV", isAuthorized: true, sortOrder: 30 },
+    { code: "LBMA", name: "LBMA", authorizationGroup: "AV", department: "AV", isAuthorized: true, sortOrder: 40 },
+    { code: "AM", name: "AM", authorizationGroup: "SHARED", department: null, isAuthorized: false, sortOrder: 50 },
+    { code: "SM", name: "SM", authorizationGroup: "SHARED", department: null, isAuthorized: false, sortOrder: 60 },
+    { code: "NDT", name: "NDT", authorizationGroup: "DIRECT", department: "NDT", isAuthorized: true, sortOrder: 70 },
+    { code: "SHOP", name: "SHOP", authorizationGroup: "DIRECT", department: "SHOP", isAuthorized: true, sortOrder: 80 },
+    { code: "INT", name: "INT", authorizationGroup: "DIRECT", department: "INT", isAuthorized: true, sortOrder: 90 },
+    { code: "CAB_REP", name: "CabRep", authorizationGroup: "DIRECT", department: "CAB_REP", isAuthorized: true, sortOrder: 100 },
+    { code: "PAINT", name: "Paint", authorizationGroup: "DIRECT", department: "PAINT", isAuthorized: true, sortOrder: 110 }
+  ] as const;
+  for (const category of personnelCategories) {
+    await prisma.personnelCategory.upsert({
+      where: { code: category.code },
+      update: category,
+      create: category
+    });
+  }
+  const canonicalCodesByWorkshopKind = {
+    PTO: ["B1", "LBMM", "B2", "LBMA", "AM", "SM"],
+    SDRK: ["NDT", "SHOP"],
+    SOIO: ["INT"],
+    CRIO: ["CAB_REP"],
+    LKP: ["PAINT"]
+  } as const;
+  const workshopKind = (workshop: { code: string; name: string }) => {
+    const text = `${workshop.code} ${workshop.name}`.toUpperCase();
+    if (text.includes("PTO") || text.includes("ПТО")) return "PTO" as const;
+    if (text.includes("SDRK") || text.includes("СДРК")) return "SDRK" as const;
+    if (text.includes("SOIO") || text.includes("СОИО")) return "SOIO" as const;
+    if (text.includes("CRIO") || text.includes("ЦРИО")) return "CRIO" as const;
+    if (text.includes("LKP") || text.includes("ЛКП")) return "LKP" as const;
+    return null;
+  };
+  const existingWorkshops = await prisma.workshop.findMany({ select: { id: true, code: true, name: true } });
+  for (const workshop of existingWorkshops) {
+    const kind = workshopKind(workshop);
+    if (!kind) continue;
+    for (const code of canonicalCodesByWorkshopKind[kind]) {
+      const category = personnelCategories.find((row) => row.code === code)!;
+      await prisma.personnelWorkshopCategory.upsert({
+        where: { workshopId_categoryCode: { workshopId: workshop.id, categoryCode: category.code } },
+        update: {},
+        create: {
+          workshopId: workshop.id,
+          categoryCode: category.code,
+          department: category.department
+        }
+      });
+    }
+  }
+  await prisma.personnelHoursNorm.upsert({
+    where: { effectiveFrom: new Date("1970-01-01T00:00:00.000Z") },
+    update: {},
+    create: { effectiveFrom: new Date("1970-01-01T00:00:00.000Z"), hours: 11 }
   });
 
   if (!seedDemo) {
@@ -396,7 +479,8 @@ async function main() {
       { code: "INT", name: "INT (Interior)" },
       { code: "NDT", name: "NDT / BORO" },
       { code: "SHOP", name: "SHOP" },
-      { code: "CAB_REP", name: "CabRep" }
+      { code: "CAB_REP", name: "CabRep" },
+      { code: "PAINT", name: "Paint" }
     ] as const;
     const skillsByCode: Record<string, { id: string }> = {};
     for (const def of skillDefs) {

@@ -3,10 +3,13 @@ import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
-import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "../../lib/api";
+import { EventWatchButton } from "./EventWatchButton";
+import { formatMskDateTime, fromInputMskOptional, toInputMsk } from "../../lib/localDate";
 import {
   buildGanttTableColumns,
   defaultWidths,
+  ensureDeadlineColumn,
   extraPrimaryFieldKeys,
   factoryColumnConfig,
   formatPrimaryCell,
@@ -25,6 +28,8 @@ import {
   type GanttTableColId,
   type PrimaryCatalogField
 } from "../../lib/ganttTableColumns";
+import { DEADLINE_SLOT_HINT, slotExitAfterDeadline } from "../../lib/deadline";
+import { eventDiffNeedsChangeReason } from "../../lib/eventChangeReason";
 import { FIELD_LABEL, resolveHistoryValue, type HistoryRefMaps } from "../../lib/eventHistoryFormat";
 import { eventAllowsOverlap } from "../../lib/eventSlotOverlap";
 import { formatLineBase, lineBaseAfterWorkshopChange, LINE_BASE_LABEL, parseLineBase } from "../../lib/lineBase";
@@ -202,6 +207,7 @@ export type GanttTableEvent = {
   placements?: EventPlacementRow[];
   allowOverlap?: boolean;
   lineBase?: "LINE" | "BASE" | null;
+  deadlineAt?: string | null;
 };
 
 type RowDraft = {
@@ -226,20 +232,17 @@ type RowDraft = {
   standId: string;
   allowOverlap: boolean;
   lineBase: "LINE" | "BASE" | "";
+  deadlineAtLocal: string;
   multiPlacement: boolean;
   hasVirtualAircraft: boolean;
 };
 
 function toInputLocal(v: string | Date | null | undefined): string {
-  if (!v) return "";
-  const d = dayjs(v);
-  return d.isValid() ? d.format("YYYY-MM-DDTHH:mm") : "";
+  return toInputMsk(v);
 }
 
 function fromInputLocalOptional(v: string): string | null {
-  if (!v) return null;
-  const d = dayjs(v).second(0).millisecond(0);
-  return d.isValid() ? d.toISOString() : null;
+  return fromInputMskOptional(v);
 }
 
 function eventPlanningKind(ev: GanttTableEvent): "PLANNED" | "UNPLANNED" {
@@ -347,6 +350,7 @@ function draftFromEvent(
     standId: ev.reservation?.stand?.id ?? "",
     allowOverlap: eventAllowsOverlap(ev, allEvents),
     lineBase: parseLineBase(ev.lineBase) ?? lineBaseAfterWorkshopChange(workshopId, workshops, ""),
+    deadlineAtLocal: toInputLocal(ev.deadlineAt),
     multiPlacement: placements.length > 1,
     hasVirtualAircraft: !ev.aircraft?.id && !!ev.virtualAircraft
   };
@@ -373,7 +377,8 @@ function computeDiff(a: RowDraft, b: RowDraft) {
     "layoutId",
     "standId",
     "allowOverlap",
-    "lineBase"
+    "lineBase",
+    "deadlineAtLocal"
   ];
   return keys
     .filter((k) => String(a[k] ?? "") !== String(b[k] ?? ""))
@@ -966,8 +971,9 @@ export function GanttEventsTable(props: {
       columns: GanttTableColDef[],
       opts?: { allowShowAll?: boolean }
     ) => {
+      const stored = config ? ensureDeadlineColumn(config) ?? config : config;
       const factory = factoryColumnConfig(columns);
-      if (!config) {
+      if (!stored) {
         setColWidths(factory.widths);
         setVisibleIds(new Set(factory.visible));
         setPinnedLeftIds(resolvePinnedLeftIds(factory.pinnedLeft, columns));
@@ -976,13 +982,13 @@ export function GanttEventsTable(props: {
       }
       const nextWidths = { ...factory.widths };
       for (const col of columns) {
-        const w = Number(config.widths?.[col.id]);
+        const w = Number(stored.widths?.[col.id]);
         if (Number.isFinite(w)) nextWidths[col.id] = Math.max(col.minWidth, Math.round(w));
       }
       setColWidths(nextWidths);
-      setVisibleIds(new Set(resolveVisibleIds(config, columns, opts)));
-      setPinnedLeftIds(resolvePinnedLeftIds(config.pinnedLeft, columns));
-      setColOrder(normalizeColOrder(config.order?.length ? config.order : factory.order, columns, config.pinnedLeft));
+      setVisibleIds(new Set(resolveVisibleIds(stored, columns, opts)));
+      setPinnedLeftIds(resolvePinnedLeftIds(stored.pinnedLeft, columns));
+      setColOrder(normalizeColOrder(stored.order?.length ? stored.order : factory.order, columns, stored.pinnedLeft));
     },
     []
   );
@@ -1359,7 +1365,8 @@ export function GanttEventsTable(props: {
     try {
       validateDraft(draft);
       setLocalError(null);
-      if (activeSandbox) {
+      const diffFields = computeDiff(original, draft).map((d) => d.field);
+      if (activeSandbox || !eventDiffNeedsChangeReason(diffFields)) {
         saveM.mutate();
         return;
       }
@@ -1372,12 +1379,21 @@ export function GanttEventsTable(props: {
   const saveM = useMutation({
     mutationFn: async () => {
       if (!draft || !original) throw new Error("Нет черновика");
+      const diffFields = computeDiff(original, draft).map((d) => d.field);
+      if (!changeReason.trim() && diffFields.length > 0 && !eventDiffNeedsChangeReason(diffFields)) {
+        await apiPatch(`/api/events/${draft.id}`, {
+          notes: draft.notes.trim() ? draft.notes : null,
+          comment: draft.comment.trim() ? draft.comment : null
+        });
+        return;
+      }
       validateDraft(draft);
       const reason = changeReason.trim();
       if (!activeSandbox && !reason) throw new Error("Укажите причину изменения");
 
-      const startAt = dayjs(draft.startAtLocal).second(0).millisecond(0).toISOString();
-      const endAt = dayjs(draft.endAtLocal).second(0).millisecond(0).toISOString();
+      const startAt = fromInputMskOptional(draft.startAtLocal);
+      const endAt = fromInputMskOptional(draft.endAtLocal);
+      if (!startAt || !endAt) throw new Error("Заполните даты оперативного периода");
       const budgetStartAt = fromInputLocalOptional(draft.budgetStartAtLocal);
       const budgetEndAt = fromInputLocalOptional(draft.budgetEndAtLocal);
       const actualStartAt = fromInputLocalOptional(draft.actualStartAtLocal);
@@ -1431,24 +1447,9 @@ export function GanttEventsTable(props: {
       }
       payload.workshopId = draft.workshopId || null;
       payload.lineBase = parseLineBase(draft.lineBase);
+      payload.deadlineAt = fromInputLocalOptional(draft.deadlineAtLocal);
 
       await apiPatch(`/api/events/${draft.id}`, payload);
-
-      const standChanged = original.standId !== draft.standId;
-      const locationEditable = !draft.multiPlacement;
-      if (locationEditable && standChanged) {
-        if (draft.standId) {
-          if (!draft.layoutId) throw new Error("Выберите вариант размещения перед назначением места");
-          await apiPut(`/api/reservations/by-event/${draft.id}`, {
-            layoutId: draft.layoutId,
-            standId: draft.standId,
-            allowOverlap: draft.allowOverlap,
-            ...(reason ? { changeReason: reason } : {})
-          });
-        } else if (original.standId) {
-          await apiDelete(`/api/reservations/by-event/${draft.id}`);
-        }
-      }
     },
     onSuccess: () => {
       setConfirmOpen(false);
@@ -1464,7 +1465,9 @@ export function GanttEventsTable(props: {
       void qc.invalidateQueries({ queryKey: ["analytics", "primary-table", "gantt-rows"] });
     },
     onError: (e: any) => {
-      setLocalError(String(e?.message ?? e));
+      const message = String(e?.message ?? e);
+      setLocalError(message);
+      if (message.includes("Укажите причину изменения")) setConfirmOpen(true);
     }
   });
 
@@ -1601,6 +1604,7 @@ export function GanttEventsTable(props: {
     if (col.sticky === "left") parts.push("ganttTableStickyCol");
     if (col.id === "actions") parts.push("ganttTableActionsCol");
     if (col.id === SELECT_COL_ID) parts.push("ganttTableSelectCol");
+    if (col.kind === "deadlineAt") parts.push("ganttTableDeadline");
     if (col.id === lastStickyLeftId) parts.push("ganttTableStickyColEdge");
     return parts.length ? parts.join(" ") : undefined;
   };
@@ -1650,6 +1654,8 @@ export function GanttEventsTable(props: {
         );
       case "lineBase":
         return formatLineBase(ev.lineBase);
+      case "deadlineAt":
+        return formatCellDate(ev.deadlineAt);
       case "startAtLocal":
         return formatCellDate(ev.startAt);
       case "endAtLocal":
@@ -1723,6 +1729,7 @@ export function GanttEventsTable(props: {
       case "actions":
         return (
           <div className="ganttTableRowActions">
+            <EventWatchButton eventId={ev.id} variant="table" />
             <button
               className="ganttTableIconBtn"
               type="button"
@@ -1889,6 +1896,17 @@ export function GanttEventsTable(props: {
             <option value="BASE">{LINE_BASE_LABEL.BASE}</option>
           </select>
         );
+      case "deadlineAt":
+        return (
+          <input
+            className="evInput ganttTableInput"
+            type="datetime-local"
+            value={d.deadlineAtLocal}
+            disabled={d.status === "DONE"}
+            title={d.status === "DONE" ? "Нельзя менять DeadLine у завершённого события" : "DeadLine"}
+            onChange={(e) => patchDraft({ deadlineAtLocal: e.target.value })}
+          />
+        );
       case "startAtLocal":
         return (
           <input
@@ -1904,6 +1922,7 @@ export function GanttEventsTable(props: {
             className="evInput ganttTableInput"
             type="datetime-local"
             value={d.endAtLocal}
+            title={slotExitAfterDeadline(d.endAtLocal, d.deadlineAtLocal) ? DEADLINE_SLOT_HINT : undefined}
             onChange={(e) => patchDraft({ endAtLocal: e.target.value })}
           />
         );
@@ -2042,6 +2061,7 @@ export function GanttEventsTable(props: {
       case "actions":
         return (
           <div className="ganttTableRowActions" title={ctx.locationLocked ? "Несколько ангаров — место в карточке" : undefined}>
+            <EventWatchButton eventId={ev.id} variant="table" />
             <button
               className="ganttTableIconBtn ganttTableIconBtnPrimary"
               type="button"
@@ -2089,6 +2109,11 @@ export function GanttEventsTable(props: {
   return (
     <div className="ganttTablePanel">
       {localError && !confirmOpen ? <div className="error ganttTableError">{localError}</div> : null}
+      {draft && slotExitAfterDeadline(draft.endAtLocal, draft.deadlineAtLocal) ? (
+        <div className="ganttTableDeadlineHint" role="status">
+          {DEADLINE_SLOT_HINT}
+        </div>
+      ) : null}
 
       <div className="ganttTableWrap" ref={tableWrapRef}>
         <table className="ganttEventsTable">
@@ -2149,7 +2174,7 @@ export function GanttEventsTable(props: {
             {sortedEvents.length === 0 ? (
               <tr>
                 <td colSpan={Math.max(1, displayColumns.length)} className="ganttTableEmpty">
-                  Нет событий в выбранном периоде и фильтрах
+                  <span className="ganttTableEmptyMsg">Нет событий в выбранном периоде и фильтрах</span>
                 </td>
               </tr>
             ) : (
@@ -2282,9 +2307,7 @@ export function GanttEventsTable(props: {
 }
 
 function formatCellDate(v: string | null | undefined): string {
-  if (!v) return "—";
-  const d = dayjs(v);
-  return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : "—";
+  return formatMskDateTime(v) || "—";
 }
 
 function validateDraft(draft: RowDraft) {

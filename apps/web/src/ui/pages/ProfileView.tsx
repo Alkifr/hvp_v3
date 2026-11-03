@@ -14,6 +14,7 @@ import {
   parseMutedNotificationKinds
 } from "../../lib/userPrefs";
 import { ActivityFeed } from "../components/ActivityFeed";
+import { ProfileSubscriptions } from "./ProfileSubscriptions";
 import { PermissionMatrix } from "../components/PermissionMatrix";
 import { PresenceFeed } from "../components/PresenceFeed";
 import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
@@ -23,9 +24,9 @@ import { sandboxIsArchived, useActiveSandbox } from "../components/SandboxSwitch
 import { useIsMobile } from "../hooks/useIsMobile";
 
 type AuthedUser = Extract<MeResponse, { ok: true }>["user"];
-type ProfileTab = "profile" | "access" | "prefs" | "security" | "activity";
+type ProfileTab = "profile" | "access" | "prefs" | "subs" | "security" | "activity";
 type ActivityPane = "edits" | "presence";
-type NavPage = "admin" | "sandboxes";
+type NavPage = "admin" | "sandboxes" | "gantt";
 
 const ROLE_LABEL: Record<string, string> = {
   ADMIN: "Администратор",
@@ -272,6 +273,7 @@ export function ProfileView(props: { me: AuthedUser; onNavigate: (page: NavPage)
             ["profile", "Профиль"],
             ["access", "Доступ"],
             ["prefs", "Предпочтения"],
+            ["subs", "Подписки"],
             ["security", "Безопасность"],
             ["activity", "Активность"]
           ] as const
@@ -427,6 +429,13 @@ export function ProfileView(props: { me: AuthedUser; onNavigate: (page: NavPage)
             </div>
           </section>
         </div>
+      ) : null}
+
+      {tab === "subs" ? (
+        <ProfileSubscriptions
+          canOpenEvents={canNotify && !isMobile}
+          onOpenGantt={() => props.onNavigate("gantt")}
+        />
       ) : null}
 
       {tab === "prefs" ? (

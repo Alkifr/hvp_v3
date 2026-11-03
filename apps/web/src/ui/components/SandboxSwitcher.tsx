@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiGet, getActiveSandboxId, setActiveSandboxId } from "../../lib/api";
+import { shouldDropActiveSandbox } from "../../lib/activeSandboxGuard";
+import { apiGet, getActiveSandboxChosenAt, getActiveSandboxId, setActiveSandboxId } from "../../lib/api";
 import { useIsMobile } from "../hooks/useIsMobile";
 
 export type SandboxStatus = "ACTIVE" | "ARCHIVED";
@@ -56,14 +57,23 @@ export function useActiveSandbox(): {
   const list = listQ.data ?? [];
   const active = useMemo(() => (activeId ? list.find((s) => s.id === activeId) ?? null : null), [activeId, list]);
 
-  // Если активная песочница ушла в архив или пропала — возвращаемся в рабочий контур.
+  // Список, снятый до выбора, новую песочницу ещё не содержит — не выкидываем из неё,
+  // пока свежий ответ не подтвердит, что её нет или она в архиве.
   useEffect(() => {
-    if (!activeId || listQ.isLoading || !listQ.data) return;
-    const found = list.find((s) => s.id === activeId);
-    if (!found || sandboxIsArchived(found)) {
-      setActiveSandboxId(null);
+    if (
+      !shouldDropActiveSandbox({
+        activeId,
+        sandboxes: listQ.data,
+        isLoading: listQ.isLoading,
+        isFetching: listQ.isFetching,
+        dataUpdatedAt: listQ.dataUpdatedAt,
+        chosenAt: getActiveSandboxChosenAt()
+      })
+    ) {
+      return;
     }
-  }, [activeId, list, listQ.isLoading, listQ.data]);
+    setActiveSandboxId(null);
+  }, [activeId, listQ.data, listQ.dataUpdatedAt, listQ.isFetching, listQ.isLoading]);
 
   return { activeId, active, list, loading: listQ.isLoading };
 }

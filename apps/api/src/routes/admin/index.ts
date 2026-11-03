@@ -15,6 +15,7 @@ import { syncUserDbAccess } from "../../lib/pgAccess.js";
 import { mailDigestRoutes } from "./mailDigest.js";
 import { announcementAdminRoutes } from "./announcements.js";
 import { runtimeAdminRoutes } from "./runtime.js";
+import { serverAdminRoutes } from "./server.js";
 import { sandboxAdminRoutes } from "./sandboxes.js";
 import { reportAdminRoutes } from "./reports.js";
 
@@ -77,6 +78,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
   await app.register(mailDigestRoutes);
   await app.register(announcementAdminRoutes);
   await app.register(runtimeAdminRoutes);
+  await app.register(serverAdminRoutes);
   await app.register(sandboxAdminRoutes);
   await app.register(reportAdminRoutes);
 
@@ -146,6 +148,8 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         }
       : {})
   });
+
+  const CLEANUP_LIST_LIMIT = 5000;
 
   const cleanupSelect = {
     id: true,
@@ -494,11 +498,11 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
         where,
         select: cleanupSelect,
         orderBy: [{ startAt: "asc" }, { title: "asc" }],
-        take: 50
+        take: CLEANUP_LIST_LIMIT
       })
     ]);
 
-    return { ok: true, total, items };
+    return { ok: true, total, items, truncated: total > items.length };
   });
 
   app.post("/cleanup/events/apply", async (req) => {
@@ -506,7 +510,8 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     const body = zCleanupFilters
       .extend({
         password: z.string().min(1).max(200),
-        reason: z.string().trim().max(1000).optional()
+        reason: z.string().trim().max(1000).optional(),
+        eventIds: z.array(zUuid).min(1).max(CLEANUP_LIST_LIMIT)
       })
       .parse(req.body ?? {});
 
@@ -538,7 +543,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     };
     const where = buildCleanupWhere(filters);
     const events = await app.prisma.maintenanceEvent.findMany({
-      where,
+      where: { ...where, id: { in: body.eventIds } },
       select: { id: true, status: true, title: true },
       orderBy: [{ startAt: "asc" }, { title: "asc" }]
     });

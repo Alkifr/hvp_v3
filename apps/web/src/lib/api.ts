@@ -1,6 +1,13 @@
 const SANDBOX_KEY = "hp_sandbox_id";
 const SANDBOX_EVENT = "hangarPlanning:sandboxChanged";
 
+/** Момент последнего выбора контура. Список песочниц старше этой метки ещё не знает о новой песочнице. */
+let activeSandboxChosenAt = 0;
+
+export function getActiveSandboxChosenAt(): number {
+  return activeSandboxChosenAt;
+}
+
 export function getActiveSandboxId(): string | null {
   try {
     const v = localStorage.getItem(SANDBOX_KEY);
@@ -11,6 +18,7 @@ export function getActiveSandboxId(): string | null {
 }
 
 export function setActiveSandboxId(id: string | null) {
+  activeSandboxChosenAt = Date.now();
   try {
     if (id) localStorage.setItem(SANDBOX_KEY, id);
     else localStorage.removeItem(SANDBOX_KEY);

@@ -169,7 +169,7 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
     busyMode === "import"
       ? jobProgress
         ? `Пакет ${jobProgress.chunk} из ${jobProgress.chunks}: создаём события (${jobProgress.done} из ${jobProgress.total} строк${jobProgress.createdEvents ? `, уже создано ${jobProgress.createdEvents}` : ""})…`
-        : `Создаём события и резервы по ${importRows?.length ?? 0} строкам пакетами…`
+        : `Создаём события по ${importRows?.length ?? 0} строкам пакетами…`
       : jobProgress
         ? `Пакет ${jobProgress.chunk} из ${jobProgress.chunks}: сверяем справочники (${jobProgress.done} из ${jobProgress.total} строк)…`
         : `Сверяем справочники и конфликты мест по ${importRows?.length ?? 0} строкам…`;
@@ -356,13 +356,13 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
                   {statusCounts.warn > 0 ? <span className="eventImportStat eventImportStatWarn">предупреждений: {statusCounts.warn}</span> : null}
                   <span className="eventImportStat eventImportStatError">с ошибками: {(importResult as any).summary?.errorRows ?? 0}</span>
                   <span className="eventImportStat">событий: {(importResult as any).summary?.wouldCreateEvents ?? 0}</span>
-                  <span className="eventImportStat">резервов: {(importResult as any).summary?.wouldCreateReservations ?? 0}</span>
+                  <span className="eventImportStat">с местом: {(importResult as any).summary?.wouldCreateReservations ?? 0}</span>
                   <span className="eventImportStat">буксировок: {(importResult as any).summary?.wouldCreateTows ?? 0}</span>
                 </>
               ) : (
                 <>
                   <span className="eventImportStat eventImportStatOk">создано событий: {(importResult as any).createdEvents ?? 0}</span>
-                  <span className="eventImportStat">создано резервов: {(importResult as any).createdReservations ?? 0}</span>
+                  <span className="eventImportStat">с местом: {(importResult as any).createdReservations ?? 0}</span>
                   <span className="eventImportStat">создано буксировок: {(importResult as any).createdTows ?? 0}</span>
                   <span className="eventImportStat eventImportStatError">ошибок: {resultErrors.length}</span>
                 </>

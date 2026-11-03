@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiGet, apiPatch, apiPost, getActiveSandboxId, setActiveSandboxId } from "../../lib/api";
 import { sandboxIsArchived, type SandboxSummary } from "../components/SandboxSwitcher";
 import { SwitchToggle } from "../components/SwitchToggle";
+import { grantAccessToUsers, isAllUsersShare, UserSharePicker, type DirectoryUser } from "../components/UserSharePicker";
 
 type CopyScope = "full" | "range";
 type SandboxTab = "mine" | "shared" | "archived";
@@ -333,8 +334,8 @@ function MergeSandboxesModal({
         ...(rangePayload ? { range: rangePayload } : {})
       }),
     onSuccess: (res) => {
-      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
       setActiveSandboxId(res.sandbox.id);
+      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
       void qc.invalidateQueries();
       onClose();
     }
@@ -551,8 +552,8 @@ function CreateSandboxModal({ onClose }: { onClose: () => void }) {
       return await apiPost<{ ok: boolean; sandbox: { id: string; name: string }; copied: any }>("/api/sandboxes", payload);
     },
     onSuccess: (res) => {
-      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
       setActiveSandboxId(res.sandbox.id);
+      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
       void qc.invalidateQueries();
       onClose();
     }
@@ -689,9 +690,8 @@ function RenameSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; onC
 
 function ShareSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; onClose: () => void }) {
   const qc = useQueryClient();
-  const [email, setEmail] = useState("");
+  const [shareUsers, setShareUsers] = useState<DirectoryUser[]>([]);
   const [role, setRole] = useState<"EDITOR" | "VIEWER">("EDITOR");
-  const [sharedRole, setSharedRole] = useState<"EDITOR" | "VIEWER">(sandbox.sharedWithAllRole ?? "VIEWER");
 
   const shareAllM = useMutation({
     mutationFn: (nextRole: "EDITOR" | "VIEWER" | null) =>
@@ -702,9 +702,24 @@ function ShareSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; onCl
   });
 
   const addM = useMutation({
-    mutationFn: () => apiPost(`/api/sandboxes/${sandbox.id}/members`, { email: email.trim().toLowerCase(), role }),
-    onSuccess: () => {
-      setEmail("");
+    mutationFn: async () => {
+      if (shareUsers.length === 0) throw new Error("Выберите пользователей");
+      const people = shareUsers.filter((user) => !isAllUsersShare(user));
+      if (shareUsers.some(isAllUsersShare)) {
+        await apiPatch(`/api/sandboxes/${sandbox.id}`, { sharedWithAllRole: role });
+      }
+      if (people.length) {
+        await grantAccessToUsers(people, (user) =>
+          apiPost(`/api/sandboxes/${sandbox.id}/members`, { email: user.email, role })
+        );
+      }
+    },
+    onSuccess: () => setShareUsers([]),
+    onError: (err) => {
+      const ids = (err as { failedIds?: string[] }).failedIds;
+      if (ids?.length) setShareUsers((prev) => prev.filter((user) => ids.includes(user.id)));
+    },
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["sandboxes"] });
     }
   });
@@ -719,51 +734,24 @@ function ShareSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; onCl
   return (
     <ModalShell title={`Поделиться «${sandbox.name}»`} onClose={onClose}>
       <div className="modalBody sandboxModalBody">
-        <div className="sandboxShareAll">
-          <SwitchToggle
-            checked={sandbox.sharedWithAllRole !== null}
-            onChange={(enabled) => shareAllM.mutate(enabled ? sharedRole : null)}
-            label="Поделиться со всеми"
-            hint="Доступ автоматически получат все текущие и новые пользователи"
-            disabled={shareAllM.isPending}
-          />
-          <label className="refLabel sandboxShareAllRole">
-            <span>Роль для всех</span>
-            <select
-              className="refInput"
-              value={sharedRole}
-              disabled={sandbox.sharedWithAllRole === null || shareAllM.isPending}
-              onChange={(e) => {
-                const nextRole = e.target.value as "EDITOR" | "VIEWER";
-                setSharedRole(nextRole);
-                shareAllM.mutate(nextRole);
-              }}
-            >
-              <option value="VIEWER">Наблюдатель</option>
-              <option value="EDITOR">Редактор</option>
-            </select>
-          </label>
-        </div>
-        {shareAllM.isError ? <div className="errorMsg">{String((shareAllM.error as Error)?.message ?? shareAllM.error)}</div> : null}
-
-        <div className="sandboxShareDivider"><span>Индивидуальный доступ</span></div>
         <div className="sandboxShareAddRow">
-          <input
-            className="refInput"
-            placeholder="user@company.ru"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            type="email"
+          <UserSharePicker
+            value={shareUsers.map((user) => user.id)}
+            onChange={setShareUsers}
+            placeholder="Выберите пользователей"
           />
           <select className="refInput" value={role} onChange={(e) => setRole(e.target.value as "EDITOR" | "VIEWER")}>
             <option value="EDITOR">Редактор</option>
             <option value="VIEWER">Наблюдатель</option>
           </select>
-          <button type="button" className="btn btnPrimary" onClick={() => addM.mutate()} disabled={addM.isPending || !email.trim()}>
+          <button type="button" className="btn btnPrimary" onClick={() => addM.mutate()} disabled={addM.isPending || shareUsers.length === 0}>
             Добавить
           </button>
         </div>
         {addM.isError ? <div className="errorMsg">{String((addM.error as Error)?.message ?? addM.error)}</div> : null}
+        <p className="muted small shareAccessHint">
+          «Все пользователи» открывает доступ каждому, включая новых. Роль конкретного человека заменяет её: всем можно дать просмотр, а отдельным — редактирование.
+        </p>
 
         <div className="sandboxMembersList">
           <div className="sandboxMembersHead">
@@ -776,7 +764,19 @@ function ShareSandboxModal({ sandbox, onClose }: { sandbox: SandboxSummary; onCl
             <div><span className="sandboxRoleBadge">Владелец</span></div>
             <div></div>
           </div>
-          {sandbox.members.length === 0 ? (
+          {sandbox.sharedWithAllRole ? (
+            <div className="sandboxMembersRow">
+              <div>Все пользователи</div>
+              <div><span className="sandboxRoleBadge">{sandbox.sharedWithAllRole === "EDITOR" ? "Редактор" : "Наблюдатель"}</span></div>
+              <div>
+                <button type="button" className="btn btnDanger btnSmall" onClick={() => shareAllM.mutate(null)} disabled={shareAllM.isPending}>
+                  Убрать
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {shareAllM.isError ? <div className="errorMsg">{String((shareAllM.error as Error)?.message ?? shareAllM.error)}</div> : null}
+          {sandbox.members.length === 0 && !sandbox.sharedWithAllRole ? (
             <div className="sandboxMembersEmpty muted">Ещё нет участников</div>
           ) : (
             sandbox.members.map((m) => (
