@@ -286,7 +286,6 @@ export function RmPersonnelView() {
     enabled: production && Boolean(workshopId)
   });
   const week = weekQ.data;
-  const workshopTypes = week?.aircraftTypes ?? [];
   useEffect(() => {
     const types = week?.aircraftTypes ?? [];
     if (!types.length) return;

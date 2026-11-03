@@ -134,12 +134,6 @@ function formatMinutesOfDay(v: unknown): string {
   return `${hh}:${mm}`;
 }
 
-function bodyTypeLabel(v: unknown): string | null {
-  if (v === "NARROW_BODY") return "Узкий";
-  if (v === "WIDE_BODY") return "Широкий";
-  return null;
-}
-
 type Operator = { id: string; code: string; name: string; isActive: boolean };
 type AircraftType = { id: string; icaoType?: string | null; name: string; manufacturer?: string | null; isActive: boolean };
 type EventType = { id: string; code: string; name: string; isActive: boolean };
@@ -219,38 +213,6 @@ function standAllowedAircraftTypeLabel(row: any): string {
     .filter(Boolean)
     .map((t: AircraftType) => aircraftTypeNameLabel(t))
     .join(", ");
-}
-
-function priorityLinkedEventTypes(row: any): string {
-  const items = Array.isArray(row.eventTypes) ? row.eventTypes : [];
-  if (items.length === 0) return "Любой тип события";
-  return items.map((link: any) => link.eventType?.name || link.eventType?.code).filter(Boolean).join(", ");
-}
-
-function priorityLinkedAircraftTypes(row: any): string {
-  const items = Array.isArray(row.aircraftTypes) ? row.aircraftTypes : [];
-  if (items.length === 0) return "Любой тип ВС";
-  return items.map((link: any) => link.aircraftType?.name || link.aircraftType?.icaoType).filter(Boolean).join(", ");
-}
-
-function scoreCategoryLabel(v: unknown): string {
-  if (v === "REWARD") return "Поощрение";
-  if (v === "PENALTY") return "Штраф";
-  if (v === "LIMIT") return "Ограничение";
-  return "—";
-}
-
-function scoreScopeLabel(v: unknown): string {
-  const map: Record<string, string> = {
-    NEW_EVENT: "Новое событие",
-    EXISTING_EVENT: "Существующее событие",
-    PLACEMENT: "Размещение",
-    LAYOUT: "Вариант",
-    STAND: "Место",
-    TOW: "Буксировка",
-    PRIORITY: "Приоритет"
-  };
-  return map[String(v)] ?? "—";
 }
 
 function LayoutSchemePreview(props: { detail?: LayoutDetail | null; selectedStandId?: string }) {
