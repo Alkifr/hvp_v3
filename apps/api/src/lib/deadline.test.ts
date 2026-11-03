@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { deadlineChangeBlockedWhileDone } from "./eventStatus.ts";
+import { deadlineChangeBlockedWhileDone } from "./eventStatus.js";
 
 test("deadline stays editable until the event is done", () => {
   assert.equal(

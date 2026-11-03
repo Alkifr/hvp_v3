@@ -73,8 +73,10 @@ export async function loadPersonnelWeekData(
     sortOrder: Number(row.sortOrder ?? 0),
     name: row.name as string
   }));
-  const workshopsWithSkills = new Set(workshopSkills.map((link: any) => link.workshopId));
-  const workshopSkillCodes = [...new Set(workshopSkills.map((link: any) => String(link.skill.code)))];
+  const workshopsWithSkills = new Set((workshopSkills as any[]).map((link: any) => link.workshopId));
+  const workshopSkillCodes = [
+    ...new Set((workshopSkills as any[]).map((link: any) => String(link.skill.code)))
+  ] as string[];
   const fromSkills = workshopSkillCodes.length
     ? qualificationsForWorkshopSkills(catalogQualifications, workshopSkillCodes).map((row) => ({
         workshopId: params.workshopId,
@@ -83,7 +85,13 @@ export async function loadPersonnelWeekData(
         department: row.department,
         sortOrder: row.sortOrder ?? 0,
         isActive: true,
-        category: { code: row.code, name: row.name, department: row.department, isAuthorized: row.isAuthorized, sortOrder: row.sortOrder ?? 0 }
+        category: {
+          code: row.code,
+          name: row.name ?? row.code,
+          department: row.department,
+          isAuthorized: row.isAuthorized,
+          sortOrder: row.sortOrder ?? 0
+        }
       }))
     : [];
   const seenCategories = new Set(fromSkills.map((row) => row.categoryCode));
@@ -366,7 +374,7 @@ function resourceCategoriesForWorkshop(
         skillId: null,
         department: row.department,
         isActive: true,
-        category: { code: row.code, name: row.name, department: row.department, isAuthorized: row.isAuthorized }
+        category: { code: row.code, name: row.name ?? row.code, department: row.department, isAuthorized: row.isAuthorized }
       }))
     : [];
   if (fromSkills.length) return fromSkills;

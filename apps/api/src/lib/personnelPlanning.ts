@@ -61,6 +61,7 @@ export type CatalogQualification = {
   department: string | null;
   isAuthorized: boolean;
   sortOrder?: number;
+  name?: string;
 };
 
 /** Квалификации справочника, входящие в выбранные категории. Состав категорий в коде не задаётся. */

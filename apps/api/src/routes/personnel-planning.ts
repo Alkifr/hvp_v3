@@ -324,7 +324,7 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
       delta.calculationByAircraftType = Object.fromEntries(
         Object.entries(delta.calculationByAircraftType).map(([typeId, typeDays]) => [
           typeId,
-          (typeDays as Array<{ date: string }>).filter((day) => known.has(day.date))
+          typeDays.filter((day) => known.has(day.date))
         ])
       );
     }

@@ -7,7 +7,7 @@ import {
   formatWatchLetter,
   notesFromAuditWrite,
   summarizeChanges
-} from "./eventWatchMail.ts";
+} from "./eventWatchMail.js";
 
 test("notesFromAuditWrite читает create и createMany", () => {
   const one = notesFromAuditWrite(
