@@ -79,12 +79,14 @@ export type HangarViewShare = {
 };
 
 export type AnalyticsViewShare = {
-  tab: "tat" | "util" | "tows" | "compare" | "monthly" | "builder";
+  tab: "tat" | "util" | "tows" | "compare" | "monthly" | "builder" | "occupancy";
   fromDate: string;
   toDate: string;
   compareA: string;
   compareB: string;
   efficiencyGrain: "day" | "week" | "month" | "period";
+  occupancyGrain?: "day" | "week" | "month" | "year";
+  occupancyGroupBy?: "aircraftType" | "operator";
   filterHangarIds: string[];
   filterOperatorIds: string[];
   filterAircraftTypeIds: string[];
@@ -299,8 +301,10 @@ export function syncHangarViewHash(state: HangarViewShare & { sandboxId?: string
   writePageHashQuery("hangar", serializeHangarViewShare(state));
 }
 
-const ANALYTICS_TABS = ["tat", "util", "tows", "compare", "monthly", "builder"] as const;
+const ANALYTICS_TABS = ["tat", "util", "tows", "compare", "monthly", "builder", "occupancy"] as const;
 const ANALYTICS_GRAINS = ["day", "week", "month", "period"] as const;
+const OCCUPANCY_GRAINS = ["day", "week", "month", "year"] as const;
+const OCCUPANCY_GROUPS = ["aircraftType", "operator"] as const;
 
 export function parseAnalyticsViewShare(query: URLSearchParams): AnalyticsViewShare | null {
   if (!queryHasViewShare(query)) return null;
@@ -308,6 +312,8 @@ export function parseAnalyticsViewShare(query: URLSearchParams): AnalyticsViewSh
   const to = readDate(query, "to");
   const tabRaw = query.get("tab") ?? "tat";
   const grainRaw = query.get("grain") ?? "week";
+  const occupancyGrainRaw = query.get("ograin") ?? "month";
+  const groupRaw = query.get("group") ?? "aircraftType";
   return {
     tab: (ANALYTICS_TABS as readonly string[]).includes(tabRaw) ? (tabRaw as AnalyticsViewShare["tab"]) : "tat",
     fromDate: from ?? "",
@@ -317,6 +323,12 @@ export function parseAnalyticsViewShare(query: URLSearchParams): AnalyticsViewSh
     efficiencyGrain: (ANALYTICS_GRAINS as readonly string[]).includes(grainRaw)
       ? (grainRaw as AnalyticsViewShare["efficiencyGrain"])
       : "week",
+    occupancyGrain: (OCCUPANCY_GRAINS as readonly string[]).includes(occupancyGrainRaw)
+      ? (occupancyGrainRaw as NonNullable<AnalyticsViewShare["occupancyGrain"]>)
+      : "month",
+    occupancyGroupBy: (OCCUPANCY_GROUPS as readonly string[]).includes(groupRaw)
+      ? (groupRaw as NonNullable<AnalyticsViewShare["occupancyGroupBy"]>)
+      : "aircraftType",
     filterHangarIds: csv(query, "hangar"),
     filterOperatorIds: csv(query, "op"),
     filterAircraftTypeIds: csv(query, "type"),
@@ -333,6 +345,8 @@ export function serializeAnalyticsViewShare(state: AnalyticsViewShare & { sandbo
   if (state.compareA && state.compareA !== "prod") q.set("ca", state.compareA);
   if (state.compareB) q.set("cb", state.compareB);
   if (state.efficiencyGrain !== "week") q.set("grain", state.efficiencyGrain);
+  if (state.occupancyGrain && state.occupancyGrain !== "month") q.set("ograin", state.occupancyGrain);
+  if (state.occupancyGroupBy && state.occupancyGroupBy !== "aircraftType") q.set("group", state.occupancyGroupBy);
   setCsv(q, "hangar", state.filterHangarIds);
   setCsv(q, "op", state.filterOperatorIds);
   setCsv(q, "type", state.filterAircraftTypeIds);

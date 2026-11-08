@@ -210,9 +210,17 @@ export async function exportUtilizationExcel(params: {
   stands: Array<Record<string, string | number | null>>;
   timelineChart: {
     labels: string[];
+    occupiedH: number[];
+    idleH: number[];
     aircraftHours: number[];
     standUtilizationPct: number[];
     capacityUtilizationPct: number[];
+    timeUtilizationPct: number[];
+  };
+  hangarChart: {
+    labels: string[];
+    occupiedH: number[];
+    idleH: number[];
   };
 }) {
   const wb = new ExcelJS.Workbook();
@@ -229,7 +237,7 @@ export async function exportUtilizationExcel(params: {
 
   await addChartSheet(wb, "Utilization — графики", [
     {
-      title: "Таймлайн утилизации",
+      title: "Ёмкость ангара",
       config: {
         type: "bar",
         data: {
@@ -237,40 +245,114 @@ export async function exportUtilizationExcel(params: {
           datasets: [
             {
               type: "bar",
-              label: "Спрос (ВС·ч)",
-              data: params.timelineChart.aircraftHours,
-              yAxisID: "yHours",
-              backgroundColor: "rgba(14, 116, 144, 0.35)",
+              label: "Заполнено, мест·ч",
+              data: params.timelineChart.occupiedH,
+              stack: "capacity",
+              backgroundColor: "rgba(14, 116, 144, 0.82)",
+              order: 2
+            },
+            {
+              type: "bar",
+              label: "Свободно, мест·ч",
+              data: params.timelineChart.idleH,
+              stack: "capacity",
+              backgroundColor: "rgba(148, 163, 184, 0.42)",
               order: 3
             },
             {
               type: "line",
-              label: "Stand util, %",
-              data: params.timelineChart.standUtilizationPct,
-              yAxisID: "yPct",
-              borderColor: "#0d9488",
-              backgroundColor: "rgba(13, 148, 136, 0.18)",
-              fill: true,
-              tension: 0.25,
-              order: 1
-            },
-            {
-              type: "line",
-              label: "Эффективность, %",
-              data: params.timelineChart.capacityUtilizationPct,
-              yAxisID: "yPct",
+              label: "Спрос, ВС·ч",
+              data: params.timelineChart.aircraftHours,
+              stack: "demand",
               borderColor: "#b45309",
-              borderDash: [5, 4],
               fill: false,
               tension: 0.25,
-              order: 2
+              pointRadius: 0,
+              borderWidth: 2,
+              order: 1
             }
           ]
         },
         options: {
           scales: {
-            yPct: { type: "linear", position: "left", min: 0, suggestedMax: 100, title: { display: true, text: "%" } },
-            yHours: { type: "linear", position: "right", min: 0, grid: { drawOnChartArea: false }, title: { display: true, text: "ВС·ч" } }
+            x: { stacked: true },
+            y: { stacked: true, min: 0, title: { display: true, text: "часы" } }
+          }
+        }
+      }
+    },
+    {
+      title: "Наполненность и эффективность",
+      config: {
+        type: "line",
+        data: {
+          labels: params.timelineChart.labels,
+          datasets: [
+            {
+              label: "Наполненность мест, %",
+              data: params.timelineChart.standUtilizationPct,
+              borderColor: "#0d9488",
+              backgroundColor: "rgba(13, 148, 136, 0.16)",
+              fill: true,
+              tension: 0.25,
+              pointRadius: 0,
+              borderWidth: 2
+            },
+            {
+              label: "Эффективность, %",
+              data: params.timelineChart.capacityUtilizationPct,
+              borderColor: "#b45309",
+              borderDash: [5, 4],
+              fill: false,
+              tension: 0.25,
+              pointRadius: 0,
+              borderWidth: 2
+            },
+            {
+              label: "Занятость по времени, %",
+              data: params.timelineChart.timeUtilizationPct,
+              borderColor: "#4f46e5",
+              borderDash: [2, 3],
+              fill: false,
+              tension: 0.25,
+              pointRadius: 0,
+              borderWidth: 2
+            }
+          ]
+        },
+        options: {
+          scales: {
+            y: { min: 0, suggestedMax: 100, title: { display: true, text: "%" } }
+          }
+        }
+      }
+    },
+    {
+      title: "Стаканы по ангарам",
+      config: {
+        type: "bar",
+        data: {
+          labels: params.hangarChart.labels,
+          datasets: [
+            {
+              label: "Заполнено, мест·ч",
+              data: params.hangarChart.occupiedH,
+              stack: "capacity",
+              backgroundColor: "rgba(14, 116, 144, 0.82)"
+            },
+            {
+              label: "Свободно, мест·ч",
+              data: params.hangarChart.idleH,
+              stack: "capacity",
+              backgroundColor: "rgba(148, 163, 184, 0.42)"
+            }
+          ]
+        },
+        options: {
+          indexAxis: "y",
+          scales: {
+            x: { stacked: true, min: 0, title: { display: true, text: "мест·ч" } },
+            y: { stacked: true }
           }
         }
       }
@@ -797,4 +879,54 @@ export async function exportTowsExcel(params: {
   ]);
 
   await downloadWorkbook(wb, `analytics-tows-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`);
+}
+
+export async function exportOccupancyExcel(params: {
+  periodLabel: string;
+  detailLabel: string;
+  groupLabel: string;
+  sliceLabel: string;
+  kpis: ExcelKpi[];
+  buckets: Array<Record<string, string | number | null>>;
+  rows: Array<Record<string, string | number | null>>;
+  eventTypes: Array<{ label: string; placeDays: number }>;
+}) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "HVP Analytics";
+  addKpiSheet(wb, params.kpis, [
+    ["Модуль", "Занятость"],
+    ["Период", params.periodLabel],
+    ["Детализация", params.detailLabel],
+    ["Группировка", params.groupLabel],
+    ["Срез", params.sliceLabel],
+    ["Выгружено", dayjs().format("YYYY-MM-DD HH:mm")]
+  ]);
+  addSheetFromRows(wb, "По времени", params.buckets);
+  addSheetFromRows(wb, "Срез", params.rows);
+
+  if (params.eventTypes.length > 0) await addChartSheet(wb, "Занятость — состав", [
+    {
+      title: `Место-сутки по типам событий · ${params.sliceLabel}`,
+      config: {
+        type: "bar",
+        data: {
+          labels: params.eventTypes.map((part) => part.label),
+          datasets: [
+            {
+              label: "Место-сутки",
+              data: params.eventTypes.map((part) => part.placeDays),
+              backgroundColor: "rgba(37, 99, 235, 0.72)"
+            }
+          ]
+        },
+        options: {
+          indexAxis: "y",
+          plugins: { legend: { display: false } },
+          scales: { x: { beginAtZero: true, title: { display: true, text: "Место-сутки" } } }
+        }
+      }
+    }
+  ]);
+
+  await downloadWorkbook(wb, `analytics-occupancy-${dayjs().format("YYYY-MM-DD_HHmm")}.xlsx`);
 }

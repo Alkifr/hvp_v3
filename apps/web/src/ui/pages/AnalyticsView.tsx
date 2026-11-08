@@ -26,6 +26,7 @@ import { parseAnalyticsViewShare, syncAnalyticsViewHash } from "../../lib/viewSh
 import { ReportBuilderPanel } from "./ReportBuilderPanel";
 import { MonthlyBasePlanPanel, type MonthlyBasePlanResponse } from "./MonthlyBasePlanPanel";
 import { TowsAnalyticsPanel, type TowsAnalyticsResponse } from "./TowsAnalyticsPanel";
+import { OccupancyPanel, type OccupancyResponse } from "./OccupancyPanel";
 
 ChartJS.register(
   CategoryScale,
@@ -38,8 +39,17 @@ ChartJS.register(
   Filler
 );
 
-type TabId = "tat" | "util" | "tows" | "compare" | "monthly" | "builder";
+type TabId = "tat" | "util" | "tows" | "compare" | "monthly" | "builder" | "occupancy";
 type EfficiencyGrain = "day" | "week" | "month" | "period";
+type OccupancyGrain = "day" | "week" | "month" | "year";
+type OccupancyGroupBy = "aircraftType" | "operator";
+
+const OCCUPANCY_GRAIN_LABEL: Record<OccupancyGrain, string> = {
+  day: "Сутки",
+  week: "Неделя",
+  month: "Месяц",
+  year: "Год"
+};
 
 const DETAIL_LEVEL_LABEL: Record<EfficiencyGrain, string> = {
   day: "Сутки",
@@ -344,7 +354,7 @@ export function AnalyticsView() {
   }, []);
 
   const [tab, setTab] = useState<TabId>(() =>
-    ["tat", "util", "tows", "compare", "monthly", "builder"].includes(String(savedUi?.tab))
+    ["tat", "util", "tows", "compare", "monthly", "builder", "occupancy"].includes(String(savedUi?.tab))
       ? (savedUi.tab as TabId)
       : "tat"
   );
@@ -366,6 +376,14 @@ export function AnalyticsView() {
     ["day", "week", "month", "period"].includes(String(savedUi?.efficiencyGrain))
       ? (savedUi.efficiencyGrain as EfficiencyGrain)
       : "week"
+  );
+  const [occupancyGrain, setOccupancyGrain] = useState<OccupancyGrain>(() =>
+    ["day", "week", "month", "year"].includes(String(savedUi?.occupancyGrain))
+      ? (savedUi.occupancyGrain as OccupancyGrain)
+      : "month"
+  );
+  const [occupancyGroupBy, setOccupancyGroupBy] = useState<OccupancyGroupBy>(() =>
+    savedUi?.occupancyGroupBy === "operator" ? "operator" : "aircraftType"
   );
 
   const [filterHangarIds, setFilterHangarIds] = useState<string[]>(() => readStringArray(savedUi?.filterHangarIds));
@@ -398,6 +416,8 @@ export function AnalyticsView() {
       compareA,
       compareB,
       efficiencyGrain,
+      occupancyGrain,
+      occupancyGroupBy,
       filterHangarIds,
       filterOperatorIds,
       filterAircraftTypeIds,
@@ -411,6 +431,8 @@ export function AnalyticsView() {
     compareA,
     compareB,
     efficiencyGrain,
+    occupancyGrain,
+    occupancyGroupBy,
     filterHangarIds,
     filterOperatorIds,
     filterAircraftTypeIds,
@@ -426,6 +448,8 @@ export function AnalyticsView() {
       compareA,
       compareB,
       efficiencyGrain,
+      occupancyGrain,
+      occupancyGroupBy,
       filterHangarIds,
       filterOperatorIds,
       filterAircraftTypeIds,
@@ -440,6 +464,8 @@ export function AnalyticsView() {
     compareA,
     compareB,
     efficiencyGrain,
+    occupancyGrain,
+    occupancyGroupBy,
     filterHangarIds,
     filterOperatorIds,
     filterAircraftTypeIds,
@@ -516,6 +542,39 @@ export function AnalyticsView() {
     enabled: tab === "tows" && periodOk
   });
 
+  const occupancyQ = useQuery({
+    queryKey: [
+      "analytics",
+      "occupancy",
+      fromIso,
+      toIso,
+      occupancyGrain,
+      occupancyGroupBy,
+      tzOffset,
+      filterHangarIds.join(","),
+      filterOperatorIds.join(","),
+      filterAircraftTypeIds.join(","),
+      filterEventTypeIds.join(","),
+      active?.id ?? "prod"
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        from: fromIso,
+        to: toIso,
+        grain: occupancyGrain,
+        groupBy: occupancyGroupBy,
+        tzOffset: String(tzOffset)
+      });
+      if (filterHangarIds.length) params.set("hangarIds", filterHangarIds.join(","));
+      if (filterOperatorIds.length) params.set("operatorIds", filterOperatorIds.join(","));
+      if (filterAircraftTypeIds.length) params.set("aircraftTypeIds", filterAircraftTypeIds.join(","));
+      if (filterEventTypeIds.length) params.set("eventTypeIds", filterEventTypeIds.join(","));
+      return apiGet<OccupancyResponse>(`/api/analytics/occupancy?${params.toString()}`);
+    },
+    enabled: tab === "occupancy" && periodOk,
+    placeholderData: (prev) => prev
+  });
+
   const filterSeedRows = useMemo((): FilterRow[] => {
     if (tab === "tat") return tatQ.data?.rows ?? [];
     if (tab === "tows") return towsQ.data?.rows ?? [];
@@ -590,6 +649,41 @@ export function AnalyticsView() {
     eventTypesQ.data
   ]);
 
+  const occupancySliceLabel = useMemo(() => {
+    const typeName = (id: string) => {
+      const type = (aircraftTypesQ.data ?? []).find((item) => item.id === id);
+      return type ? type.icaoType || type.name : null;
+    };
+    const operatorName = (id: string) => {
+      const operator = (operatorsQ.data ?? []).find((item) => item.id === id);
+      return operator ? (operator.code ? `${operator.code} · ${operator.name}` : operator.name) : null;
+    };
+    const eventName = (id: string) => (eventTypesQ.data ?? []).find((item) => item.id === id)?.name ?? null;
+    if (filterAircraftTypeIds.length === 1) return typeName(filterAircraftTypeIds[0]!) ?? "Срез";
+    if (occupancyGroupBy === "operator" && filterOperatorIds.length === 1 && filterAircraftTypeIds.length === 0) {
+      return operatorName(filterOperatorIds[0]!) ?? "Срез";
+    }
+    if (
+      filterEventTypeIds.length === 1 &&
+      filterAircraftTypeIds.length === 0 &&
+      filterOperatorIds.length === 0
+    ) {
+      return eventName(filterEventTypeIds[0]!) ?? "Срез";
+    }
+    if (filterAircraftTypeIds.length + filterOperatorIds.length + filterEventTypeIds.length === 0) {
+      return occupancyGroupBy === "operator" ? "Все операторы" : "Все типы ВС";
+    }
+    return "Срез";
+  }, [
+    aircraftTypesQ.data,
+    eventTypesQ.data,
+    filterAircraftTypeIds,
+    filterEventTypeIds,
+    filterOperatorIds,
+    occupancyGroupBy,
+    operatorsQ.data
+  ]);
+
   const applyPeriodPreset = (days: number, mode: "past" | "future") => {
     if (mode === "past") {
       setFromInput(toInputDate(dayjs().subtract(days, "day")));
@@ -615,6 +709,9 @@ export function AnalyticsView() {
         </button>
         <button type="button" className={tab === "util" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("util")}>
           Utilization
+        </button>
+        <button type="button" className={tab === "occupancy" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("occupancy")}>
+          Занятость
         </button>
         <button type="button" className={tab === "tows" ? "sandboxesTab active" : "sandboxesTab"} onClick={() => setTab("tows")}>
           Tows
@@ -745,6 +842,36 @@ export function AnalyticsView() {
                   </select>
                 </label>
               ) : null}
+              {tab === "occupancy" ? (
+                <>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">Детализация</span>
+                    <select
+                      value={occupancyGrain}
+                      onChange={(e) => setOccupancyGrain(e.target.value as OccupancyGrain)}
+                      style={{ width: 140 }}
+                      title="Уровень детализации интервалов"
+                    >
+                      {(Object.keys(OCCUPANCY_GRAIN_LABEL) as OccupancyGrain[]).map((g) => (
+                        <option key={g} value={g}>
+                          {OCCUPANCY_GRAIN_LABEL[g]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="tgField">
+                    <span className="tgFieldLabel">Группировка</span>
+                    <select
+                      value={occupancyGroupBy}
+                      onChange={(e) => setOccupancyGroupBy(e.target.value as OccupancyGroupBy)}
+                      style={{ width: 150 }}
+                    >
+                      <option value="aircraftType">Тип ВС</option>
+                      <option value="operator">Оператор</option>
+                    </select>
+                  </label>
+                </>
+              ) : null}
               {tab !== "util" ? (
                 <>
                   <label className="tgField">
@@ -775,20 +902,22 @@ export function AnalyticsView() {
                       compact
                     />
                   </label>
-                  <label className="tgField">
-                    <span className="tgFieldLabel">Борт</span>
-                    <MultiSelectDropdown
-                      options={filterOptions.aircraft}
-                      value={filterAircraftIds}
-                      onChange={setFilterAircraftIds}
-                      placeholder="все"
-                      width={140}
-                      maxHeight={320}
-                      searchable
-                      searchPlaceholder="Найти борт"
-                      compact
-                    />
-                  </label>
+                  {tab !== "occupancy" ? (
+                    <label className="tgField">
+                      <span className="tgFieldLabel">Борт</span>
+                      <MultiSelectDropdown
+                        options={filterOptions.aircraft}
+                        value={filterAircraftIds}
+                        onChange={setFilterAircraftIds}
+                        placeholder="все"
+                        width={140}
+                        maxHeight={320}
+                        searchable
+                        searchPlaceholder="Найти борт"
+                        compact
+                      />
+                    </label>
+                  ) : null}
                   <label className="tgField">
                     <span className="tgFieldLabel">Тип события</span>
                     <MultiSelectDropdown
@@ -820,6 +949,15 @@ export function AnalyticsView() {
           grain={efficiencyGrain}
           periodLabel={periodChipLabel}
           detailLabel={DETAIL_LEVEL_LABEL[efficiencyGrain]}
+        />
+      ) : null}
+      {tab === "occupancy" ? (
+        <OccupancyPanel
+          q={occupancyQ}
+          periodLabel={periodChipLabel}
+          detailLabel={OCCUPANCY_GRAIN_LABEL[occupancyGrain]}
+          groupBy={occupancyGroupBy}
+          sliceLabel={occupancySliceLabel}
         />
       ) : null}
       {tab === "tows" ? (
@@ -1167,50 +1305,58 @@ type TimelinePoint = {
   conflictPct: number;
 };
 
-function UtilizationTimelineChart(props: { points: TimelinePoint[] }) {
-  const { points } = props;
-  // A year of days shares one chart width, so each column is a few pixels.
-  // Skip per-point markers and the entry animation — they cost draw time and don't read at this density.
-  const dense = points.length > 160;
+const UTIL_FILL = "rgba(14, 116, 144, 0.82)";
+const UTIL_FILL_HOVER = "rgba(14, 116, 144, 0.95)";
+const UTIL_FREE = "rgba(148, 163, 184, 0.42)";
+const UTIL_FREE_HOVER = "rgba(100, 116, 139, 0.55)";
 
-  const chartData = useMemo<ChartData<"bar" | "line">>(() => {
-    const labels = points.map((p) => dayjs(p.from).format("DD.MM"));
-    return {
+function timelineAxisTicks(dense: boolean) {
+  return {
+    color: "#64748b",
+    maxRotation: 0 as const,
+    autoSkip: true,
+    maxTicksLimit: dense ? 8 : 10
+  };
+}
+
+function UtilizationCapacityChart(props: { points: TimelinePoint[] }) {
+  const { points } = props;
+  const dense = points.length > 160;
+  const labels = useMemo(() => points.map((p) => dayjs(p.from).format("DD.MM")), [points]);
+
+  const chartData = useMemo<ChartData<"bar" | "line">>(
+    () => ({
       labels,
       datasets: [
         {
           type: "bar",
-          label: "Спрос (ВС·ч)",
-          data: points.map((p) => Number(p.aircraftHours.toFixed(2))),
-          yAxisID: "yHours",
-          backgroundColor: "rgba(14, 116, 144, 0.35)",
-          hoverBackgroundColor: "rgba(14, 116, 144, 0.55)",
-          borderRadius: dense ? 0 : 3,
-          categoryPercentage: dense ? 1 : 0.8,
-          barPercentage: dense ? 1 : 0.9,
-          maxBarThickness: dense ? 8 : 36,
+          label: "Заполнено, мест·ч",
+          data: points.map((p) => Number(p.occupiedH.toFixed(2))),
+          stack: "capacity",
+          backgroundColor: UTIL_FILL,
+          hoverBackgroundColor: UTIL_FILL_HOVER,
+          categoryPercentage: dense ? 1 : 0.84,
+          barPercentage: dense ? 1 : 0.92,
+          maxBarThickness: dense ? 10 : 40,
+          order: 2
+        },
+        {
+          type: "bar",
+          label: "Свободно, мест·ч",
+          data: points.map((p) => Number(p.idleH.toFixed(2))),
+          stack: "capacity",
+          backgroundColor: UTIL_FREE,
+          hoverBackgroundColor: UTIL_FREE_HOVER,
+          categoryPercentage: dense ? 1 : 0.84,
+          barPercentage: dense ? 1 : 0.92,
+          maxBarThickness: dense ? 10 : 40,
           order: 3
         },
         {
           type: "line",
-          label: "Stand util, %",
-          data: points.map((p) => Number(p.standUtilizationPct.toFixed(1))),
-          yAxisID: "yPct",
-          borderColor: "#0d9488",
-          backgroundColor: "rgba(13, 148, 136, 0.18)",
-          fill: true,
-          tension: dense ? 0.15 : 0.25,
-          pointRadius: dense ? 0 : 3,
-          pointHoverRadius: dense ? 3 : 5,
-          pointHitRadius: dense ? 6 : 4,
-          borderWidth: dense ? 1.5 : 2,
-          order: 1
-        },
-        {
-          type: "line",
-          label: "Эффективность, %",
-          data: points.map((p) => Number(p.capacityUtilizationPct.toFixed(1))),
-          yAxisID: "yPct",
+          label: "Спрос, ВС·ч",
+          data: points.map((p) => Number(p.aircraftHours.toFixed(2))),
+          stack: "demand",
           borderColor: "#b45309",
           backgroundColor: "#b45309",
           fill: false,
@@ -1219,12 +1365,12 @@ function UtilizationTimelineChart(props: { points: TimelinePoint[] }) {
           pointHoverRadius: dense ? 3 : 4,
           pointHitRadius: dense ? 6 : 4,
           borderWidth: dense ? 1.5 : 2,
-          borderDash: [5, 4],
-          order: 2
+          order: 1
         }
       ]
-    };
-  }, [dense, points]);
+    }),
+    [dense, labels, points]
+  );
 
   const options = useMemo<ChartOptions<"bar" | "line">>(
     () => ({
@@ -1240,72 +1386,258 @@ function UtilizationTimelineChart(props: { points: TimelinePoint[] }) {
         },
         tooltip: {
           callbacks: {
-            title: (items) => {
-              const idx = items[0]?.dataIndex ?? 0;
-              return points[idx]?.label ?? "";
+            title: (items) => points[items[0]?.dataIndex ?? 0]?.label ?? "",
+            label: (item) => {
+              const p = points[item.dataIndex];
+              if (!p) return "";
+              if (item.datasetIndex === 0) {
+                const pct = p.capacityH > 0 ? (p.occupiedH / p.capacityH) * 100 : 0;
+                return `Заполнено: ${fmtNum(p.occupiedH)} мест·ч (${fmtNum(pct)}%)`;
+              }
+              if (item.datasetIndex === 1) return `Свободно: ${fmtNum(p.idleH)} мест·ч`;
+              return `Спрос: ${fmtNum(p.aircraftHours)} ВС·ч`;
             },
-            afterBody: (items) => {
-              const idx = items[0]?.dataIndex ?? 0;
-              const p = points[idx];
-              if (!p) return [];
-              return [
-                `Занято мест·ч: ${fmtNum(p.occupiedH)}`,
-                `Ёмкость мест·ч: ${fmtNum(p.capacityH)}`,
-                `Простой: ${fmtNum(p.idleH)} ч`,
-                `Time util: ${fmtNum(p.timeUtilizationPct)}%`
-              ];
+            footer: (items) => {
+              const p = points[items[0]?.dataIndex ?? 0];
+              return p ? `Ёмкость: ${fmtNum(p.capacityH)} мест·ч` : "";
             }
           }
         }
       },
       scales: {
         x: {
+          stacked: true,
           grid: { color: "rgba(148, 163, 184, 0.2)" },
-          ticks: {
-            color: "#64748b",
-            maxRotation: 0,
-            autoSkip: true,
-            maxTicksLimit: 10
-          }
+          ticks: timelineAxisTicks(dense)
         },
-        yPct: {
-          type: "linear",
-          position: "left",
+        y: {
+          stacked: true,
           min: 0,
-          suggestedMax: 100,
-          title: { display: true, text: "%", color: "#64748b" },
+          title: { display: true, text: "часы", color: "#64748b" },
           grid: { color: "rgba(148, 163, 184, 0.25)" },
-          ticks: { color: "#64748b", callback: (v) => `${v}%` }
-        },
-        yHours: {
-          type: "linear",
-          position: "right",
-          min: 0,
-          title: { display: true, text: "ВС·ч", color: "#0e7490" },
-          grid: { drawOnChartArea: false },
-          ticks: { color: "#0e7490" }
+          ticks: { color: "#64748b" }
         }
       }
     }),
     [dense, points]
   );
 
-  if (points.length === 0) {
-    return <div className="muted">Нет точек для таймлайна за выбранный период/фильтр.</div>;
-  }
-
-  const peak = points.reduce((best, p) => (p.aircraftHours > best.aircraftHours ? p : best), points[0]!);
-  const dip = points.reduce((best, p) => (p.aircraftHours < best.aircraftHours ? p : best), points[0]!);
-
   return (
-    <div className="analyticsTimeline">
+    <div className="analyticsChartBlock">
+      <h4>Ёмкость ангара</h4>
+      <p className="muted small">
+        Высота столбика — общая ёмкость мест·ч. Нижняя часть — заполненная, верхняя — свободная. Линия — спрос в ВС·ч.
+      </p>
       <div className="analyticsTimelineChartWrap">
         <Chart type="bar" data={chartData} options={options} />
       </div>
-      <div className="analyticsTimelineTooltip muted">
-        Пик спроса: {peak.label} ({fmtNum(peak.aircraftHours)} ВС·ч) · просадка: {dip.label} (
-        {fmtNum(dip.aircraftHours)} ВС·ч)
+    </div>
+  );
+}
+
+function UtilizationRateChart(props: { points: TimelinePoint[] }) {
+  const { points } = props;
+  const dense = points.length > 160;
+  const labels = useMemo(() => points.map((p) => dayjs(p.from).format("DD.MM")), [points]);
+  const suggestedMax = useMemo(() => {
+    const peak = points.reduce(
+      (max, p) => Math.max(max, p.standUtilizationPct, p.capacityUtilizationPct, p.timeUtilizationPct),
+      0
+    );
+    return peak <= 100 ? 100 : Math.ceil(peak / 10) * 10;
+  }, [points]);
+
+  const chartData = useMemo<ChartData<"line">>(
+    () => ({
+      labels,
+      datasets: [
+        {
+          label: "Наполненность мест, %",
+          data: points.map((p) => Number(p.standUtilizationPct.toFixed(1))),
+          borderColor: "#0d9488",
+          backgroundColor: "rgba(13, 148, 136, 0.16)",
+          fill: true,
+          tension: dense ? 0.15 : 0.25,
+          pointRadius: dense ? 0 : 2,
+          pointHoverRadius: dense ? 3 : 4,
+          pointHitRadius: dense ? 6 : 4,
+          borderWidth: dense ? 1.5 : 2
+        },
+        {
+          label: "Эффективность, %",
+          data: points.map((p) => Number(p.capacityUtilizationPct.toFixed(1))),
+          borderColor: "#b45309",
+          backgroundColor: "#b45309",
+          fill: false,
+          tension: dense ? 0.15 : 0.25,
+          pointRadius: dense ? 0 : 2,
+          pointHoverRadius: dense ? 3 : 4,
+          pointHitRadius: dense ? 6 : 4,
+          borderWidth: dense ? 1.5 : 2,
+          borderDash: [5, 4]
+        },
+        {
+          label: "Занятость по времени, %",
+          data: points.map((p) => Number(p.timeUtilizationPct.toFixed(1))),
+          borderColor: "#4f46e5",
+          backgroundColor: "#4f46e5",
+          fill: false,
+          tension: dense ? 0.15 : 0.25,
+          pointRadius: dense ? 0 : 2,
+          pointHoverRadius: dense ? 3 : 4,
+          pointHitRadius: dense ? 6 : 4,
+          borderWidth: dense ? 1.5 : 2,
+          borderDash: [2, 3]
+        }
+      ]
+    }),
+    [dense, labels, points]
+  );
+
+  const options = useMemo<ChartOptions<"line">>(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: dense ? false : undefined,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: {
+          position: "top",
+          align: "start",
+          labels: { boxWidth: 12, boxHeight: 12, color: "#475569", font: { size: 12 } }
+        },
+        tooltip: {
+          callbacks: {
+            title: (items) => points[items[0]?.dataIndex ?? 0]?.label ?? "",
+            label: (item) => `${item.dataset.label ?? ""}: ${fmtNum(Number(item.raw))}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: "rgba(148, 163, 184, 0.2)" },
+          ticks: timelineAxisTicks(dense)
+        },
+        y: {
+          min: 0,
+          suggestedMax,
+          title: { display: true, text: "%", color: "#64748b" },
+          grid: { color: "rgba(148, 163, 184, 0.25)" },
+          ticks: { color: "#64748b", callback: (v) => `${v}%` }
+        }
+      }
+    }),
+    [dense, points, suggestedMax]
+  );
+
+  return (
+    <div className="analyticsChartBlock">
+      <h4>Наполненность и эффективность</h4>
+      <p className="muted small">
+        Наполненность — заполнено / ёмкость. Эффективность — спрос ВС·ч / ёмкость. Занятость по времени — доля периода, когда в ангаре есть ВС.
+      </p>
+      <div className="analyticsTimelineChartWrap">
+        <Chart type="line" data={chartData} options={options} />
       </div>
+    </div>
+  );
+}
+
+type HangarFillRow = {
+  hangarName: string;
+  occupiedH: number;
+  idleH: number;
+  capacityH: number;
+  utilizationPct: number;
+  efficiencyPct: number;
+};
+
+function HangarFillChart(props: { hangars: HangarFillRow[] }) {
+  const { hangars } = props;
+  const chartData = useMemo<ChartData<"bar">>(
+    () => ({
+      labels: hangars.map((h) => h.hangarName),
+      datasets: [
+        {
+          label: "Заполнено, мест·ч",
+          data: hangars.map((h) => Number(h.occupiedH.toFixed(1))),
+          stack: "capacity",
+          backgroundColor: UTIL_FILL,
+          hoverBackgroundColor: UTIL_FILL_HOVER,
+          maxBarThickness: 22
+        },
+        {
+          label: "Свободно, мест·ч",
+          data: hangars.map((h) => Number(h.idleH.toFixed(1))),
+          stack: "capacity",
+          backgroundColor: UTIL_FREE,
+          hoverBackgroundColor: UTIL_FREE_HOVER,
+          maxBarThickness: 22
+        }
+      ]
+    }),
+    [hangars]
+  );
+
+  const options = useMemo<ChartOptions<"bar">>(
+    () => ({
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: {
+          position: "top",
+          align: "start",
+          labels: { boxWidth: 12, boxHeight: 12, color: "#475569", font: { size: 12 } }
+        },
+        tooltip: {
+          callbacks: {
+            title: (items) => hangars[items[0]?.dataIndex ?? 0]?.hangarName ?? "",
+            label: (item) => {
+              const h = hangars[item.dataIndex];
+              if (!h) return "";
+              if (item.datasetIndex === 0) return `Заполнено: ${fmtNum(h.occupiedH)} мест·ч (${fmtNum(h.utilizationPct)}%)`;
+              return `Свободно: ${fmtNum(h.idleH)} мест·ч`;
+            },
+            footer: (items) => {
+              const h = hangars[items[0]?.dataIndex ?? 0];
+              if (!h) return "";
+              return [`Ёмкость: ${fmtNum(h.capacityH)} мест·ч`, `Эффективность: ${fmtNum(h.efficiencyPct)}%`];
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          stacked: true,
+          min: 0,
+          title: { display: true, text: "мест·ч", color: "#64748b" },
+          grid: { color: "rgba(148, 163, 184, 0.25)" },
+          ticks: { color: "#64748b" }
+        },
+        y: {
+          stacked: true,
+          grid: { display: false },
+          ticks: {
+            color: "#334155",
+            autoSkip: false,
+            callback: (value) => {
+              const label = hangars[Number(value)]?.hangarName ?? "";
+              return label.length > 28 ? `${label.slice(0, 28)}…` : label;
+            }
+          }
+        }
+      }
+    }),
+    [hangars]
+  );
+
+  if (hangars.length === 0) return <div className="muted">Нет ангаров за выбранный период/фильтр.</div>;
+
+  return (
+    <div className="analyticsHangarFillWrap" style={{ height: Math.min(520, Math.max(180, hangars.length * 36 + 72)) }}>
+      <Chart type="bar" data={chartData} options={options} />
     </div>
   );
 }
@@ -1458,6 +1790,13 @@ function UtilPanel(props: {
           ? "месяцы"
           : DETAIL_LEVEL_LABEL[grain].toLowerCase();
   const refreshing = Boolean(q.isFetching && !q.isLoading);
+  const peakCapacity = timelinePoints.length
+    ? timelinePoints.reduce((best, p) => (p.capacityH > best.capacityH ? p : best))
+    : undefined;
+  const peakFill = timelinePoints.length
+    ? timelinePoints.reduce((best, p) => (p.occupiedH > best.occupiedH ? p : best))
+    : undefined;
+  const peakFillPct = peakFill && peakFill.capacityH > 0 ? (peakFill.occupiedH / peakFill.capacityH) * 100 : 0;
 
   const onExport = async () => {
     setExporting(true);
@@ -1469,12 +1808,13 @@ function UtilPanel(props: {
         periodLabel,
         detailLabel,
         kpis: [
-          { label: "Stand util", value: `${fmtNum(filteredKpis.standUtilizationPct)}%` },
+          { label: "Ёмкость, мест·ч", value: fmtNum(filteredKpis.capacityH) },
+          { label: "Заполнено, мест·ч", value: fmtNum(filteredKpis.occupiedH) },
+          { label: "Наполненность", value: `${fmtNum(filteredKpis.standUtilizationPct)}%` },
           { label: "Эффективность", value: `${fmtNum(filteredKpis.capacityUtilizationPct)}%` },
-          { label: "Time util", value: `${fmtNum(filteredKpis.timeUtilizationPct)}%` },
-          { label: "Конфликты схем", value: `${fmtNum(filteredKpis.conflictPct)}%` },
-          { label: "ВС·часы", value: fmtNum(filteredKpis.aircraftHours) },
-          { label: "Место·часы", value: fmtNum(filteredKpis.capacityHours) }
+          { label: "Занятость по времени", value: `${fmtNum(filteredKpis.timeUtilizationPct)}%` },
+          { label: "Спрос, ВС·ч", value: fmtNum(filteredKpis.aircraftHours) },
+          { label: "Конфликты схем", value: `${fmtNum(filteredKpis.conflictPct)}%` }
         ],
         timeline: timelinePoints.map((p) => ({
           Интервал: p.label,
@@ -1484,9 +1824,9 @@ function UtilPanel(props: {
           "Занято мест·ч": Number(p.occupiedH.toFixed(2)),
           "Ёмкость мест·ч": Number(p.capacityH.toFixed(2)),
           "Простой, ч": Number(p.idleH.toFixed(2)),
-          "Stand util, %": Number(p.standUtilizationPct.toFixed(1)),
+          "Наполненность, %": Number(p.standUtilizationPct.toFixed(1)),
           "Эффективность, %": Number(p.capacityUtilizationPct.toFixed(1)),
-          "Time util, %": Number(p.timeUtilizationPct.toFixed(1)),
+          "Занятость по времени, %": Number(p.timeUtilizationPct.toFixed(1)),
           "Конфликт, %": Number(p.conflictPct.toFixed(1))
         })),
         hangars: hangars.map((h) => ({
@@ -1495,9 +1835,9 @@ function UtilPanel(props: {
           "Занято, ч": h.occupiedH,
           "Простой, ч": h.idleH,
           "Ёмкость, ч": h.capacityH,
-          "Stand util, %": h.utilizationPct,
+          "Наполненность, %": h.utilizationPct,
           "Эффективность, %": h.efficiency.capacityUtilizationPct,
-          "Time util, %": h.efficiency.timeUtilizationPct,
+          "Занятость по времени, %": h.efficiency.timeUtilizationPct,
           "ВС·ч": h.efficiency.aircraftHours,
           "Место·ч схемы": h.efficiency.capacityHours,
           "Конфликт, %": h.efficiency.conflictPct,
@@ -1514,9 +1854,17 @@ function UtilPanel(props: {
         })),
         timelineChart: {
           labels: timelinePoints.map((p) => dayjs(p.from).format("DD.MM")),
+          occupiedH: timelinePoints.map((p) => Number(p.occupiedH.toFixed(2))),
+          idleH: timelinePoints.map((p) => Number(p.idleH.toFixed(2))),
           aircraftHours: timelinePoints.map((p) => Number(p.aircraftHours.toFixed(2))),
           standUtilizationPct: timelinePoints.map((p) => Number(p.standUtilizationPct.toFixed(1))),
-          capacityUtilizationPct: timelinePoints.map((p) => Number(p.capacityUtilizationPct.toFixed(1)))
+          capacityUtilizationPct: timelinePoints.map((p) => Number(p.capacityUtilizationPct.toFixed(1))),
+          timeUtilizationPct: timelinePoints.map((p) => Number(p.timeUtilizationPct.toFixed(1)))
+        },
+        hangarChart: {
+          labels: hangars.map((h) => h.hangarName),
+          occupiedH: hangars.map((h) => Number(h.occupiedH.toFixed(1))),
+          idleH: hangars.map((h) => Number(h.idleH.toFixed(1)))
         }
       });
     } finally {
@@ -1544,36 +1892,75 @@ function UtilPanel(props: {
       <StatCards
         items={[
           {
-            label: "Stand util",
+            label: "Ёмкость, мест·ч",
+            value: fmtNum(filteredKpis.capacityH),
+            hint: "места активной схемы × часы периода"
+          },
+          {
+            label: "Заполнено, мест·ч",
+            value: fmtNum(filteredKpis.occupiedH),
+            hint: "занятые место-часы"
+          },
+          {
+            label: "Наполненность",
             value: `${fmtNum(filteredKpis.standUtilizationPct)}%`,
-            hint: "место·ч / ёмкость активной схемы"
+            hint: "заполнено / ёмкость"
           },
           {
             label: "Эффективность",
             value: `${fmtNum(filteredKpis.capacityUtilizationPct)}%`,
-            hint: "ВС·ч / место·ч схемы"
+            hint: "спрос ВС·ч / ёмкость"
           },
           {
-            label: "Time util",
+            label: "Занятость по времени",
             value: `${fmtNum(filteredKpis.timeUtilizationPct)}%`,
-            hint: "доля времени занятости ангара"
+            hint: "доля периода, когда в ангаре есть ВС"
           },
-          { label: "Конфликты схем", value: `${fmtNum(filteredKpis.conflictPct)}%` },
-          { label: "ВС·часы", value: fmtNum(filteredKpis.aircraftHours) },
-          { label: "Место·часы", value: fmtNum(filteredKpis.capacityHours) }
+          { label: "Спрос, ВС·ч", value: fmtNum(filteredKpis.aircraftHours), hint: "борт-часы расставленных событий" },
+          { label: "Конфликты схем", value: `${fmtNum(filteredKpis.conflictPct)}%` }
         ]}
       />
 
       <section className="card analyticsCard">
         <div className="analyticsEffHeader">
           <div>
-            <h3>Таймлайн утилизации</h3>
+            <h3>Ёмкость и заполнение</h3>
+            <p className="muted small">Детализация: {timelineGrainLabel}</p>
+          </div>
+        </div>
+        {timelinePoints.length === 0 ? (
+          <div className="muted">Нет точек для таймлайна за выбранный период/фильтр.</div>
+        ) : (
+          <div className="analyticsTimeline">
+            <UtilizationCapacityChart points={timelinePoints} />
+            <UtilizationRateChart points={timelinePoints} />
+            <div className="analyticsTimelineTooltip muted">
+              Пик ёмкости: {peakCapacity?.label} ({fmtNum(peakCapacity?.capacityH)} мест·ч) · пик заполнения:{" "}
+              {peakFill?.label} ({fmtNum(peakFill?.occupiedH)} мест·ч, {fmtNum(peakFillPct)}%)
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="card analyticsCard">
+        <div className="analyticsEffHeader">
+          <div>
+            <h3>Стаканы по ангарам</h3>
             <p className="muted small">
-              Пики и просадки спроса по расставленным событиям · детализация: {timelineGrainLabel}
+              Длина полосы — ёмкость ангара за весь выбранный период. Цветная часть — заполненная, серая — свободная.
             </p>
           </div>
         </div>
-        <UtilizationTimelineChart points={timelinePoints} />
+        <HangarFillChart
+          hangars={hangars.map((h) => ({
+            hangarName: h.hangarName,
+            occupiedH: h.occupiedH,
+            idleH: h.idleH,
+            capacityH: h.capacityH,
+            utilizationPct: h.utilizationPct,
+            efficiencyPct: h.efficiency.capacityUtilizationPct
+          }))}
+        />
       </section>
 
       <section className="card analyticsCard">
@@ -1590,8 +1977,8 @@ function UtilPanel(props: {
                 <th>{grain === "period" ? "Ангар" : "Интервал"}</th>
                 {grain === "period" ? null : <th>Ангар</th>}
                 <th>Эффект., %</th>
-                <th>Time util, %</th>
-                <th>Stand util, %</th>
+                <th>Занятость, %</th>
+                <th>Наполненность, %</th>
                 <th>ВС·ч</th>
                 <th>Место·ч</th>
                 <th>Конфликт, %</th>
@@ -1652,7 +2039,7 @@ function UtilPanel(props: {
       </section>
 
       <section className="card analyticsCard">
-        <h3>Ангары (stand utilization)</h3>
+        <h3>Ангары</h3>
         <p className="muted small">
           Ёмкость и простой только по активной схеме; заблокированные конфигурации не учитываются.
         </p>
@@ -1664,7 +2051,7 @@ function UtilPanel(props: {
                 <th>Мест (nominal)</th>
                 <th>Занято, ч</th>
                 <th>Простой, ч</th>
-                <th>Utilization</th>
+                <th>Наполненность</th>
                 <th>Резервов</th>
               </tr>
             </thead>
@@ -1706,7 +2093,7 @@ function UtilPanel(props: {
                 <th>Доступно, ч</th>
                 <th>Занято, ч</th>
                 <th>Простой, ч</th>
-                <th>Utilization</th>
+                <th>Наполненность</th>
               </tr>
             </thead>
             <tbody>

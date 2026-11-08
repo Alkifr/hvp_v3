@@ -12,6 +12,13 @@ import {
 } from "../lib/monthlyBasePlan.js";
 import { serializeTowReportRow, resolveVirtualNames, towInclude } from "./planning/tows.js";
 import {
+  UNOWNED_OCCUPANCY_ID,
+  buildOccupancyReport,
+  type OccupancyGrain,
+  type OccupancyGroupBy,
+  type OccupancyReservation
+} from "../lib/occupancy.js";
+import {
   buildExclusiveLayoutSegments,
   buildUtilizationBuckets,
   clipHangarWindow,
@@ -34,6 +41,30 @@ function round1(n: number): number {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function jsonString(value: unknown, key: string): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "string" && field ? field : null;
+}
+
+function aircraftTypeLabel(
+  id: string,
+  typeById: Map<string, { name: string; icaoType: string | null }>
+): string {
+  if (id === UNOWNED_OCCUPANCY_ID) return "Без типа ВС";
+  const type = typeById.get(id);
+  if (!type) return "—";
+  if (type.icaoType && type.icaoType !== type.name) return `${type.icaoType} · ${type.name}`;
+  return type.icaoType || type.name;
+}
+
+function operatorLabel(id: string, operatorById: Map<string, { code: string; name: string }>): string {
+  if (id === UNOWNED_OCCUPANCY_ID) return "Без оператора";
+  const operator = operatorById.get(id);
+  if (!operator) return "—";
+  return operator.code ? `${operator.code} · ${operator.name}` : operator.name;
 }
 
 function pickTimelineGrain(from: Date, to: Date): Exclude<EfficiencyGrain, "period"> {
@@ -675,6 +706,228 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       },
       hangars: hangarRows.sort((a, b) => b.efficiency.capacityUtilizationPct - a.efficiency.capacityUtilizationPct),
       stands: standRows.sort((a, b) => b.utilizationPct - a.utilizationPct)
+    };
+  });
+
+  // GET /api/analytics/occupancy?from&to&grain=day|week|month|year&groupBy=aircraftType|operator
+  app.get("/occupancy", async (req) => {
+    assertPermission(req as any, "events:read");
+    const zIdList = z
+      .string()
+      .optional()
+      .transform((value) => [...new Set((value ?? "").split(",").map((item) => item.trim()).filter(Boolean))]);
+    const query = z
+      .object({
+        from: zDateTime,
+        to: zDateTime,
+        grain: z.enum(["day", "week", "month", "year"]).optional().default("month"),
+        groupBy: z.enum(["aircraftType", "operator"]).optional().default("aircraftType"),
+        tzOffset: z.coerce.number().int().min(-14 * 60).max(14 * 60).optional().default(0),
+        hangarIds: zIdList,
+        aircraftTypeIds: zIdList,
+        operatorIds: zIdList,
+        eventTypeIds: zIdList
+      })
+      .parse(req.query);
+
+    if (query.to <= query.from) {
+      const err: any = new Error("Период to должен быть позже from");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const sb = sandboxFilter(req as any);
+    const hangarFilter = new Set(query.hangarIds);
+    const [hangars, layouts, events, reservations, aircraftTypes, operators, eventTypes] = await Promise.all([
+      app.prisma.hangar.findMany({
+        where: { isActive: true },
+        select: { id: true },
+        orderBy: { name: "asc" }
+      }),
+      app.prisma.hangarLayout.findMany({
+        where: { isActive: true },
+        select: { id: true, hangarId: true, stands: { where: { isActive: true }, select: { id: true } } }
+      }),
+      app.prisma.maintenanceEvent.findMany({
+        where: {
+          ...sb,
+          status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] },
+          startAt: { lt: query.to },
+          endAt: { gt: query.from }
+        },
+        select: {
+          id: true,
+          hangarId: true,
+          startAt: true,
+          endAt: true,
+          reservations: { select: { layoutId: true, startAt: true, endAt: true } },
+          placements: { select: { layoutId: true, startAt: true, endAt: true } }
+        }
+      }),
+      app.prisma.standReservation.findMany({
+        where: {
+          ...sb,
+          startAt: { lt: query.to },
+          endAt: { gt: query.from },
+          event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+        },
+        select: {
+          startAt: true,
+          endAt: true,
+          layoutId: true,
+          eventId: true,
+          event: {
+            select: {
+              eventTypeId: true,
+              aircraft: { select: { typeId: true, operatorId: true } },
+              virtualAircraft: true
+            }
+          }
+        }
+      }),
+      app.prisma.aircraftType.findMany({ select: { id: true, name: true, icaoType: true } }),
+      app.prisma.operator.findMany({ select: { id: true, code: true, name: true } }),
+      app.prisma.eventType.findMany({ select: { id: true, name: true } })
+    ]);
+
+    const selectedHangars = hangars.filter((hangar) => hangarFilter.size === 0 || hangarFilter.has(hangar.id));
+    const selectedHangarIds = new Set(selectedHangars.map((hangar) => hangar.id));
+    const standCountByLayoutId = new Map(layouts.map((layout) => [layout.id, layout.stands.length]));
+    const layoutsByHangar = new Map<string, string[]>();
+    const activeLayoutIds = new Set<string>();
+    for (const layout of layouts) {
+      if (!selectedHangarIds.has(layout.hangarId)) continue;
+      activeLayoutIds.add(layout.id);
+      const list = layoutsByHangar.get(layout.hangarId) ?? [];
+      list.push(layout.id);
+      layoutsByHangar.set(layout.hangarId, list);
+    }
+
+    const layoutEvents: Array<{ startAt: Date; endAt: Date; layoutId: string | null }> = [];
+    for (const event of events) {
+      if (event.placements.length > 0) {
+        for (const placement of event.placements) {
+          if (placement.layoutId) layoutEvents.push({ startAt: placement.startAt, endAt: placement.endAt, layoutId: placement.layoutId });
+        }
+      } else if (event.reservations[0]?.layoutId) {
+        const reservation = event.reservations[0];
+        layoutEvents.push({ startAt: reservation.startAt, endAt: reservation.endAt, layoutId: reservation.layoutId });
+      }
+    }
+
+    const layoutHangarId = new Map(layouts.map((layout) => [layout.id, layout.hangarId]));
+    const placedEventIds = new Set<string>();
+    const occupancyReservations: OccupancyReservation[] = [];
+    for (const reservation of reservations) {
+      if (!activeLayoutIds.has(reservation.layoutId)) continue;
+      const hangarId = layoutHangarId.get(reservation.layoutId);
+      if (!hangarId || !selectedHangarIds.has(hangarId)) continue;
+      placedEventIds.add(reservation.eventId);
+      const aircraft = reservation.event.aircraft;
+      occupancyReservations.push({
+        hangarId,
+        startAt: reservation.startAt,
+        endAt: reservation.endAt,
+        aircraftTypeId: aircraft?.typeId ?? jsonString(reservation.event.virtualAircraft, "aircraftTypeId"),
+        operatorId: aircraft?.operatorId ?? jsonString(reservation.event.virtualAircraft, "operatorId"),
+        eventTypeId: reservation.event.eventTypeId
+      });
+    }
+
+    let unplacedEventCount = 0;
+    for (const event of events) {
+      if (!event.hangarId || !selectedHangarIds.has(event.hangarId)) continue;
+      if (!placedEventIds.has(event.id)) unplacedEventCount += 1;
+    }
+
+    const report = buildOccupancyReport({
+      from: query.from,
+      to: query.to,
+      grain: query.grain as OccupancyGrain,
+      groupBy: query.groupBy as OccupancyGroupBy,
+      tzOffsetMinutes: query.tzOffset,
+      hangars: selectedHangars.map((hangar) => ({
+        hangarId: hangar.id,
+        layoutIds: layoutsByHangar.get(hangar.id) ?? [],
+        standCountByLayoutId,
+        events: layoutEvents
+      })),
+      reservations: occupancyReservations,
+      filters: {
+        aircraftTypeIds: query.aircraftTypeIds,
+        operatorIds: query.operatorIds,
+        eventTypeIds: query.eventTypeIds
+      }
+    });
+
+    const typeById = new Map(aircraftTypes.map((type) => [type.id, type]));
+    const operatorById = new Map(operators.map((operator) => [operator.id, operator]));
+    const eventTypeById = new Map(eventTypes.map((eventType) => [eventType.id, eventType.name]));
+    const groupLabel =
+      query.groupBy === "operator"
+        ? (id: string) => operatorLabel(id, operatorById)
+        : (id: string) => aircraftTypeLabel(id, typeById);
+    const eventLabel = (id: string) =>
+      id === UNOWNED_OCCUPANCY_ID ? "Без типа события" : eventTypeById.get(id) ?? "—";
+    const presentPart = (part: { id: string; placeDays: number; lines: number; sharePct: number }) => ({
+      id: part.id,
+      label: eventLabel(part.id),
+      placeDays: round2(part.placeDays),
+      lines: round2(part.lines),
+      sharePct: round1(part.sharePct)
+    });
+
+    return {
+      ok: true as const,
+      period: { from: query.from.toISOString(), to: query.to.toISOString() },
+      grain: query.grain,
+      groupBy: query.groupBy,
+      summary: {
+        periodDays: round2(report.periodDays),
+        capacityPlaceDays: round2(report.capacityPlaceDays),
+        occupiedPlaceDays: round2(report.occupiedPlaceDays),
+        slicePlaceDays: round2(report.slicePlaceDays),
+        capacityLines: round2(report.capacityLines),
+        occupiedLines: round2(report.occupiedLines),
+        sliceLines: round2(report.sliceLines),
+        shareOfCapacityPct: round1(report.shareOfCapacityPct),
+        shareOfOccupiedPct: round1(report.shareOfOccupiedPct),
+        unplacedEventCount
+      },
+      byEventType: report.byEventType.map(presentPart),
+      rows: report.rows.map((row) => ({
+        id: row.id,
+        label: groupLabel(row.id),
+        placeDays: round2(row.placeDays),
+        lines: round2(row.lines),
+        shareOfCapacityPct: round1(row.shareOfCapacityPct),
+        shareOfOccupiedPct: round1(row.shareOfOccupiedPct),
+        byEventType: row.byEventType.map(presentPart)
+      })),
+      buckets: report.buckets.map((bucket) => ({
+        key: bucket.key,
+        label: bucket.label,
+        from: bucket.from.toISOString(),
+        to: bucket.to.toISOString(),
+        dayCount: round2(bucket.dayCount),
+        capacityPlaceDays: round2(bucket.capacityPlaceDays),
+        occupiedPlaceDays: round2(bucket.occupiedPlaceDays),
+        slicePlaceDays: round2(bucket.slicePlaceDays),
+        capacityLines: round2(bucket.capacityLines),
+        occupiedLines: round2(bucket.occupiedLines),
+        sliceLines: round2(bucket.sliceLines),
+        shareOfCapacityPct: round1(bucket.shareOfCapacityPct),
+        shareOfOccupiedPct: round1(bucket.shareOfOccupiedPct),
+        byEventType: bucket.byEventType.map(presentPart),
+        byAircraftType: bucket.byAircraftType.map((part) => ({
+          id: part.id,
+          label: aircraftTypeLabel(part.id, typeById),
+          placeDays: round2(part.placeDays),
+          lines: round2(part.lines),
+          sharePct: round1(part.sharePct)
+        }))
+      })),
+      truncated: report.truncated
     };
   });
 
