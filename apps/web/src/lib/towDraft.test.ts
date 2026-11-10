@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { planEdgeTows } from "./edgeTowPlan.ts";
-import { resolveTowPlacementId, towDraftDirty, towMutationPlan, towRowsFromServer, type TowDraftRow } from "./towDraft.ts";
+import { installRandomUuidPolyfill, safeRandomUuid } from "./randomId.ts";
+import {
+  newTowDraftKey,
+  resolveTowPlacementId,
+  towDraftDirty,
+  towMutationPlan,
+  towRowsFromServer,
+  type TowDraftRow
+} from "./towDraft.ts";
 
 const base = (patch: Partial<TowDraftRow> = {}): TowDraftRow => ({
   key: "tow-1",
@@ -14,6 +22,56 @@ const base = (patch: Partial<TowDraftRow> = {}): TowDraftRow => ({
   toLabel: "12",
   placementId: "pl-1",
   ...patch
+});
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+test("draft key is unique without crypto.randomUUID", () => {
+  const cryptoObj = globalThis.crypto;
+  const original = cryptoObj.randomUUID;
+  Object.defineProperty(cryptoObj, "randomUUID", { configurable: true, value: undefined });
+  try {
+    const first = newTowDraftKey();
+    const second = newTowDraftKey();
+    assert.match(first, new RegExp(`^local-${UUID_RE.source.slice(1, -1)}$`));
+    assert.notEqual(first, second);
+  } finally {
+    Object.defineProperty(cryptoObj, "randomUUID", { configurable: true, value: original });
+  }
+});
+
+test("draft key survives a randomUUID that throws", () => {
+  const cryptoObj = globalThis.crypto;
+  const original = cryptoObj.randomUUID;
+  Object.defineProperty(cryptoObj, "randomUUID", {
+    configurable: true,
+    value() {
+      throw new TypeError("crypto.randomUUID is not a function");
+    }
+  });
+  try {
+    assert.match(newTowDraftKey(), new RegExp(`^local-${UUID_RE.source.slice(1, -1)}$`));
+    assert.match(safeRandomUuid(), UUID_RE);
+  } finally {
+    Object.defineProperty(cryptoObj, "randomUUID", { configurable: true, value: original });
+  }
+});
+
+test("polyfill makes crypto.randomUUID callable when the native method throws", () => {
+  const cryptoObj = globalThis.crypto;
+  const original = cryptoObj.randomUUID;
+  Object.defineProperty(cryptoObj, "randomUUID", {
+    configurable: true,
+    value() {
+      throw new TypeError("crypto.randomUUID is not a function");
+    }
+  });
+  try {
+    installRandomUuidPolyfill();
+    assert.match(cryptoObj.randomUUID(), UUID_RE);
+  } finally {
+    Object.defineProperty(cryptoObj, "randomUUID", { configurable: true, value: original });
+  }
 });
 
 test("server snapshot is clean until a local edit", () => {

@@ -34,9 +34,14 @@ export function RecordCard(props: {
     props.onClose();
   };
 
+  const onDirtyChangeRef = useRef(props.onDirtyChange);
+  onDirtyChangeRef.current = props.onDirtyChange;
+
   useEffect(() => {
-    props.onDirtyChange?.(props.dirty);
-  }, [props.dirty, props.onDirtyChange]);
+    onDirtyChangeRef.current?.(props.dirty);
+  }, [props.dirty]);
+
+  useEffect(() => () => onDirtyChangeRef.current?.(false), []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

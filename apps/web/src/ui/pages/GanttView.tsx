@@ -6,6 +6,7 @@ import utc from "dayjs/plugin/utc";
 import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost } from "../../lib/api";
+import { ChangeReasonFields, useChangeReasons } from "../components/ChangeReasonFields";
 import { isValidDateInput, isValidDateTimeLocal } from "../../lib/dateInput";
 import {
   ensurePlacementClientKey,
@@ -15,7 +16,14 @@ import {
   type PlacementDraft
 } from "../../lib/placementDraft";
 import { buildEventShareUrl, copyTextToClipboard, parseHashPage } from "../../lib/eventDeepLink";
-import { eventDiffNeedsChangeReason } from "../../lib/eventChangeReason";
+import {
+  CHANGE_REASON_REQUIRED_MESSAGE,
+  changeReasonBlocksSave,
+  changeReasonRequest,
+  eventDraftNeedsChangeReason,
+  isChangeReasonError,
+  moveNeedsChangeReason
+} from "../../lib/eventChangeReason";
 import { towOverlayRect } from "../../lib/towOverlay";
 import {
   newTowDraftKey,
@@ -48,7 +56,7 @@ import {
   extractDiffEntries,
   formatActionLabel,
   formatHistoryActor,
-  historyCommentRow,
+  historyReasonRows,
   historyTableRows,
   resolveHistoryValue,
   type HistoryRefMaps
@@ -75,7 +83,7 @@ import { authMe } from "../auth/authApi";
 import { EventPlacementsEditor } from "../components/EventPlacementsEditor";
 import { EventWatchButton } from "../components/EventWatchButton";
 import { EventResourcesPanel, type LaborMetricsHandle } from "../components/EventResourcesPanel";
-import { FilterIndicator } from "../components/FilterIndicator";
+import { FilterIndicator, IndicatorGlyph } from "../components/FilterIndicator";
 import { GanttEventsTable } from "../components/GanttEventsTable";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
@@ -758,6 +766,8 @@ type EventAudit = {
   action: "CREATE" | "UPDATE" | "RESERVE" | "UNRESERVE";
   actor: string;
   reason?: string | null;
+  changeReasonNames?: string[] | null;
+  changeReasonComment?: string | null;
   changes?: any;
   createdAt: string;
 };
@@ -1392,13 +1402,21 @@ function drawnBarIntervals(ev: EventRow, mode: GanttDisplayMode, dndActive = fal
   return intervals;
 }
 
+/** Пунктир, пока слот можно менять. Фиксация — только «Завершено». */
+const SLOT_OPEN_BORDER = "2px dashed rgba(15, 23, 42, 0.35)";
+
+function slotFrameIsOpen(status: string) {
+  return status !== "DONE" && status !== "CANCELLED" && status !== "DELETED";
+}
+
 function barVisualStyle(status: string, baseColor: string) {
   // Базовая логика:
   // - основной цвет = тип ВС (в связке с оператором)
-  // - статус согласования — узкая полоска внизу бара (BarStatusStripe)
-  // - «на согласовании» дополнительно пунктирной рамкой (слот ещё можно менять)
+  // - статус — узкая полоска внизу бара (BarStatusStripe)
+  // - пунктир, пока слот можно менять (согласование, «В работе» и прочие незакрытые)
+  // - «Завершено» без рамки: даты, место и тип зафиксированы
   // - CANCELLED всегда серый
-  if (status === "CANCELLED") {
+  if (status === "CANCELLED" || status === "DELETED") {
     return {
       background: "rgba(148, 163, 184, 0.85)",
       border: "1px solid rgba(100, 116, 139, 0.9)",
@@ -1416,21 +1434,12 @@ function barVisualStyle(status: string, baseColor: string) {
     } as const;
   }
 
-  if (isPendingApprovalStatus(status)) {
-    return {
-      background: baseColor,
-      opacity: 0.78,
-      border: "2px dashed rgba(15, 23, 42, 0.35)",
-      color: textColor
-    } as const;
-  }
-
-  // APPROVED_* / IN_PROGRESS (и прочие) — обычная заливка и рамка
   return {
     background: baseColor,
-    border: "1px solid rgba(15, 23, 42, 0.22)",
+    ...(isPendingApprovalStatus(status) ? { opacity: 0.78 } : {}),
+    border: SLOT_OPEN_BORDER,
     color: textColor
-  } as const;
+  };
 }
 
 function pickTextColorForBg(color: string) {
@@ -2162,6 +2171,7 @@ export function GanttView() {
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
   const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
   const canEditEvents = Boolean(hasPermission(me?.permissions, "gantt:write") || canWriteSandbox);
+  const canAllowOverlap = Boolean(hasPermission(me?.permissions, "gantt:overlap"));
   const canEditEventsEffective = canEditEvents && !isMobile;
   const canPlanLabor = !isMobile && Boolean(hasPermission(me?.permissions, "resources:plan") || canWriteSandbox);
   const canDnd = Boolean(
@@ -2444,9 +2454,9 @@ export function GanttView() {
   });
   const [dndZoneOnly, setDndZoneOnly] = useState<boolean>(() => Boolean(savedUi?.dndZoneOnly ?? false));
   const [selectedDndEventIds, setSelectedDndEventIds] = useState<string[]>([]);
-  /** Показывать на Гантте внешние MRO (isPhysical=false). По умолчанию — да. */
-  const [showExternalMroOnGantt, setShowExternalMroOnGantt] = useState<boolean>(
-    () => savedUi?.showExternalMroOnGantt !== false
+  /** Показывать на диаграмме отдельную строку отменённых событий. По умолчанию — да. */
+  const [showCancelledOnGantt, setShowCancelledOnGantt] = useState<boolean>(
+    () => savedUi?.showCancelledOnGantt !== false
   );
   const [showGanttNotes, setShowGanttNotes] = useState<boolean>(() => Boolean(savedUi?.showGanttNotes));
 
@@ -2613,7 +2623,7 @@ export function GanttView() {
       dndHangarIds,
       dndLayoutIds,
       dndZoneOnly,
-      showExternalMroOnGantt,
+      showCancelledOnGantt,
       showGanttNotes,
       zoom: minorScale
     });
@@ -2646,7 +2656,7 @@ export function GanttView() {
     dndHangarIds,
     dndLayoutIds,
     dndZoneOnly,
-    showExternalMroOnGantt,
+    showCancelledOnGantt,
     showGanttNotes,
     isMobile,
   ]);
@@ -2673,7 +2683,7 @@ export function GanttView() {
       filterLineBases,
       fitWidth,
       showAllPlacementLinks,
-      showExternalMroOnGantt,
+      showCancelledOnGantt,
       showGanttNotes,
       sandboxId: activeSandboxId
     });
@@ -2698,26 +2708,13 @@ export function GanttView() {
     filterLineBases,
     fitWidth,
     showAllPlacementLinks,
-    showExternalMroOnGantt,
+    showCancelledOnGantt,
     showGanttNotes,
     isMobile,
     activeSandboxId
   ]);
 
   const events = q.data ?? EMPTY_EVENTS
-
-  const externalMroHangarIds = useMemo(() => {
-    return new Set((hangarsQ.data ?? []).filter((h) => h.isPhysical === false).map((h) => h.id));
-  }, [hangarsQ.data]);
-
-  const eventsForGantt = useMemo(() => {
-    if (showExternalMroOnGantt || externalMroHangarIds.size === 0) return events;
-    return events.filter((e) => {
-      const ids = eventHangarIds(e);
-      if (ids.length === 0) return true;
-      return ids.some((id) => !externalMroHangarIds.has(id));
-    });
-  }, [events, showExternalMroOnGantt, externalMroHangarIds]);
 
   const ganttFilters = useMemo<GanttFilters>(
     () => ({
@@ -2745,7 +2742,7 @@ export function GanttView() {
     const planningKindSet = new Set<"PLANNED" | "UNPLANNED">();
     const lineBaseSet = new Set<LineBase>();
 
-    for (const e of eventsForGantt) {
+    for (const e of events) {
       if (eventMatchesGanttFilters(e, ganttFilters, "hangarIds")) {
         for (const id of eventHangarIds(e)) if (id) hangarIdSet.add(id);
       }
@@ -2786,8 +2783,7 @@ export function GanttView() {
     const hangars = [
       { id: NO_HANGAR_FILTER_ID, label: "Без ангара" },
       ...(hangarsQ.data ?? [])
-        .filter((h) => eventsForGantt.length === 0 || hangarIdSet.has(h.id))
-        .filter((h) => showExternalMroOnGantt || h.isPhysical !== false)
+        .filter((h) => events.length === 0 || hangarIdSet.has(h.id))
         .map((h) => ({
           id: h.id,
           label: h.isPhysical === false ? `${h.name} (MRO)` : h.name
@@ -2796,34 +2792,34 @@ export function GanttView() {
     ];
 
     const operators = (operatorsQ.data ?? [])
-      .filter((o) => eventsForGantt.length === 0 || operatorIdSet.has(o.id))
+      .filter((o) => events.length === 0 || operatorIdSet.has(o.id))
       .map((o) => ({ id: o.id, label: o.code ? `${o.code} • ${o.name}` : o.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const aircraftTypes = (aircraftTypesQ.data ?? [])
-      .filter((t) => eventsForGantt.length === 0 || aircraftTypeIdSet.has(t.id))
+      .filter((t) => events.length === 0 || aircraftTypeIdSet.has(t.id))
       .map((t) => ({ id: t.id, label: t.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const aircraft = (aircraftQ.data ?? [])
-      .filter((a) => eventsForGantt.length === 0 || aircraftIdSet.has(String(a.id)))
+      .filter((a) => events.length === 0 || aircraftIdSet.has(String(a.id)))
       .map((a) => ({ id: a.id, label: a.tailNumber }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const eventTypes = (eventTypesQ.data ?? [])
-      .filter((t) => eventsForGantt.length === 0 || eventTypeIdSet.has(t.id))
+      .filter((t) => events.length === 0 || eventTypeIdSet.has(t.id))
       .map((t) => ({ id: t.id, label: t.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const workshops = (workshopsQ.data ?? [])
       .filter((w) => w.isActive !== false)
-      .filter((w) => eventsForGantt.length === 0 || workshopIdSet.has(w.id))
+      .filter((w) => events.length === 0 || workshopIdSet.has(w.id))
       .map((w) => ({ id: w.id, label: w.name }))
       .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 
     const statusSortOrder = new Map<string, number>(statusCatalog.map((s) => [s.code, s.sortOrder]));
     const statuses =
-      eventsForGantt.length === 0
+      events.length === 0
         ? selectableStatusOptions
         : [...statusIdSet]
             .map((id) => ({
@@ -2835,10 +2831,10 @@ export function GanttView() {
             .map(({ id, label }) => ({ id, label }));
 
     return { hangars, operators, aircraftTypes, aircraft, eventTypes, workshops, statuses, planningKinds: planningKindSet, lineBases: lineBaseSet };
-  }, [eventsForGantt, ganttFilters, hangarsQ.data, operatorsQ.data, aircraftTypesQ.data, aircraftQ.data, eventTypesQ.data, workshopsQ.data, showExternalMroOnGantt, statusCatalog, selectableStatusOptions]);
+  }, [events, ganttFilters, hangarsQ.data, operatorsQ.data, aircraftTypesQ.data, aircraftQ.data, eventTypesQ.data, workshopsQ.data, statusCatalog, selectableStatusOptions]);
 
   useEffect(() => {
-    if (eventsForGantt.length === 0) return;
+    if (events.length === 0) return;
 
     const prune = (selected: string[], available: Set<string>) => selected.filter((id) => available.has(id));
     const hangarAvail = new Set(smartFilterOptions.hangars.map((o) => o.id));
@@ -3524,8 +3520,11 @@ export function GanttView() {
   const [legendOpen, setLegendOpen] = useState(false);
   const [pendingSave, setPendingSave] = useState<"event" | "dndMove" | "bulkStatus" | null>(null);
   const [changeReason, setChangeReason] = useState("");
+  const [changeReasonIds, setChangeReasonIds] = useState<string[]>([]);
   const changeReasonRef = useRef(changeReason);
   changeReasonRef.current = changeReason;
+  const changeReasonsQ = useChangeReasons();
+  const activeChangeReasonCount = (changeReasonsQ.data ?? []).filter((row) => row.isActive).length;
   const laborRef = useRef<LaborMetricsHandle | null>(null);
   const [laborDirty, setLaborDirty] = useState(false);
   const [towRows, setTowRows] = useState<TowDraftRow[]>([]);
@@ -3632,6 +3631,7 @@ export function GanttView() {
     setDraft(d);
     setOriginal(d);
     setChangeReason("");
+      setChangeReasonIds([]);
     setCopyFromTitle(null);
     setEditorCollapsed(false);
     setEditorOpen(true);
@@ -3681,6 +3681,7 @@ export function GanttView() {
     setDraft(d);
     setOriginal(d);
     setChangeReason("");
+      setChangeReasonIds([]);
     setCopyFromTitle(null);
     setEditorCollapsed(false);
     setEditorOpen(true);
@@ -3734,6 +3735,7 @@ export function GanttView() {
     setDraft(d);
     setOriginal(d);
     setChangeReason("");
+      setChangeReasonIds([]);
     setCopyFromTitle(ev.title);
     setCopySelectMode(false);
     setEditorCollapsed(false);
@@ -4028,8 +4030,8 @@ export function GanttView() {
       saveEventM.mutate();
       return;
     }
-    const eventNeedsReason = eventDiffNeedsChangeReason(diffs.map((d) => d.field));
-    if (activeSandbox || (!eventNeedsReason && !towDirty)) {
+    const eventNeedsReason = Boolean(original && draft && eventDraftNeedsChangeReason(original, draft));
+    if (activeSandbox || !eventNeedsReason) {
       saveEventM.mutate();
       return;
     }
@@ -4088,20 +4090,18 @@ export function GanttView() {
 
   const applyTowAdd = () => {
     const payload = buildTowWritePayload("add");
+    const row: TowDraftRow = {
+      key: newTowDraftKey(),
+      serverId: null,
+      deleted: false,
+      startAt: payload.startAt,
+      endAt: payload.endAt,
+      fromLabel: payload.fromLabel,
+      toLabel: payload.toLabel,
+      placementId: payload.placementId
+    };
     lockTowDraft();
-    setTowRows((rows) => [
-      ...rows,
-      {
-        key: newTowDraftKey(),
-        serverId: null,
-        deleted: false,
-        startAt: payload.startAt,
-        endAt: payload.endAt,
-        fromLabel: payload.fromLabel,
-        toLabel: payload.toLabel,
-        placementId: payload.placementId
-      }
-    ]);
+    setTowRows((rows) => [...rows, row]);
     setTowFormError("");
     setEdgeTowNotice("");
   };
@@ -4289,17 +4289,19 @@ export function GanttView() {
         await persistTowDraft(draft.id, null);
         return draft;
       }
-      if (draft.id && original && !changeReason.trim()) {
-        const diffFields = computeDraftDiff(original, draft).map((d) => d.field);
-        if (diffFields.length > 0 && !eventDiffNeedsChangeReason(diffFields)) {
-          const updated = await apiPatch<EventRow>(`/api/events/${draft.id}`, {
-            notes: draft.notes?.trim() ? draft.notes : null,
-            comment: draft.comment?.trim() ? draft.comment : null
-          });
-          await persistLabor();
-          await persistTowDraft(draft.id, savedPlacementLinks(updated.placements));
-          return updated;
-        }
+      if (
+        draft.id &&
+        original &&
+        !activeSandbox &&
+        eventDraftNeedsChangeReason(original, draft) &&
+        changeReasonBlocksSave({
+          optional: false,
+          loading: changeReasonsQ.isPending && !changeReasonsQ.data,
+          activeCount: activeChangeReasonCount,
+          selectedCount: changeReasonIds.length
+        })
+      ) {
+        throw new Error(CHANGE_REASON_REQUIRED_MESSAGE);
       }
       if (!draft.eventTypeId) throw new Error("Заполните тип события");
       if (!draft.aircraftId && !selectedVirtualAircraft) throw new Error("Заполните борт");
@@ -4374,7 +4376,6 @@ export function GanttView() {
             })
           ]);
 
-      const reason = changeReason.trim();
       const payload = {
         level: draft.level,
         status: draft.status,
@@ -4397,9 +4398,9 @@ export function GanttView() {
         placements: placementsPayload,
         notes: draft.notes?.trim() ? draft.notes : null,
         comment: draft.comment?.trim() ? draft.comment : null,
-        allowOverlap: draft.allowOverlap,
+        ...(canAllowOverlap ? { allowOverlap: draft.allowOverlap } : {}),
         autoFillGapPlacements: draft.multiPlacement && draft.autoFillGapPlacements,
-        ...(reason ? { changeReason: reason } : {})
+        ...changeReasonRequest(changeReasonIds, changeReason)
       };
 
       if (!draft.id) {
@@ -4428,6 +4429,7 @@ export function GanttView() {
       setConfirmOpen(false);
       setPendingSave(null);
       setChangeReason("");
+      setChangeReasonIds([]);
       setCopyFromTitle(null);
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
       void qc.invalidateQueries({ queryKey: ["analytics", "primary-table"] });
@@ -4439,7 +4441,7 @@ export function GanttView() {
     },
     onError: (err) => {
       const message = String((err as { message?: string })?.message ?? "");
-      if (message.includes("Укажите причину изменения")) {
+      if (isChangeReasonError(message)) {
         setPendingSave("event");
         setConfirmOpen(true);
       }
@@ -4458,6 +4460,7 @@ export function GanttView() {
       setOriginal(null);
       setCopyFromTitle(null);
       setChangeReason("");
+      setChangeReasonIds([]);
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
     }
   });
@@ -4682,6 +4685,9 @@ export function GanttView() {
     },
     [from, dayWidth, canvasWidth, timelineTimeMode]
   );
+
+  const eventsForReasonRef = useRef(events);
+  eventsForReasonRef.current = events;
 
   useEffect(() => {
     if (!dndActive) {
@@ -5021,11 +5027,33 @@ export function GanttView() {
               startAt: preview.startAt,
               endAt: preview.endAt
             } as DndPlaceRequest);
+      const sourceEvents = eventsForReasonRef.current;
+      const leader = sourceEvents.find((row) => row.id === d.eventId);
+      const leaderShift =
+        leader && preview.startAt ? new Date(preview.startAt).getTime() - new Date(leader.startAt).getTime() : 0;
+      const needsReason =
+        displace ||
+        eventIds.some((id) => {
+          const ev = sourceEvents.find((row) => row.id === id);
+          if (!ev) return true;
+          const shift = Number.isFinite(leaderShift) ? leaderShift : 0;
+          const shiftedStart = new Date(new Date(ev.startAt).getTime() + shift).toISOString();
+          const shiftedEnd = new Date(new Date(ev.endAt).getTime() + shift).toISOString();
+          return moveNeedsChangeReason({
+            fromStart: ev.startAt,
+            fromEnd: ev.endAt,
+            toStart: id === d.eventId ? preview.startAt : shiftedStart,
+            toEnd: id === d.eventId ? preview.endAt : shiftedEnd,
+            fromHangarId: (ev.hangar as { id?: string } | null)?.id ?? null,
+            toHangarId: t.hangarId ?? null
+          });
+        });
       setPendingDnd(dndPayload);
       setPendingSave("dndMove");
       setDndNotice(null);
       setChangeReason("");
-      if (displace || !activeSandbox) {
+      setChangeReasonIds([]);
+      if (displace || (!activeSandbox && needsReason)) {
         setConfirmOpen(true);
       } else {
         dndCommitRef.current(dndPayload);
@@ -5097,22 +5125,18 @@ export function GanttView() {
         .filter((row) => !row.deleted)
         .map((row) => ({ startAt: new Date(row.startAt), endAt: new Date(row.endAt) }))
     });
+    const created: TowDraftRow[] = plan.create.map((tow) => ({
+      key: newTowDraftKey(),
+      serverId: null,
+      deleted: false,
+      startAt: tow.startAt.toISOString(),
+      endAt: tow.endAt.toISOString(),
+      fromLabel: tow.fromLabel,
+      toLabel: tow.toLabel,
+      placementId: tow.placementId
+    }));
     lockTowDraft();
-    if (plan.create.length > 0) {
-      setTowRows((rows) => [
-        ...rows,
-        ...plan.create.map((tow) => ({
-          key: newTowDraftKey(),
-          serverId: null,
-          deleted: false,
-          startAt: tow.startAt.toISOString(),
-          endAt: tow.endAt.toISOString(),
-          fromLabel: tow.fromLabel,
-          toLabel: tow.toLabel,
-          placementId: tow.placementId
-        }))
-      ]);
-    }
+    if (created.length > 0) setTowRows((rows) => [...rows, ...created]);
     const parts: string[] = [];
     if (plan.create.length > 0) parts.push(`В карточку добавлено ${plan.create.length}`);
     if (plan.kept > 0) parts.push(`уже заполнено ${plan.kept}`);
@@ -5128,8 +5152,7 @@ export function GanttView() {
     ) => {
       const data = override ?? pendingDnd;
       if (!data) throw new Error("Нет данных переноса");
-      const reason = changeReason.trim();
-      const reasonPayload = reason ? { changeReason: reason } : {};
+      const reasonPayload = changeReasonRequest(changeReasonIds, changeReason);
       const batchIds = (data as DndBatchPlaceRequest).eventIds;
       if (Array.isArray(batchIds) && batchIds.length > 1) {
         return await apiPost<{
@@ -5199,6 +5222,7 @@ export function GanttView() {
             : `Перенос выполнен.${autoPlace}`;
       setDndNotice(batchMsg);
       setChangeReason("");
+      setChangeReasonIds([]);
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
       if (draft?.id) void qc.invalidateQueries({ queryKey: ["event-history", draft.id] });
       for (const id of res?.bumpedEventIds ?? []) {
@@ -5231,12 +5255,22 @@ export function GanttView() {
       const ids = selectedTableEventIds;
       if (ids.length === 0) throw new Error("Не выбраны события");
       if (ids.length > BULK_STATUS_MAX) throw new Error(`За один раз можно изменить не больше ${BULK_STATUS_MAX} событий`);
-      const reason = changeReason.trim();
-      if (!activeSandbox && !reason) throw new Error("Укажите причину изменения");
+      if (
+        !activeSandbox &&
+        bulkStatusTarget === "CANCELLED" &&
+        changeReasonBlocksSave({
+          optional: false,
+          loading: changeReasonsQ.isPending && !changeReasonsQ.data,
+          activeCount: activeChangeReasonCount,
+          selectedCount: changeReasonIds.length
+        })
+      ) {
+        throw new Error(CHANGE_REASON_REQUIRED_MESSAGE);
+      }
       return apiPost<BulkStatusBatchResult>("/api/events/status/batch", {
         eventIds: ids,
         status: bulkStatusTarget,
-        ...(reason ? { changeReason: reason } : {})
+        ...changeReasonRequest(changeReasonIds, changeReason)
       });
     },
     onSuccess: (res) => {
@@ -5261,6 +5295,7 @@ export function GanttView() {
       setConfirmOpen(false);
       setPendingSave(null);
       setChangeReason("");
+      setChangeReasonIds([]);
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
       void qc.invalidateQueries({ queryKey: ["analytics", "primary-table", "gantt-rows"] });
     },
@@ -5291,7 +5326,8 @@ export function GanttView() {
     }
     setPendingSave("bulkStatus");
     setChangeReason("");
-    if (activeSandbox) {
+      setChangeReasonIds([]);
+    if (activeSandbox || bulkStatusTarget !== "CANCELLED") {
       bulkStatusM.mutate();
       return;
     }
@@ -5332,7 +5368,7 @@ export function GanttView() {
       return hangarAxisLabel({ name: meta?.name ?? fallbackName, code: meta?.code }, false);
     };
 
-    const visible = eventsForGantt
+    const visible = events
       .filter((e) => {
         if (eventMatchesGanttFilters(e, ganttFilters)) return true;
         return (
@@ -5571,7 +5607,7 @@ export function GanttView() {
     const laneRows: LaneRow[] = [];
     pushLanes(rows, laneRows);
 
-    if (cancelledVisible.length > 0) {
+    if (showCancelledOnGantt && cancelledVisible.length > 0) {
       const cancelledLanes = packOverlapsIntoLanes(cancelledVisible, packRange);
       for (let i = 0; i < cancelledLanes.length; i++) {
         laneRows.push({
@@ -5588,7 +5624,7 @@ export function GanttView() {
   }, [
     groupMode,
     ganttFilters,
-    eventsForGantt,
+    events,
     dndActive,
     dndStandsQ.data,
     dndStandById,
@@ -5600,7 +5636,8 @@ export function GanttView() {
     hangarMetaById,
     preferAxisCodes,
     ganttDisplayMode,
-    hangarStandSort
+    hangarStandSort,
+    showCancelledOnGantt
   ]);
 
   // чтобы DnD-логика могла читать строки без "used before declaration"
@@ -5709,8 +5746,8 @@ export function GanttView() {
   }, [groupMode, events, hangarMetaById]);
 
   const exportEvents = useMemo(() => {
-    return eventsForGantt.filter((e) => eventMatchesGanttFilters(e, ganttFilters));
-  }, [eventsForGantt, ganttFilters]);
+    return events.filter((e) => eventMatchesGanttFilters(e, ganttFilters));
+  }, [events, ganttFilters]);
 
   useEffect(() => {
     const visible = new Set(exportEvents.map((e) => e.id));
@@ -5838,7 +5875,7 @@ export function GanttView() {
   );
 
   const cancelledAircraftRows = useMemo(() => {
-    if (groupMode !== "AIRCRAFT") return [];
+    if (groupMode !== "AIRCRAFT" || !showCancelledOnGantt) return [];
     const cancelled = exportEvents.filter((e) => e.status === "CANCELLED");
     return packOverlapsIntoLanes(cancelled, (ev) => eventPackRangeMs(ev, ganttDisplayMode)).map((events, i) => ({
       key: `cancelled-aircraft:lane:${i}`,
@@ -5847,7 +5884,7 @@ export function GanttView() {
       subLabel: "Не участвует в рабочем размещении",
       events
     }));
-  }, [groupMode, exportEvents, ganttDisplayMode]);
+  }, [groupMode, exportEvents, ganttDisplayMode, showCancelledOnGantt]);
 
   const aircraftRows = useMemo(
     () => [
@@ -6077,6 +6114,7 @@ export function GanttView() {
             const w = Math.max(2, right - x);
             const fill = ev.status === "CANCELLED" ? "#94a3b8" : aircraftTypeMarkColor(ev, aircraftPaletteMap);
             const stroke = ev.status === "DONE" ? "#16a34a" : ev.status === "CANCELLED" ? "#64748b" : "#0f172a";
+            const openFrame = slotFrameIsOpen(ev.status) ? ` stroke-dasharray="4 3"` : "";
             const stripe = ganttStatusStripeColor(ev.status, statusCatalog);
             const label = compactBarLabel(ev);
             const actualSvg =
@@ -6100,7 +6138,7 @@ export function GanttView() {
             const stripeSvg = stripe
               ? `<rect x="${x.toFixed(1)}" y="${(barY + barH - 3).toFixed(1)}" width="${w.toFixed(1)}" height="3" fill="${htmlEscape(stripe)}" />`
               : "";
-            return `<rect x="${x.toFixed(1)}" y="${barY}" width="${w.toFixed(1)}" height="${barH}" rx="5" fill="${htmlEscape(fill)}" stroke="${stroke}" stroke-width="1" opacity="${ev.status === "CANCELLED" ? "0.55" : "0.88"}" />
+            return `<rect x="${x.toFixed(1)}" y="${barY}" width="${w.toFixed(1)}" height="${barH}" rx="5" fill="${htmlEscape(fill)}" stroke="${stroke}" stroke-width="1"${openFrame} opacity="${ev.status === "CANCELLED" ? "0.55" : "0.88"}" />
               ${stripeSvg}
               ${actualSvg}
               ${w > 80 ? `<text x="${(x + 6).toFixed(1)}" y="${ganttDisplayMode === "PLAN_FACT" ? y + 15 : y + 19}" font-size="9" fill="#ffffff">${htmlEscape(label.slice(0, 58))}</text>` : ""}`;
@@ -6205,7 +6243,7 @@ export function GanttView() {
         ? `Планирование: ${filterPlanningKinds.map((k) => (k === "PLANNED" ? "плановые" : "внеплановые")).join(", ")}`
         : null,
       filterLineBases.length ? `L/B: ${filterLineBases.map((k) => LINE_BASE_LABEL[k]).join(", ")}` : null,
-      showExternalMroOnGantt ? null : "без внешних MRO"
+      showCancelledOnGantt ? null : "без отмененных"
     ].filter((x): x is string => Boolean(x));
   }, [
     selectedHangarIds,
@@ -6218,7 +6256,7 @@ export function GanttView() {
     filterPlanningKinds,
     filterLineBases,
     smartFilterOptions,
-    showExternalMroOnGantt
+    showCancelledOnGantt
   ]);
 
   const activeFilterCount = useMemo(() => {
@@ -6774,62 +6812,81 @@ export function GanttView() {
                     />
                   </div>
                 </div>
+                {panelView === "DIAGRAM" ? (
+                  <>
+                    <div className="tgIndicatorCluster">
+                      <span className="tgIndicatorCaption">Групп:</span>
+                      <div className="tgIndicatorGroup" role="group" aria-label="Группировка строк">
+                        <FilterIndicator
+                          icon={<IndicatorGlyph name="aircraft" />}
+                          title="Группировка: борт / событие"
+                          tone="aircraft"
+                          active={groupMode === "AIRCRAFT"}
+                          onClick={() => {
+                            if (groupMode === "AIRCRAFT") return;
+                            setGroupMode("AIRCRAFT");
+                            setSelectedDndEventIds([]);
+                            setPtrDrag(null);
+                          }}
+                        />
+                        <FilterIndicator
+                          icon={<IndicatorGlyph name="hangar" />}
+                          title="Группировка: ангар / место"
+                          tone="hangar"
+                          active={groupMode === "HANGAR_STAND"}
+                          onClick={() => {
+                            if (groupMode === "HANGAR_STAND") return;
+                            setGroupMode("HANGAR_STAND");
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="tgIndicatorCluster">
+                      <span className="tgIndicatorCaption">График:</span>
+                      <div className="tgIndicatorGroup" role="group" aria-label="Отображение графика">
+                        <FilterIndicator
+                          icon={<IndicatorGlyph name="current" />}
+                          title="Текущий график: факт подменяет план, если факт заполнен"
+                          tone="current"
+                          active={ganttDisplayMode === "CURRENT"}
+                          onClick={() => setGanttDisplayMode("CURRENT")}
+                        />
+                        <FilterIndicator
+                          icon={<IndicatorGlyph name="planfact" />}
+                          title="План-факт: план и факт двумя полосами"
+                          tone="planfact"
+                          active={ganttDisplayMode === "PLAN_FACT"}
+                          onClick={() => setGanttDisplayMode("PLAN_FACT")}
+                        />
+                      </div>
+                    </div>
+                    <div className="tgIndicatorCluster">
+                      <span className="tgIndicatorCaption">Отмен:</span>
+                      <div className="tgIndicatorGroup" role="group" aria-label="Отмененные события">
+                        <FilterIndicator
+                          icon={<IndicatorGlyph name="cancelled" />}
+                          title="Отмененные события выводятся отдельной строкой «Отменено»"
+                          tone="cancelled"
+                          active={showCancelledOnGantt}
+                          onClick={() => setShowCancelledOnGantt((shown) => !shown)}
+                        />
+                      </div>
+                    </div>
+                    <div className="tgIndicatorCluster">
+                      <span className="tgIndicatorCaption">Прим:</span>
+                      <div className="tgIndicatorGroup" role="group" aria-label="Примечание на диаграмме">
+                        <FilterIndicator
+                          icon={<IndicatorGlyph name="notes" />}
+                          title="Показать примечание под баром для событий, которые ещё не завершены и не отменены"
+                          tone="notes"
+                          active={showGanttNotes}
+                          onClick={() => setShowGanttNotes((shown) => !shown)}
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : null}
               </div>
-              {panelView === "DIAGRAM" ? (
-                <>
-                  <div className="tgField" title="Как группировать строки диаграммы">
-                    <span className="tgFieldLabel">Группировка</span>
-                    <SwitchToggle
-                      compact
-                      checked={groupMode === "HANGAR_STAND"}
-                      onChange={(v) => {
-                        setGroupMode(v ? "HANGAR_STAND" : "AIRCRAFT");
-                        if (!v) {
-                          setSelectedDndEventIds([]);
-                          setPtrDrag(null);
-                        }
-                      }}
-                      label={groupMode === "HANGAR_STAND" ? "Ангар / место" : "Борт / событие"}
-                    />
-                  </div>
-                  <div
-                    className="tgField"
-                    title="Текущий график показывает факт вместо плана, когда факт заполнен; План-факт показывает два бара"
-                  >
-                    <span className="tgFieldLabel">Отображение</span>
-                    <SwitchToggle
-                      compact
-                      checked={ganttDisplayMode === "PLAN_FACT"}
-                      onChange={(v) => setGanttDisplayMode(v ? "PLAN_FACT" : "CURRENT")}
-                      label={ganttDisplayMode === "PLAN_FACT" ? "План-факт" : "Текущий график"}
-                    />
-                  </div>
-                  <div
-                    className="tgField"
-                    title="Внешние MRO (ангары с isPhysical=false) — сторонние контуры для оценки потребности"
-                  >
-                    <span className="tgFieldLabel">Внешние MRO</span>
-                    <SwitchToggle
-                      compact
-                      checked={showExternalMroOnGantt}
-                      onChange={setShowExternalMroOnGantt}
-                      label={showExternalMroOnGantt ? "Показывать" : "Скрыты"}
-                    />
-                  </div>
-                  <div
-                    className="tgField"
-                    title="Показать примечание под баром для событий, которые ещё не завершены и не отменены"
-                  >
-                    <span className="tgFieldLabel">Примечание</span>
-                    <SwitchToggle
-                      compact
-                      checked={showGanttNotes}
-                      onChange={setShowGanttNotes}
-                      label={showGanttNotes ? "Под баром" : "Скрыты"}
-                    />
-                  </div>
-                </>
-              ) : null}
             </div>
           </div>
 
@@ -7190,9 +7247,10 @@ export function GanttView() {
       <div className="ganttPageMain" ref={ganttPageMainRef} onScroll={scheduleGanttVirt}>
       {panelView === "TABLE" ? (
         <div className="card ganttTableCard">
-          <GanttEventsTable
+            <GanttEventsTable
             events={exportEvents}
             canEdit={canEditEventsEffective}
+            canAllowOverlap={canAllowOverlap}
             allowColumnReorder={!isMobile}
             settingsOpen={tableSettingsOpen}
             onSettingsOpenChange={setTableSettingsOpen}
@@ -7570,7 +7628,7 @@ export function GanttView() {
                                   : null}
                                 {displayPeriod.source === "Опер." ? renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
                                 {canShowBarTitle(w) ? (
-                                  <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
+                                  <span style={{ position: "relative", zIndex: 5, pointerEvents: "none" }}>
                                     <BarLabel {...aircraftBarText(ev, w, ganttDisplayMode)} />
                                   </span>
                                 ) : null}
@@ -7786,7 +7844,7 @@ export function GanttView() {
                                   })
                                 : null}
                               {canShowBarTitle(w) ? (
-                                <span style={{ position: "relative", zIndex: 1, pointerEvents: "none" }}>
+                                <span style={{ position: "relative", zIndex: 5, pointerEvents: "none" }}>
                                   <BarLabel {...hangarBarText(ev, w, ganttDisplayMode)} />
                                 </span>
                               ) : null}
@@ -8207,7 +8265,7 @@ export function GanttView() {
                         <li>Оперативный период управляет полоской на Гантте и размещением в ангаре.</li>
                         <li>Если окончание оперативного слота позже DeadLine, показывается подсказка. Сохранение при этом не блокируется.</li>
                         <li>Бюджетный период нужен для планового TAT; у внеплановых событий он скрыт.</li>
-                        <li>Фактический период заполняется по ходу работы и влияет на статус «Завершено».</li>
+                        <li>Фактический период заполняется по ходу работы. Статус «Завершено» ставится автоматически, когда фактическое окончание уже наступило, и снимается, если эта дата ещё впереди.</li>
                       </ul>
                     </>
                   }
@@ -8317,6 +8375,11 @@ export function GanttView() {
                         <li>Варианты размещения фильтруются по совместимости с типом ВС.</li>
                         <li>При нескольких размещениях этапы открываются компактным списком ниже.</li>
                         <li>Первый этап начинается, а последний заканчивается вместе с оперативным периодом события.</li>
+                        <li>
+                          «Разрешить нахлёст» виден только при праве старшего планировщика. Без него занятое место или
+                          другая схема в том же ангаре сохранение отклоняют. Факт, закрытый позже плана, тоже занимает
+                          стоянку: сохранить его поверх уже занятого места нельзя.
+                        </li>
                       </ul>
                     </>
                   }
@@ -8393,16 +8456,20 @@ export function GanttView() {
                     label="Событие в нескольких ангарах"
                     hint="Позволяет задать последовательность этапов размещения"
                   />
-                  <EvToggle
-                    checked={draft.allowOverlap}
-                    onChange={(allowOverlap) => setDraft({ ...draft, allowOverlap })}
-                    label="Разрешить нахлёст при сохранении"
-                    hint={
-                      draft.allowOverlap
-                        ? "Нахлёст уже разрешён для этого события и сохраняется при следующих изменениях"
-                        : "При конфликте места сохранение будет отклонено"
-                    }
-                  />
+                  {canAllowOverlap ? (
+                    <EvToggle
+                      checked={draft.allowOverlap}
+                      onChange={(allowOverlap) => setDraft({ ...draft, allowOverlap })}
+                      label="Разрешить нахлёст при сохранении"
+                      hint={
+                        draft.allowOverlap
+                          ? "Нахлёст уже разрешён для этого события и сохраняется при следующих изменениях"
+                          : "При конфликте места сохранение будет отклонено"
+                      }
+                    />
+                  ) : selectedDraftEvent?.allowOverlap ? (
+                    <p className="muted">Нахлёст для этого события уже разрешён. Снять его может старший планировщик.</p>
+                  ) : null}
                 </div>
                 {draft.multiPlacement ? (
                   <EventPlacementsEditor
@@ -8517,7 +8584,13 @@ export function GanttView() {
                       <button
                         className="btn btnGhost refIconButton"
                         type="button"
-                        onClick={() => applyEdgeTows()}
+                        onClick={() => {
+                          try {
+                            applyEdgeTows();
+                          } catch (error) {
+                            setTowFormError(error instanceof Error ? error.message : String(error));
+                          }
+                        }}
                         disabled={!edgeTowNorm || (!!draft.id && !towsQ.isSuccess)}
                         title={
                           edgeTowNorm
@@ -8682,7 +8755,7 @@ export function GanttView() {
                       <ul>
                         <li>Сюда удобно писать контекст, особенности работ и внешние согласования.</li>
                         <li>Текст виден всем, у кого есть доступ к карточке события.</li>
-                        <li>Примечание и комментарий сохраняются кнопкой карточки сразу, без окна «Причина изменения».</li>
+                        <li>Окно «Причина изменения» открывается только при смене дат, борта, DeadLine, ангара или переводе в «Отменено». В нём выбирают одну или несколько причин из справочника, комментарий можно не заполнять.</li>
                       </ul>
                     </>
                   }
@@ -8757,8 +8830,8 @@ export function GanttView() {
                       <p>Журнал правок события: кто, когда и что изменил — включая автостатусы.</p>
                       <ul>
                         <li>Записи сгруппированы по дням. В таблице: реквизит, предыдущая версия и текущая. У первичной записи предыдущая версия пустая, комментарий к правке — отдельная строка.</li>
-                        <li>В рабочем контуре при существенных правках (сроки, статус, размещение) указывается причина.</li>
-                        <li>Примечание, комментарий и трудоёмкость сохраняются сразу.</li>
+                        <li>В рабочем контуре причина указывается при смене дат, борта, DeadLine, ангара или переводе в «Отменено».</li>
+                        <li>Остальные правки, включая место, статус кроме отмены, примечание, комментарий и трудоёмкость, сохраняются сразу.</li>
                         <li>В песочнице причина не обязательна.</li>
                       </ul>
                     </>
@@ -8792,7 +8865,7 @@ export function GanttView() {
                           {group.items.map((h) => {
                             const rows = [
                               ...extractDiffEntries(h.changes).flatMap((entry) => historyTableRows(entry, historyRefMaps)),
-                              ...(h.reason?.trim() ? [historyCommentRow(h.reason)] : [])
+                              ...historyReasonRows(h)
                             ];
                             return (
                               <div key={h.id} className="evHistoryItem">
@@ -8888,11 +8961,6 @@ export function GanttView() {
                   className="btn btnPrimary"
                   onClick={() => {
                     if (!draft.id) {
-                      if (!activeSandbox && towDirty) {
-                        setPendingSave("event");
-                        setConfirmOpen(true);
-                        return;
-                      }
                       saveEventM.mutate();
                     } else {
                       requestSaveWithReason();
@@ -8936,7 +9004,7 @@ export function GanttView() {
                 ))}
             </div>
             <div className="legendHint muted">
-              Цветная полоска внизу бара — статус из справочника «Статусы». Пунктирная рамка — слот ещё на согласовании.
+              Цветная полоска внизу бара — статус из справочника «Статусы». Пунктирная рамка — слот ещё можно менять, в том числе в статусе «В работе». У «Завершено» рамки нет: слот зафиксирован.
               Заливка определяется правилом «оператор × тип ВС» (см. ниже).
             </div>
           </div>
@@ -9033,23 +9101,22 @@ export function GanttView() {
           dndDisplaceConfirm
             ? confirmReasonOptional
               ? "Перенос займёт чужое место. Подтвердите, что его нужно освободить."
-              : "Перенос займёт чужое место. Подтвердите смещение и укажите причину — она попадёт в историю."
-            : "Укажите причину — она попадёт в историю события."
+              : "Перенос займёт чужое место. Подтвердите смещение. Можно выбрать несколько причин."
+            : pendingSave === "bulkStatus"
+              ? "Перевод в «Отменено». Можно выбрать несколько причин."
+              : pendingSave === "dndMove"
+                ? "Перенос меняет даты или ангар. Можно выбрать несколько причин."
+                : "Можно выбрать несколько причин."
         }
         onClose={() => setConfirmOpen(false)}
       >
         <div className={dndDisplaceConfirm ? "evConfirm evConfirmWide" : "evConfirm"}>
-          <label className="evField">
-            <span className="evFieldLabel">Причина изменения</span>
-            <textarea
-              className="evInput evTextarea"
-              rows={3}
-              value={changeReason}
-              onChange={(e) => setChangeReason(e.target.value)}
-              placeholder="Например: перенос по запросу оператора, уточнение сроков…"
-              autoFocus
-            />
-          </label>
+          <ChangeReasonFields
+            ids={changeReasonIds}
+            comment={changeReason}
+            onIdsChange={setChangeReasonIds}
+            onCommentChange={setChangeReason}
+          />
 
           {(() => {
             const diffs =
@@ -9181,8 +9248,10 @@ export function GanttView() {
                 <span className="muted">Сохраняем…</span>
               ) : confirmReasonOptional ? (
                 <span className="muted">В песочнице причина не обязательна.</span>
+              ) : !changeReasonsQ.isPending && activeChangeReasonCount === 0 ? (
+                <span className="muted">Справочник причин пуст, сохранение доступно без выбора.</span>
               ) : (
-                <span className="muted">Причина обязательна.</span>
+                <span className="muted">Выберите хотя бы одну причину.</span>
               )}
             </div>
             <div className="evFooterActions">
@@ -9192,7 +9261,12 @@ export function GanttView() {
               <button
                 className="btn btnPrimary"
                 disabled={
-                  (!confirmReasonOptional && !changeReason.trim()) ||
+                  changeReasonBlocksSave({
+                    optional: confirmReasonOptional,
+                    loading: changeReasonsQ.isPending && !changeReasonsQ.data,
+                    activeCount: activeChangeReasonCount,
+                    selectedCount: changeReasonIds.length
+                  }) ||
                   saveEventM.isPending ||
                   dndMoveM.isPending ||
                   bulkStatusM.isPending

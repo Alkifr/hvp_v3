@@ -12,8 +12,24 @@ import {
   summarizeGroupAccess,
   summarizeRolePermissions,
   nextCloneRoleCode,
-  previewNavLabels
+  previewNavLabels,
+  SYSTEM_ROLE_GUIDE
 } from "./permissionCatalog.ts";
+
+test("overlap is separate from plan editing", () => {
+  assert.equal(hasPermission(["gantt:write"], "gantt:overlap"), false);
+  assert.equal(hasPermission(["gantt:overlap"], "gantt:write"), false);
+  assert.equal(hasPermission(["gantt:overlap"], "gantt:read"), true);
+});
+
+test("system roles name who they are for", () => {
+  const codes = SYSTEM_ROLE_GUIDE.map((role) => role.code);
+  assert.deepEqual(codes, ["VIEWER", "PLANNER", "PLANNER_SENIOR", "ADMIN", "SUPER_ADMIN"]);
+  for (const role of SYSTEM_ROLE_GUIDE) {
+    assert.ok(role.who.length > 20, role.code);
+    assert.ok(role.can.length > 20, role.code);
+  }
+});
 
 test("edit implies view and events data access", () => {
   assert.deepEqual(expandPermissionCodes(["gantt:write"]).sort(), [

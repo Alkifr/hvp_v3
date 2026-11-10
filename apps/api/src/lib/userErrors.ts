@@ -52,7 +52,7 @@ export const UserMsg = {
   PLACEMENT_END_AFTER_START: "Окончание этапа размещения должно быть позже начала",
   PLACEMENT_WITHIN_EVENT: "Этап размещения должен быть внутри дат события",
   PLACEMENT_NO_OVERLAP: "Этапы размещения не должны пересекаться",
-  CHANGE_REASON_REQUIRED: "Укажите причину изменения",
+  CHANGE_REASON_REQUIRED: "Выберите причину изменения",
   STEP_DEPENDENCY_INVALID: "Выбранные предшествующие шаги должны быть из того же плана",
   INVALID_DATE: "Укажите корректную дату",
   CADENCE_REQUIRED: "Для режима с фиксированным интервалом укажите шаг в часах",

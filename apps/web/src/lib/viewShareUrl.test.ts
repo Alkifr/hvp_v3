@@ -42,7 +42,7 @@ test("gantt serialize omits defaults and round-trips filters", () => {
     filterLineBases: ["LINE"],
     fitWidth: true,
     showAllPlacementLinks: false,
-    showExternalMroOnGantt: false,
+    showCancelledOnGantt: false,
     showGanttNotes: true,
     hangarStandSort: "layout-stand",
     sandboxId: "sb1"
@@ -57,7 +57,7 @@ test("gantt serialize omits defaults and round-trips filters", () => {
   assert.equal(q.get("tz"), "utc");
   assert.equal(q.get("fit"), "1");
   assert.equal(q.has("links"), false);
-  assert.equal(q.get("ext"), "0");
+  assert.equal(q.get("cx"), "0");
   assert.equal(q.get("notes"), "1");
   assert.equal(q.get("hsort"), "ly");
   assert.equal(q.get("hangar"), "h1");
@@ -72,7 +72,7 @@ test("gantt serialize omits defaults and round-trips filters", () => {
   assert.deepEqual(parsed.selectedHangarIds, ["h1"]);
   assert.deepEqual(parsed.filterEventTypeIds, []);
   assert.deepEqual(parsed.filterPlanningKinds, ["UNPLANNED"]);
-  assert.equal(parsed.showExternalMroOnGantt, false);
+  assert.equal(parsed.showCancelledOnGantt, false);
   assert.equal(parsed.showGanttNotes, true);
   assert.equal(parsed.hangarStandSort, "layout-stand");
 });
@@ -98,7 +98,7 @@ test("gantt prod contour writes empty sandbox", () => {
     filterLineBases: [],
     fitWidth: false,
     showAllPlacementLinks: false,
-    showExternalMroOnGantt: true,
+    showCancelledOnGantt: true,
     showGanttNotes: false,
     hangarStandSort: "stand-layout",
     sandboxId: null

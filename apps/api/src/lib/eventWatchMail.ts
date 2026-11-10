@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import dayjs from "dayjs";
 
+import { eventStatusLabel } from "./eventStatusCatalog.js";
 import { isSmtpReady, sendMail, smtpConfigFromSettings } from "./mailer.js";
 
 export type AuditNote = {
@@ -43,7 +44,69 @@ const FIELD_LABEL: Record<string, string> = {
   allowOverlap: "Нахлёст",
   reservation: "Резерв места",
   placements: "Этапы размещения",
-  tow: "Буксировка"
+  tow: "Буксировка",
+  operatorId: "Оператор",
+  aircraftTypeId: "Тип ВС",
+  typeId: "Тип ВС",
+  label: "Обозначение",
+  origin: "Источник этапа",
+  fromLabel: "Откуда",
+  toLabel: "Куда",
+  placementLabel: "Этап размещения",
+  positionComment: "Позиция",
+  startChangeReason: "Причина изменения начала"
+};
+
+const LEVEL_LABEL: Record<string, string> = {
+  STRATEGIC: "Стратегический",
+  OPERATIONAL: "Оперативный"
+};
+
+const PLANNING_KIND_LABEL: Record<string, string> = {
+  PLANNED: "Плановое",
+  UNPLANNED: "Внеплановое"
+};
+
+const LINE_BASE_LABEL: Record<string, string> = {
+  LINE: "L (Line)",
+  BASE: "B (Base)"
+};
+
+const ORIGIN_LABEL: Record<string, string> = {
+  AUTO_GAP: "Создан системой для заполнения разрыва",
+  MANUAL: "Добавлен пользователем"
+};
+
+const LEGACY_STATUS_LABEL: Record<string, string> = {
+  DRAFT: "Черновик",
+  PROPOSED: "Предложено",
+  APPROVED: "Согласовано"
+};
+
+const REF_KEYS = new Set([
+  "hangarId",
+  "layoutId",
+  "standId",
+  "aircraftId",
+  "eventTypeId",
+  "workshopId",
+  "aircraftTypeId",
+  "typeId",
+  "operatorId"
+]);
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type WatchLabels = {
+  hangars: Map<string, string>;
+  layouts: Map<string, string>;
+  stands: Map<string, string>;
+  aircraft: Map<string, string>;
+  eventTypes: Map<string, string>;
+  workshops: Map<string, string>;
+  statuses: Map<string, string>;
+  aircraftTypes: Map<string, string>;
+  operators: Map<string, string>;
 };
 
 export type WatchEventSection = {
@@ -58,42 +121,262 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-function formatVal(v: unknown, depth = 0): string {
+function isUuid(v: string): boolean {
+  return UUID_RE.test(v);
+}
+
+function isRefKey(key: string | undefined): boolean {
+  return !!key && (REF_KEYS.has(key) || /Id$/.test(key));
+}
+
+function clip(value: string, max = 500): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function refValue(key: string | undefined, value: string, labels?: WatchLabels): string | null {
+  if (!labels || !key) return null;
+  switch (key) {
+    case "hangarId":
+      return labels.hangars.get(value) ?? null;
+    case "layoutId":
+      return labels.layouts.get(value) ?? null;
+    case "standId":
+      return labels.stands.get(value) ?? null;
+    case "aircraftId":
+      return labels.aircraft.get(value) ?? null;
+    case "eventTypeId":
+      return labels.eventTypes.get(value) ?? null;
+    case "workshopId":
+      return labels.workshops.get(value) ?? null;
+    case "aircraftTypeId":
+    case "typeId":
+      return labels.aircraftTypes.get(value) ?? null;
+    case "operatorId":
+      return labels.operators.get(value) ?? null;
+    default:
+      return null;
+  }
+}
+
+function formatScalar(key: string | undefined, value: string, labels?: WatchLabels): string {
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const d = dayjs(value);
+    if (d.isValid()) return d.format("DD.MM.YYYY HH:mm");
+  }
+  if (key === "status") return labels?.statuses.get(value) ?? LEGACY_STATUS_LABEL[value] ?? eventStatusLabel(value);
+  if (key === "level") return LEVEL_LABEL[value] ?? value;
+  if (key === "planningKind") return PLANNING_KIND_LABEL[value] ?? value;
+  if (key === "lineBase") return LINE_BASE_LABEL[value] ?? value;
+  if (key === "origin") return ORIGIN_LABEL[value] ?? value;
+  const named = refValue(key, value, labels);
+  if (named) return named;
+  if (isRefKey(key) && isUuid(value)) return "не найдено";
+  return clip(value, 180);
+}
+
+function formatPeriod(start: unknown, end: unknown, labels?: WatchLabels): string {
+  const left = start == null || start === "" ? "" : formatVal(start, undefined, labels, 1);
+  const right = end == null || end === "" ? "" : formatVal(end, undefined, labels, 1);
+  if (left && right) return `${left} — ${right}`;
+  if (left) return `с ${left}`;
+  if (right) return `до ${right}`;
+  return "";
+}
+
+function isPlace(key: string | undefined, value: Record<string, unknown>): boolean {
+  if (key === "reservation" || key === "placements") return true;
+  return ("layoutId" in value || "standId" in value || "hangarId" in value) && ("startAt" in value || "endAt" in value || "origin" in value);
+}
+
+function formatPlace(value: Record<string, unknown>, labels?: WatchLabels): string {
+  const period = formatPeriod(value.startAt, value.endAt, labels);
+  const budget = formatPeriod(value.budgetStartAt, value.budgetEndAt, labels);
+  const actual = formatPeriod(value.actualStartAt, value.actualEndAt, labels);
+  const layout = typeof value.layoutId === "string" ? formatScalar("layoutId", value.layoutId, labels) : "";
+  const hangar = typeof value.hangarId === "string" ? formatScalar("hangarId", value.hangarId, labels) : "";
+  const stand = typeof value.standId === "string" ? formatScalar("standId", value.standId, labels) : "";
+  const location =
+    value.origin === "AUTO_GAP"
+      ? "Без ангара"
+      : [layout || hangar, stand ? `место ${stand}` : ""].filter(Boolean).join(", ");
+  const extras = [budget ? `бюджет ${budget}` : "", actual ? `факт ${actual}` : ""].filter(Boolean);
+  return [period, location, ...extras].filter(Boolean).join(" · ") || "—";
+}
+
+function formatVal(v: unknown, key: string | undefined, labels?: WatchLabels, depth = 0): string {
   if (v == null || v === "") return "—";
   if (typeof v === "boolean") return v ? "да" : "нет";
   if (typeof v === "number") return String(v);
-  if (typeof v === "string") {
-    if (/^\d{4}-\d{2}-\d{2}T/.test(v)) {
-      const d = dayjs(v);
-      if (d.isValid()) return d.format("DD.MM.YYYY HH:mm");
-    }
-    return v.length > 180 ? `${v.slice(0, 177)}…` : v;
+  if (typeof v === "string") return formatScalar(key, v, labels);
+  if (Array.isArray(v)) {
+    if (!v.length) return "—";
+    return clip(v.map((item, index) => formatListItem(item, key, labels, depth + 1, index)).join("; "));
   }
-  if (Array.isArray(v)) return v.length ? `${v.length} шт.` : "—";
-  if (depth >= 2 || !isObj(v)) return "изменено";
-  if ("from" in v || "to" in v) return `${formatVal(v.from, depth + 1)} → ${formatVal(v.to, depth + 1)}`;
-  return "изменено";
+  if (depth >= 3 || !isObj(v)) return "изменено";
+  return clip(formatObject(v, key, labels, depth));
 }
 
-export function summarizeChanges(changes: unknown): string[] {
+function formatListItem(item: unknown, key: string | undefined, labels: WatchLabels | undefined, depth: number, index: number): string {
+  if (isObj(item) && isPlace(key, item)) return `${index + 1}. ${formatPlace(item, labels)}`;
+  return formatVal(item, key, labels, depth);
+}
+
+function formatObject(value: Record<string, unknown>, key: string | undefined, labels: WatchLabels | undefined, depth: number): string {
+  if (isPlace(key, value)) return formatPlace(value, labels);
+  const keys = Object.keys(value);
+  if (("from" in value || "to" in value) && keys.every((child) => child === "from" || child === "to")) {
+    return `${formatVal(value.from, key, labels, depth + 1)} → ${formatVal(value.to, key, labels, depth + 1)}`;
+  }
+  const skip = new Set<string>();
+  if ("aircraftTypeId" in value || "typeId" in value) {
+    skip.add("aircraftTypeName");
+    skip.add("aircraftTypeCode");
+  }
+  const parts: string[] = [];
+  for (const [childKey, child] of Object.entries(value)) {
+    if (skip.has(childKey) || child == null || child === "") continue;
+    const label = FIELD_LABEL[childKey] ?? childKey;
+    parts.push(`${label}: ${formatVal(child, childKey, labels, depth + 1)}`);
+  }
+  return parts.join(", ") || "—";
+}
+
+export function summarizeChanges(changes: unknown, labels?: WatchLabels): string[] {
   if (!isObj(changes)) return [];
   const lines: string[] = [];
   for (const [key, raw] of Object.entries(changes)) {
     const label = FIELD_LABEL[key] ?? key;
-    if (isObj(raw) && ("from" in raw || "to" in raw)) {
-      lines.push(`${label}: ${formatVal(raw.from)} → ${formatVal(raw.to)}`);
+    if (isObj(raw) && ("from" in raw || "to" in raw) && Object.keys(raw).every((child) => child === "from" || child === "to")) {
+      lines.push(`${label}: ${formatVal(raw.from, key, labels)} → ${formatVal(raw.to, key, labels)}`);
     } else {
-      lines.push(`${label}: ${formatVal(raw)}`);
+      lines.push(`${label}: ${formatVal(raw, key, labels)}`);
     }
     if (lines.length >= 12) break;
   }
   return lines;
 }
 
-export function describeAudit(note: AuditNote): string[] {
+export function describeAudit(note: AuditNote, labels?: WatchLabels): string[] {
   const action = ACTION_LABEL[note.action] ?? note.action;
   const head = note.reason?.trim() ? `${action}. ${note.reason.trim()}` : action;
-  return [head, ...summarizeChanges(note.changes)];
+  return [head, ...summarizeChanges(note.changes, labels)];
+}
+
+type RefBag = {
+  hangarId: Set<string>;
+  layoutId: Set<string>;
+  standId: Set<string>;
+  aircraftId: Set<string>;
+  eventTypeId: Set<string>;
+  workshopId: Set<string>;
+  aircraftTypeId: Set<string>;
+  operatorId: Set<string>;
+  status: Set<string>;
+};
+
+function emptyRefBag(): RefBag {
+  return {
+    hangarId: new Set(),
+    layoutId: new Set(),
+    standId: new Set(),
+    aircraftId: new Set(),
+    eventTypeId: new Set(),
+    workshopId: new Set(),
+    aircraftTypeId: new Set(),
+    operatorId: new Set(),
+    status: new Set()
+  };
+}
+
+function refBucket(key: string): keyof Omit<RefBag, "status"> | null {
+  if (key === "typeId" || key === "aircraftTypeId") return "aircraftTypeId";
+  if (key === "hangarId" || key === "layoutId" || key === "standId" || key === "aircraftId" || key === "eventTypeId" || key === "workshopId" || key === "operatorId") {
+    return key;
+  }
+  return null;
+}
+
+function collectRefs(value: unknown, key: string | undefined, bag: RefBag) {
+  if (typeof value === "string") {
+    if (key === "status" && value.trim()) bag.status.add(value);
+    const bucket = key ? refBucket(key) : null;
+    if (bucket && isUuid(value)) bag[bucket].add(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectRefs(item, key, bag);
+    return;
+  }
+  if (!isObj(value)) return;
+  if ("from" in value || "to" in value) {
+    collectRefs(value.from, key, bag);
+    collectRefs(value.to, key, bag);
+  }
+  for (const [childKey, child] of Object.entries(value)) {
+    if (childKey === "from" || childKey === "to") continue;
+    collectRefs(child, childKey, bag);
+  }
+}
+
+function idsOf(values: Set<string>): string[] {
+  return [...values];
+}
+
+/** Названия справочников для текста письма: вместо id борта, ангара, места, статуса. */
+export async function loadWatchLabels(prisma: PrismaClient, notes: Array<{ changes: unknown }>): Promise<WatchLabels> {
+  const bag = emptyRefBag();
+  for (const note of notes) collectRefs(note.changes, undefined, bag);
+
+  const [hangars, layouts, stands, aircraft, eventTypes, workshops, statuses, aircraftTypes, operators] = await Promise.all([
+    bag.hangarId.size
+      ? prisma.hangar.findMany({ where: { id: { in: idsOf(bag.hangarId) } }, select: { id: true, name: true } })
+      : [],
+    bag.layoutId.size
+      ? prisma.hangarLayout.findMany({
+          where: { id: { in: idsOf(bag.layoutId) } },
+          select: { id: true, name: true, hangar: { select: { name: true } } }
+        })
+      : [],
+    bag.standId.size
+      ? prisma.hangarStand.findMany({
+          where: { id: { in: idsOf(bag.standId) } },
+          select: { id: true, code: true, name: true }
+        })
+      : [],
+    bag.aircraftId.size
+      ? prisma.aircraft.findMany({ where: { id: { in: idsOf(bag.aircraftId) } }, select: { id: true, tailNumber: true } })
+      : [],
+    bag.eventTypeId.size
+      ? prisma.eventType.findMany({ where: { id: { in: idsOf(bag.eventTypeId) } }, select: { id: true, name: true } })
+      : [],
+    bag.workshopId.size
+      ? prisma.workshop.findMany({ where: { id: { in: idsOf(bag.workshopId) } }, select: { id: true, name: true } })
+      : [],
+    bag.status.size
+      ? prisma.eventStatusCatalog.findMany({ where: { code: { in: idsOf(bag.status) } }, select: { code: true, name: true } })
+      : [],
+    bag.aircraftTypeId.size
+      ? prisma.aircraftType.findMany({
+          where: { id: { in: idsOf(bag.aircraftTypeId) } },
+          select: { id: true, name: true, icaoType: true }
+        })
+      : [],
+    bag.operatorId.size
+      ? prisma.operator.findMany({ where: { id: { in: idsOf(bag.operatorId) } }, select: { id: true, name: true } })
+      : []
+  ]);
+
+  return {
+    hangars: new Map(hangars.map((row) => [row.id, row.name])),
+    layouts: new Map(layouts.map((row) => [row.id, row.hangar?.name ? `${row.hangar.name} / ${row.name}` : row.name])),
+    stands: new Map(stands.map((row) => [row.id, row.code?.trim() || row.name])),
+    aircraft: new Map(aircraft.map((row) => [row.id, row.tailNumber])),
+    eventTypes: new Map(eventTypes.map((row) => [row.id, row.name])),
+    workshops: new Map(workshops.map((row) => [row.id, row.name])),
+    statuses: new Map(statuses.map((row) => [row.code, row.name])),
+    aircraftTypes: new Map(aircraftTypes.map((row) => [row.id, row.icaoType ? `${row.icaoType} · ${row.name}` : row.name])),
+    operators: new Map(operators.map((row) => [row.id, row.name]))
+  };
 }
 
 function noteFrom(raw: unknown): AuditNote | null {
@@ -109,6 +392,14 @@ function noteFrom(raw: unknown): AuditNote | null {
     reason: typeof raw.reason === "string" ? raw.reason : null,
     changes: raw.changes ?? null
   };
+}
+
+/** Массовая очистка пишет аудит на каждое событие, но не рассылает письмо подписчикам. */
+export function isCleanupAuditNote(note: AuditNote): boolean {
+  const changes = note.changes;
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) return false;
+  const cleanup = (changes as { cleanup?: unknown }).cleanup;
+  return cleanup != null && typeof cleanup === "object";
 }
 
 /** Строки аудита из аргументов Prisma create / createMany. */
@@ -223,16 +514,20 @@ export async function flushEventWatchMails(client: Bound, batch: Map<string, Aud
   const smtp = smtpConfigFromSettings(smtpRow);
   if (!smtp) return;
 
-  const events = await client.prisma.maintenanceEvent.findMany({
-    where: { id: { in: eventIds } },
-    select: {
-      id: true,
-      title: true,
-      sandboxId: true,
-      aircraft: { select: { tailNumber: true } },
-      sandbox: { select: { name: true } }
-    }
-  });
+  const batchNotes = [...batch.values()].flat();
+  const [events, labels] = await Promise.all([
+    client.prisma.maintenanceEvent.findMany({
+      where: { id: { in: eventIds } },
+      select: {
+        id: true,
+        title: true,
+        sandboxId: true,
+        aircraft: { select: { tailNumber: true } },
+        sandbox: { select: { name: true } }
+      }
+    }),
+    loadWatchLabels(client.prisma, batchNotes)
+  ]);
   const byId = new Map(events.map((ev) => [ev.id, ev]));
 
   const byRecipient = new Map<string, WatchEventSection[]>();
@@ -241,7 +536,7 @@ export async function flushEventWatchMails(client: Bound, batch: Map<string, Aud
     const notes = auditsForRecipient(batch.get(sub.eventId) ?? [], email);
     if (!notes.length) continue;
     const ev = byId.get(sub.eventId);
-    const lines = notes.flatMap(describeAudit).slice(0, 20);
+    const lines = notes.flatMap((note) => describeAudit(note, labels)).slice(0, 20);
     if (!lines.length) continue;
     const section: WatchEventSection = {
       title: ev?.title?.trim() || "Событие",

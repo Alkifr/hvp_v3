@@ -710,6 +710,19 @@ model EventStatusCatalog {
   @@index([sortOrder])
 }
 
+/// Почему изменили даты, борт, срок, ангар или отменили событие.
+model ChangeReason {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
 model Workshop {
   id              String         @id @default(uuid())
   code            String         @unique
@@ -1583,7 +1596,12 @@ model MaintenanceEventAudit {
   sandboxId String?
   action    EventAuditAction
   actor     String           @default("browser")
+  /// Сводная строка для журнала и писем: названия причин и, если есть, комментарий.
   reason    String?
+  /// Снимок выбранных причин. Имена не переписываются при правке справочника.
+  changeReasonIds     String[] @default([])
+  changeReasonNames   String[] @default([])
+  changeReasonComment String?
   // хранит diff вида { field: { from: any, to: any } }
   changes   Json?
   createdAt DateTime         @default(now())

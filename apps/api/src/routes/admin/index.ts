@@ -10,6 +10,7 @@ import { logUserActivity } from "../../lib/userActivity.js";
 import { queryActivityFeed } from "../../lib/activityFeed.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { EventStatus } from "../../lib/eventStatusCatalog.js";
+import { CLEANUP_TX, CLEANUP_WRITE_BATCH, chunkList } from "../../lib/cleanupBatch.js";
 import { queryPresenceHeatmap } from "../../lib/userPresence.js";
 import { syncUserDbAccess } from "../../lib/pgAccess.js";
 import { mailDigestRoutes } from "./mailDigest.js";
@@ -544,8 +545,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     const where = buildCleanupWhere(filters);
     const events = await app.prisma.maintenanceEvent.findMany({
       where: { ...where, id: { in: body.eventIds } },
-      select: { id: true, status: true, title: true },
-      orderBy: [{ startAt: "asc" }, { title: "asc" }]
+      select: { id: true, status: true, title: true }
     });
 
     if (events.length === 0) return { ok: true, updated: 0 };
@@ -560,51 +560,67 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const cleanupReason = reason || (filters.sandboxId ? "Очистка песочницы" : "Очистка рабочего контура");
+    const sandboxId = filters.sandboxId ?? null;
+    let updated = 0;
 
-    await app.prisma.$transaction(async (tx) => {
-      await tx.maintenanceEvent.updateMany({
-        where: { id: { in: events.map((e) => e.id) }, sandboxId: filters.sandboxId ?? null },
-        data: { status: EventStatus.DELETED }
-      });
-      await tx.maintenanceEventAudit.createMany({
-        data: events.map((event) => ({
-          eventId: event.id,
-          sandboxId: filters.sandboxId ?? null,
-          action: EventAuditAction.UPDATE,
-          actor: currentUser.email,
-          reason: cleanupReason,
-          changes: {
-            status: { from: event.status, to: EventStatus.DELETED },
-            cleanup: { mode: "logical-delete", title: event.title, sandboxId: filters.sandboxId ?? null }
-          }
-        }))
-      });
-      await logUserActivity(tx, {
-        userId: currentUser.id,
-        actor: currentUser.email,
-        action: UserActivityAction.CLEANUP,
-        title: filters.sandboxId
-          ? `Массовая очистка песочницы «${sandboxName ?? filters.sandboxId}»`
-          : "Массовая очистка рабочего контура",
-        reason: cleanupReason,
-        sourceKind: filters.sandboxId ? "sandbox" : "prod",
-        sandboxId: filters.sandboxId ?? null,
-        sandboxName,
-        changes: {
-          updated: events.length,
-          filters: {
-            eventId: filters.eventId ?? null,
-            eventTypeId: filters.eventTypeId ?? null,
-            aircraftTypeId: filters.aircraftTypeId ?? null,
-            aircraftId: filters.aircraftId ?? null,
-            from: filters.from ?? null,
-            to: filters.to ?? null
-          }
+    for (const chunk of chunkList(events, CLEANUP_WRITE_BATCH)) {
+      const ids = chunk.map((event) => event.id);
+      const count = await app.prisma.$transaction(async (tx) => {
+        const result = await tx.maintenanceEvent.updateMany({
+          where: { id: { in: ids }, sandboxId, status: { not: EventStatus.DELETED } },
+          data: { status: EventStatus.DELETED }
+        });
+        if (result.count > 0) {
+          await tx.maintenanceEventAudit.createMany({
+            data: chunk.map((event) => ({
+              eventId: event.id,
+              sandboxId,
+              action: EventAuditAction.UPDATE,
+              actor: currentUser.email,
+              reason: cleanupReason,
+              changes: {
+                status: { from: event.status, to: EventStatus.DELETED },
+                cleanup: { mode: "logical-delete", title: event.title, sandboxId }
+              }
+            }))
+          });
         }
-      });
-    });
+        return result.count;
+      }, CLEANUP_TX);
+      updated += count;
+    }
 
-    return { ok: true, updated: events.length };
+    if (updated > 0) {
+      try {
+        await logUserActivity(app.prisma, {
+          userId: currentUser.id,
+          actor: currentUser.email,
+          action: UserActivityAction.CLEANUP,
+          title: filters.sandboxId
+            ? `Массовая очистка песочницы «${sandboxName ?? filters.sandboxId}»`
+            : "Массовая очистка рабочего контура",
+          reason: cleanupReason,
+          sourceKind: filters.sandboxId ? "sandbox" : "prod",
+          sandboxId,
+          sandboxName,
+          changes: {
+            updated,
+            filters: {
+              eventId: filters.eventId ?? null,
+              eventTypeId: filters.eventTypeId ?? null,
+              aircraftTypeId: filters.aircraftTypeId ?? null,
+              aircraftId: filters.aircraftId ?? null,
+              from: filters.from ?? null,
+              to: filters.to ?? null
+            }
+          }
+        });
+      } catch (err) {
+        app.log.warn({ err }, "cleanup activity log failed");
+      }
+    }
+
+    return { ok: true, updated };
   });
 };
 

@@ -20,10 +20,11 @@ export const PERMISSION_GROUPS: PermGroup[] = [
   {
     id: "gantt",
     title: "План (Гантт)",
-    hint: "Диаграмма и таблица событий",
+    hint: "Диаграмма и таблица событий. Редактирование не включает разрешение нахлёста.",
     actions: [
       { code: "gantt:read", label: "Просмотр" },
-      { code: "gantt:write", label: "Редактирование" }
+      { code: "gantt:write", label: "Редактирование" },
+      { code: "gantt:overlap", label: "Разрешить нахлёст" }
     ]
   },
   {
@@ -123,6 +124,7 @@ export const PERMISSION_GROUPS: PermGroup[] = [
 
 const WRITE_IMPLIES_READ: Record<string, string> = {
   "gantt:write": "gantt:read",
+  "gantt:overlap": "gantt:read",
   "hangar:write": "hangar:read",
   "ref:write": "ref:read",
   "workforce:write": "workforce:read",
@@ -146,6 +148,7 @@ const PERMISSION_ALIASES: Record<string, string[]> = {
     "view_aircrafttypepalette",
     "view_eventtype",
     "view_eventstatuscatalog",
+    "view_changereason",
     "view_workshop",
     "view_hangar",
     "view_hangarlayout",
@@ -172,6 +175,9 @@ const PERMISSION_ALIASES: Record<string, string[]> = {
     "add_eventstatuscatalog",
     "change_eventstatuscatalog",
     "delete_eventstatuscatalog",
+    "add_changereason",
+    "change_changereason",
+    "delete_changereason",
     "add_workshop",
     "change_workshop",
     "delete_workshop",
@@ -409,7 +415,6 @@ export function previewNavLabels(perms: Iterable<string>): string {
     .map((item) => item.label)
     .join(" · ");
 }
-
 
 /** Системные группы: кому выдавать и что человек может делать. */
 export const SYSTEM_ROLE_GUIDE: Array<{ code: string; name: string; who: string; can: string }> = [

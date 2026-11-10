@@ -7,6 +7,7 @@ import { apiGet, apiPost } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
 import { downloadMassPlanBatchTemplate } from "../../lib/importTemplates";
 import { endOfMskDayIso, fromInputMskOptional, startOfMskDayIso } from "../../lib/localDate";
+import { safeRandomUuid } from "../../lib/randomId";
 import {
   massPlanBlockMessage,
   parseImportNumber,
@@ -21,6 +22,8 @@ import {
   parseLineBase,
   type LineBase
 } from "../../lib/lineBase";
+import { BlockHelp } from "../components/BlockHelp";
+import { DraftNumberInput } from "../components/DraftNumberInput";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 import { MassBatchRows } from "./MassBatchRows";
@@ -202,9 +205,7 @@ function fromInputLocalOptional(value: string): string | null {
 }
 
 function makeClientId(): string {
-  const randomUUID = globalThis.crypto?.randomUUID;
-  if (typeof randomUUID === "function") return randomUUID.call(globalThis.crypto);
-  return `row-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return safeRandomUuid();
 }
 
 function normalizeImportToken(value: unknown): string {
@@ -757,12 +758,20 @@ export function MassPlanView(props: { hideHero?: boolean }) {
           <section className="massSection">
             <div className="massSectionHead">
               <div>
-                <h2>Основные параметры</h2>
-                <p>
-                  {inputMode === "single"
-                    ? "Задайте тип события, объём и период — система создаст серию по одному шаблону."
-                    : "Каждая строка — отдельный набор событий. Режим, пауза и шаг берутся из строки, в том числе из файла. Буксировки задаются ниже для всех строк."}
-                </p>
+                <h2>
+                  Основные параметры
+                  <BlockHelp label="Основные параметры">
+                    <p>Серия событий с виртуальными бортами. Система подбирает места в активных ангарах и пишет в текущий контур: рабочий план или активную песочницу.</p>
+                    <ul>
+                      <li>«Один шаблон» — одна серия одинаковых событий.</li>
+                      <li>«Список строк» — несколько разных серий. Строки можно набрать вручную или загрузить из Excel.</li>
+                      <li>Готовые строки с конкретными бортами загружаются на вкладке «Импорт событий».</li>
+                      <li>Борт помечается VIRT и в справочник не попадает. Пока борт VIRT, событие можно оставить на согласовании с исполнителем, с заказчиком или в статусе «Отменено».</li>
+                      <li>Чтобы согласовать, взять в работу или завершить, в карточке выбирается реальный борт.</li>
+                      <li>«Предпросмотр» ничего не создаёт. «Перенести в план» записывает события. В песочнице кнопка называется «Создать в песочнице».</li>
+                    </ul>
+                  </BlockHelp>
+                </h2>
               </div>
               <div className="massModeToggle" role="group" aria-label="Режим ввода">
                 <button
@@ -792,7 +801,17 @@ export function MassPlanView(props: { hideHero?: boolean }) {
             {inputMode === "single" ? (
               <>
                 <div className="massFieldGroup">
-                  <p className="massFieldGroupTitle">Что планируем</p>
+                  <div className="massFieldGroupTitle">
+                    Что планируем
+                    <BlockHelp label="Что планируем">
+                      <p>Кто выполняет работу и какое это событие.</p>
+                      <ul>
+                        <li>Оператор, тип ВС и вид события обязательны.</li>
+                        <li>Цех можно не указывать.</li>
+                        <li>Пустой L/B берётся из выбранного цеха.</li>
+                      </ul>
+                    </BlockHelp>
+                  </div>
                   <div className="massFormGrid massFormGridIdentity">
                     <label className={operatorId ? "massField" : "massField massFieldInvalid"}>
                       <span className="muted">Оператор</span>
@@ -866,37 +885,39 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                 </div>
 
                 <div className="massFieldGroup">
-                  <p className="massFieldGroupTitle">Объём и период</p>
+                  <div className="massFieldGroupTitle">
+                    Объём и период
+                    <BlockHelp label="Объём и период">
+                      <p>Сколько событий создать и в каком окне их ставить.</p>
+                      <ul>
+                        <li>TAT — длительность одного события в часах. Количество — сколько таких событий в серии.</li>
+                        <li>«Начало периода» — с какой даты искать старт. «Крайний старт» — событие должно начаться не позже этой даты. Окончание может быть позже.</li>
+                        <li>Даты читаются как местное время (MSK).</li>
+                        <li>В шаблоне названия знак % заменяется номером: «A-check %» становится «A-check 1», «A-check 2».</li>
+                      </ul>
+                    </BlockHelp>
+                  </div>
                   <div className="massFormGrid massFormGridPeriod">
                     <label className="massField">
                       <span className="muted">TAT, ч</span>
-                      <input
-                        type="number"
+                      <DraftNumberInput
                         min={1}
                         max={8760}
                         value={tatHours}
-                        onChange={(e) => setTatHours(Number(e.target.value) || 72)}
+                        onChange={setTatHours}
                       />
                     </label>
                     <label className="massField">
                       <span className="muted">Количество</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={200}
-                        value={count}
-                        onChange={(e) => setCount(Number(e.target.value) || 1)}
-                      />
+                      <DraftNumberInput min={1} max={200} value={count} onChange={setCount} />
                     </label>
                     <label className="massField">
                       <span className="muted">Начало периода</span>
                       <input type="date" value={startFrom} onChange={(e) => setStartFrom(e.target.value)} />
-                      <span className="massFieldHint">Местное время (MSK)</span>
                     </label>
                     <label className="massField">
-                      <span className="muted" title="Крайняя допустимая дата старта события">Крайний старт</span>
+                      <span className="muted">Крайний старт</span>
                       <input type="date" value={endTo} onChange={(e) => setEndTo(e.target.value)} />
-                      <span className="massFieldHint">Событие может закончиться позже этой даты · MSK</span>
                     </label>
                   </div>
                   <label className="massField massFieldWide">
@@ -912,12 +933,20 @@ export function MassPlanView(props: { hideHero?: boolean }) {
               </>
             ) : (
               <div className="massBatchBox">
+                <div className="massFieldGroupTitle">
+                  Список строк
+                  <BlockHelp label="Список строк">
+                    <p>Каждая строка — отдельная серия со своими оператором, типом ВС, видом события, цехом, L/B, TAT, количеством и периодом.</p>
+                    <ul>
+                      <li>Строки можно набрать вручную или загрузить из Excel/CSV. «Скачать шаблон» даёт пример и лист «Инструкция».</li>
+                      <li>В файле задаются operator, aircraftType, eventType, workshop, lineBase, tatHours, count, startFrom, endTo, scheduleMode, spacingHours, cadenceHours.</li>
+                      <li>Пустая ячейка режима, паузы или шага берёт значение из «Расширенных настроек», одно на все такие строки. Заполненная ячейка важнее.</li>
+                      <li>Если потом изменить режим, паузу или шаг в расширенных настройках, новое значение запишется во все строки.</li>
+                      <li>Буксировки, бюджетный и фактический периоды задаются ниже для всей загрузки.</li>
+                    </ul>
+                  </BlockHelp>
+                </div>
                 <div className="massBatchToolbar">
-                  <div className="muted small">
-                    Заполните строки вручную или импортируйте XLSX/CSV по шаблону
-                    (operator, aircraftType, eventType, workshop, lineBase, tatHours, count, startFrom, endTo, scheduleMode, spacingHours, cadenceHours).
-                    Если пауза или шаг в ячейке пустые, для строки берётся значение из «Расширенных настроек» — одно на все такие строки.
-                  </div>
                   <div className="massBatchToolbarActions">
                     <button
                       type="button"
@@ -979,17 +1008,40 @@ export function MassPlanView(props: { hideHero?: boolean }) {
           </section>
 
           <details className="massAdvanced massSection">
-            <summary>Расширенные настройки</summary>
+            <summary>
+              <span className="massBlockTitle">
+                Расширенные настройки
+                <BlockHelp label="Расширенные настройки">
+                  <p>Общие правила расстановки для всей серии.</p>
+                  <ul>
+                    <li>Здесь задаются расписание, поведение при занятом месте, буксировки, бюджетный и фактический периоды и приоритет ангаров.</li>
+                    <li>В списке строк пустые ячейки режима, паузы и шага берут значения отсюда. Заполненная ячейка файла важнее.</li>
+                    <li>Изменение режима, паузы или шага записывает новое значение во все строки.</li>
+                  </ul>
+                </BlockHelp>
+              </span>
+            </summary>
             <div className="massAdvancedBody">
-              {inputMode === "batch" ? (
-                <p className="massAdvancedNote">
-                  Пустые ячейки режима, паузы и шага берут значение отсюда: одно число применяется ко всем таким строкам. Заполненная ячейка файла важнее. Изменение полей здесь записывает новое значение во все строки.
-                  {scheduleMixed ? " Сейчас в строках разные режим, пауза или шаг." : ""}
-                </p>
+              {inputMode === "batch" && scheduleMixed ? (
+                <p className="massAdvancedNote">В строках сейчас разные режим, пауза или шаг.</p>
               ) : null}
 
               <div className="massFieldGroup">
-                <p className="massFieldGroupTitle">Расписание</p>
+                <div className="massFieldGroupTitle">
+                  Расписание
+                  <BlockHelp label="Расписание">
+                    <p>Как события встают друг за другом и что делать, если место занято.</p>
+                    <ul>
+                      <li>«Компактно» ставит событие в первый свободный слот с начала периода. Пауза и шаг на этот старт не влияют.</li>
+                      <li>«Последовательно» начинает следующее событие после окончания предыдущего плюс пауза. Цепочка общая для строк с этим режимом. Ноль стыкует события без зазора.</li>
+                      <li>«Фиксированный шаг» стремится стартовать первое событие в дату начала, каждое следующее — через заданные часы. Занятое место сдвигает старт на ближайшее свободное время, не позже крайнего старта.</li>
+                      <li>«Искать ближайшее свободное место» берёт первый подходящий слот.</li>
+                      <li>«Искать по приоритету ангаров» сначала смотрит список в блоке ниже.</li>
+                      <li>«Создавать черновик, если целевой слот занят» оставляет событие без места. Место потом ставится на «Плане».</li>
+                      <li>В списке строк способ расчёта: только OR-Tools, только эвристика или оба вместе.</li>
+                    </ul>
+                  </BlockHelp>
+                </div>
                 <div className="massAdvancedGrid">
                   <label className="massField">
                     <span className="muted">Режим</span>
@@ -1010,13 +1062,11 @@ export function MassPlanView(props: { hideHero?: boolean }) {
 
                   <label className="massField">
                     <span className="muted">Пауза между событиями, ч</span>
-                    <input
-                      type="number"
+                    <DraftNumberInput
                       min={0}
                       max={8760}
                       value={spacingHours}
-                      onChange={(e) => {
-                        const next = Number(e.target.value) || 0;
+                      onChange={(next) => {
                         setSpacingHours(next);
                         applyAdvancedScheduleToRows({ spacingHours: next });
                         clearPlanOutput();
@@ -1030,13 +1080,11 @@ export function MassPlanView(props: { hideHero?: boolean }) {
                   {scheduleMode === "fixedCadence" ? (
                     <label className="massField">
                       <span className="muted">Фиксированный шаг, ч</span>
-                      <input
-                        type="number"
+                      <DraftNumberInput
                         min={1}
                         max={8760}
                         value={cadenceHours}
-                        onChange={(e) => {
-                          const next = Number(e.target.value) || 1;
+                        onChange={(next) => {
                           setCadenceHours(next);
                           applyAdvancedScheduleToRows({ cadenceHours: next });
                           clearPlanOutput();
@@ -1080,30 +1128,37 @@ export function MassPlanView(props: { hideHero?: boolean }) {
               </div>
 
               <div className="massFieldGroup">
-                <p className="massFieldGroupTitle">Буксировки</p>
+                <div className="massFieldGroupTitle">
+                  Буксировки
+                  <BlockHelp label="Буксировки">
+                    <p>Минуты буксировки до и после каждого события серии.</p>
+                    <ul>
+                      <li>Значения появляются в предпросмотре после пересчёта.</li>
+                      <li>«Учитывать как занятость места» включает эти минуты в занятость слота.</li>
+                    </ul>
+                  </BlockHelp>
+                </div>
                 <div className="massAdvancedGrid">
                   <label className="massField">
                     <span className="muted">До события, мин</span>
-                    <input
-                      type="number"
+                    <DraftNumberInput
                       min={0}
                       max={1440}
                       value={towBeforeMinutes}
-                      onChange={(e) => {
-                        setTowBeforeMinutes(Number(e.target.value) || 0);
+                      onChange={(next) => {
+                        setTowBeforeMinutes(next);
                         clearPlanOutput();
                       }}
                     />
                   </label>
                   <label className="massField">
                     <span className="muted">После события, мин</span>
-                    <input
-                      type="number"
+                    <DraftNumberInput
                       min={0}
                       max={1440}
                       value={towAfterMinutes}
-                      onChange={(e) => {
-                        setTowAfterMinutes(Number(e.target.value) || 0);
+                      onChange={(next) => {
+                        setTowAfterMinutes(next);
                         clearPlanOutput();
                       }}
                     />
@@ -1121,7 +1176,17 @@ export function MassPlanView(props: { hideHero?: boolean }) {
               </div>
 
               <div className="massFieldGroup">
-                <p className="massFieldGroupTitle">Бюджетный и фактический периоды</p>
+                <div className="massFieldGroupTitle">
+                  Бюджетный и фактический периоды
+                  <BlockHelp label="Бюджетный и фактический периоды">
+                    <p>Необязательные даты. Они одинаковы для всех событий этой серии.</p>
+                    <ul>
+                      <li>Бюджетный период — плановые даты. Фактический — когда работы шли по факту.</li>
+                      <li>У периода нужны обе границы, окончание позже начала.</li>
+                      <li>Пустые поля период не задают.</li>
+                    </ul>
+                  </BlockHelp>
+                </div>
                 <div className="massAdvancedGrid">
                   <label className="massField">
                     <span className="muted">Бюджетное начало</span>
@@ -1171,14 +1236,19 @@ export function MassPlanView(props: { hideHero?: boolean }) {
               </div>
 
               <div className="massFieldGroup">
-                <p className="massFieldGroupTitle">Приоритет ангаров</p>
-                <p className="massAdvancedNote">
-                  {hangarPriority.length === 0
-                    ? "Список пуст: поиск идёт по всем активным ангарам."
-                    : strictHangars
-                      ? "Жёсткое ограничение: свободные места ищутся только среди ангаров ниже."
-                      : "Сначала ангары из списка. Если места нет, можно использовать другой активный ангар."}
-                </p>
+                <div className="massFieldGroupTitle">
+                  Приоритет ангаров
+                  <BlockHelp label="Приоритет ангаров">
+                    <p>В каком порядке искать ангар.</p>
+                    <ul>
+                      <li>Пустой список — поиск по всем активным ангарам.</li>
+                      <li>Порядок в списке задаёт приоритет: сначала ангар выше.</li>
+                      <li>«Только выбранные ангары» ищет места только в этом списке.</li>
+                      <li>Без этого переключателя, если в списке места нет, событие можно поставить в другой активный ангар.</li>
+                      <li>Неактивные ангары в список не попадают. Приоритеты размещения из справочника влияют на оценку в предпросмотре.</li>
+                    </ul>
+                  </BlockHelp>
+                </div>
                 <SwitchToggle
                   compact
                   checked={strictHangars}
@@ -1281,8 +1351,17 @@ export function MassPlanView(props: { hideHero?: boolean }) {
         <section className="massCard">
           <div className="massResultHeader">
             <div>
-              <h2>Предпросмотр</h2>
-              <p>Проверьте размещение перед созданием событий.</p>
+              <h2>
+                Предпросмотр
+                <BlockHelp label="Предпросмотр">
+                  <p>Расчёт размещения до записи в план. События ещё не созданы.</p>
+                  <ul>
+                    <li>«Размещено» — нашлось место. «Черновики» — место не нашлось.</li>
+                    <li>«Перенести в план» создаёт события. В песочнице кнопка называется «Создать в песочнице».</li>
+                    <li>Черновик без места потом ставится вручную на «Плане».</li>
+                  </ul>
+                </BlockHelp>
+              </h2>
             </div>
             <div className="massSummaryChips">
               <span><b>{preview.summary.placed}</b> размещено</span>
@@ -1299,10 +1378,16 @@ export function MassPlanView(props: { hideHero?: boolean }) {
           ) : null}
           {preview.solverDiagnostics?.alternativeScenarios?.length ? (
             <div className="massDraftBox">
-              <strong>Альтернативные варианты решения (решение за пользователем)</strong>
-              <p className="muted">
-                Сценарии показывают, какие ограничения можно снять и сколько черновиков потенциально разместится после изменения схемы.
-              </p>
+              <div className="massBlockTitle">
+                Альтернативные варианты решения
+                <BlockHelp label="Альтернативные варианты решения">
+                  <p>Другие схемы расстановки, если снять часть ограничений.</p>
+                  <ul>
+                    <li>Сценарий показывает ангар, схему, сколько мест добавится и какие переносы нужны.</li>
+                    <li>Сам по себе сценарий план не меняет: выбор остаётся за пользователем.</li>
+                  </ul>
+                </BlockHelp>
+              </div>
               <div className="massTableWrap">
                 <table className="massTable">
                   <thead>
@@ -1377,7 +1462,16 @@ export function MassPlanView(props: { hideHero?: boolean }) {
           )}
           {preview.unplaced.length > 0 && (
             <div className="massDraftBox">
-              <strong>Черновики без места</strong>
+              <div className="massBlockTitle">
+                Черновики без места
+                <BlockHelp label="Черновики без места">
+                  <p>События, для которых свободный слот не нашёлся.</p>
+                  <ul>
+                    <li>В план они попадут без ангара и места.</li>
+                    <li>Место назначается вручную на «Плане».</li>
+                  </ul>
+                </BlockHelp>
+              </div>
               <div className="massTableWrap">
                 <table className="massTable">
                   <thead>
@@ -1446,8 +1540,16 @@ export function MassPlanView(props: { hideHero?: boolean }) {
         <section className="massCard">
           <div className="massResultHeader">
             <div>
-              <h2>Результат создания</h2>
-              <p>События созданы в текущем контуре.</p>
+              <h2>
+                Результат создания
+                <BlockHelp label="Результат создания">
+                  <p>События записаны в текущий контур.</p>
+                  <ul>
+                    <li>«В плане» — с местом. «Черновики» — без места.</li>
+                    <li>Черновик дорабатывается на «Плане».</li>
+                  </ul>
+                </BlockHelp>
+              </h2>
             </div>
             <div className="massSummaryChips">
               <span><b>{result.placed}</b> в плане</span>

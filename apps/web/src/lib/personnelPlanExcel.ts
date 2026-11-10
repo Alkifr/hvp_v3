@@ -1,12 +1,23 @@
 import ExcelJS from "exceljs";
 import dayjs from "dayjs";
 
-import { contrastTextArgb } from "./colorContrast";
-
-const SHEET_CHART = "График";
-const SHEET_RESOURCE = "Доступный ресурс";
-const SHEET_PLAN = "План-Доступность";
+const SHEET_CHART = "Chart";
+const SHEET_RESOURCE = "Available resource";
+const SHEET_PLAN = "Plan-Availability";
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const HOURS_PER_DAY = 24;
+const CATEGORY_ROW_HEIGHT = 10.5;
+const LABEL_COLUMNS = 5;
+const MONTH_HOUR_WIDTH = 0.3;
+const WEEK_HOUR_WIDTH = 1.08;
+const CLOCK_FONT = 12;
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function columnWidthPx(pixels: number) {
+  return Math.max(0.1, Math.round(((pixels - 5) / 7) * 100) / 100);
+}
+
 const PLAN_ORDER = ["ME", "AV", "INT", "NDT", "SHOP", "CAB_REP", "PAINT"] as const;
 const HAIR = { style: "thin" as const, color: { argb: "FFE2E8F0" } };
 const TOW_RED = "FFEF4444";
@@ -14,6 +25,7 @@ const TOW_RED = "FFEF4444";
 export type PersonnelPlanExcelInput = {
   from: string;
   to: string;
+  scale?: "week" | "month";
   dates: string[];
   shifts: Array<{ id: string; code: string; name: string; startMin: number }>;
   sheets: Array<{
@@ -127,15 +139,15 @@ function put(cell: ExcelJS.Cell, value: ExcelJS.CellValue, options?: { fill?: st
   if (options?.note) cell.note = options.note;
 }
 
-function formula(cell: ExcelJS.Cell, expression: string, options?: { fill?: string; bold?: boolean; numFmt?: string; align?: "center" | "left" }) {
+function formula(cell: ExcelJS.Cell, expression: string, options?: { fill?: string; bold?: boolean; numFmt?: string; align?: "center" | "left"; size?: number }) {
   put(cell, { formula: expression }, { ...options, align: options?.align ?? "center", numFmt: options?.numFmt ?? "0.0" });
 }
 
 function shiftLabel(shift: { code: string; name: string; startMin: number }) {
   const code = shift.code.toUpperCase();
-  if (code === "DAY" || code.includes("ДЕН")) return "д";
-  if (code === "NIGHT" || code.includes("НОЧ") || code.includes("EVE")) return "н";
-  return shift.startMin >= 18 * 60 ? "н" : shift.startMin <= 10 * 60 ? "д" : shift.name;
+  if (code === "DAY" || code.includes("ДЕН")) return "D";
+  if (code === "NIGHT" || code.includes("НОЧ") || code.includes("EVE")) return "N";
+  return shift.startMin >= 18 * 60 ? "N" : shift.startMin <= 10 * 60 ? "D" : shift.name;
 }
 
 function moscowDate(value: string) {
@@ -147,14 +159,19 @@ function fmtClock(value: string) {
   return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
 }
 
-function fmtTill(value: string) {
+function fmtEdge(prefix: "from" | "till", value: string) {
   const date = moscowDate(value);
-  return `till ${String(date.getUTCDate()).padStart(2, "0")}.${String(date.getUTCMonth() + 1).padStart(2, "0")}.${String(date.getUTCFullYear()).slice(2)} ${fmtClock(value)}`;
+  return `${prefix} ${String(date.getUTCDate()).padStart(2, "0")}.${String(date.getUTCMonth() + 1).padStart(2, "0")}.${String(date.getUTCFullYear()).slice(2)} ${fmtClock(value)}`;
 }
 
 function fmtDayMonth(value: string) {
   const [, month, day] = value.split("-");
   return day && month ? `${day}.${month}` : value;
+}
+
+function weekdayName(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return WEEKDAYS[new Date(Date.UTC(year || 1970, (month || 1) - 1, day || 1)).getUTCDay()] ?? "";
 }
 
 function fmtShort(value: string) {
@@ -180,7 +197,7 @@ function typeLabel(type: { name: string; icaoType?: string | null }) {
 }
 
 function sheetTitle(sheet: { code: string; name: string }) {
-  return sheet.name && sheet.name !== sheet.code ? `${sheet.code} · ${sheet.name}` : (sheet.code || "Цех");
+  return sheet.name && sheet.name !== sheet.code ? `${sheet.code} · ${sheet.name}` : (sheet.code || "Shop");
 }
 
 function fit(ws: ExcelJS.Worksheet) {
@@ -218,26 +235,23 @@ function headcountOf(sheet: PersonnelPlanExcelInput["sheets"][number], typeId: s
   ), 0);
 }
 
-function towOnDay(event: ChartEvent, date: string) {
-  const day0 = dayStart(date);
-  const day1 = day0 + DAY_MS;
+function towOnInterval(event: ChartEvent, from: number, to: number) {
   const eventStart = new Date(event.startAt).getTime();
   const eventEnd = new Date(event.endAt).getTime();
-  const eventOnDay = overlap(eventStart, eventEnd, day0, day1);
-  if (eventOnDay <= 0) return { kind: "none" as const, note: "" };
+  const eventOn = overlap(eventStart, eventEnd, from, to);
+  if (eventOn <= 0) return { kind: "none" as const, note: "" };
   let covered = 0;
   const labels: string[] = [];
   for (const tow of event.towSegments) {
     const towStart = Math.max(new Date(tow.startAt).getTime(), eventStart);
     const towEnd = Math.min(new Date(tow.endAt).getTime(), eventEnd);
-    const hit = overlap(towStart, towEnd, day0, day1);
+    const hit = overlap(towStart, towEnd, from, to);
     if (hit <= 0) continue;
     covered += hit;
     labels.push(`${fmtClock(tow.startAt)}–${fmtClock(tow.endAt)}`);
   }
   if (covered <= 0) return { kind: "none" as const, note: "" };
-  const note = `Буксировка ${labels.join("; ")}`;
-  return { kind: covered >= eventOnDay - 1000 ? "full" as const : "partial" as const, note };
+  return { kind: "full" as const, note: `Tow ${labels.join("; ")}` };
 }
 
 function sortedEvents(events: ChartEvent[]) {
@@ -260,13 +274,13 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
   const gridLast = 4 + dates.length * shiftCount;
   let row = titleBlock(
     ws,
-    `Доступный ресурс · ${fmtShort(input.from)} – ${fmtShort(input.to)}`,
-    "Численность — исходные головы по квалификации, типу ВС и смене. Строка категории суммирует свои квалификации. Часы категории = эта сумма по типам и сменам × норма часов суток. Часы цеха и типа ВС суммируют все квалификации.",
+    `Available resource · ${fmtShort(input.from)} – ${fmtShort(input.to)}`,
+    "Headcount is the source number of people by qualification, aircraft type and shift. A category row sums its qualifications. Category hours = that sum across types and shifts × the day's hour norm. Shop and aircraft-type hours sum every qualification.",
     gridLast
   );
   const headerRow = row;
   const shiftRow = row + 1;
-  for (const [col, label] of ["Цех", "Квалификация", "Отдел", "Тип ВС"].entries()) {
+  for (const [col, label] of ["Shop", "Qualification", "Department", "Aircraft type"].entries()) {
     ws.mergeCells(headerRow, col + 1, shiftRow, col + 1);
     put(ws.getCell(headerRow, col + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" });
     box(ws.getCell(shiftRow, col + 1));
@@ -307,13 +321,13 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
     }
     row += 1;
     if (!sheet.categories.length) {
-      put(ws.getCell(row, 1), "Для цеха не назначены квалификации.", { fill: "FFFFF7ED", color: "FF9A3412" });
+      put(ws.getCell(row, 1), "No qualifications are assigned to the shop.", { fill: "FFFFF7ED", color: "FF9A3412" });
       ws.mergeCells(row, 1, row, gridLast);
       row += 1;
       continue;
     }
     if (!sheet.aircraftTypes.length) {
-      put(ws.getCell(row, 1), "Для выбранных типов ВС у цеха нет строк численности.", { fill: "FFFFF7ED", color: "FF9A3412" });
+      put(ws.getCell(row, 1), "The shop has no headcount rows for the selected aircraft types.", { fill: "FFFFF7ED", color: "FF9A3412" });
       ws.mergeCells(row, 1, row, gridLast);
       row += 1;
       continue;
@@ -372,7 +386,7 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
         });
         row += 1;
       }
-      writeHeadcountRow(sheet.code, "Итого", "численность", label, "FFE2E8F0", true);
+      writeHeadcountRow(sheet.code, "Total", "headcount", label, "FFE2E8F0", true);
       dates.forEach((date, dateIndex) => {
         shifts.forEach((shift, shiftIndex) => {
           const column = 5 + dateIndex * shiftCount + shiftIndex;
@@ -384,7 +398,7 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
       typeTotalRows.push(row);
       row += 1;
     }
-    writeHeadcountRow(sheet.code, "Итого", "все типы ВС", "Все", "FFCBD5E1", true);
+    writeHeadcountRow(sheet.code, "Total", "all aircraft types", "All", "FFCBD5E1", true);
     dates.forEach((date, dateIndex) => {
       shifts.forEach((shift, shiftIndex) => {
         const column = 5 + dateIndex * shiftCount + shiftIndex;
@@ -396,7 +410,7 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
   }
 
   row += 1;
-  put(ws.getCell(row, 1), "Норма часов", { bold: true, fill: "FFFFFBEB" });
+  put(ws.getCell(row, 1), "Hour norm", { bold: true, fill: "FFFFFBEB" });
   const normRow = row;
   const normCell = new Map<string, string>();
   dates.forEach((date, index) => {
@@ -408,13 +422,13 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
   });
   row += 2;
 
-  put(ws.getCell(row, 1), "Доступные часы по категории", { bold: true, size: 12 });
+  put(ws.getCell(row, 1), "Available hours by category", { bold: true, size: 12 });
   ws.mergeCells(row, 1, row, 3 + dates.length);
   row += 1;
-  ["Цех", "Категория", "Тип ВС"].forEach((label, index) => put(ws.getCell(row, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
+  ["Shop", "Category", "Aircraft type"].forEach((label, index) => put(ws.getCell(row, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
   dates.forEach((date, index) => put(ws.getCell(row, 4 + index), fmtDayMonth(date), { bold: true, fill: "FFE2E8F0", align: "center" }));
   const periodColumn = 4 + dates.length;
-  put(ws.getCell(row, periodColumn), "Итого", { bold: true, fill: "FFE2E8F0", align: "center" });
+  put(ws.getCell(row, periodColumn), "Total", { bold: true, fill: "FFE2E8F0", align: "center" });
   row += 1;
 
   const workshopDepartmentDay = new Map<string, string>();
@@ -438,7 +452,7 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
       const last = row - 1;
       put(ws.getCell(row, 1), sheet.code, { fill: "FFDBEAFE", bold: true });
       put(ws.getCell(row, 2), department, { fill: "FFDBEAFE", bold: true });
-      put(ws.getCell(row, 3), "Все типы", { fill: "FFDBEAFE", bold: true });
+      put(ws.getCell(row, 3), "All types", { fill: "FFDBEAFE", bold: true });
       dates.forEach((date, index) => {
         const column = 4 + index;
         formula(ws.getCell(row, column), first <= last ? `SUM(${localRef(column, first)}:${localRef(column, last)})` : "0", { fill: "FFDBEAFE", bold: true });
@@ -451,9 +465,9 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
 
   const departmentDay = new Map<string, string>();
   for (const department of departments) {
-    put(ws.getCell(row, 1), "Все цеха", { fill: "FFBFDBFE", bold: true });
+    put(ws.getCell(row, 1), "All shops", { fill: "FFBFDBFE", bold: true });
     put(ws.getCell(row, 2), department, { fill: "FFBFDBFE", bold: true });
-    put(ws.getCell(row, 3), "Все типы", { fill: "FFBFDBFE", bold: true });
+    put(ws.getCell(row, 3), "All types", { fill: "FFBFDBFE", bold: true });
     dates.forEach((date, index) => {
       const column = 4 + index;
       const refs = input.sheets.flatMap((sheet) => {
@@ -468,13 +482,13 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
   }
 
   row += 1;
-  put(ws.getCell(row, 1), "Доступные часы по цеху и типу ВС", { bold: true, size: 12 });
+  put(ws.getCell(row, 1), "Available hours by shop and aircraft type", { bold: true, size: 12 });
   ws.mergeCells(row, 1, row, 2 + dates.length);
   row += 1;
-  ["Цех", "Тип ВС"].forEach((label, index) => put(ws.getCell(row, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
+  ["Shop", "Aircraft type"].forEach((label, index) => put(ws.getCell(row, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
   dates.forEach((date, index) => put(ws.getCell(row, 3 + index), fmtDayMonth(date), { bold: true, fill: "FFE2E8F0", align: "center" }));
   const typePeriodColumn = 3 + dates.length;
-  put(ws.getCell(row, typePeriodColumn), "Итого", { bold: true, fill: "FFE2E8F0", align: "center" });
+  put(ws.getCell(row, typePeriodColumn), "Total", { bold: true, fill: "FFE2E8F0", align: "center" });
   row += 1;
 
   const typePeriod = new Map<string, string>();
@@ -494,8 +508,8 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
       row += 1;
     }
   }
-  put(ws.getCell(row, 1), "Все цеха", { fill: "FFBFDBFE", bold: true });
-  put(ws.getCell(row, 2), "Все типы", { fill: "FFBFDBFE", bold: true });
+  put(ws.getCell(row, 1), "All shops", { fill: "FFBFDBFE", bold: true });
+  put(ws.getCell(row, 2), "All types", { fill: "FFBFDBFE", bold: true });
   const allTypesDay = new Map<string, string>();
   dates.forEach((date, index) => {
     const column = 3 + index;
@@ -523,15 +537,15 @@ function buildPlanSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, de
   const lastCol = 5 + departments.length + 1;
   let row = titleBlock(
     ws,
-    `План/Доступность · ${fmtShort(input.from)} – ${fmtShort(input.to)}`,
-    "Часы события — плановая трудоёмкость суток. Потребность суток суммирует события. Доступность — формула с листа «Доступный ресурс». Разница = доступность − потребность.",
+    `Plan/Availability · ${fmtShort(input.from)} – ${fmtShort(input.to)}`,
+    "Event hours are the planned workload of the day. Daily demand sums the events. Availability is a formula from the Available resource sheet. Difference = availability − demand.",
     lastCol
   );
   const headerRow = row;
-  ["Событие", "Борт", "Цех", "Тип ВС", "Дата"].forEach((label, index) => put(ws.getCell(headerRow, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
+  ["Event", "Tail", "Shop", "Aircraft type", "Date"].forEach((label, index) => put(ws.getCell(headerRow, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
   departments.forEach((department, index) => put(ws.getCell(headerRow, 6 + index), department, { bold: true, fill: "FFE2E8F0", align: "center" }));
   const totalCol = 6 + departments.length;
-  put(ws.getCell(headerRow, totalCol), "Итого", { bold: true, fill: "FFE2E8F0", align: "center" });
+  put(ws.getCell(headerRow, totalCol), "Total", { bold: true, fill: "FFE2E8F0", align: "center" });
   row += 1;
   const firstRow = row;
   const demand = new Map<string, number>();
@@ -561,7 +575,7 @@ function buildPlanSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, de
   }
   const lastRow = Math.max(firstRow, row - 1);
   if (!events.length) {
-    put(ws.getCell(row, 1), "Нет событий за выбранный период.");
+    put(ws.getCell(row, 1), "No events in the selected period.");
     ws.mergeCells(row, 1, row, lastCol);
     row += 1;
   }
@@ -570,11 +584,11 @@ function buildPlanSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, de
   }
 
   row += 1;
-  put(ws.getCell(row, 1), "Баланс по суткам", { bold: true, size: 12 });
+  put(ws.getCell(row, 1), "Daily balance", { bold: true, size: 12 });
   row += 1;
   const balanceHeader = row;
-  put(ws.getCell(balanceHeader, 1), "Дата", { bold: true, fill: "FFE2E8F0", align: "center" });
-  ["П", "Д", "Diff"].forEach((label, index) => put(ws.getCell(balanceHeader, 2 + index), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
+  put(ws.getCell(balanceHeader, 1), "Date", { bold: true, fill: "FFE2E8F0", align: "center" });
+  ["Demand", "Supply", "Diff"].forEach((label, index) => put(ws.getCell(balanceHeader, 2 + index), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
   ws.mergeCells(balanceHeader, 1, balanceHeader + 1, 1);
   for (let col = 2; col <= 4; col += 1) ws.mergeCells(balanceHeader, col, balanceHeader + 1, col);
   departments.forEach((department, index) => {
@@ -588,7 +602,7 @@ function buildPlanSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, de
   });
   row += 1;
   departments.forEach((_, departmentIndex) => {
-    ["П", "Д", "Diff"].forEach((label, index) => put(ws.getCell(row, 5 + departmentIndex * 3 + index), label, { bold: true, fill: "FFF8FAFC", align: "center", size: 9 }));
+    ["Demand", "Supply", "Diff"].forEach((label, index) => put(ws.getCell(row, 5 + departmentIndex * 3 + index), label, { bold: true, fill: "FFF8FAFC", align: "center", size: 9 }));
   });
   row += 1;
   const demandCell = new Map<string, string>();
@@ -630,21 +644,60 @@ function buildPlanSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, de
 function buildChartSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, departments: string[], resource: ResourceRefs, plan: PlanRefs) {
   const ws = wb.addWorksheet(SHEET_CHART);
   const dates = input.dates;
-  const events = sortedEvents(input.events);
-  const lastCol = 3 + Math.max(dates.length, 1);
+  const scale = input.scale === "week" ? "week" : "month";
+  const hourWidth = scale === "week" ? WEEK_HOUR_WIDTH : MONTH_HOUR_WIDTH;
+  const dayCount = Math.max(dates.length, 1);
+  const lastCol = LABEL_COLUMNS + dayCount * HOURS_PER_DAY;
+  const dayColumn = (dateIndex: number, hour = 0) => LABEL_COLUMNS + 1 + dateIndex * HOURS_PER_DAY + hour;
+  const timelineStart = dayColumn(0);
+  const timelineEnd = dayColumn(Math.max(dates.length, 1) - 1, HOURS_PER_DAY - 1);
+  const paintDay = (dateRow: number, index: number, text: string) => {
+    const start = dayColumn(index);
+    const end = start + HOURS_PER_DAY - 1;
+    put(ws.getCell(dateRow, start), text, { bold: true, fill: "FFE2E8F0", align: "center" });
+    ws.mergeCells(dateRow, start, dateRow, end);
+    for (let col = start; col <= end; col += 1) {
+      box(ws.getCell(dateRow, col));
+      ws.getCell(dateRow, col).fill = solid("FFE2E8F0");
+    }
+  };
   let row = titleBlock(
     ws,
-    `График/План · ${fmtShort(input.from)} – ${fmtShort(input.to)}`,
-    "Полоса события закрашена цветом оператора и типа ВС. Красная заливка — буксировка на весь видимый кусок суток, красная штриховка — буксировка занимает часть суток. Часы события и потребность — формулы листа «План-Доступность». Доступный ресурс — формулы листа «Доступный ресурс». Разница вычитает одну ячейку из другой.",
+    `Chart/Plan · ${scale === "week" ? "Week" : "Month"} · ${fmtShort(input.from)} – ${fmtShort(input.to)}`,
+    scale === "week"
+      ? "Week view: weekday above the date. Each tail is its own row. Status stands after Category. Hour columns are about 8 pixels. Hour cells are not merged: the fill stays, and each border uses the fill color. Empty hours have white borders. The orange band separates hangars."
+      : "Month view: each day is 24 columns of about 2 pixels. Each tail is its own row. Status stands after Category. Hour cells are not merged: the fill stays, and each border uses the fill color. Empty hours have white borders. The orange band separates hangars.",
     lastCol
   );
-  put(ws.getCell(row, 1), "Событие", { bold: true, fill: "FFE2E8F0" });
-  put(ws.getCell(row, 2), "Название", { bold: true, fill: "FFE2E8F0" });
-  put(ws.getCell(row, 3), "Категория", { bold: true, fill: "FFE2E8F0", align: "center" });
-  dates.forEach((date, index) => put(ws.getCell(row, 4 + index), fmtDayMonth(date), { bold: true, fill: "FFE2E8F0", align: "center" }));
+  const labelTop = row;
+  if (scale === "week") {
+    dates.forEach((date, index) => paintDay(row, index, weekdayName(date)));
+    row += 1;
+  }
+  ["Tail", "Operator", "Stand", "Category", "Status"].forEach((label, index) => put(ws.getCell(labelTop, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
   const headerRow = row;
+  dates.forEach((date, index) => paintDay(headerRow, index, fmtDayMonth(date)));
   row += 1;
+  const hourRow = row;
+  for (let col = 1; col <= LABEL_COLUMNS; col += 1) {
+    box(ws.getCell(hourRow, col));
+    ws.getCell(hourRow, col).fill = solid("FFE2E8F0");
+    if (labelTop < headerRow) {
+      box(ws.getCell(labelTop, col));
+      ws.getCell(labelTop, col).fill = solid("FFE2E8F0");
+    }
+    ws.mergeCells(labelTop, col, hourRow, col);
+  }
+  for (let index = 0; index < dayCount; index += 1) {
+    if (!dates[index]) continue;
+    for (let hour = 0; hour < HOURS_PER_DAY; hour += 1) {
+      put(ws.getCell(hourRow, dayColumn(index, hour)), hour, { align: "center", size: 5, fill: "FFF8FAFC" });
+    }
+  }
+  row += 1;
+  const periodStart = dayStart(input.from);
   const periodEnd = dayStart(input.to) + DAY_MS;
+  const events = sortedEvents(input.events);
   const groups: Array<{ hangarLabel: string; events: ChartEvent[] }> = [];
   for (const event of events) {
     const last = groups[groups.length - 1];
@@ -653,98 +706,153 @@ function buildChartSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, d
   }
   const diffRefs: string[] = [];
   for (const group of groups) {
-    put(ws.getCell(row, 1), group.hangarLabel, { bold: true, color: "FF431407", fill: "FFF97316" });
-    ws.mergeCells(row, 1, row, lastCol);
+    put(ws.getCell(row, 1), group.hangarLabel === "Без ангара" ? "No hangar" : group.hangarLabel, { bold: true, color: "FF431407", fill: "FFF97316" });
     for (let col = 2; col <= lastCol; col += 1) {
       box(ws.getCell(row, col));
       ws.getCell(row, col).fill = solid("FFF97316");
     }
+    ws.mergeCells(row, 1, row, lastCol);
     row += 1;
     for (const event of group.events) {
-      const occupied = dates.filter((date) => overlap(new Date(event.startAt).getTime(), new Date(event.endAt).getTime(), dayStart(date), dayStart(date) + DAY_MS) > 0);
-      const firstDay = occupied[0];
-      const lastDay = occupied[occupied.length - 1];
-      const endsAfter = new Date(event.endAt).getTime() > periodEnd;
+      const eventStart = new Date(event.startAt).getTime();
+      const eventEnd = new Date(event.endAt).getTime();
       put(ws.getCell(row, 1), event.tail, { bold: true });
-      put(ws.getCell(row, 2), event.title, { bold: true });
-      put(ws.getCell(row, 3), "");
+      put(ws.getCell(row, 2), event.operator, { bold: true });
+      put(ws.getCell(row, 3), event.stand);
+      put(ws.getCell(row, 4), "");
+      put(ws.getCell(row, 5), event.status);
       const eventColor = argb(event.color);
+      const occupied = new Set<number>();
+      const slots: number[] = [];
       dates.forEach((date, index) => {
-        const column = 4 + index;
-        const cell = ws.getCell(row, column);
-        const onDay = occupied.includes(date);
-        if (!onDay) {
-          put(cell, "");
-          return;
+        const day0 = dayStart(date);
+        for (let hour = 0; hour < HOURS_PER_DAY; hour += 1) {
+          const hour0 = day0 + hour * HOUR_MS;
+          const hour1 = hour0 + HOUR_MS;
+          const column = dayColumn(index, hour);
+          if (overlap(eventStart, eventEnd, hour0, hour1) <= 0) continue;
+          const cell = ws.getCell(row, column);
+          const tow = towOnInterval(event, hour0, hour1);
+          const fill = tow.kind === "full" ? TOW_RED : eventColor;
+          cell.fill = solid(fill);
+          const edge = { style: "thin" as const, color: { argb: fill } };
+          cell.border = { top: edge, left: edge, bottom: edge, right: edge };
+          if (tow.note) cell.note = tow.note;
+          occupied.add(column);
+          slots.push(column);
         }
-        const tow = towOnDay(event, date);
-        const clocks = [
-          date === firstDay ? fmtClock(event.startAt) : "",
-          date === lastDay ? (endsAfter ? fmtTill(event.endAt) : fmtClock(event.endAt)) : ""
-        ].filter(Boolean).join("–");
-        put(cell, clocks, {
-          align: "center",
-          bold: true,
-          color: tow.kind === "full" ? contrastTextArgb("#ef4444") : contrastTextArgb(event.color),
-          note: tow.note || undefined
-        });
-        if (tow.kind === "full") cell.fill = solid(TOW_RED);
-        else if (tow.kind === "partial") {
-          cell.fill = { type: "pattern", pattern: "lightTrellis", fgColor: { argb: TOW_RED }, bgColor: { argb: eventColor } };
-        } else cell.fill = solid(eventColor);
       });
-      ws.getRow(row).height = 20;
+      if (slots.length) {
+        const first = slots[0]!;
+        const last = slots[slots.length - 1]!;
+        const startsBefore = eventStart < periodStart;
+        const endsAfter = eventEnd > periodEnd;
+        const columnsFor = (text: string) => Math.max(1, Math.ceil(text.length / Math.max(hourWidth, 0.1)));
+        const paintText = (column: number, text: string, allowOccupied = false) => {
+          if (!allowOccupied && occupied.has(column)) return;
+          const cell = ws.getCell(row, column);
+          if (cell.value) return;
+          cell.value = text;
+          cell.font = { bold: true, size: CLOCK_FONT, color: { argb: "FF000000" }, name: "Calibri" };
+          cell.alignment = { vertical: "middle", horizontal: "left", wrapText: false, shrinkToFit: false };
+        };
+        if (!startsBefore && first > timelineStart) {
+          const clock = fmtClock(event.startAt);
+          paintText(Math.max(timelineStart, first - columnsFor(clock)), clock);
+        }
+        const fromText = startsBefore ? fmtEdge("from", event.startAt) : "";
+        const endText = endsAfter ? fmtEdge("till", event.endAt) : fmtClock(event.endAt);
+        const outsideEnd = last + 1 <= timelineEnd;
+        const endReserve = outsideEnd ? 0 : Math.min(columnsFor(endText), Math.max(1, last - first));
+        const endCol = outsideEnd ? last + 1 : Math.max(first + 1, last - endReserve + 1);
+        const fromReserve = fromText ? Math.min(columnsFor(fromText), Math.max(0, endCol - first - 1)) : 0;
+        const titleCol = Math.min(Math.max(first, first + fromReserve), Math.max(first, endCol - 1));
+        const titleText = `${fromReserve > 0 ? "" : "   "}${event.title}`;
+        if (fromText && titleCol > first) paintText(first, fromText, true);
+        paintText(titleCol, titleCol === first && fromText ? `${fromText} ${titleText.trimStart()}` : titleText, true);
+        if (endCol !== titleCol) paintText(endCol, endText, !outsideEnd);
+      }
+      const whiteEdge = { style: "thin" as const, color: { argb: "FFFFFFFF" } };
+      for (let column = timelineStart; column <= timelineEnd; column += 1) {
+        if (occupied.has(column)) continue;
+        const cell = ws.getCell(row, column);
+        cell.fill = solid("FFFFFFFF");
+        cell.border = { top: whiteEdge, left: whiteEdge, bottom: whiteEdge, right: whiteEdge };
+      }
+      ws.getRow(row).height = 22;
       row += 1;
       for (const department of departments) {
-        put(ws.getCell(row, 1), event.tail, { color: "FF64748B", size: 9 });
-        put(ws.getCell(row, 2), "");
-        put(ws.getCell(row, 3), department, { align: "center", bold: true, size: 9, fill: "FFF8FAFC" });
+        put(ws.getCell(row, 1), event.tail, { color: "FF64748B", size: 8 });
+        put(ws.getCell(row, 2), event.operator, { color: "FF64748B", size: 8 });
+        put(ws.getCell(row, 3), event.stand, { color: "FF64748B", size: 8 });
+        put(ws.getCell(row, 4), department, { align: "center", bold: true, size: 8 });
+        put(ws.getCell(row, 5), event.status, { color: "FF64748B", size: 8 });
         dates.forEach((date, index) => {
           const source = plan.eventCell.get(`${event.id}|${date}|${department}`);
-          formula(ws.getCell(row, 4 + index), source ? `IF(ABS(${source})<0.0001,"",${source})` : "0", { fill: "FFFFF7ED" });
+          const start = dayColumn(index);
+          formula(ws.getCell(row, start), source ? `IF(ABS(${source})<0.0001,"",${source})` : "0", { size: 8 });
+          ws.mergeCells(row, start, row, start + HOURS_PER_DAY - 1);
+          for (let col = start; col <= start + HOURS_PER_DAY - 1; col += 1) box(ws.getCell(row, col));
         });
+        ws.getRow(row).height = CATEGORY_ROW_HEIGHT;
         row += 1;
       }
     }
   }
-  if (!events.length) {
-    put(ws.getCell(row, 1), "Нет событий за выбранный период.");
+  if (!input.events.length) {
+    put(ws.getCell(row, 1), "No events in the selected period.");
     ws.mergeCells(row, 1, row, lastCol);
     row += 1;
   }
 
   const totalSpecs = [
-    { label: "Итого потребность", fill: "FFFFF7ED", source: (department: string, date: string) => plan.demandCell.get(`${department}|${date}`) ?? "0" },
-    { label: "Итого доступный ресурс", fill: "FFEFF6FF", source: (department: string, date: string) => resource.departmentDay.get(`${department}|${date}`) ?? "0" }
+    { label: "Total demand", fill: "FFFFF7ED", source: (department: string, date: string) => plan.demandCell.get(`${department}|${date}`) ?? "0" },
+    { label: "Total available", fill: "FFEFF6FF", source: (department: string, date: string) => resource.departmentDay.get(`${department}|${date}`) ?? "0" }
   ] as const;
   for (const spec of totalSpecs) {
     for (const department of departments) {
       put(ws.getCell(row, 1), spec.label, { bold: true, fill: "FFE2E8F0" });
       put(ws.getCell(row, 2), "", { fill: "FFE2E8F0" });
-      put(ws.getCell(row, 3), department, { bold: true, align: "center", fill: "FFE2E8F0" });
+      put(ws.getCell(row, 3), "", { fill: "FFE2E8F0" });
+      ws.mergeCells(row, 1, row, 3);
+      put(ws.getCell(row, 4), department, { bold: true, align: "center", fill: "FFE2E8F0" });
+    put(ws.getCell(row, 5), "", { fill: "FFE2E8F0" });
       dates.forEach((date, index) => {
-        const column = 4 + index;
-        formula(ws.getCell(row, column), `IF(ABS(${spec.source(department, date)})<0.0001,"",${spec.source(department, date)})`, { fill: spec.fill, bold: true });
+        const start = dayColumn(index);
+        formula(ws.getCell(row, start), `IF(ABS(${spec.source(department, date)})<0.0001,"",${spec.source(department, date)})`, { fill: spec.fill, bold: true });
+        ws.mergeCells(row, start, row, start + HOURS_PER_DAY - 1);
+        for (let col = start; col <= start + HOURS_PER_DAY - 1; col += 1) {
+          box(ws.getCell(row, col));
+          ws.getCell(row, col).fill = solid(spec.fill);
+        }
       });
       row += 1;
     }
   }
   for (const department of departments) {
-    put(ws.getCell(row, 1), "Итого разница", { bold: true, fill: "FFE2E8F0" });
+    put(ws.getCell(row, 1), "Total difference", { bold: true, fill: "FFE2E8F0" });
     put(ws.getCell(row, 2), "", { fill: "FFE2E8F0" });
-    put(ws.getCell(row, 3), department, { bold: true, align: "center", fill: "FFE2E8F0" });
+    put(ws.getCell(row, 3), "", { fill: "FFE2E8F0" });
+    ws.mergeCells(row, 1, row, 3);
+    put(ws.getCell(row, 4), department, { bold: true, align: "center", fill: "FFE2E8F0" });
+    put(ws.getCell(row, 5), "", { fill: "FFE2E8F0" });
     dates.forEach((date, index) => {
-      const column = 4 + index;
+      const start = dayColumn(index);
       const supply = resource.departmentDay.get(`${department}|${date}`) ?? "0";
       const demand = plan.demandCell.get(`${department}|${date}`) ?? "0";
-      formula(ws.getCell(row, column), `IF(AND(ABS(${supply})<0.0001,ABS(${demand})<0.0001),"",${supply}-${demand})`, { fill: "FFF0FDF4", bold: true });
-      diffRefs.push(localRef(column, row));
+      formula(ws.getCell(row, start), `IF(AND(ABS(${supply})<0.0001,ABS(${demand})<0.0001),"",${supply}-${demand})`, { fill: "FFF0FDF4", bold: true });
+      ws.mergeCells(row, start, row, start + HOURS_PER_DAY - 1);
+      for (let col = start; col <= start + HOURS_PER_DAY - 1; col += 1) {
+        box(ws.getCell(row, col));
+        ws.getCell(row, col).fill = solid("FFF0FDF4");
+      }
+      diffRefs.push(localRef(start, row));
     });
     row += 1;
   }
   if (diffRefs.length) {
     ws.addConditionalFormatting({
-      ref: `${diffRefs[0]}:${diffRefs[diffRefs.length - 1]}`,
+      ref: `${diffRefs[0]}:${colLetter(lastCol)}${row - 1}`,
       rules: [
         { type: "cellIs", operator: "lessThan", priority: 1, formulae: ["0"], style: { font: { color: { argb: "FFB91C1C" }, bold: true } } },
         { type: "cellIs", operator: "greaterThan", priority: 2, formulae: ["0"], style: { font: { color: { argb: "FF15803D" }, bold: true } } }
@@ -753,41 +861,39 @@ function buildChartSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, d
   }
 
   row += 1;
-  put(ws.getCell(row, 1), "Сводка за период", { bold: true, size: 12 });
+  put(ws.getCell(row, 1), "Period summary", { bold: true, size: 12 });
   row += 1;
-  ["Цех", "Тип ВС", "Плановая трудоемкость", "Доступный ресурс", "Разница"].forEach((label, index) => put(ws.getCell(row, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center" }));
+  ["Shop / aircraft type", "Planned workload", "Available resource", "Difference"].forEach((label, index) => put(ws.getCell(row, index + 1), label, { bold: true, fill: "FFE2E8F0", align: "center", wrap: true }));
+  ws.getRow(row).height = 32;
   row += 1;
   const slices = [...input.slices].sort((a, b) => a.workshop.localeCompare(b.workshop, "ru", { numeric: true }) || a.aircraftType.localeCompare(b.aircraftType, "ru", { numeric: true }));
   const summaryStart = row;
   for (const slice of slices) {
-    put(ws.getCell(row, 1), slice.workshop);
-    put(ws.getCell(row, 2), slice.aircraftType);
+    put(ws.getCell(row, 1), `${slice.workshop} · ${slice.aircraftType}`, { wrap: true });
     const plannedRange = (col: number) => `'${SHEET_PLAN}'!$${colLetter(col)}$${plan.firstRow}:$${colLetter(col)}$${plan.lastRow}`;
-    const planned = plan.lastRow >= plan.firstRow && events.length
+    const planned = plan.lastRow >= plan.firstRow && input.events.length
       ? `SUMIFS(${plannedRange(plan.totalCol)},${plannedRange(plan.workshopCol)},${formulaText(slice.workshop)},${plannedRange(plan.typeCol)},${formulaText(slice.aircraftType)})`
       : "0";
-    formula(ws.getCell(row, 3), planned, { fill: "FFFFF7ED" });
-    formula(ws.getCell(row, 4), resource.typePeriod.get(`${slice.workshopId}|${slice.aircraftTypeId}`) ?? "0", { fill: "FFEFF6FF" });
-    formula(ws.getCell(row, 5), `${localRef(4, row)}-${localRef(3, row)}`, { fill: "FFF0FDF4" });
+    formula(ws.getCell(row, 2), planned, { fill: "FFFFF7ED" });
+    formula(ws.getCell(row, 3), resource.typePeriod.get(`${slice.workshopId}|${slice.aircraftTypeId}`) ?? "0", { fill: "FFEFF6FF" });
+    formula(ws.getCell(row, 4), `${localRef(3, row)}-${localRef(2, row)}`, { fill: "FFF0FDF4" });
     row += 1;
   }
   if (slices.length) {
-    put(ws.getCell(row, 1), "Итого", { bold: true, fill: "FFE2E8F0" });
-    put(ws.getCell(row, 2), "", { fill: "FFE2E8F0" });
+    put(ws.getCell(row, 1), "Total", { bold: true, fill: "FFE2E8F0" });
+    formula(ws.getCell(row, 2), `SUM(${localRef(2, summaryStart)}:${localRef(2, row - 1)})`, { fill: "FFE2E8F0", bold: true });
     formula(ws.getCell(row, 3), `SUM(${localRef(3, summaryStart)}:${localRef(3, row - 1)})`, { fill: "FFE2E8F0", bold: true });
-    formula(ws.getCell(row, 4), `SUM(${localRef(4, summaryStart)}:${localRef(4, row - 1)})`, { fill: "FFE2E8F0", bold: true });
-    formula(ws.getCell(row, 5), `${localRef(4, row)}-${localRef(3, row)}`, { fill: "FFE2E8F0", bold: true });
+    formula(ws.getCell(row, 4), `${localRef(3, row)}-${localRef(2, row)}`, { fill: "FFE2E8F0", bold: true });
   } else {
-    put(ws.getCell(row, 1), "Нет плановой трудоёмкости и доступного ресурса за период.");
-    ws.mergeCells(row, 1, row, 5);
+    put(ws.getCell(row, 1), "No planned workload or available resource for the period.");
+    ws.mergeCells(row, 1, row, LABEL_COLUMNS);
   }
 
-  ws.getColumn(1).width = 28;
-  ws.getColumn(2).width = 28;
-  ws.getColumn(3).width = 22;
-  for (let col = 4; col <= lastCol; col += 1) ws.getColumn(col).width = 14;
-  ws.views = [{ state: "frozen", xSplit: 3, ySplit: headerRow }];
-  ws.pageSetup.printTitlesRow = `${headerRow}:${headerRow}`;
+  const labelWidth = columnWidthPx(70);
+  for (let col = 1; col <= LABEL_COLUMNS; col += 1) ws.getColumn(col).width = labelWidth;
+  for (let col = LABEL_COLUMNS + 1; col <= lastCol; col += 1) ws.getColumn(col).width = hourWidth;
+  ws.views = [{ state: "frozen", xSplit: LABEL_COLUMNS, ySplit: hourRow }];
+  ws.pageSetup.printTitlesRow = `${headerRow}:${hourRow}`;
   ws.properties.tabColor = { argb: "FFF97316" };
   fit(ws);
 }

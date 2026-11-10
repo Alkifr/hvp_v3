@@ -96,6 +96,12 @@ export function personnelViewDefaults(now: Date = new Date()) {
   return { periodFrom: period.from, periodTo: period.to, weekStart: mondayOfWeek(now) };
 }
 
+/** Пустой массив в сохранённом виде — это «Сбросить», а не «выбор ещё не записывали». */
+export function savedIdList(value: unknown, fallback: string): string[] {
+  if (!Array.isArray(value)) return fallback ? [fallback] : [];
+  return value.filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
 export function readPersonnelView(
   raw: unknown,
   defaults: { periodFrom: string; periodTo: string; weekStart: string }

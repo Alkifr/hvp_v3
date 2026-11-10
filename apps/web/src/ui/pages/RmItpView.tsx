@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
+import { DraftNumberInput } from "../components/DraftNumberInput";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
@@ -504,7 +505,12 @@ export function RmItpView() {
                   </label>
                   <label>
                     <span className="muted">Готовность, %</span>
-                    <input type="number" min={0} max={100} value={planDraft.readinessPct} onChange={(e) => setPlanDraft({ ...planDraft, readinessPct: Number(e.target.value) })} />
+                    <DraftNumberInput
+                      min={0}
+                      max={100}
+                      value={planDraft.readinessPct}
+                      onChange={(readinessPct) => setPlanDraft({ ...planDraft, readinessPct })}
+                    />
                   </label>
                   <label className="itpWideField">
                     <span className="muted">Комментарий</span>
@@ -591,7 +597,12 @@ export function RmItpView() {
                 {plan ? (
                   <>
                     <div className="itpInlineForm itpStepForm">
-                      <input type="number" min={0} value={stepDraft.seq} onChange={(e) => setStepDraft({ ...stepDraft, seq: Number(e.target.value) })} title="Порядок" />
+                      <DraftNumberInput
+                        min={0}
+                        value={stepDraft.seq}
+                        title="Порядок"
+                        onChange={(seq) => setStepDraft({ ...stepDraft, seq })}
+                      />
                       <input value={stepDraft.description} onChange={(e) => setStepDraft({ ...stepDraft, description: e.target.value })} placeholder="Зона/система: крыло, БГО, авионика..." />
                       <input className="itpGrow" value={stepDraft.title} onChange={(e) => setStepDraft({ ...stepDraft, title: e.target.value })} placeholder="Название этапа" />
                       <input value={stepDraft.responsible} onChange={(e) => setStepDraft({ ...stepDraft, responsible: e.target.value })} placeholder="Ответственный" />
@@ -625,7 +636,13 @@ export function RmItpView() {
                                   </select>
                                 </td>
                                 <td>
-                                  <input type="number" min={0} max={100} value={s.progressPct} onChange={(e) => patchStepM.mutate({ id: s.id, patch: { progressPct: Number(e.target.value) } })} />
+                                  <DraftNumberInput
+                                    min={0}
+                                    max={100}
+                                    value={s.progressPct}
+                                    commitOnBlur
+                                    onChange={(progressPct) => patchStepM.mutate({ id: s.id, patch: { progressPct } })}
+                                  />
                                 </td>
                                 <td>{predecessors.length ? predecessors.join(", ") : "—"}</td>
                                 <td><button className="btn" type="button" onClick={() => deleteStepM.mutate(s.id)}>Удалить</button></td>

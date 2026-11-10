@@ -369,9 +369,6 @@ export function RmTowsView() {
         <div className="massHeroText">
           <div className="massEyebrow">Рабочее место буксировок</div>
           <h1>РМ Буксировки</h1>
-          <p className="muted">
-            Только интервалы буксировок текущего контура. Выгрузка — набор полей для диспетчерского отчёта.
-          </p>
         </div>
         <div className="massHeroStats" aria-label="Сводка буксировок">
           <span>

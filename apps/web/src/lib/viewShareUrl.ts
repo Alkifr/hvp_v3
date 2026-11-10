@@ -16,7 +16,7 @@ const VIEW_SHARE_KEYS = new Set([
   "tz",
   "fit",
   "links",
-  "ext",
+  "cx",
   "notes",
   "hangar",
   "op",
@@ -60,7 +60,7 @@ export type GanttViewShare = {
   filterLineBases: Array<"LINE" | "BASE">;
   fitWidth: boolean;
   showAllPlacementLinks: boolean;
-  showExternalMroOnGantt: boolean;
+  showCancelledOnGantt: boolean;
   showGanttNotes: boolean;
   hangarStandSort: HangarStandSort;
 };
@@ -154,7 +154,7 @@ function defaultGanttShare(): GanttViewShare {
     filterLineBases: [],
     fitWidth: false,
     showAllPlacementLinks: false,
-    showExternalMroOnGantt: true,
+    showCancelledOnGantt: true,
     showGanttNotes: false,
     hangarStandSort: "stand-layout"
   };
@@ -192,7 +192,7 @@ export function parseGanttViewShare(query: URLSearchParams): GanttViewShare | nu
     filterLineBases: lb,
     fitWidth: query.get("fit") === "1",
     showAllPlacementLinks: query.get("links") === "1",
-    showExternalMroOnGantt: query.get("ext") !== "0",
+    showCancelledOnGantt: query.get("cx") !== "0",
     showGanttNotes: query.get("notes") === "1",
     hangarStandSort: parseHangarStandSort(query.get("hsort") === "ly" ? "layout-stand" : undefined)
   };
@@ -210,7 +210,7 @@ export function serializeGanttViewShare(state: GanttViewShare & { sandboxId?: st
   if (state.timelineTimeMode === "UTC") q.set("tz", "utc");
   setFlag(q, "fit", state.fitWidth);
   setFlag(q, "links", state.showAllPlacementLinks);
-  if (!state.showExternalMroOnGantt) q.set("ext", "0");
+  if (!state.showCancelledOnGantt) q.set("cx", "0");
   setFlag(q, "notes", state.showGanttNotes);
   if (state.hangarStandSort === "layout-stand") q.set("hsort", "ly");
   setCsv(q, "hangar", state.selectedHangarIds);
@@ -403,6 +403,7 @@ export const REF_SHARE_KINDS = [
   "aircraft-type-palette",
   "event-types",
   "event-statuses",
+  "change-reasons",
   "tow-norms",
   "workshops",
   "hangars",

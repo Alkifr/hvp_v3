@@ -1,3 +1,5 @@
+import { safeRandomUuid } from "./randomId";
+
 export type TowDraftRow = {
   key: string;
   serverId: string | null;
@@ -60,8 +62,9 @@ export function towRowsFromServer(rows: TowServerRow[]): TowDraftRow[] {
   }));
 }
 
+/** Ключ локального черновика. На HTTP вне localhost `crypto.randomUUID` отсутствует или бросает. */
 export function newTowDraftKey(): string {
-  return `local-${crypto.randomUUID()}`;
+  return `local-${safeRandomUuid()}`;
 }
 
 function sameInstant(a: string, b: string): boolean {

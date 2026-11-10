@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { EventAuditAction, EventPlacementOrigin, PlanningLevel, Prisma } from "@prisma/client";
+import { EventAuditAction, EventPlacementOrigin, PlanningLevel, Prisma, type PrismaClient } from "@prisma/client";
 
 import { parseImportDateTime } from "../../lib/localDate.js";
 import { normalizePlacementGaps } from "../../lib/placementGaps.js";
@@ -11,7 +11,12 @@ import {
   parseLineBase,
   resolveEventLineBase
 } from "../../lib/lineBase.js";
-import { eventHasExistingSlotOverlap, resolveAllowOverlap } from "../../lib/placementOverlap.js";
+import {
+  eventHasExistingSlotOverlap,
+  gateAllowOverlapRequest,
+  resolveAllowOverlap,
+  standOccupancyWindow
+} from "../../lib/placementOverlap.js";
 import { resolveStandLocation } from "../../lib/standLocation.js";
 import {
   DONE_DEADLINE_LOCK_MESSAGE,
@@ -30,7 +35,12 @@ import {
   resolveImportEventStatus
 } from "../../lib/eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "../../lib/eventStatusNotifications.js";
-import { patchNeedsChangeReason } from "../../lib/changeReason.js";
+import {
+  changeReasonAuditFields,
+  placementChangeNeedsReason,
+  requestedEventChangeNeedsReason,
+  resolveStoredChangeReason
+} from "../../lib/changeReason.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { inferTowRoute, type TowPlacementInput } from "../../lib/towReport.js";
 import { EDGE_TOW_NORM_CODE, planEdgeTows, remapTowPlacementId, type TowLinkPlacement } from "../../lib/edgeTows.js";
@@ -42,11 +52,12 @@ import {
   statusAllowsVirtualAircraft,
   virtualAircraftDisplayLabel
 } from "../../lib/virtualAircraft.js";
+import { fileDuplicateWarnings, planDuplicateWarnings, type ImportDuplicateRow } from "../../lib/importDuplicates.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
-import { assertAnyPermission, assertPermission } from "../../lib/rbac.js";
+import { assertAnyPermission, assertPermission, requirePermission } from "../../lib/rbac.js";
 import {
-  assertChangeReasonIfNeeded,
   canWriteInContext,
+  changeReasonRequired,
   sandboxFilter,
   sandboxIdFor
 } from "../../plugins/sandbox.js";
@@ -94,6 +105,8 @@ const IMPORT_FIELD_LABELS: Record<string, string> = {
   HangarStand: "HangarStand (место)",
   Workshop: "Workshop (ответственный цех)",
   LineBase: "LineBase (L/B)",
+  DeadLine: "DeadLine (крайний срок)",
+  deadlineAt: "DeadLine (крайний срок)",
   ...Object.fromEntries(
     laborImportFieldAliases().map((col) => [col.field, `${col.field} (${col.title}, ч/ч)`])
   )
@@ -127,11 +140,23 @@ function formatEventImportSchemaError(error: z.ZodError): string {
   }
 
   parts.push(
-    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand, Workshop, LineBase, laborBudget_*/laborAddBudget_*/laborNrcBudget_*/laborMps_*/laborActual_*/laborAddPlan_*/laborNrcPlan_*/laborAddActual_*/laborNrcActual_*)."
+    "Ожидаемая шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt (опционально budget*/actual*/tow*, Hangar, HangarStand, Workshop, LineBase, DeadLine, laborBudget_*/laborAddBudget_*/laborNrcBudget_*/laborMps_*/laborActual_*/laborAddPlan_*/laborNrcPlan_*/laborAddActual_*/laborNrcActual_*)."
   );
   parts.push("Если это файл массового планирования — перейдите на вкладку «Массовое планирование», а не «Импорт событий».");
 
   return parts.join(" ");
+}
+
+function readEventChangeReason(
+  prisma: PrismaClient,
+  req: any,
+  needed: boolean,
+  body: { changeReasonIds?: string[]; changeReason?: string | null }
+) {
+  return resolveStoredChangeReason(
+    () => prisma.changeReason.findMany({ select: { id: true, name: true, isActive: true, sortOrder: true } }),
+    { required: changeReasonRequired(req) && needed, ids: body.changeReasonIds, comment: body.changeReason }
+  );
 }
 
 function getActor(req: any) {
@@ -434,6 +459,8 @@ async function resolvePlacementLocation(tx: any, p: PlacementInput) {
   return { hangarId, layoutId, standId };
 }
 
+const INACTIVE_SLOT_STATUSES = [EventStatus.CANCELLED, EventStatus.DELETED];
+
 async function assertPlacementConflicts(tx: any, params: {
   sandboxId: string | null;
   eventId: string;
@@ -442,11 +469,20 @@ async function assertPlacementConflicts(tx: any, params: {
   standId: string | null;
   startAt: Date;
   endAt: Date;
+  actualStartAt?: Date | null;
+  actualEndAt?: Date | null;
   allowOverlap?: boolean;
 }) {
   if (params.allowOverlap) return;
   // Ангар или схема без места слот не занимают и чужую схему не блокируют.
   if (!params.standId) return;
+
+  const occupied = standOccupancyWindow(params);
+  const activeEvent = { status: { notIn: INACTIVE_SLOT_STATUSES } };
+  const factOverlaps = {
+    actualStartAt: { lt: occupied.endAt },
+    actualEndAt: { gt: occupied.startAt }
+  };
 
   {
     const conflict = await tx.standReservation.findFirst({
@@ -454,14 +490,27 @@ async function assertPlacementConflicts(tx: any, params: {
         sandboxId: params.sandboxId,
         standId: params.standId,
         eventId: { not: params.eventId },
-        startAt: { lt: params.endAt },
-        endAt: { gt: params.startAt },
-        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+        startAt: { lt: occupied.endAt },
+        endAt: { gt: occupied.startAt },
+        event: activeEvent
       },
       include: { event: { include: { aircraft: true } } }
     });
-    if (conflict) {
-      throw new Error(`Место уже занято: ${conflict.event.title} (${eventAircraftLabel(conflict.event)})`);
+    const factConflict = conflict
+      ? null
+      : await tx.eventPlacement.findFirst({
+          where: {
+            sandboxId: params.sandboxId,
+            standId: params.standId,
+            eventId: { not: params.eventId },
+            ...factOverlaps,
+            event: activeEvent
+          },
+          include: { event: { include: { aircraft: true } } }
+        });
+    const hit = conflict ?? factConflict;
+    if (hit) {
+      throw new Error(`Место уже занято: ${hit.event.title} (${eventAircraftLabel(hit.event)})`);
     }
   }
 
@@ -471,17 +520,33 @@ async function assertPlacementConflicts(tx: any, params: {
         sandboxId: params.sandboxId,
         eventId: { not: params.eventId },
         layoutId: { not: params.layoutId },
-        startAt: { lt: params.endAt },
-        endAt: { gt: params.startAt },
+        startAt: { lt: occupied.endAt },
+        endAt: { gt: occupied.startAt },
         layout: { hangarId: params.hangarId },
-        event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+        event: activeEvent
       },
       include: { layout: { select: { name: true } }, event: { include: { aircraft: true } } },
       orderBy: [{ startAt: "asc" }]
     });
-    if (layoutConflict) {
+    const layoutFactConflict = layoutConflict
+      ? null
+      : await tx.eventPlacement.findFirst({
+          where: {
+            sandboxId: params.sandboxId,
+            eventId: { not: params.eventId },
+            standId: { not: null },
+            layoutId: { not: params.layoutId },
+            hangarId: params.hangarId,
+            ...factOverlaps,
+            event: activeEvent
+          },
+          include: { layout: { select: { name: true } }, event: { include: { aircraft: true } } },
+          orderBy: [{ startAt: "asc" }]
+        });
+    const hit = layoutConflict ?? layoutFactConflict;
+    if (hit) {
       throw new Error(
-        `В этот период в ангаре уже используется другая схема расстановки: ${layoutConflict.layout?.name ?? "другая схема"} (${layoutConflict.event.title}, ${eventAircraftLabel(layoutConflict.event)})`
+        `В этот период в ангаре уже используется другая схема расстановки: ${hit.layout?.name ?? "другая схема"} (${hit.event.title}, ${eventAircraftLabel(hit.event)})`
       );
     }
   }
@@ -552,6 +617,8 @@ async function replaceEventPlacements(tx: any, params: {
       standId: location.occupiesStand ? location.standId : null,
       startAt: p.startAt,
       endAt: p.endAt,
+      actualStartAt: p.actualStartAt ?? null,
+      actualEndAt: p.actualEndAt ?? null,
       allowOverlap: params.allowOverlap
     });
 
@@ -582,6 +649,7 @@ async function replaceEventPlacements(tx: any, params: {
     });
 
     if (location.occupiesStand && location.layoutId && location.standId) {
+      const occupied = standOccupancyWindow(p);
       await tx.standReservation.create({
         data: {
           eventId: params.eventId,
@@ -589,8 +657,8 @@ async function replaceEventPlacements(tx: any, params: {
           sandboxId: params.sandboxId,
           layoutId: location.layoutId,
           standId: location.standId,
-          startAt: p.startAt,
-          endAt: p.endAt
+          startAt: occupied.startAt,
+          endAt: occupied.endAt
         }
       });
     }
@@ -681,7 +749,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const eventId = zUuid.parse((req.params as any).id);
     const body = z
       .object({
-        changeReason: z.string().trim().min(1).max(1000).optional()
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
       })
       .parse(req.body ?? {});
 
@@ -714,8 +783,6 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       })),
       existing: ev.towSegments.map((tow) => ({ startAt: tow.startAt, endAt: tow.endAt }))
     });
-
-    assertChangeReasonIfNeeded(req, plan.create.length > 0, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
 
     const sbId = sandboxIdFor(req);
     const created = await app.prisma.$transaction(async (tx) => {
@@ -787,7 +854,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         fromLabel: z.string().trim().max(120).nullable().optional(),
         toLabel: z.string().trim().max(120).nullable().optional(),
         notes: z.string().trim().max(2000).nullable().optional(),
-        changeReason: z.string().trim().min(1).max(1000).optional()
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: UserMsg.END_AFTER_START })
       .parse(req.body);
@@ -891,7 +959,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         toLabel: z.string().trim().max(120).nullable().optional(),
         notes: z.string().trim().max(2000).nullable().optional(),
         startChangeReason: z.string().trim().max(1000).nullable().optional(),
-        changeReason: z.string().trim().min(1).max(1000).optional()
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
       })
       .parse(req.body);
 
@@ -922,7 +991,6 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }
     const startChanged = body.startAt != null && body.startAt.getTime() !== existing.startAt.getTime();
     const endChanged = body.endAt != null && body.endAt.getTime() !== existing.endAt.getTime();
-    assertChangeReasonIfNeeded(req, true, body.changeReason ?? body.startChangeReason, UserMsg.CHANGE_REASON_REQUIRED);
     if (startChanged && !String(body.startChangeReason ?? body.changeReason ?? "").trim()) {
       throw app.httpErrors.badRequest("Укажите причину изменения времени начала буксировки");
     }
@@ -1016,7 +1084,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const towId = zUuid.parse((req.params as any).towId);
     const query = z
       .object({
-        changeReason: z.string().trim().min(1).max(1000).optional()
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
       })
       .parse((req.query ?? {}) as any);
 
@@ -1080,12 +1149,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         placements: z.array(zPlacementInput).min(1).max(50),
         changeReason: z.string().trim().min(1).max(1000).optional(),
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional(),
         allowOverlap: z.boolean().optional(),
         autoFillGapPlacements: z.boolean().optional().default(true)
       })
       .parse(req.body);
-
-    assertChangeReasonIfNeeded(req, true, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
 
     const event = await app.prisma.maintenanceEvent.findFirst({
       where: { id: eventId, ...sandboxFilter(req) },
@@ -1096,9 +1164,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }
 
+    const storedReason = await readEventChangeReason(
+      app.prisma,
+      req,
+      placementChangeNeedsReason(event.placements, body.placements),
+      body
+    );
+
     const sbId = sandboxIdFor(req);
     const overlap = resolveAllowOverlap({
-      requested: body.allowOverlap,
+      requested: gateAllowOverlapRequest(body.allowOverlap, requirePermission(req, "gantt:overlap")),
       stored: Boolean((event as { allowOverlap?: boolean }).allowOverlap),
       existingOverlap: await eventHasExistingSlotOverlap(app.prisma, { sandboxId: sbId, eventId })
     });
@@ -1135,7 +1210,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: sbId,
           action: EventAuditAction.UPDATE,
           actor: getActor(req),
-          reason: body.changeReason ?? null,
+          ...changeReasonAuditFields(storedReason),
           changes: {
             placements: {
               from: before,
@@ -1196,6 +1271,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                 actualEndAt: zOptionalDateCell,
                 towStartAt: zOptionalDateCell,
                 towEndAt: zOptionalDateCell,
+                DeadLine: zOptionalDateCell,
+                deadlineAt: zOptionalDateCell,
                 Hangar: z.string().optional(),
                 HangarStand: z.string().optional(),
                 Workshop: z.union([z.string(), z.number()]).optional(),
@@ -1253,6 +1330,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       "responsibleWorkshop"
     ];
     const lineBaseCellAliases = ["LineBase", "lineBase", "LB", "L/B", "контур", "контур L/B", "Line/Base"];
+    const deadlineCellAliases = ["DeadLine", "deadlineAt", "deadline", "Дедлайн", "крайний срок"];
     const statusCellAliases = ["Status", "Статус", "status"];
     const reasonCellAliases = ["Reason", "Причина", "reason"];
     const commentCellAliases = ["Comment", "Комментарий", "comment"];
@@ -1262,10 +1340,22 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const parseOptionalDate = (v: string | number | Date | null | undefined, label: string) => {
       if (v == null) return null;
       if (typeof v === "string" && norm(v) === "") return null;
-      const d = parseDate(v);
-      if (!Number.isFinite(d.valueOf())) throw new Error(`Некорректная дата ${label}: ${String(v)}`);
-      return d;
+      try {
+        const d = parseDate(v);
+        if (!Number.isFinite(d.valueOf())) throw new Error(`Некорректная дата ${label}: ${String(v)}`);
+        return d;
+      } catch (err: unknown) {
+        const message = String((err as { message?: unknown })?.message ?? err);
+        if (message.includes(label)) throw err;
+        throw new Error(`Некорректная дата ${label}: ${String(v)}`);
+      }
     };
+    const asImportDateCell = (v: unknown): string | number | Date | null => {
+      if (v == null || v === "") return null;
+      if (v instanceof Date || typeof v === "string" || typeof v === "number") return v;
+      return String(v);
+    };
+    const IMPORT_DEADLINE_HINT = "Дата выхода со слота позже DeadLine.";
     const validateOptionalPeriod = (start: Date | null, end: Date | null, label: string) => {
       if ((start && !end) || (!start && end)) throw new Error(`Заполните обе даты периода "${label}"`);
       if (start && end && end <= start) throw new Error(`Окончание периода "${label}" должно быть позже начала`);
@@ -1537,8 +1627,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       actualEndAt?: string | null;
       towStartAt?: string | null;
       towEndAt?: string | null;
+      deadlineAt?: string | null;
       aircraftTail?: string;
+      aircraftId?: string | null;
       eventTypeKey?: string;
+      eventTypeId?: string | null;
       hangar?: string | null;
       stand?: string | null;
       layout?: string | null;
@@ -1561,6 +1654,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     let wouldCreateEvents = 0;
     let wouldCreateReservations = 0;
     let wouldCreateTows = 0;
+    const duplicateCandidates: ImportDuplicateRow[] = [];
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i]!;
@@ -1591,6 +1685,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         if (towStartAt && towEndAt && (towStartAt < startAt || towEndAt > endAt)) {
           throw new Error("Период буксировки должен быть внутри startAt/endAt");
         }
+        const deadlineAt = parseOptionalDate(
+          asImportDateCell(pickImportCell(r as Record<string, unknown>, deadlineCellAliases)),
+          "DeadLine"
+        );
+        if (deadlineAt && endAt > deadlineAt) warnings.push(IMPORT_DEADLINE_HINT);
 
         const laborMetrics = collectLaborMetricsFromImportRow(r as Record<string, unknown>);
 
@@ -1676,8 +1775,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           actualEndAt: actualEndAt?.toISOString() ?? null,
           towStartAt: towStartAt?.toISOString() ?? null,
           towEndAt: towEndAt?.toISOString() ?? null,
+          deadlineAt: deadlineAt?.toISOString() ?? null,
           aircraftTail,
+          aircraftId: aircraft.id,
           eventTypeKey: norm(r.Event_name),
+          eventTypeId: eventType.id,
           hangar: hangar?.name ?? null,
           hangarId: hangar?.id ?? null,
           stand: standCode || null,
@@ -1694,6 +1796,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           allowOverlap: Boolean(resolvedStand?.allowOverlap),
           warnings,
           laborMetricsCount: laborMetrics.length
+        });
+        duplicateCandidates.push({
+          rowIndex,
+          aircraftId: aircraft.id,
+          eventTypeId: eventType.id,
+          title,
+          tail: aircraftTail,
+          startAt,
+          endAt
         });
 
         wouldCreateEvents += 1;
@@ -1723,6 +1834,62 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           warnings,
           error: String(err?.message ?? err)
         });
+      }
+    }
+
+    if (duplicateCandidates.length > 0) {
+      const aircraftIds = [...new Set(duplicateCandidates.map((row) => row.aircraftId))];
+      const eventTypeIds = [...new Set(duplicateCandidates.map((row) => row.eventTypeId))];
+      let rangeStart = duplicateCandidates[0]!.startAt;
+      let rangeEnd = duplicateCandidates[0]!.endAt;
+      for (const row of duplicateCandidates) {
+        if (row.startAt < rangeStart) rangeStart = row.startAt;
+        if (row.endAt > rangeEnd) rangeEnd = row.endAt;
+      }
+      const existing = await app.prisma.maintenanceEvent.findMany({
+        where: {
+          ...sandboxFilter(req),
+          ...(body.ignoreEventIds?.length ? { id: { notIn: body.ignoreEventIds } } : {}),
+          aircraftId: { in: aircraftIds },
+          eventTypeId: { in: eventTypeIds },
+          status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] },
+          startAt: { lt: rangeEnd },
+          endAt: { gt: rangeStart }
+        },
+        select: {
+          id: true,
+          title: true,
+          aircraftId: true,
+          eventTypeId: true,
+          startAt: true,
+          endAt: true,
+          aircraft: { select: { tailNumber: true } }
+        }
+      });
+      const withinFile = fileDuplicateWarnings(duplicateCandidates);
+      const inPlan = planDuplicateWarnings(
+        duplicateCandidates,
+        existing.flatMap((event) =>
+          event.aircraftId
+            ? [
+                {
+                  id: event.id,
+                  aircraftId: event.aircraftId,
+                  eventTypeId: event.eventTypeId,
+                  title: event.title,
+                  tail: event.aircraft?.tailNumber ?? "",
+                  startAt: event.startAt,
+                  endAt: event.endAt
+                }
+              ]
+            : []
+        )
+      );
+      for (const row of previewRows) {
+        if (!row.ok) continue;
+        const extra = [withinFile.get(row.rowIndex), inPlan.get(row.rowIndex)].filter((item): item is string => Boolean(item));
+        if (!extra.length) continue;
+        row.warnings = [...(row.warnings ?? []), ...extra];
       }
     }
 
@@ -1776,6 +1943,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         const actualEndAt = parseOptionalDate(r.actualEndAt, "actualEndAt");
         const towStartAt = parseOptionalDate(r.towStartAt, "towStartAt");
         const towEndAt = parseOptionalDate(r.towEndAt, "towEndAt");
+        const deadlineAt = parseOptionalDate(
+          asImportDateCell(pickImportCell(r as Record<string, unknown>, deadlineCellAliases)),
+          "DeadLine"
+        );
 
         const aircraft = aircraftByTail.get(aircraftTail)!;
         const eventType = eventTypeByKey.get(eventKey)!;
@@ -1799,6 +1970,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               budgetEndAt,
               actualStartAt,
               actualEndAt,
+              deadlineAt,
               hangarId: hangar?.id ?? null,
               workshopId: previewRows[i]!.workshopId ?? null,
               lineBase: previewRows[i]!.lineBase ?? null,
@@ -1832,6 +2004,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                   actualEndAt: actualEndAt?.toISOString() ?? null,
                   towStartAt: towStartAt?.toISOString() ?? null,
                   towEndAt: towEndAt?.toISOString() ?? null,
+                  deadlineAt: deadlineAt?.toISOString() ?? null,
                   Hangar: hangarStr,
                   HangarStand: standCode,
                   Workshop: previewRows[i]!.workshop ?? null,
@@ -1856,14 +2029,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           }
 
           if (location.occupiesStand && location.standId && location.layoutId && location.hangarId) {
-            const [standConflicts, layoutConflictRows] = await Promise.all([
+            const occupied = standOccupancyWindow({ startAt, endAt, actualStartAt, actualEndAt });
+            const activeEvent = { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } };
+            const [standConflicts, layoutConflictRows, factConflicts] = await Promise.all([
               tx.standReservation.findMany({
                 where: {
                   sandboxId: sbId,
                   standId: location.standId,
-                  startAt: { lt: endAt },
-                  endAt: { gt: startAt },
-                  event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+                  startAt: { lt: occupied.endAt },
+                  endAt: { gt: occupied.startAt },
+                  event: activeEvent
                 },
                 select: { eventId: true }
               }),
@@ -1871,17 +2046,28 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
                 where: {
                   sandboxId: sbId,
                   layoutId: { not: location.layoutId },
-                  startAt: { lt: endAt },
-                  endAt: { gt: startAt },
+                  startAt: { lt: occupied.endAt },
+                  endAt: { gt: occupied.startAt },
                   layout: { hangarId: location.hangarId },
-                  event: { status: { notIn: [EventStatus.CANCELLED, EventStatus.DELETED] } }
+                  event: activeEvent
+                },
+                select: { eventId: true }
+              }),
+              tx.eventPlacement.findMany({
+                where: {
+                  sandboxId: sbId,
+                  standId: location.standId,
+                  actualStartAt: { lt: occupied.endAt },
+                  actualEndAt: { gt: occupied.startAt },
+                  event: activeEvent
                 },
                 select: { eventId: true }
               })
             ]);
             const overlapsExisting =
               standConflicts.some((row) => !importedEventIds.has(row.eventId)) ||
-              layoutConflictRows.some((row) => !importedEventIds.has(row.eventId));
+              layoutConflictRows.some((row) => !importedEventIds.has(row.eventId)) ||
+              factConflicts.some((row) => !importedEventIds.has(row.eventId));
             if (overlapsExisting) {
               await tx.maintenanceEvent.update({ where: { id: created.id }, data: { allowOverlap: true } });
             }
@@ -1905,14 +2091,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           });
 
           if (location.occupiesStand && location.layoutId && location.standId) {
+            const occupied = standOccupancyWindow({ startAt, endAt, actualStartAt, actualEndAt });
             await tx.standReservation.create({
               data: {
                 eventId: created.id,
                 placementId: placement.id,
                 layoutId: location.layoutId,
                 standId: location.standId,
-                startAt,
-                endAt,
+                startAt: occupied.startAt,
+                endAt: occupied.endAt,
                 sandboxId: sbId
               }
             });
@@ -2004,7 +2191,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         comment: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional().default(false),
         autoFillGapPlacements: z.boolean().optional().default(true),
-        changeReason: z.string().trim().min(1).max(1000).optional()
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
       })
       .refine((v) => v.endAt > v.startAt, { message: UserMsg.END_AFTER_START })
       .refine((v) => Boolean(v.budgetStartAt) === Boolean(v.budgetEndAt), { message: UserMsg.BUDGET_BOTH_DATES })
@@ -2024,7 +2212,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         throw app.httpErrors.badRequest("Этот статус нельзя выбрать");
       }
     }
-    const { changeReason, placements, allowOverlap, autoFillGapPlacements, lineBase, ...data } = body;
+    const { changeReason, placements, allowOverlap: requestedOverlap, autoFillGapPlacements, lineBase, ...data } = body;
+    const allowOverlap = gateAllowOverlapRequest(requestedOverlap, requirePermission(req, "gantt:overlap")) ?? false;
     const resolvedLineBase = resolveEventLineBase({
       requestedProvided: lineBase !== undefined,
       requested: lineBase ?? null,
@@ -2171,7 +2360,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         eventIds: z.array(zUuid).min(1).max(BULK_STATUS_MAX),
         status: z.string().trim().min(1).max(64),
-        changeReason: z.string().trim().min(1).max(1000).optional()
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
       })
       .parse(req.body);
 
@@ -2184,7 +2374,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Этот статус нельзя выбрать");
     }
 
-    assertChangeReasonIfNeeded(req, true, body.changeReason, UserMsg.CHANGE_REASON_REQUIRED);
+    const storedReason = await readEventChangeReason(app.prisma, req, body.status === EventStatus.CANCELLED, body);
 
     const uniqueIds = Array.from(new Set(body.eventIds));
     const sbId = sandboxIdFor(req);
@@ -2262,7 +2452,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
               sandboxId: sbId,
               action: EventAuditAction.UPDATE,
               actor,
-              reason: body.changeReason ?? null,
+              ...changeReasonAuditFields(storedReason),
               changes
             }
           });
@@ -2320,7 +2510,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         comment: z.string().trim().min(1).max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional(),
         autoFillGapPlacements: z.boolean().optional().default(true),
-        changeReason: z.string().trim().min(1).max(1000).optional()
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
       })
       .parse(req.body);
 
@@ -2383,7 +2574,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    let { changeReason, placements, allowOverlap, autoFillGapPlacements, lineBase, ...patch } = body;
+    let { changeReason, changeReasonIds, placements, allowOverlap, autoFillGapPlacements, lineBase, ...patch } = body;
     const nextWorkshopId = body.workshopId !== undefined ? body.workshopId : existing.workshopId;
     const workshopChanged = body.workshopId !== undefined && body.workshopId !== existing.workshopId;
     const resolvedLineBase = resolveEventLineBase({
@@ -2394,7 +2585,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       workshopChanged
     });
     const overlap = resolveAllowOverlap({
-      requested: allowOverlap,
+      requested: gateAllowOverlapRequest(allowOverlap, requirePermission(req, "gantt:overlap")),
       stored: Boolean((existing as { allowOverlap?: boolean }).allowOverlap),
       existingOverlap: await eventHasExistingSlotOverlap(app.prisma, {
         sandboxId: sandboxIdFor(req),
@@ -2549,6 +2740,28 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       actualEndAt: statusReconciled.actualEndAt
     };
 
+    const storedReason = await readEventChangeReason(
+      app.prisma,
+      req,
+      requestedEventChangeNeedsReason({
+        before: existing,
+        after: {
+          ...(body.status !== undefined ? { status: body.status } : {}),
+          ...(body.aircraftId !== undefined ? { aircraftId: body.aircraftId } : {}),
+          ...(body.startAt !== undefined ? { startAt: body.startAt } : {}),
+          ...(body.endAt !== undefined ? { endAt: body.endAt } : {}),
+          ...(body.budgetStartAt !== undefined ? { budgetStartAt: body.budgetStartAt } : {}),
+          ...(body.budgetEndAt !== undefined ? { budgetEndAt: body.budgetEndAt } : {}),
+          ...(body.actualStartAt !== undefined ? { actualStartAt: body.actualStartAt } : {}),
+          ...(body.actualEndAt !== undefined ? { actualEndAt: body.actualEndAt } : {}),
+          ...(body.hangarId !== undefined ? { hangarId: body.hangarId } : {}),
+          ...(body.deadlineAt !== undefined ? { deadlineAt: body.deadlineAt } : {}),
+          ...(placements !== undefined ? { placements } : {})
+        }
+      }),
+      { changeReason, changeReasonIds }
+    );
+
     const placementChanged = placements !== undefined;
     const singlePlacementSyncNeeded =
       !placementChanged &&
@@ -2657,12 +2870,6 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
     const changedKeys = Object.keys(changes);
-    assertChangeReasonIfNeeded(
-      req,
-      patchNeedsChangeReason(changedKeys),
-      changeReason,
-      UserMsg.CHANGE_REASON_REQUIRED
-    );
 
     if (changedKeys.length > 0) {
       await app.prisma.maintenanceEventAudit.create({
@@ -2671,7 +2878,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           sandboxId: sandboxIdFor(req),
           action: EventAuditAction.UPDATE,
           actor: getActor(req),
-          reason: changeReason ?? null,
+          ...changeReasonAuditFields(storedReason),
           changes
         }
       });

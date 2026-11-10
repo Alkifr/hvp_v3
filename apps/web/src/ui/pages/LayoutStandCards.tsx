@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 
+import { DraftNumberInput } from "../components/DraftNumberInput";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { ClickRow, RecordCard, StatusCell } from "./FleetRefCards";
@@ -518,27 +519,27 @@ export function LayoutCardModal(props: {
       <div className="operatorCardMetrics">
         <label className="refLabel">
           <span>Ширина, м</span>
-          <input
+          <DraftNumberInput
             className={`refInput${attempted && widthError ? " refInputInvalid" : ""}`}
-            type="number"
             min={0}
-            step={1}
-            value={props.width > 0 ? String(props.width) : ""}
+            blankZero
+            value={props.width}
             disabled={!props.canEdit}
-            onChange={(e) => props.onChange({ width: e.target.value === "" ? 0 : Number(e.target.value) })}
+            aria-invalid={attempted && Boolean(widthError)}
+            onChange={(width) => props.onChange({ width })}
           />
           {attempted && widthError ? <span className="operatorCardFieldError">{widthError}</span> : null}
         </label>
         <label className="refLabel">
           <span>Высота, м</span>
-          <input
+          <DraftNumberInput
             className={`refInput${attempted && heightError ? " refInputInvalid" : ""}`}
-            type="number"
             min={0}
-            step={1}
-            value={props.height > 0 ? String(props.height) : ""}
+            blankZero
+            value={props.height}
             disabled={!props.canEdit}
-            onChange={(e) => props.onChange({ height: e.target.value === "" ? 0 : Number(e.target.value) })}
+            aria-invalid={attempted && Boolean(heightError)}
+            onChange={(height) => props.onChange({ height })}
           />
           {attempted && heightError ? <span className="operatorCardFieldError">{heightError}</span> : null}
         </label>
@@ -666,13 +667,14 @@ export function StandCardModal(props: {
   ) => (
     <label className="refLabel">
       <span>{label}</span>
-      <input
+      <DraftNumberInput
         className={`refInput${attempted && error ? " refInputInvalid" : ""}`}
-        type="number"
         step={0.5}
-        value={emptyWhenZero && value === 0 ? "" : String(value)}
+        blankZero={emptyWhenZero}
+        value={value}
         disabled={!props.canEdit}
-        onChange={(e) => onValue(e.target.value === "" ? 0 : Number(e.target.value))}
+        aria-invalid={attempted && Boolean(error)}
+        onChange={onValue}
       />
       {attempted && error ? <span className="operatorCardFieldError">{error}</span> : null}
     </label>

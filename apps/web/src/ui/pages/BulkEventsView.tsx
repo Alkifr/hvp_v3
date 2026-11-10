@@ -16,19 +16,12 @@ export function BulkEventsView(props: { tab: BulkEventsTab; onTab: (tab: BulkEve
           <div className="massEyebrow">Импорт и массовое планирование</div>
           <h1>Импорт/План</h1>
         </div>
-        <div className="massHeroStats" aria-hidden="true">
-          {props.tab === "import" ? (
-            <>
-              <span><b>Excel/CSV</b></span>
-              <span><b>Реальные борта</b></span>
-            </>
-          ) : (
-            <>
-              <span><b>Серия работ</b></span>
-              <span><b>Виртуальные борта</b></span>
-            </>
-          )}
-        </div>
+        {props.tab === "mass" ? (
+          <div className="massHeroStats" aria-hidden="true">
+            <span><b>Серия работ</b></span>
+            <span><b>Виртуальные борта</b></span>
+          </div>
+        ) : null}
       </section>
 
       <div className="sandboxesTabs" role="tablist" aria-label="Режим раздела Импорт/План">

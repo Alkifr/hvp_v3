@@ -18,8 +18,11 @@ export type EventImportPreviewRow = {
   actualEndAt?: string | null;
   towStartAt?: string | null;
   towEndAt?: string | null;
+  deadlineAt?: string | null;
   aircraftTail?: string;
+  aircraftId?: string | null;
   eventTypeKey?: string;
+  eventTypeId?: string | null;
   hangar?: string | null;
   stand?: string | null;
   layout?: string | null;
@@ -90,6 +93,70 @@ function emptyWriteResult(): EventImportWriteResult {
   };
 }
 
+/** Совпадает с предупреждением API. Клиент пересобирает его по всему файлу, а не по одному пакету. */
+export const FILE_DUPLICATE_WARNING_PREFIX = "Вероятный дубль в файле:";
+/** Общий префикс предупреждений о дубле в файле и в плане. */
+export const PROBABLE_DUPLICATE_WARNING_PREFIX = "Вероятный дубль";
+
+export function rowHasProbableDuplicate(row: { warnings?: string[] | null }): boolean {
+  return (row.warnings ?? []).some((warning) => warning.startsWith(PROBABLE_DUPLICATE_WARNING_PREFIX));
+}
+
+const MAX_LISTED_DUPLICATES = 5;
+
+function listWithMore(parts: string[], total: number): string {
+  if (total <= parts.length) return parts.join(", ");
+  return `${parts.join(", ")} и ещё ${total - parts.length}`;
+}
+
+/**
+ * Вероятный дубль внутри файла: тот же борт, тот же тип события и пересечение оперативного периода.
+ * Пакеты предпросмотра склеиваются здесь, чтобы пара из разных источников не разошлась по запросам.
+ */
+export function applyFileDuplicateWarnings(rows: EventImportPreviewRow[]): EventImportPreviewRow[] {
+  const cleaned = rows.map((row) => ({
+    ...row,
+    warnings: (row.warnings ?? []).filter((warning) => !warning.startsWith(FILE_DUPLICATE_WARNING_PREFIX))
+  }));
+  const groups = new Map<string, number[]>();
+  cleaned.forEach((row, index) => {
+    if (!row.ok || !row.aircraftId || !row.eventTypeId || !row.startAt || !row.endAt) return;
+    const key = `${row.aircraftId}\0${row.eventTypeId}`;
+    const list = groups.get(key) ?? [];
+    list.push(index);
+    groups.set(key, list);
+  });
+
+  for (const indexes of groups.values()) {
+    if (indexes.length < 2) continue;
+    for (const index of indexes) {
+      const row = cleaned[index]!;
+      const start = Date.parse(row.startAt!);
+      const end = Date.parse(row.endAt!);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+      const partners = indexes.filter((other) => {
+        if (other === index) return false;
+        const partner = cleaned[other]!;
+        const partnerStart = Date.parse(partner.startAt!);
+        const partnerEnd = Date.parse(partner.endAt!);
+        return Number.isFinite(partnerStart) && Number.isFinite(partnerEnd) && start < partnerEnd && end > partnerStart;
+      });
+      if (!partners.length) continue;
+      const ordered = [...partners].sort((a, b) => cleaned[a]!.rowIndex - cleaned[b]!.rowIndex);
+      const shown = ordered.slice(0, MAX_LISTED_DUPLICATES).map((other) => {
+        const partner = cleaned[other]!;
+        const title = partner.title?.trim();
+        return title ? `${partner.rowIndex} «${title}»` : String(partner.rowIndex);
+      });
+      const tail = row.aircraftTail?.trim() ? ` ${row.aircraftTail.trim()}` : "";
+      const rowsLabel = ordered.length === 1 ? "со строкой" : "со строками";
+      const message = `${FILE_DUPLICATE_WARNING_PREFIX} борт${tail}, тот же тип события, пересекается ${rowsLabel} ${listWithMore(shown, ordered.length)}.`;
+      row.warnings = [...(row.warnings ?? []), message];
+    }
+  }
+  return cleaned;
+}
+
 function mergeWriteResults(acc: EventImportWriteResult, next: EventImportWriteResult) {
   acc.createdEvents += next.createdEvents ?? 0;
   acc.createdReservations += next.createdReservations ?? 0;
@@ -138,19 +205,20 @@ export async function previewEventsInChunks(
     chunks: chunks.length
   });
 
-  const okRows = mergedRows.filter((row) => row.ok).length;
+  const rowsWithDuplicates = applyFileDuplicateWarnings(mergedRows);
+  const okRows = rowsWithDuplicates.filter((row) => row.ok).length;
   return {
     ok: true,
     summary: {
       dryRun: true,
       totalRows: rows.length,
       okRows,
-      errorRows: mergedRows.length - okRows,
+      errorRows: rowsWithDuplicates.length - okRows,
       wouldCreateEvents,
       wouldCreateReservations,
       wouldCreateTows
     },
-    rows: mergedRows
+    rows: rowsWithDuplicates
   };
 }
 

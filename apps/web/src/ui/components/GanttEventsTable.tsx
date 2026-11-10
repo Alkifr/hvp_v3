@@ -29,7 +29,14 @@ import {
   type PrimaryCatalogField
 } from "../../lib/ganttTableColumns";
 import { DEADLINE_SLOT_HINT, slotExitAfterDeadline } from "../../lib/deadline";
-import { eventDiffNeedsChangeReason } from "../../lib/eventChangeReason";
+import {
+  CHANGE_REASON_REQUIRED_MESSAGE,
+  changeReasonBlocksSave,
+  changeReasonRequest,
+  eventDiffNeedsChangeReason,
+  isChangeReasonError
+} from "../../lib/eventChangeReason";
+import { ChangeReasonFields, useChangeReasons } from "./ChangeReasonFields";
 import { FIELD_LABEL, resolveHistoryValue, type HistoryRefMaps } from "../../lib/eventHistoryFormat";
 import { eventAllowsOverlap } from "../../lib/eventSlotOverlap";
 import { formatLineBase, lineBaseAfterWorkshopChange, LINE_BASE_LABEL, parseLineBase } from "../../lib/lineBase";
@@ -387,6 +394,8 @@ function computeDiff(a: RowDraft, b: RowDraft) {
 
 function ConfirmDrawer(props: {
   open: boolean;
+  changeReasonIds: string[];
+  onChangeReasonIds: (ids: string[]) => void;
   changeReason: string;
   onChangeReason: (v: string) => void;
   diffs: Array<{ field: string; from: unknown; to: unknown }>;
@@ -396,6 +405,14 @@ function ConfirmDrawer(props: {
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const reasonsQ = useChangeReasons();
+  const activeCount = (reasonsQ.data ?? []).filter((row) => row.isActive).length;
+  const blocked = changeReasonBlocksSave({
+    optional: false,
+    loading: reasonsQ.isPending && !reasonsQ.data,
+    activeCount,
+    selectedCount: props.changeReasonIds.length
+  });
   if (!props.open) return null;
   return createPortal(
     <div className="drawerBackdrop">
@@ -403,7 +420,7 @@ function ConfirmDrawer(props: {
         <header className="drawerHeader">
           <div className="drawerHeaderText">
             <div className="drawerTitle">Подтверждение изменения</div>
-            <div className="drawerSubtitle">Укажите причину — она попадёт в историю события.</div>
+            <div className="drawerSubtitle">Можно выбрать несколько причин.</div>
           </div>
           <button
             className="drawerCloseBtn"
@@ -421,17 +438,12 @@ function ConfirmDrawer(props: {
         </header>
         <div className="drawerBody">
           <div className="evConfirm">
-            <label className="evField">
-              <span className="evFieldLabel">Причина изменения</span>
-              <textarea
-                className="evInput evTextarea"
-                rows={3}
-                value={props.changeReason}
-                onChange={(e) => props.onChangeReason(e.target.value)}
-                placeholder="Например: перенос по запросу оператора, уточнение сроков…"
-                autoFocus
-              />
-            </label>
+            <ChangeReasonFields
+              ids={props.changeReasonIds}
+              comment={props.changeReason}
+              onIdsChange={props.onChangeReasonIds}
+              onCommentChange={props.onChangeReason}
+            />
             {props.diffs.length > 0 ? (
               <div className="evDiff">
                 <div className="evDiffTitle">Изменения</div>
@@ -458,7 +470,11 @@ function ConfirmDrawer(props: {
                 ) : props.pending ? (
                   <span className="muted">Сохраняем…</span>
                 ) : (
-                  <span className="muted">Причина обязательна.</span>
+                  <span className="muted">
+                    {!reasonsQ.isPending && activeCount === 0
+                      ? "Справочник причин пуст, сохранение доступно без выбора."
+                      : "Выберите хотя бы одну причину."}
+                  </span>
                 )}
               </div>
               <div className="evFooterActions">
@@ -469,7 +485,7 @@ function ConfirmDrawer(props: {
                   className="btn btnPrimary"
                   type="button"
                   onClick={props.onConfirm}
-                  disabled={props.pending || !props.changeReason.trim()}
+                  disabled={props.pending || blocked}
                 >
                   Подтвердить и сохранить
                 </button>
@@ -884,6 +900,8 @@ const SELECT_COL_WIDTH = 40;
 export function GanttEventsTable(props: {
   events: GanttTableEvent[];
   canEdit: boolean;
+  /** Право gantt:overlap: переключатель нахлёста в строке таблицы. */
+  canAllowOverlap?: boolean;
   /** На мобиле отключаем DnD порядка столбцов */
   allowColumnReorder?: boolean;
   eventsQueryFromISO: string;
@@ -911,6 +929,9 @@ export function GanttEventsTable(props: {
   const [original, setOriginal] = useState<RowDraft | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [changeReason, setChangeReason] = useState("");
+  const [changeReasonIds, setChangeReasonIds] = useState<string[]>([]);
+  const changeReasonsQ = useChangeReasons();
+  const activeChangeReasonCount = (changeReasonsQ.data ?? []).filter((row) => row.isActive).length;
   const [localError, setLocalError] = useState<string | null>(null);
   const [factorySelected, setFactorySelected] = useState(false);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
@@ -1321,6 +1342,7 @@ export function GanttEventsTable(props: {
       setOriginal(null);
       setConfirmOpen(false);
       setChangeReason("");
+      setChangeReasonIds([]);
       setLocalError(null);
     }
   }, [editingId, props.events]);
@@ -1342,6 +1364,7 @@ export function GanttEventsTable(props: {
     setOriginal(d);
     setLocalError(null);
     setChangeReason("");
+      setChangeReasonIds([]);
     setConfirmOpen(false);
   };
 
@@ -1351,6 +1374,7 @@ export function GanttEventsTable(props: {
     setOriginal(null);
     setLocalError(null);
     setChangeReason("");
+      setChangeReasonIds([]);
     setConfirmOpen(false);
   };
 
@@ -1365,8 +1389,8 @@ export function GanttEventsTable(props: {
     try {
       validateDraft(draft);
       setLocalError(null);
-      const diffFields = computeDiff(original, draft).map((d) => d.field);
-      if (activeSandbox || !eventDiffNeedsChangeReason(diffFields)) {
+      const diffsNow = computeDiff(original, draft);
+      if (activeSandbox || !eventDiffNeedsChangeReason(diffsNow)) {
         saveM.mutate();
         return;
       }
@@ -1379,17 +1403,20 @@ export function GanttEventsTable(props: {
   const saveM = useMutation({
     mutationFn: async () => {
       if (!draft || !original) throw new Error("Нет черновика");
-      const diffFields = computeDiff(original, draft).map((d) => d.field);
-      if (!changeReason.trim() && diffFields.length > 0 && !eventDiffNeedsChangeReason(diffFields)) {
-        await apiPatch(`/api/events/${draft.id}`, {
-          notes: draft.notes.trim() ? draft.notes : null,
-          comment: draft.comment.trim() ? draft.comment : null
-        });
-        return;
+      const diffRows = computeDiff(original, draft);
+      if (
+        !activeSandbox &&
+        eventDiffNeedsChangeReason(diffRows) &&
+        changeReasonBlocksSave({
+          optional: false,
+          loading: changeReasonsQ.isPending && !changeReasonsQ.data,
+          activeCount: activeChangeReasonCount,
+          selectedCount: changeReasonIds.length
+        })
+      ) {
+        throw new Error(CHANGE_REASON_REQUIRED_MESSAGE);
       }
       validateDraft(draft);
-      const reason = changeReason.trim();
-      if (!activeSandbox && !reason) throw new Error("Укажите причину изменения");
 
       const startAt = fromInputMskOptional(draft.startAtLocal);
       const endAt = fromInputMskOptional(draft.endAtLocal);
@@ -1433,8 +1460,8 @@ export function GanttEventsTable(props: {
         actualEndAt,
         notes: draft.notes.trim() ? draft.notes : null,
         comment: draft.comment.trim() ? draft.comment : null,
-        allowOverlap: draft.allowOverlap,
-        ...(reason ? { changeReason: reason } : {})
+        ...(props.canAllowOverlap ? { allowOverlap: draft.allowOverlap } : {}),
+        ...changeReasonRequest(changeReasonIds, changeReason)
       };
 
       if (draft.aircraftId) payload.aircraftId = draft.aircraftId;
@@ -1454,6 +1481,7 @@ export function GanttEventsTable(props: {
     onSuccess: () => {
       setConfirmOpen(false);
       setChangeReason("");
+      setChangeReasonIds([]);
       setLocalError(null);
       if (draft) {
         setOriginal(draft);
@@ -1467,7 +1495,7 @@ export function GanttEventsTable(props: {
     onError: (e: any) => {
       const message = String(e?.message ?? e);
       setLocalError(message);
-      if (message.includes("Укажите причину изменения")) setConfirmOpen(true);
+      if (isChangeReasonError(message)) setConfirmOpen(true);
     }
   });
 
@@ -2042,13 +2070,15 @@ export function GanttEventsTable(props: {
           </select>
         );
       case "allowOverlap":
-        return (
+        return props.canAllowOverlap ? (
           <input
             type="checkbox"
             checked={d.allowOverlap}
             onChange={(e) => patchDraft({ allowOverlap: e.target.checked })}
             title="Разрешить нахлёст при сохранении"
           />
+        ) : (
+          <span className="ganttTableReadonly">{eventAllowsOverlap(ev, props.events) ? "да" : "—"}</span>
         );
       case "notes":
         return (
@@ -2290,6 +2320,8 @@ export function GanttEventsTable(props: {
 
       <ConfirmDrawer
         open={confirmOpen}
+        changeReasonIds={changeReasonIds}
+        onChangeReasonIds={setChangeReasonIds}
         changeReason={changeReason}
         onChangeReason={setChangeReason}
         diffs={diffs}

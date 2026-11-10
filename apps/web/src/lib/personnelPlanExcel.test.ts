@@ -103,6 +103,57 @@ const input: PersonnelPlanExcelInput = {
       endAt: "2026-11-03T07:00:00Z",
       color: "#22c55e",
       towSegments: [{ startAt: "2026-11-03T06:00:00Z", endAt: "2026-11-03T07:00:00Z" }]
+    },
+    {
+      id: "e3",
+      title: "Ночная",
+      tail: "RA-777",
+      hangarLabel: "Ангар 1",
+      workshopId: "w1",
+      workshop: "ЦПТО3",
+      operator: "AFL",
+      aircraftTypeId: "a320",
+      aircraftType: "A320",
+      stand: "7",
+      status: "План",
+      startAt: "2026-11-02T07:00:00Z",
+      endAt: "2026-11-04T02:00:00Z",
+      color: "#111827",
+      towSegments: []
+    },
+    {
+      id: "e4",
+      title: "Late",
+      tail: "RA-230",
+      hangarLabel: "Ангар 1",
+      workshopId: "w1",
+      workshop: "ЦПТО3",
+      operator: "AFL",
+      aircraftTypeId: "a320",
+      aircraftType: "A320",
+      stand: "2",
+      status: "План",
+      startAt: "2026-11-03T19:00:00Z",
+      endAt: "2026-11-03T20:59:00Z",
+      color: "#0f766e",
+      towSegments: []
+    },
+    {
+      id: "e5",
+      title: "Inbound",
+      tail: "RA-100",
+      hangarLabel: "Ангар 1",
+      workshopId: "w1",
+      workshop: "ЦПТО3",
+      operator: "AFL",
+      aircraftTypeId: "a320",
+      aircraftType: "A320",
+      stand: "1",
+      status: "План",
+      startAt: "2026-11-01T18:00:00Z",
+      endAt: "2026-11-02T08:00:00Z",
+      color: "#7c3aed",
+      towSegments: []
     }
   ],
   departments: ["ME", "AV"],
@@ -111,12 +162,12 @@ const input: PersonnelPlanExcelInput = {
 
 test("personnel plan workbook pulls chart values from the resource and plan sheets", () => {
   const wb = buildPersonnelPlanWorkbook(input);
-  assert.deepEqual(wb.worksheets.map((sheet) => sheet.name), ["График", "Доступный ресурс", "План-Доступность"]);
+  assert.deepEqual(wb.worksheets.map((sheet) => sheet.name), ["Chart", "Available resource", "Plan-Availability"]);
 
-  const resource = wb.getWorksheet("Доступный ресурс")!;
-  const plan = wb.getWorksheet("План-Доступность")!;
-  const chart = wb.getWorksheet("График")!;
-  const headcountHeader = findCell(resource, "Квалификация")!;
+  const resource = wb.getWorksheet("Available resource")!;
+  const plan = wb.getWorksheet("Plan-Availability")!;
+  const chart = wb.getWorksheet("Chart")!;
+  const headcountHeader = findCell(resource, "Qualification")!;
   const dayColumn = columnWith(resource, headcountHeader.row, "02.11");
   const b1 = findRowBy(resource, { 2: "B1", 4: "A320" });
   const lbmm = findRowBy(resource, { 2: "LBMM", 4: "A320" });
@@ -126,22 +177,22 @@ test("personnel plan workbook pulls chart values from the resource and plan shee
   const meSumFormula = formulaOf(resource.getCell(meSum, dayColumn));
   assert.match(meSumFormula, new RegExp(`SUM\\([A-Z]+${b1}:[A-Z]+${lbmm}\\)`));
 
-  const norm = findCell(resource, "Норма часов")!;
+  const norm = findCell(resource, "Hour norm")!;
   const normColumn = columnWith(resource, norm.row - 1, "02.11");
   assert.equal(resource.getCell(norm.row, normColumn).value, 10);
-  const hoursHeader = findCell(resource, "Категория")!;
+  const hoursHeader = findCell(resource, "Category")!;
   const hoursDay = columnWith(resource, hoursHeader.row, "02.11");
   const meHours = findRowBy(resource, { 1: "ЦПТО3", 2: "ME", 3: "A320" }, hoursHeader.row);
-  const meAllTypes = findRowBy(resource, { 1: "ЦПТО3", 2: "ME", 3: "Все типы" }, hoursHeader.row);
-  const meAllShops = findRowBy(resource, { 1: "Все цеха", 2: "ME", 3: "Все типы" }, hoursHeader.row);
+  const meAllTypes = findRowBy(resource, { 1: "ЦПТО3", 2: "ME", 3: "All types" }, hoursHeader.row);
+  const meAllShops = findRowBy(resource, { 1: "All shops", 2: "ME", 3: "All types" }, hoursHeader.row);
   const meHoursFormula = formulaOf(resource.getCell(meHours, hoursDay));
   assert.match(meHoursFormula, /N\([A-Z]+\d+\)/);
   assert.match(meHoursFormula, /\$[A-Z]+\$\d+/);
   assert.match(formulaOf(resource.getCell(meAllTypes, hoursDay)), new RegExp(String(meHours)));
   assert.match(formulaOf(resource.getCell(meAllShops, hoursDay)), /[A-Z]+\d+/);
 
-  const planHeader = findCell(plan, "Событие")!;
-  const planDate = columnWith(plan, planHeader.row, "Дата");
+  const planHeader = findCell(plan, "Event")!;
+  const planDate = columnWith(plan, planHeader.row, "Date");
   const planMe = columnWith(plan, planHeader.row, "ME");
   const eventRow = findRowBy(plan, { 1: "C-check", 2: "RA-123", [planDate]: "02.11.2026" });
   assert.equal(plan.getCell(eventRow, planMe).value, 5);
@@ -151,35 +202,96 @@ test("personnel plan workbook pulls chart values from the resource and plan shee
   const demandFormula = formulaOf(plan.getCell(balanceDate, balanceMe));
   assert.match(demandFormula, /SUMIF\(/);
   const supplyFormula = formulaOf(plan.getCell(balanceDate, balanceMe + 1));
-  assert.match(supplyFormula, /^'Доступный ресурс'![A-Z]+\d+$/);
+  assert.match(supplyFormula, /^'Available resource'![A-Z]+\d+$/);
 
-  const chartHeader = findCell(chart, "Событие")!;
+  const chartHeader = findCell(chart, "Tail")!;
+  assert.equal(findCell(chart, "Operator")?.col, 2);
+  assert.equal(findCell(chart, "Stand")?.col, 3);
+  assert.equal(findCell(chart, "Category")?.col, 4);
+  assert.equal(findCell(chart, "Status")?.col, 5);
+  assert.equal(findCell(chart, "Title"), null);
+  assert.equal(chart.getColumn(1).width, 9.29);
+  assert.equal(chart.getColumn(2).width, 9.29);
+  assert.equal(chart.getColumn(3).width, 9.29);
   const chartDay = columnWith(chart, chartHeader.row, "02.11");
   const chartDay2 = columnWith(chart, chartHeader.row, "03.11");
-  const bar = findRowBy(chart, { 1: "RA-123", 3: "" });
-  const fullTow = findRowBy(chart, { 1: "RA-999", 3: "" });
-  assert.equal(chart.getCell(bar, chartDay).fill?.type, "pattern");
-  assert.equal((chart.getCell(bar, chartDay).fill as ExcelJS.FillPattern).pattern, "lightTrellis");
-  assert.match(noteOf(chart.getCell(bar, chartDay)), /Буксировка 09:00–10:00/);
-  assert.equal((chart.getCell(fullTow, chartDay2).fill as ExcelJS.FillPattern).pattern, "solid");
-  assert.equal((chart.getCell(fullTow, chartDay2).fill as ExcelJS.FillPattern).fgColor?.argb, "FFEF4444");
+  assert.equal(chartDay2 - chartDay, 24);
+  assert.equal(chart.getColumn(chartDay).width, 0.3);
+  assert.equal(chart.getCell(chartHeader.row + 1, chartDay + 8).value, 8);
+  assert.equal(chart.getCell(chartHeader.row + 1, chartDay + 10).font?.size, 5);
+  const bar = findRowBy(chart, { 1: "RA-123", 2: "AFL", 4: "", 5: "В работе" });
+  const fullTow = findRowBy(chart, { 1: "RA-999", 4: "" });
+  assert.equal(textOf(chart.getCell(bar, chartDay).value), "08:00");
+  assert.equal(chart.getCell(bar, chartDay).alignment?.horizontal, "left");
+  assert.equal(chart.getCell(bar, chartDay + 8).isMerged, false);
+  assert.equal(textOf(chart.getCell(bar, chartDay + 8).value), "   C-check");
+  assert.equal(chart.getCell(bar, chartDay + 8).font?.color?.argb, "FF000000");
+  assert.equal(chart.getCell(bar, chartDay + 8).alignment?.horizontal, "left");
+  assert.equal((chart.getCell(bar, chartDay + 8).fill as ExcelJS.FillPattern).fgColor?.argb, "FF336699");
+  assert.equal(chart.getCell(bar, chartDay + 8).border?.right?.color?.argb, "FF336699");
+  assert.equal((chart.getCell(bar, chartDay + 9).fill as ExcelJS.FillPattern).fgColor?.argb, "FFEF4444");
+  assert.equal(chart.getCell(bar, chartDay + 9).border?.left?.color?.argb, "FFEF4444");
+  assert.match(noteOf(chart.getCell(bar, chartDay + 9)), /Tow 09:00–10:00/);
+  assert.equal(textOf(chart.getCell(bar, chartDay2 + 18).value), "18:00");
+  assert.equal(chart.getCell(bar, chartDay2 + 18).alignment?.horizontal, "left");
+  assert.equal((chart.getCell(bar, chartDay2 + 18).fill as ExcelJS.FillPattern).fgColor?.argb, "FFFFFFFF");
+  assert.equal(chart.getCell(bar, chartDay2 + 18).border?.left?.color?.argb, "FFFFFFFF");
+  assert.equal(chart.getCell(bar, chartDay + 1).border?.right?.color?.argb, "FFFFFFFF");
+  assert.equal(chart.getCell(fullTow, chartDay2 + 9).alignment?.horizontal, "left");
+  assert.equal(chart.getCell(fullTow, chartDay2 + 9).font?.color?.argb, "FF000000");
+  assert.equal(textOf(chart.getCell(fullTow, chartDay2 + 9).value), "   Выкатка");
+  assert.equal(textOf(chart.getCell(fullTow, chartDay2 + 10).value), "10:00");
+  assert.equal(chart.getCell(fullTow, chartDay2 + 9).isMerged, false);
+  assert.equal((chart.getCell(fullTow, chartDay2 + 9).fill as ExcelJS.FillPattern).fgColor?.argb, "FFEF4444");
+  const night = findRowBy(chart, { 1: "RA-777", 4: "" });
+  assert.equal(textOf(chart.getCell(night, chartDay + 10).value), "   Ночная");
+  const nightTill = columnWith(chart, night, "till 04.11.26 05:00");
+  assert.ok(nightTill > chartDay + 10);
+  assert.equal(textOf(chart.getCell(night, nightTill).value), "till 04.11.26 05:00");
+  const inbound = findRowBy(chart, { 1: "RA-100", 4: "" });
+  assert.equal(textOf(chart.getCell(inbound, chartDay).value), "from 01.11.26 21:00");
+  assert.ok(columnWith(chart, inbound, "Inbound") > chartDay);
+  const late = findRowBy(chart, { 1: "RA-230", 4: "" });
+  assert.ok(textOf(chart.getCell(late, chartDay2 + 22).value).includes("Late"));
+  assert.equal(columnWith(chart, late, "23:59"), chartDay2 + 23);
 
-  const eventHours = findRowBy(chart, { 1: "RA-123", 3: "ME" });
+  const eventHours = findRowBy(chart, { 1: "RA-123", 4: "ME" });
+  assert.equal(chart.getRow(eventHours).height, 10.5);
+  assert.equal(chart.getCell(eventHours, 4).font?.size, 8);
+  assert.equal(chart.getCell(eventHours, chartDay).font?.size, 8);
+  assert.equal(chart.getCell(eventHours, 4).fill?.type, undefined);
+  assert.equal(chart.getCell(eventHours, chartDay).fill?.type, undefined);
   const eventFormula = formulaOf(chart.getCell(eventHours, chartDay));
-  assert.match(eventFormula, /'План-Доступность'![A-Z]+\d+/);
-  const demandRow = findRowBy(chart, { 1: "Итого потребность", 3: "ME" });
-  const supplyRow = findRowBy(chart, { 1: "Итого доступный ресурс", 3: "ME" });
-  const diffRow = findRowBy(chart, { 1: "Итого разница", 3: "ME" });
-  assert.match(formulaOf(chart.getCell(demandRow, chartDay)), /'План-Доступность'!/);
-  assert.match(formulaOf(chart.getCell(supplyRow, chartDay)), /'Доступный ресурс'!/);
+  assert.match(eventFormula, /'Plan-Availability'![A-Z]+\d+/);
+  const demandRow = findRowBy(chart, { 1: "Total demand", 4: "ME" });
+  const supplyRow = findRowBy(chart, { 1: "Total available", 4: "ME" });
+  const diffRow = findRowBy(chart, { 1: "Total difference", 4: "ME" });
+  assert.match(formulaOf(chart.getCell(demandRow, chartDay)), /'Plan-Availability'!/);
+  assert.match(formulaOf(chart.getCell(supplyRow, chartDay)), /'Available resource'!/);
   const diff = formulaOf(chart.getCell(diffRow, chartDay));
-  assert.match(diff, /'Доступный ресурс'!/);
-  assert.match(diff, /'План-Доступность'!/);
+  assert.match(diff, /'Available resource'!/);
+  assert.match(diff, /'Plan-Availability'!/);
   assert.match(diff, /-/);
-  const summary = findRowBy(chart, { 1: "ЦПТО3", 2: "A320" });
-  assert.match(formulaOf(chart.getCell(summary, 3)), /SUMIFS\('План-Доступность'!/);
-  assert.match(formulaOf(chart.getCell(summary, 4)), /'Доступный ресурс'!/);
-  assert.equal(formulaOf(chart.getCell(summary, 5)), `${textAddress(4, summary)}-${textAddress(3, summary)}`);
+  const summary = findRowBy(chart, { 1: "ЦПТО3 · A320" });
+  assert.match(formulaOf(chart.getCell(summary, 2)), /SUMIFS\('Plan-Availability'!/);
+  assert.match(formulaOf(chart.getCell(summary, 3)), /'Available resource'!/);
+  assert.equal(formulaOf(chart.getCell(summary, 4)), `${textAddress(3, summary)}-${textAddress(2, summary)}`);
+  const hangar = findCell(chart, "Ангар 1")!;
+  assert.equal((chart.getCell(hangar.row, chartDay).fill as ExcelJS.FillPattern).fgColor?.argb, "FFF97316");
+  assert.equal(chart.getCell(hangar.row, chartDay2 + 23).master.address, chart.getCell(hangar.row, 1).address);
+  assert.equal(chart.getCell(fullTow, chartDay).isMerged, false);
+  assert.equal((chart.getCell(fullTow, chartDay).fill as ExcelJS.FillPattern).fgColor?.argb, "FFFFFFFF");
+  assert.equal(chart.getCell(fullTow, chartDay).border?.right?.color?.argb, "FFFFFFFF");
+
+  const week = buildPersonnelPlanWorkbook({ ...input, scale: "week" }).getWorksheet("Chart")!;
+  const weekDate = findCell(week, "02.11")!;
+  assert.equal(week.getCell(weekDate.row - 1, weekDate.col).value, "Monday");
+  assert.equal(week.getCell(weekDate.row - 1, weekDate.col + 24).value, "Tuesday");
+  assert.equal(week.getCell(weekDate.row, weekDate.col).value, "02.11");
+  assert.equal(week.getColumn(weekDate.col).width, 1.08);
+  const weekTow = findRowBy(week, { 1: "RA-999", 4: "" });
+  assert.equal(week.getCell(weekTow, weekDate.col).isMerged, false);
+  assert.equal((week.getCell(findCell(week, "Ангар 1")!.row, weekDate.col).fill as ExcelJS.FillPattern).fgColor?.argb, "FFF97316");
 });
 
 function textAddress(col: number, row: number) {

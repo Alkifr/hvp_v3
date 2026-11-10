@@ -36,6 +36,7 @@ export const CONTENT_TYPES: ContentTypeDef[] = [
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "AircraftTypePalette", name: "палитра типа ВС", actions: ["view", "add", "change", "delete"] },
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "EventType", name: "тип события", actions: ["view", "add", "change", "delete"] },
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "EventStatusCatalog", name: "статус события", actions: ["view", "add", "change", "delete"] },
+  { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "ChangeReason", name: "причина изменения", actions: ["view", "add", "change", "delete"] },
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "TowNorm", name: "норматив буксировки", actions: ["view", "change"] },
   { appLabel: "fleet", appTitle: "Флот и справочники ТО", model: "Workshop", name: "цех", actions: ["view", "add", "change", "delete"] },
   { appLabel: "hangar", appTitle: "Ангары и расстановка", model: "Hangar", name: "ангар", actions: ["view", "add", "change", "delete"] },
@@ -99,6 +100,7 @@ function crudSeed(): PermissionSeed[] {
 const SCREEN_PERMISSIONS: PermissionSeed[] = [
   { code: "gantt:read", name: "Can view план (Гантт)", appLabel: "event", model: "MaintenanceEvent", action: "view" },
   { code: "gantt:write", name: "Can change план (Гантт)", appLabel: "event", model: "MaintenanceEvent", action: "change" },
+  { code: "gantt:overlap", name: "Can allow нахлёст на плане", appLabel: "event", model: "MaintenanceEvent", action: "custom" },
   { code: "hangar:read", name: "Can view ангар (схема)", appLabel: "event", model: "EventPlacement", action: "view" },
   { code: "hangar:write", name: "Can change ангар (схема)", appLabel: "event", model: "EventPlacement", action: "change" },
   { code: "analytics:read", name: "Can view аналитика", appLabel: "analytics", model: "SavedReport", action: "view" },
@@ -135,6 +137,7 @@ const MODULE_WRITES = ["gantt:write", "hangar:write", "import:write"] as const;
 
 const WRITE_IMPLIES_READ: Record<string, string> = {
   "gantt:write": "gantt:read",
+  "gantt:overlap": "gantt:read",
   "hangar:write": "hangar:read",
   "ref:write": "ref:read",
   "workforce:write": "workforce:read",
@@ -155,6 +158,7 @@ const REF_MODELS = [
   "AircraftTypePalette",
   "EventType",
   "EventStatusCatalog",
+  "ChangeReason",
   "TowNorm",
   "Workshop",
   "Hangar",

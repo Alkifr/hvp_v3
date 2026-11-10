@@ -12,6 +12,7 @@ import {
 import { parseHashPage } from "../../lib/eventDeepLink";
 import { parseRefViewShare, syncRefViewHash, type RefShareKind } from "../../lib/viewShareUrl";
 import { authMe } from "../auth/authApi";
+import { DraftNumberInput } from "../components/DraftNumberInput";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { SwitchToggle } from "../components/SwitchToggle";
 import {
@@ -29,6 +30,7 @@ import { LayoutCardModal, LayoutsLibrary, StandCardModal, StandsLibrary } from "
 import { OperatorCardModal, OperatorsTable } from "./OperatorCard";
 import { TowNormCardModal, TowNormsTable, type TowNormRow } from "./TowNormsTable";
 import { isPersonnelCatalogKind, PersonnelCatalogPanel } from "./PersonnelCatalogPanels";
+import { ChangeReasonsPanel } from "./ChangeReasonsPanel";
 
 type RefKind = RefShareKind;
 
@@ -57,6 +59,7 @@ const REF_GROUPS: RefGroup[] = [
     items: [
       { kind: "event-types", title: "Типы событий" },
       { kind: "event-statuses", title: "Статусы", hint: "название и цвет на Гантте" },
+      { kind: "change-reasons", title: "Причины изменения", hint: "выбор в окне изменения события" },
       { kind: "tow-norms", title: "Нормативы буксировки", hint: "минуты на край события" }
     ]
   },
@@ -102,6 +105,7 @@ const REF_SINGULAR: Record<RefKind, string> = {
   "aircraft-type-palette": "Правило палитры",
   "event-types": "Тип события",
   "event-statuses": "Статус события",
+  "change-reasons": "Причина изменения",
   "tow-norms": "Норматив буксировки",
   workshops: "Цех",
   hangars: "Ангар",
@@ -180,12 +184,11 @@ function TextInput(props: { value: string; onChange: (v: string) => void; placeh
 
 function NumberInput(props: { value: number; onChange: (v: number) => void; step?: number; style?: React.CSSProperties }) {
   return (
-    <input
-      type="number"
+    <DraftNumberInput
+      value={Number.isFinite(props.value) ? props.value : 0}
       step={props.step ?? 1}
-      value={Number.isFinite(props.value) ? String(props.value) : ""}
-      onChange={(e) => props.onChange(Number(e.target.value))}
       style={props.style}
+      onChange={props.onChange}
     />
   );
 }
@@ -511,8 +514,10 @@ export function ReferenceView() {
   const isAdmin = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("SUPER_ADMIN"));
   const canWrite = Boolean(me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER") || me?.roles?.includes("SUPER_ADMIN"));
   const canMutate = kind === "event-statuses" || kind === "tow-norms" ? isAdmin : canWrite;
-  const catalogKind = isPersonnelCatalogKind(kind);
+  const changeReasonCatalog = kind === "change-reasons";
+  const catalogKind = isPersonnelCatalogKind(kind) || changeReasonCatalog;
   const canCreate = canMutate && !catalogKind;
+  const catalogCreateRef = useRef<(() => void) | null>(null);
   const splitRef = kind === "aircraft" || kind === "stands" || kind === "layouts";
 
   const url = useMemo(() => `/api/ref/${kind}`, [kind]);
@@ -841,6 +846,11 @@ export function ReferenceView() {
   const confirmLeaveDetail = () => {
     if (!detailDirtyRef.current) return true;
     return window.confirm("Закрыть карточку без сохранения?");
+  };
+
+  const closeDetail = () => {
+    detailDirtyRef.current = false;
+    setMode(null);
   };
 
   const openCreate = () => {
@@ -1228,10 +1238,7 @@ export function ReferenceView() {
         if (patch.comment != null) setFComment(patch.comment);
         if (patch.source != null) setFSource(patch.source);
       }}
-      onClose={() => {
-        detailDirtyRef.current = false;
-        setMode(null);
-      }}
+      onClose={closeDetail}
       onSave={() => {
         const payload = buildPayload();
         const finish = async (id: string) => {
@@ -1242,8 +1249,7 @@ export function ReferenceView() {
               });
               await qc.invalidateQueries({ queryKey: ["ref", "persons"] });
             }
-            detailDirtyRef.current = false;
-            setMode(null);
+            closeDetail();
           } catch (err) {
             showFeedback("error", `Не удалось сохранить квалификации: ${String((err as { message?: string })?.message ?? err)}`);
           }
@@ -1253,12 +1259,7 @@ export function ReferenceView() {
       }}
       onDelete={() => {
         if (!editId || !confirm("Удалить запись?")) return;
-        deleteM.mutate(editId, {
-          onSuccess: () => {
-            detailDirtyRef.current = false;
-            setMode(null);
-          }
-        });
+        deleteM.mutate(editId, { onSuccess: closeDetail });
       }}
     />
   );
@@ -1288,8 +1289,7 @@ export function ReferenceView() {
                         setSearch("");
                         setFilterAircraftTypeId("");
                         setFilterProfileId("");
-                        detailDirtyRef.current = false;
-                        setMode(null);
+                        closeDetail();
                         setFeedback(null);
                       }}
                       aria-current={active ? "page" : undefined}
@@ -1396,6 +1396,11 @@ export function ReferenceView() {
             ) : null}
             {canCreate && !splitRef && kind !== "tow-norms" ? (
               <button className="btn btnPrimary" onClick={openCreate}>
+                + Добавить
+              </button>
+            ) : null}
+            {catalogKind && (changeReasonCatalog ? isAdmin : canWrite) ? (
+              <button className="btn btnPrimary" type="button" onClick={() => catalogCreateRef.current?.()}>
                 + Добавить
               </button>
             ) : null}
@@ -2005,8 +2010,10 @@ export function ReferenceView() {
       ) : null}
 
       <div className="card refList">
-        {isPersonnelCatalogKind(kind) ? (
-          <PersonnelCatalogPanel kind={kind} search={search} canWrite={canWrite} />
+        {changeReasonCatalog ? (
+          <ChangeReasonsPanel search={search} canWrite={isAdmin} createActionRef={catalogCreateRef} />
+        ) : isPersonnelCatalogKind(kind) ? (
+          <PersonnelCatalogPanel kind={kind} search={search} canWrite={canWrite} createActionRef={catalogCreateRef} />
         ) : listQ.error ? (
           <div className="error" style={{ marginBottom: 8 }}>
             {String(listQ.error.message || listQ.error)}
@@ -2077,18 +2084,15 @@ export function ReferenceView() {
                     if (patch.manufactureDate != null) setFManufactureDate(patch.manufactureDate);
                     if (patch.isActive != null) setFIsActive(patch.isActive);
                   }}
-                  onClose={() => {
-                    detailDirtyRef.current = false;
-                    setMode(null);
-                  }}
+                  onClose={closeDetail}
                   onSave={() => {
                     const payload = buildPayload();
-                    if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
-                    else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+                    if (mode === "create") createM.mutate(payload, { onSuccess: closeDetail });
+                    else updateM.mutate({ id: editId, payload }, { onSuccess: closeDetail });
                   }}
                   onDelete={() => {
                     if (!editId || !confirm("Удалить борт?")) return;
-                    deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+                    deleteM.mutate(editId, { onSuccess: closeDetail });
                   }}
                 />
               ) : (
@@ -2145,24 +2149,20 @@ export function ReferenceView() {
                     if (patch.height != null) setFHeight(patch.height);
                     if (patch.isActive != null) setFIsActive(patch.isActive);
                   }}
-                  onClose={() => {
-                    detailDirtyRef.current = false;
-                    setMode(null);
-                  }}
+                  onClose={closeDetail}
                   onSave={() => {
                     const payload = buildPayload();
-                    if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
-                    else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+                    if (mode === "create") createM.mutate(payload, { onSuccess: closeDetail });
+                    else updateM.mutate({ id: editId, payload }, { onSuccess: closeDetail });
                   }}
                   onDelete={() => {
                     if (!editId || !confirm("Удалить вариант расстановки?")) return;
-                    deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+                    deleteM.mutate(editId, { onSuccess: closeDetail });
                   }}
                   onShowScheme={() => {
-                    detailDirtyRef.current = false;
+                    closeDetail();
                     setPreviewLayoutId(editId);
                     setPreviewStandId("");
-                    setMode(null);
                     window.setTimeout(() => document.getElementById("ref-scheme-preview")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
                   }}
                 />
@@ -2232,24 +2232,20 @@ export function ReferenceView() {
                     if (patch.rotate != null) setFRotate(patch.rotate);
                     if (patch.isActive != null) setFIsActive(patch.isActive);
                   }}
-                  onClose={() => {
-                    detailDirtyRef.current = false;
-                    setMode(null);
-                  }}
+                  onClose={closeDetail}
                   onSave={() => {
                     const payload = buildPayload();
-                    if (mode === "create") createM.mutate(payload, { onSuccess: () => setMode(null) });
-                    else updateM.mutate({ id: editId, payload }, { onSuccess: () => setMode(null) });
+                    if (mode === "create") createM.mutate(payload, { onSuccess: closeDetail });
+                    else updateM.mutate({ id: editId, payload }, { onSuccess: closeDetail });
                   }}
                   onDelete={() => {
                     if (!editId || !confirm("Удалить место стоянки?")) return;
-                    deleteM.mutate(editId, { onSuccess: () => setMode(null) });
+                    deleteM.mutate(editId, { onSuccess: closeDetail });
                   }}
                   onShowScheme={() => {
-                    detailDirtyRef.current = false;
+                    closeDetail();
                     setPreviewLayoutId(fLayoutId);
                     setPreviewStandId(editId);
-                    setMode(null);
                     window.setTimeout(() => document.getElementById("ref-scheme-preview")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
                   }}
                 />

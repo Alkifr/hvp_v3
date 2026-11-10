@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { extractDiffEntries, formatActionLabel, historyCommentRow, historyTableRows, resolveHistoryValue } from "./eventHistoryFormat.ts";
+import { extractDiffEntries, formatActionLabel, historyCommentRow, historyReasonRows, historyTableRows, resolveHistoryValue } from "./eventHistoryFormat.ts";
 
 test("imported labor metrics are shown as hours, not missing reservations", () => {
   const entries = extractDiffEntries({
@@ -142,6 +142,19 @@ test("change comment is a table row", () => {
   assert.equal(row.field, "Комментарий");
   assert.equal(row.previous, "");
   assert.equal(row.current, "Импорт из Excel");
+});
+
+test("formal reasons and the optional comment are separate history rows", () => {
+  const rows = historyReasonRows({
+    reason: "Запрос оператора, Нет слота. уточнение",
+    changeReasonNames: ["Запрос оператора", "Нет слота"],
+    changeReasonComment: "уточнение"
+  });
+  assert.deepEqual(rows.map((row) => [row.field, row.current]), [
+    ["Причина", "Запрос оператора, Нет слота"],
+    ["Комментарий", "уточнение"]
+  ]);
+  assert.deepEqual(historyReasonRows({ reason: "Старый свободный текст" }).map((row) => row.current), ["Старый свободный текст"]);
 });
 
 test("import column names use the card labels", () => {

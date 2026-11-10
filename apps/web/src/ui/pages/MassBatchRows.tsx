@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 
 import type { MassPlanBatchRow, MassScheduleMode } from "../../lib/massPlanBatch";
+import { DraftNumberInput } from "../components/DraftNumberInput";
 import { LINE_BASE_LABEL, lineBaseAfterWorkshopChange, parseLineBase, type LineBase } from "../../lib/lineBase";
 
 type Operator = { id: string; name: string };
@@ -106,11 +107,16 @@ const BatchRowCard = memo(function BatchRowCard(props: RowProps) {
         </label>
         <label className="massField">
           <span className="muted">TAT, ч</span>
-          <input type="number" min={1} max={8760} value={row.tatHours} onChange={(e) => onUpdate(row.id, { tatHours: Number(e.target.value) || 1 })} />
+          <DraftNumberInput
+            min={1}
+            max={8760}
+            value={row.tatHours}
+            onChange={(tatHours) => onUpdate(row.id, { tatHours })}
+          />
         </label>
         <label className="massField">
           <span className="muted">Кол-во</span>
-          <input type="number" min={1} max={200} value={row.count} onChange={(e) => onUpdate(row.id, { count: Number(e.target.value) || 1 })} />
+          <DraftNumberInput min={1} max={200} value={row.count} onChange={(count) => onUpdate(row.id, { count })} />
         </label>
         <label className="massField" title="scheduleMode: компактно, последовательно или фиксированный шаг">
           <span className="muted">Режим</span>
@@ -125,12 +131,11 @@ const BatchRowCard = memo(function BatchRowCard(props: RowProps) {
         </label>
         <label className="massField" title="spacingHours: пауза между событиями, ч. Используется в режиме «Последовательно».">
           <span className="muted">Пауза, ч</span>
-          <input
-            type="number"
+          <DraftNumberInput
             min={0}
             max={8760}
             value={row.spacingHours}
-            onChange={(e) => onUpdate(row.id, { spacingHours: Math.max(0, Number(e.target.value) || 0) })}
+            onChange={(spacingHours) => onUpdate(row.id, { spacingHours })}
           />
         </label>
         <label
@@ -138,13 +143,12 @@ const BatchRowCard = memo(function BatchRowCard(props: RowProps) {
           title="cadenceHours: шаг запуска, ч. Обязателен в режиме «Фиксированный шаг»."
         >
           <span className="muted">Шаг, ч</span>
-          <input
-            type="number"
+          <DraftNumberInput
             min={0}
             max={8760}
             aria-invalid={row.scheduleMode === "fixedCadence" && !(row.cadenceHours > 0)}
             value={row.cadenceHours}
-            onChange={(e) => onUpdate(row.id, { cadenceHours: Math.max(0, Number(e.target.value) || 0) })}
+            onChange={(cadenceHours) => onUpdate(row.id, { cadenceHours })}
           />
         </label>
         <label className={row.startFrom ? "massField" : "massField massFieldInvalid"}>

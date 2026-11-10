@@ -1,7 +1,7 @@
 import fp from "fastify-plugin";
 import { Prisma, PrismaClient } from "@prisma/client";
 
-import { bindEventWatchMail, enqueueEventAuditMails, notesFromAuditWrite } from "../lib/eventWatchMail.js";
+import { bindEventWatchMail, enqueueEventAuditMails, isCleanupAuditNote, notesFromAuditWrite } from "../lib/eventWatchMail.js";
 import { errorBody } from "../lib/userErrors.js";
 
 declare module "fastify" {
@@ -48,7 +48,9 @@ export const prismaPlugin = fp(async (app) => {
           try {
             const result = await query(args);
             if (model === "MaintenanceEventAudit" && (operation === "create" || operation === "createMany")) {
-              const notes = notesFromAuditWrite(operation, args as { data?: unknown }, result);
+              const notes = notesFromAuditWrite(operation, args as { data?: unknown }, result).filter(
+                (note) => !isCleanupAuditNote(note)
+              );
               if (notes.length) enqueueEventAuditMails(notes);
             }
             return result;

@@ -6,6 +6,7 @@ import { isValidDateInput } from "../../lib/dateInput";
 import { composeOutgoingLetter } from "../../lib/mailLetter";
 import { resolveFieldPick, suggestFieldPick } from "../../lib/reportFieldPick";
 import { authMe } from "../auth/authApi";
+import { DraftNumberInput } from "../components/DraftNumberInput";
 import { SwitchToggle } from "../components/SwitchToggle";
 
 type PeriodMode = "last1" | "last7" | "last30" | "custom";
@@ -1079,13 +1080,7 @@ export function MailDigestView() {
                         {scheduleMode === "monthly" ? (
                           <label className="adminField">
                             <span className="muted">Число месяца</span>
-                            <input
-                              type="number"
-                              min={1}
-                              max={28}
-                              value={monthDay}
-                              onChange={(e) => setMonthDay(Math.min(28, Math.max(1, Number(e.target.value) || 1)))}
-                            />
+                            <DraftNumberInput min={1} max={28} value={monthDay} onChange={setMonthDay} />
                           </label>
                         ) : null}
 

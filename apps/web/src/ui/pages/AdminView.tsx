@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import dayjs from "dayjs";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../lib/api";
+import { applyCleanupChunks } from "../../lib/cleanupBatch";
 import { isValidDateInput } from "../../lib/dateInput";
+import { ganttIndexWindow } from "../../lib/ganttVirtualize";
 import { statusCatalogLabel } from "../../lib/eventStatusCatalog";
 import {
   adminTabFromHash,
@@ -11,7 +14,7 @@ import {
   parseHashPage,
   type AdminHashTab
 } from "../../lib/eventDeepLink";
-import { permissionCodesFromIds, permissionIdsFromCodes, summarizeRolePermissions, previewNavLabels, nextCloneRoleCode, applyPermissionOverrides, diffPermissionOverrides } from "../../lib/permissionCatalog";
+import { permissionCodesFromIds, permissionIdsFromCodes, summarizeRolePermissions, previewNavLabels, nextCloneRoleCode, applyPermissionOverrides, diffPermissionOverrides, systemRoleGuide } from "../../lib/permissionCatalog";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { DjangoPermissionPicker } from "../components/DjangoPermissionPicker";
@@ -71,14 +74,18 @@ function cleanupAircraftLabel(item: CleanupEventItem): string {
   return item.aircraft?.tailNumber ?? item.virtualAircraft?.label ?? (item.virtualAircraft ? "VIRT" : "—");
 }
 
+function formatCleanupWhen(iso: string): string {
+  return dayjs(iso).format("DD.MM.YYYY HH:mm");
+}
+
 function exportCleanupEvents(items: CleanupEventItem[]) {
   const rows = items.map((item) => ({
     Событие: item.title,
     ID: item.id,
     Борт: cleanupAircraftLabel(item),
     "Тип события": item.eventType?.name ?? "—",
-    Начало: new Date(item.startAt).toLocaleString("ru-RU"),
-    Окончание: new Date(item.endAt).toLocaleString("ru-RU"),
+    Начало: formatCleanupWhen(item.startAt),
+    Окончание: formatCleanupWhen(item.endAt),
     Статус: statusCatalogLabel(item.status)
   }));
   const sheet = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ Событие: "" }]);
@@ -112,6 +119,116 @@ function CleanupSelectAll(props: { checked: boolean; indeterminate: boolean; onC
   );
 }
 type CleanupApplyResult = { ok: true; updated: number };
+
+const CLEANUP_ROW_PX = 64;
+const CLEANUP_OVERSCAN = 6;
+
+const CleanupEventList = memo(function CleanupEventList(props: {
+  items: CleanupEventItem[];
+  keepIds: Set<string>;
+  allMarked: boolean;
+  someMarked: boolean;
+  onToggleAll: (checked: boolean) => void;
+  onToggle: (id: string, checked: boolean) => void;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef(420);
+  const count = props.items.length;
+  const [range, setRange] = useState(() => ganttIndexWindow(0, 420, CLEANUP_ROW_PX, count, CLEANUP_OVERSCAN));
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (el) el.scrollTop = 0;
+    setRange(ganttIndexWindow(0, viewportRef.current, CLEANUP_ROW_PX, count, CLEANUP_OVERSCAN));
+  }, [props.items, count]);
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const next = el.clientHeight || 420;
+      viewportRef.current = next;
+      const top = el.scrollTop;
+      setRange((prev) => {
+        const windowed = ganttIndexWindow(top, next, CLEANUP_ROW_PX, count, CLEANUP_OVERSCAN);
+        return prev.startIdx === windowed.startIdx && prev.endIdx === windowed.endIdx ? prev : windowed;
+      });
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const obs = new ResizeObserver(measure);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [count]);
+
+  const slice = props.items.slice(range.startIdx, range.endIdx);
+
+  return (
+    <div
+      className="adminCleanupScroll"
+      ref={scrollerRef}
+      onScroll={(e) => {
+        const top = e.currentTarget.scrollTop;
+        const next = ganttIndexWindow(top, viewportRef.current, CLEANUP_ROW_PX, count, CLEANUP_OVERSCAN);
+        setRange((prev) => (prev.startIdx === next.startIdx && prev.endIdx === next.endIdx ? prev : next));
+      }}
+    >
+      <div className="adminCleanupInner">
+        <div className="adminCleanupGrid adminCleanupHead">
+          <div className="adminCleanupCheck">
+            <CleanupSelectAll checked={props.allMarked} indeterminate={props.someMarked} onChange={props.onToggleAll} />
+          </div>
+          <div>Событие</div>
+          <div>Борт</div>
+          <div>Тип</div>
+          <div>Период</div>
+          <div>Статус</div>
+        </div>
+        {count === 0 ? (
+          <div className="muted adminCleanupEmpty">Ничего не найдено</div>
+        ) : (
+          <div className="adminCleanupBody" style={{ height: count * CLEANUP_ROW_PX }}>
+            {slice.map((item, i) => {
+              const index = range.startIdx + i;
+              const checked = !props.keepIds.has(item.id);
+              return (
+                <div
+                  key={item.id}
+                  className="adminCleanupGrid adminCleanupRow"
+                  style={{ top: index * CLEANUP_ROW_PX, height: CLEANUP_ROW_PX }}
+                >
+                  <div className="adminCleanupCheck">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => props.onToggle(item.id, e.target.checked)}
+                      aria-label={`Удалить «${item.title}»`}
+                    />
+                  </div>
+                  <div className="adminCleanupEvent">
+                    <strong className="adminCleanupTitle" title={item.title}>
+                      {item.title}
+                    </strong>
+                    <div className="muted adminMono">{item.id}</div>
+                  </div>
+                  <div>{cleanupAircraftLabel(item)}</div>
+                  <div className="adminCleanupTitle" title={item.eventType?.name ?? ""}>
+                    {item.eventType?.name ?? "—"}
+                  </div>
+                  <div>
+                    {formatCleanupWhen(item.startAt)}
+                    <div className="muted">до {formatCleanupWhen(item.endAt)}</div>
+                  </div>
+                  <div>{statusCatalogLabel(item.status)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
 
 type MailDigestSettings = {
   id: string;
@@ -368,6 +485,8 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const [cleanupReason, setCleanupReason] = useState("");
   const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null);
   const [cleanupKeepIds, setCleanupKeepIds] = useState<Set<string>>(() => new Set());
+  const [cleanupProgress, setCleanupProgress] = useState<{ done: number; total: number } | null>(null);
+  const cleanupUpdatedRef = useRef(0);
 
   const [mailSmtpHost, setMailSmtpHost] = useState("");
   const [mailSmtpPort, setMailSmtpPort] = useState("25");
@@ -453,26 +572,57 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const cleanupAllMarked =
     (cleanupPreview?.items.length ?? 0) > 0 && cleanupMarked.length === cleanupPreview!.items.length;
   const cleanupSomeMarked = cleanupMarked.length > 0 && !cleanupAllMarked;
+  const toggleCleanupRow = useCallback((id: string, checked: boolean) => {
+    setCleanupKeepIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const toggleCleanupAll = useCallback(
+    (checked: boolean) => {
+      setCleanupKeepIds(checked ? new Set() : new Set((cleanupPreview?.items ?? []).map((item) => item.id)));
+    },
+    [cleanupPreview]
+  );
 
   const cleanupPreviewM = useMutation({
     mutationFn: () => apiPost<CleanupPreview>("/api/admin/cleanup/events/preview", cleanupPayload()),
     onSuccess: (res) => {
       setCleanupKeepIds(new Set());
       setCleanupPreview(res);
+      setCleanupProgress(null);
+      cleanupUpdatedRef.current = 0;
     }
   });
   const cleanupApplyM = useMutation({
-    mutationFn: () =>
-      apiPost<CleanupApplyResult>("/api/admin/cleanup/events/apply", {
-        ...cleanupPayload(),
-        eventIds: cleanupMarked.map((item) => item.id),
-        password: cleanupPassword,
-        reason: cleanupReason.trim() || undefined
-      }),
+    mutationFn: async () => {
+      const ids = cleanupMarked.map((item) => item.id);
+      const payload = cleanupPayload();
+      const password = cleanupPassword;
+      const reason = cleanupReason.trim() || undefined;
+      await applyCleanupChunks({
+        ids,
+        onProgress: (done, total) => setCleanupProgress({ done, total }),
+        post: async (eventIds) => {
+          const res = await apiPost<CleanupApplyResult>("/api/admin/cleanup/events/apply", {
+            ...payload,
+            eventIds,
+            password,
+            reason
+          });
+          cleanupUpdatedRef.current += res.updated;
+          return res;
+        }
+      });
+      return { ok: true as const, updated: cleanupUpdatedRef.current };
+    },
     onSuccess: async () => {
       setCleanupPassword("");
       setCleanupKeepIds(new Set());
       setCleanupPreview(null);
+      setCleanupProgress(null);
       await qc.invalidateQueries({ queryKey: ["events"] });
       await qc.invalidateQueries({ queryKey: ["reservations"] });
       await qc.invalidateQueries({ queryKey: ["hangar-planning"] });
@@ -519,7 +669,12 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
   const permissions = permsQ.data ?? [];
 
   const roleOptions = useMemo(
-    () => roles.map((r) => ({ id: r.id, label: `${r.code} • ${r.name}` })),
+    () =>
+      roles.map((r) => ({
+        id: r.id,
+        label: `${r.code} • ${r.name}`,
+        description: systemRoleGuide(r.code)?.who
+      })),
     [roles]
   );
 
@@ -1250,7 +1405,7 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               disabled={!cleanupTargetReady || !cleanupHasFilters || cleanupPreviewM.isPending}
               onClick={() => cleanupPreviewM.mutate()}
             >
-              Предпросмотр
+              {cleanupPreviewM.isPending ? "Считаю…" : "Предпросмотр"}
             </button>
           </div>
 
@@ -1270,7 +1425,12 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
             <div className="error">{String(cleanupPreviewM.error.message || cleanupPreviewM.error)}</div>
           ) : null}
           {cleanupApplyM.error ? (
-            <div className="error">{String(cleanupApplyM.error.message || cleanupApplyM.error)}</div>
+            <div className="error">
+              {String(cleanupApplyM.error.message || cleanupApplyM.error)}
+              {cleanupProgress && cleanupProgress.done > 0 && cleanupProgress.done < cleanupProgress.total
+                ? ` Уже обработано ${cleanupProgress.done} из ${cleanupProgress.total}. Повторите — удалённые события будут пропущены.`
+                : null}
+            </div>
           ) : null}
           {cleanupApplyM.data ? (
             <div className="muted">Переведено в статус «Удалено»: {cleanupApplyM.data.updated}</div>
@@ -1308,67 +1468,14 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
               ) : (
                 <div className="muted">Снимите галочку, чтобы оставить событие. Выгрузка содержит только отмеченные.</div>
               )}
-              <div className="adminTableWrap">
-                <table className="table adminTable">
-                  <thead>
-                    <tr>
-                      <th className="adminCleanupCheck">
-                        <CleanupSelectAll
-                          checked={cleanupAllMarked}
-                          indeterminate={cleanupSomeMarked}
-                          onChange={(checked) =>
-                            setCleanupKeepIds(checked ? new Set() : new Set(cleanupPreview.items.map((item) => item.id)))
-                          }
-                        />
-                      </th>
-                      <th>Событие</th>
-                      <th>Борт</th>
-                      <th>Тип</th>
-                      <th>Период</th>
-                      <th>Статус</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cleanupPreview.items.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="muted">
-                          Ничего не найдено
-                        </td>
-                      </tr>
-                    ) : null}
-                    {cleanupPreview.items.map((item) => (
-                      <tr key={item.id}>
-                        <td className="adminCleanupCheck">
-                          <input
-                            type="checkbox"
-                            checked={!cleanupKeepIds.has(item.id)}
-                            onChange={(e) =>
-                              setCleanupKeepIds((prev) => {
-                                const next = new Set(prev);
-                                if (e.target.checked) next.delete(item.id);
-                                else next.add(item.id);
-                                return next;
-                              })
-                            }
-                            aria-label={`Удалить «${item.title}»`}
-                          />
-                        </td>
-                        <td>
-                          <strong>{item.title}</strong>
-                          <div className="muted adminMono">{item.id}</div>
-                        </td>
-                        <td>{cleanupAircraftLabel(item)}</td>
-                        <td>{item.eventType?.name ?? "—"}</td>
-                        <td>
-                          {new Date(item.startAt).toLocaleString("ru-RU")}
-                          <div className="muted">до {new Date(item.endAt).toLocaleString("ru-RU")}</div>
-                        </td>
-                        <td>{statusCatalogLabel(item.status)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <CleanupEventList
+                items={cleanupPreview.items}
+                keepIds={cleanupKeepIds}
+                allMarked={cleanupAllMarked}
+                someMarked={cleanupSomeMarked}
+                onToggleAll={toggleCleanupAll}
+                onToggle={toggleCleanupRow}
+              />
               <div className="adminFormRow">
                 <label className="adminField adminFieldGrow">
                   <span className="muted">Причина</span>
@@ -1400,7 +1507,9 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                     cleanupApplyM.mutate();
                   }}
                 >
-                  Удалить
+                  {cleanupApplyM.isPending
+                    ? `Удаление ${cleanupProgress?.done ?? 0} из ${cleanupProgress?.total ?? cleanupMarked.length}…`
+                    : "Удалить"}
                 </button>
               </div>
             </div>
@@ -1652,7 +1761,11 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                   <div className="adminField adminUserEditorRoles">
                     <span className="muted">Роли</span>
                     <MultiSelectDropdown
-                      options={props.roles.map((r) => ({ id: r.id, label: `${r.code} • ${r.name}` }))}
+                      options={props.roles.map((r) => ({
+                        id: r.id,
+                        label: `${r.code} • ${r.name}`,
+                        description: systemRoleGuide(r.code)?.who
+                      }))}
                       value={selRoles}
                       onChange={changeRoles}
                       width={320}
@@ -1846,6 +1959,9 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
                   {props.role.isSystem ? " · system" : ""}
                 </span>
               </span>
+              {systemRoleGuide(props.role.code) ? (
+                <span className="adminRoleCardSummary">{systemRoleGuide(props.role.code)?.who}</span>
+              ) : null}
               <span className="adminRoleCardSummary">{summary}</span>
               <span className="muted adminRoleCardMembers">{memberLabel}</span>
             </span>
@@ -1901,6 +2017,9 @@ export function AdminView(props: { permissions: string[]; me?: AdminUser }) {
         {open ? (
           <div className="adminRoleCardBody">
             <div className="adminRoleCardEdit">
+              {systemRoleGuide(props.role.code) ? (
+                <p className="muted adminHint">{systemRoleGuide(props.role.code)?.can}</p>
+              ) : null}
               <label className="adminField">
                 <span className="muted">Название</span>
                 <input value={name} onChange={(e) => setName(e.target.value)} />

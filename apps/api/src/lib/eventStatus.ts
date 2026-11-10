@@ -37,10 +37,12 @@ const TERMINAL_MANUAL = new Set<string>([EventStatus.CANCELLED, EventStatus.DELE
 /**
  * Auto status rules:
  * - CANCELLED / DELETED — untouched
- * - PENDING_* — no auto IN_PROGRESS; fact / forceDone still → DONE
+ * - PENDING_* — no auto IN_PROGRESS; fact whose end has arrived / forceDone still → DONE
  * - APPROVED_BY_* + now >= startAt (minute) → IN_PROGRESS
- * - both actual dates → DONE
- * - forceDone / DONE with empty actual → fill actual from operational period
+ * - both actual dates and actual end <= now (minute) → DONE
+ * - future actual end does not complete the event; an automatic DONE is returned to IN_PROGRESS / APPROVED
+ * - forceDone with empty actual → fill actual from operational period and stay DONE
+ * - DONE with empty actual and operational end already reached → fill fact and stay DONE
  * - DONE with actual cleared → recompute APPROVED_BY_EXECUTOR / IN_PROGRESS
  */
 export function reconcileEventStatus(input: StatusReconcileInput): StatusReconcileResult {
@@ -65,23 +67,33 @@ export function reconcileEventStatus(input: StatusReconcileInput): StatusReconci
     };
   }
 
-  // Manual DONE → ensure fact from operational if empty
+  // Explicit completion always copies an empty fact from the operational period.
+  // An already completed event does the same only after that period has ended,
+  // so a future end date is not written in as fact and then cleared from DONE.
   if ((input.forceDone || status === EventStatus.DONE) && (!actualStartAt || !actualEndAt)) {
-    actualStartAt = input.startAt;
-    actualEndAt = endAt;
-    actualFilledFromOper = true;
-    status = EventStatus.DONE;
+    const operationalEnded = floorToMinute(endAt).valueOf() <= now.valueOf();
+    if (input.forceDone || operationalEnded) {
+      actualStartAt = input.startAt;
+      actualEndAt = endAt;
+      actualFilledFromOper = true;
+      status = EventStatus.DONE;
+    }
   }
 
   const hasFact = Boolean(actualStartAt && actualEndAt);
+  const actualEnded =
+    actualEndAt != null && floorToMinute(actualEndAt).valueOf() <= now.valueOf();
 
-  if (hasFact && status !== EventStatus.DONE) {
+  if (hasFact && actualEnded && status !== EventStatus.DONE) {
     status = EventStatus.DONE;
+  } else if (!input.forceDone && status === EventStatus.DONE && hasFact && !actualEnded) {
+    // Actual end is still ahead — automatic completion does not hold.
+    status = now.valueOf() >= startAt.valueOf() ? EventStatus.IN_PROGRESS : EventStatus.APPROVED_BY_EXECUTOR;
   } else if (!hasFact && status === EventStatus.DONE) {
     // Fact cleared while DONE → fall back by time
     status = now.valueOf() >= startAt.valueOf() ? EventStatus.IN_PROGRESS : EventStatus.APPROVED_BY_EXECUTOR;
   } else if (
-    !hasFact &&
+    status !== EventStatus.DONE &&
     autoInProgress.has(status) &&
     now.valueOf() >= startAt.valueOf()
   ) {

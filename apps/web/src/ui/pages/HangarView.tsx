@@ -7,7 +7,6 @@ import { apiGet, apiPost, apiPut } from "../../lib/api";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { isValidDateInput } from "../../lib/dateInput";
 import { authMe } from "../auth/authApi";
-import { EventWatchButton } from "../components/EventWatchButton";
 import { FilterIndicator } from "../components/FilterIndicator";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
@@ -927,13 +926,10 @@ export function HangarView() {
           ) : (
             <div className="hangarEventList" style={{ marginTop: 8 }}>
               {assigned.map((event) => (
-                <div key={`${event.id}-${event.startAt}`} className="hangarEventRow">
-                  <div className="hangarEventItem" style={{ cursor: "default" }}>
-                    <b>{event.aircraftLabel}</b>
-                    <span>{event.title}</span>
-                    <small>{formatEventPeriod(event)} · {bodyTypeLabel(event.bodyType)}</small>
-                  </div>
-                  <EventWatchButton eventId={event.id} variant="inline" />
+                <div key={`${event.id}-${event.startAt}`} className="hangarEventItem" style={{ cursor: "default" }}>
+                  <b>{event.aircraftLabel}</b>
+                  <span>{event.title}</span>
+                  <small>{formatEventPeriod(event)} · {bodyTypeLabel(event.bodyType)}</small>
                 </div>
               ))}
             </div>
@@ -1467,28 +1463,26 @@ export function HangarView() {
           <div className="hangarEventList">
             {(summary?.unplaced ?? []).length === 0 ? <div className="muted">Нет неразмещённых событий.</div> : null}
             {(summary?.unplaced ?? []).map((event) => (
-              <div key={event.id} className="hangarEventRow">
-                <button
-                  className={selectedEventId === event.id ? "hangarEventItem active" : "hangarEventItem"}
-                  type="button"
-                  draggable={canEditEvents}
-                  onDragStart={(e) => {
-                    if (!canEditEvents) {
-                      e.preventDefault();
-                      return;
-                    }
-                    e.dataTransfer.setData("text/plain", event.id);
-                    e.dataTransfer.effectAllowed = "copy";
-                    setSelectedEventId(event.id);
-                  }}
-                  onClick={() => setSelectedEventId(event.id)}
-                >
-                  <b>{event.aircraftLabel}</b>
-                  <span>{event.title}</span>
-                  <small>{formatEventPeriod(event)} · {bodyTypeLabel(event.bodyType)}</small>
-                </button>
-                <EventWatchButton eventId={event.id} variant="inline" />
-              </div>
+              <button
+                key={event.id}
+                className={selectedEventId === event.id ? "hangarEventItem active" : "hangarEventItem"}
+                type="button"
+                draggable={canEditEvents}
+                onDragStart={(e) => {
+                  if (!canEditEvents) {
+                    e.preventDefault();
+                    return;
+                  }
+                  e.dataTransfer.setData("text/plain", event.id);
+                  e.dataTransfer.effectAllowed = "copy";
+                  setSelectedEventId(event.id);
+                }}
+                onClick={() => setSelectedEventId(event.id)}
+              >
+                <b>{event.aircraftLabel}</b>
+                <span>{event.title}</span>
+                <small>{formatEventPeriod(event)} · {bodyTypeLabel(event.bodyType)}</small>
+              </button>
             ))}
           </div>
 

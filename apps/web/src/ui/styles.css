@@ -23,11 +23,21 @@
   flex-wrap: wrap;
 }
 
+.personnelFilters > .btn {
+  flex: 0 0 auto;
+}
+
 .personnelFilters label {
   display: grid;
   gap: 4px;
+  min-width: 0;
   color: #64748b;
   font-size: 12px;
+}
+
+.personnelFilters label:has(.msdRoot) {
+  width: 220px;
+  max-width: min(220px, 70vw);
 }
 
 .personnelFilters select,
@@ -77,6 +87,13 @@
   font-size: 18px;
 }
 
+.personnelResourceTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .personnelTableScroll,
 .personnelTimelineScroll {
   width: 100%;
@@ -114,7 +131,7 @@
 
 .personnelColLabel { width: 104px; }
 .personnelColType { width: 76px; }
-.personnelColShift { width: 40px; }
+.personnelColShift { width: 48px; }
 
 .personnelMatrixRange thead th {
   position: sticky;
@@ -160,9 +177,9 @@
 }
 
 .personnelMatrixRange thead tr:last-child th {
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
   padding: 4px 2px;
   text-align: center;
 }
@@ -355,9 +372,9 @@
 }
 
 .personnelMatrix.personnelMatrixRange tbody td:nth-child(n + 3) {
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
   padding: 3px 2px;
   text-align: center;
 }
@@ -365,7 +382,7 @@
 .personnelMatrix.personnelMatrixRange input {
   width: 100%;
   min-width: 0;
-  padding: 4px 0;
+  padding: 2px 0;
   text-align: center;
 }
 
@@ -390,10 +407,69 @@
   color: #78350f;
 }
 
+.personnelResourceScroll .personnelMatrix.personnelMatrixRange {
+  border-collapse: separate;
+  border-spacing: 0;
+  border-top: 1px solid #dbe3ee;
+  border-left: 1px solid #dbe3ee;
+}
+
+.personnelResourceScroll .personnelMatrix.personnelMatrixRange th,
+.personnelResourceScroll .personnelMatrix.personnelMatrixRange td {
+  box-sizing: border-box;
+  border: 0;
+  border-right: 1px solid #dbe3ee;
+  border-bottom: 1px solid #dbe3ee;
+}
+
+.personnelResourceScroll tr.personnelRowInput > th,
+.personnelResourceScroll tr.personnelRowInput > td {
+  height: 36px;
+  max-height: 36px;
+  padding: 1px 4px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.personnelResourceScroll tr.personnelRowSum > th,
+.personnelResourceScroll tr.personnelRowSum > td {
+  height: 52px;
+  max-height: 52px;
+  padding: 4px 6px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.personnelResourceScroll tr.personnelRowBanner > th {
+  height: 38px;
+  max-height: 38px;
+  padding: 6px 8px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.personnelResourceScroll tr.personnelRowNote > td {
+  height: 64px;
+  max-height: 64px;
+  padding: 8px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.personnelResourceScroll tr.personnelVirtSpacer > td {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .personnelSaveRow {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: 0 0 auto;
+}
+
+.personnelSaveRow > .btn {
   flex: 0 0 auto;
 }
 
@@ -621,6 +697,7 @@
   --plan-identity: 148px;
   --plan-slot-columns: 3;
   --plan-bands: calc(40px * var(--plan-slot-columns));
+  --plan-label-gutter: 46px;
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
@@ -714,12 +791,16 @@
 }
 
 .personnelPlanNumbers {
+  position: relative;
+  isolation: isolate;
   padding: 4px 0 !important;
 }
 
 .personnelPlanDays,
 .personnelPlanHours {
   display: grid;
+  min-width: 0;
+  margin-inline: var(--plan-label-gutter);
 }
 
 .personnelPlanDays span,
@@ -730,8 +811,10 @@
 }
 
 .personnelPlanDays span {
+  min-width: 0;
+  overflow: hidden;
   padding: 6px 0;
-  border-left-color: #94a3b8;
+  border-left: 0.5px dashed #475569;
 }
 
 .personnelPlanHours {
@@ -739,6 +822,28 @@
   font-size: 8px;
   font-weight: 400;
   line-height: 1.2;
+}
+
+.personnelPlanHourMarks {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.personnelPlanHourMarks span {
+  min-width: 0;
+  overflow: hidden;
+  padding-left: 2px;
+  border-left: 0.5px dashed #94a3b8;
+  text-align: left;
+}
+
+@container (max-width: 52px) {
+  .personnelPlanHourMarks span {
+    padding-left: 0;
+    color: transparent;
+  }
 }
 
 .personnelPlanTrack {
@@ -753,6 +858,31 @@
 .personnelPlanLane {
   position: relative;
   height: 26px;
+}
+
+.personnelPlanTrack > .personnelPlanLane {
+  margin-inline: var(--plan-label-gutter);
+}
+
+.personnelPlanGridLines {
+  --plan-line: 0.5px;
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  right: var(--plan-label-gutter);
+  bottom: 0;
+  left: var(--plan-label-gutter);
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--plan-days) - var(--plan-line)), #475569 calc(100% / var(--plan-days) - var(--plan-line)), #475569 calc(100% / var(--plan-days))),
+    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--plan-quarters) - var(--plan-line)), #94a3b8 calc(100% / var(--plan-quarters) - var(--plan-line)), #94a3b8 calc(100% / var(--plan-quarters)));
+  -webkit-mask-image: repeating-linear-gradient(to bottom, #000 0 2px, transparent 2px 5px);
+  mask-image: repeating-linear-gradient(to bottom, #000 0 2px, transparent 2px 5px);
+}
+
+.personnelPlanTrack > .personnelPlanLabor,
+.personnelPlanNumbers > .personnelPlanLabor {
+  margin-inline: var(--plan-label-gutter);
 }
 
 .personnelPlanBar {
@@ -792,7 +922,7 @@
   white-space: nowrap;
 }
 
-@container (max-width: 108px) {
+@container (max-width: 48px) {
   .personnelPlanBarTitle { display: none; }
 }
 
@@ -908,6 +1038,11 @@
   padding: 4px 0;
   font-size: 9px;
   letter-spacing: -0.03em;
+}
+
+.personnelPlanMonth .personnelPlanHourMarks span {
+  font-size: 7px;
+  letter-spacing: -0.05em;
 }
 
 .personnelPlanMonth thead .personnelPlanBandsCol {
@@ -1809,6 +1944,180 @@ a {
   margin-top: 2px;
 }
 
+.eventImportGuide {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.eventImportGuideLead h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+
+.eventImportGuideLead p,
+.eventImportGuideNote {
+  margin: 6px 0 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.eventImportGuide code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #1e3a8a;
+  background: #eff6ff;
+  border-radius: 6px;
+  padding: 1px 5px;
+}
+
+.eventImportSteps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: event-import-step;
+}
+
+.eventImportSteps li {
+  counter-increment: event-import-step;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.eventImportSteps li::before {
+  content: counter(event-import-step);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.eventImportSteps strong {
+  color: #0f172a;
+}
+
+.eventImportColumnsCard {
+  gap: 10px;
+}
+
+.eventImportColumns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.eventImportColumnGroup {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: #fff;
+}
+
+.eventImportColumnGroup h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.eventImportColumnGroup dl {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.eventImportColumnGroup dl > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.eventImportColumnGroup dt {
+  margin: 0;
+  color: #1e3a8a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.eventImportColumnGroup dd {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.eventImportColumnsNote,
+.eventImportColumnRules {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.eventImportColumnRules {
+  display: grid;
+  gap: 4px;
+}
+
+.eventImportColumnRules p {
+  margin: 0;
+}
+
+.eventImportColumnRules strong {
+  display: inline-block;
+  margin-right: 6px;
+  color: #0f172a;
+}
+
+@media (max-width: 1100px) {
+  .eventImportSteps {
+    grid-template-columns: 1fr;
+  }
+
+  .eventImportColumns {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .eventImportColumns {
+    grid-template-columns: 1fr;
+  }
+}
+
 .massHero {
   display: flex;
   justify-content: space-between;
@@ -2120,6 +2429,9 @@ a {
 
 .massSectionHead h2,
 .massResultHeader h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 15px;
 }
 
@@ -2165,13 +2477,24 @@ a {
   background: #fff;
 }
 
-.massFieldGroupTitle {
+.massFieldGroupTitle,
+.massBlockTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: #64748b;
+}
+
+.massBlockTitle {
+  text-transform: none;
+  font-size: 13px;
+  letter-spacing: 0;
+  color: #0f172a;
 }
 
 .massFormGrid,
@@ -2415,16 +2738,34 @@ a {
 }
 
 .massAdvanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
   color: #0f172a;
   padding: 14px;
-  list-style-position: inside;
 }
 
 .massAdvanced > summary::-webkit-details-marker {
-  color: #64748b;
+  display: none;
+}
+
+.massAdvanced > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid #64748b;
+}
+
+.massAdvanced[open] > summary::before {
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid #64748b;
+  border-bottom: 0;
 }
 
 .massAdvancedBody {
@@ -2801,6 +3142,69 @@ a {
 .adminCleanupPreview .adminTableWrap {
   max-height: 420px;
   overflow: auto;
+}
+
+.adminCleanupScroll {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.adminCleanupInner {
+  min-width: 760px;
+}
+
+.adminCleanupGrid {
+  display: grid;
+  grid-template-columns: 36px minmax(160px, 1.6fr) minmax(80px, 0.7fr) minmax(100px, 0.9fr) minmax(180px, 1.2fr) minmax(120px, 0.8fr);
+  column-gap: 8px;
+  align-items: center;
+  padding: 0 8px;
+}
+
+.adminCleanupHead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 36px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #334155;
+  background: #fff;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.adminCleanupBody {
+  position: relative;
+}
+
+.adminCleanupRow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+  font-size: 13px;
+  line-height: 1.25;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.adminCleanupEvent {
+  min-width: 0;
+}
+
+.adminCleanupTitle {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adminCleanupEmpty {
+  padding: 16px 10px;
 }
 
 .adminCleanupCheck {
@@ -6552,6 +6956,42 @@ main.content:has(.ganttPage) {
   color: #78350f;
 }
 
+.tgIndicator_aircraft.isOn {
+  background: #7dd3fc;
+  color: #0c4a6e;
+}
+
+.tgIndicator_hangar.isOn {
+  background: #c4b5fd;
+  color: #4c1d95;
+}
+
+.tgIndicator_current.isOn {
+  background: #93c5fd;
+  color: #1e3a8a;
+}
+
+.tgIndicator_planfact.isOn {
+  background: #6ee7b7;
+  color: #064e3b;
+}
+
+.tgIndicator_cancelled.isOn {
+  background: #fca5a5;
+  color: #7f1d1d;
+}
+
+.tgIndicator_notes.isOn {
+  background: #fde68a;
+  color: #78350f;
+}
+
+.tgIndicator svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+}
+
 .tgField {
   display: inline-flex;
   flex-direction: column;
@@ -6850,6 +7290,17 @@ textarea {
   border-radius: 10px;
   padding: 10px 12px;
   background: white;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .table {
@@ -8136,6 +8587,8 @@ textarea {
 }
 
 .msdBtnText {
+  min-width: 0;
+  flex: 1 1 auto;
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -9539,8 +9992,17 @@ textarea {
   background: rgba(37, 99, 235, 0.06);
 }
 
+button.evCardHelpBtn {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
 .evCardHelpPanel {
   width: min(340px, calc(100vw - 24px));
+  max-height: min(70vh, 520px);
+  overflow: auto;
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.35);
@@ -10577,6 +11039,39 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.evReasonField {
+  min-width: 0;
+}
+
+.evReasonField .msdRoot {
+  width: 100%;
+}
+
+.evReasonList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  padding: 6px 8px;
+  background: #fff;
+}
+
+.evReasonOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.35;
+  padding: 3px 2px;
+}
+
+.evReasonOption input {
+  margin-top: 2px;
 }
 
 .evDiff {
@@ -12014,17 +12509,6 @@ textarea {
   color: #1d4ed8;
   border-color: rgba(37, 99, 235, 0.45);
   background: #eff6ff;
-}
-
-.hangarEventRow {
-  display: flex;
-  gap: 6px;
-  align-items: stretch;
-}
-
-.hangarEventRow .hangarEventItem {
-  flex: 1;
-  min-width: 0;
 }
 
 .profileSandboxName {
@@ -15635,7 +16119,24 @@ textarea.refInput.refMemo {
 
 .analyticsTimeline {
   display: grid;
-  gap: 10px;
+  gap: 18px;
+}
+
+.analyticsChartBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.analyticsChartBlock h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.analyticsHangarFillWrap {
+  position: relative;
+  width: 100%;
 }
 
 .analyticsTimelineChartWrap {

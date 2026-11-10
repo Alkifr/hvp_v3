@@ -63,6 +63,11 @@ async function main() {
     update: { name: "Планировщик", isSystem: true },
     create: { code: "PLANNER", name: "Планировщик", isSystem: true }
   });
+  const rolePlannerSenior = await prisma.role.upsert({
+    where: { code: "PLANNER_SENIOR" },
+    update: { name: "Старший планировщик", isSystem: true },
+    create: { code: "PLANNER_SENIOR", name: "Старший планировщик", isSystem: true }
+  });
   const roleViewer = await prisma.role.upsert({
     where: { code: "VIEWER" },
     update: { name: "Наблюдатель", isSystem: true },
@@ -100,7 +105,7 @@ async function main() {
     });
   }
   await setRolePerms(roleSuperAdmin.id, permissionsSeed.map((p) => p.code) as unknown as string[]);
-  await setRolePerms(rolePlanner.id, [
+  const plannerPerms = [
     "gantt:read",
     "gantt:write",
     "hangar:read",
@@ -124,7 +129,9 @@ async function main() {
     "personnel:unlock",
     "warehouse:read",
     ...plannerModelCodes()
-  ]);
+  ];
+  await setRolePerms(rolePlanner.id, plannerPerms);
+  await setRolePerms(rolePlannerSenior.id, [...plannerPerms, "gantt:overlap"]);
   await setRolePerms(roleViewer.id, [
     "gantt:read",
     "hangar:read",
@@ -306,6 +313,12 @@ async function main() {
       displayName: "Планировщик",
       password: "planner123",
       roleId: rolePlanner.id
+    });
+    await ensureDemoUser({
+      email: "senior@local.dev",
+      displayName: "Старший планировщик",
+      password: "senior123",
+      roleId: rolePlannerSenior.id
     });
     await ensureDemoUser({
       email: "viewer@local.dev",

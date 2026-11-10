@@ -2,6 +2,41 @@ import { EventStatus } from "./eventStatusCatalog.js";
 
 const INACTIVE_EVENT_STATUSES: string[] = [EventStatus.CANCELLED, EventStatus.DELETED];
 
+export type OccupancyWindow = { startAt: Date; endAt: Date };
+
+function asInstant(value: Date | string | null | undefined): Date | null {
+  if (value == null || value === "") return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+/**
+ * Стоянка занята непрерывно от более раннего начала до более позднего конца
+ * оперативного слота и факта. Факт внутри плана стоянку не освобождает.
+ * Факт, закрытый позже плана, продолжает её занимать.
+ */
+export function standOccupancyWindow(slot: {
+  startAt: Date | string;
+  endAt: Date | string;
+  actualStartAt?: Date | string | null;
+  actualEndAt?: Date | string | null;
+}): OccupancyWindow {
+  const startAt = asInstant(slot.startAt)!;
+  const endAt = asInstant(slot.endAt)!;
+  const actualStartAt = asInstant(slot.actualStartAt);
+  const actualEndAt = asInstant(slot.actualEndAt);
+  if (!actualStartAt || !actualEndAt) return { startAt, endAt };
+  return {
+    startAt: actualStartAt < startAt ? actualStartAt : startAt,
+    endAt: actualEndAt > endAt ? actualEndAt : endAt
+  };
+}
+
+/** Без права gantt:overlap клиент не включает и не снимает флаг: остаётся сохранённое значение. */
+export function gateAllowOverlapRequest(requested: boolean | undefined, canAllowOverlap: boolean): boolean | undefined {
+  return canAllowOverlap ? requested : undefined;
+}
+
 export function resolveAllowOverlap(params: {
   requested?: boolean;
   stored?: boolean;

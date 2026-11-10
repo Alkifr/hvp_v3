@@ -18,9 +18,13 @@ export function MultiSelectDropdown(props: {
   searchPlaceholder?: string;
   compact?: boolean;
   selectedLabelMode?: "count" | "labels";
+  /** Короткая подпись, когда отмечены все пункты списка. */
+  collapseAllLabel?: string;
   disabled?: boolean;
   /** Рисовать список поверх страницы, чтобы его не обрезал overflow родителя (модалки). */
   portal?: boolean;
+  /** Слой списка, если окно подтверждения само лежит выше стандартного портала. */
+  menuZIndex?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -103,6 +107,7 @@ export function MultiSelectDropdown(props: {
   }, [props.options, search]);
   const selectedLabel = useMemo(() => {
     if (props.value.length === 0) return props.placeholder ?? "не выбрано";
+    if (props.collapseAllLabel && props.options.length > 1 && props.value.length === props.options.length) return props.collapseAllLabel;
     if (props.selectedLabelMode === "labels") {
       const labels = props.value
         .map((id) => props.options.find((o) => o.id === id)?.label)
@@ -114,7 +119,7 @@ export function MultiSelectDropdown(props: {
       return one?.label ?? "1 выбрано";
     }
     return `${props.value.length} выбрано`;
-  }, [props.value, props.options, props.placeholder, props.selectedLabelMode]);
+  }, [props.value, props.options, props.placeholder, props.selectedLabelMode, props.collapseAllLabel]);
 
   const toggle = (id: string) => {
     const next = new Set(props.value);
@@ -151,7 +156,7 @@ export function MultiSelectDropdown(props: {
           right: "auto",
           width: panelPos.width,
           maxHeight: panelPos.maxHeight,
-          zIndex: 1200
+          zIndex: props.menuZIndex ?? 1200
         }
       : undefined
     : props.maxHeight
@@ -178,6 +183,8 @@ export function MultiSelectDropdown(props: {
           <div className="msdSearch">
             <input
               value={search}
+              name="filter-search"
+              autoComplete="off"
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => e.stopPropagation()}
               placeholder={props.searchPlaceholder ?? "Поиск..."}

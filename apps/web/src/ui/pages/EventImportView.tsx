@@ -6,6 +6,7 @@ import {
   importEventsInChunks,
   PartialEventImportError,
   previewEventsInChunks,
+  rowHasProbableDuplicate,
   type EventImportPreviewRow,
   type EventImportProgress
 } from "../../lib/eventImport";
@@ -13,7 +14,7 @@ import { downloadEventImportTemplate } from "../../lib/importTemplates";
 import { formatLineBase } from "../../lib/lineBase";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
-type PreviewStatusFilter = "" | "ok" | "warn" | "error";
+type PreviewStatusFilter = "" | "ok" | "warn" | "duplicate" | "error";
 
 function rowStatus(row: EventImportPreviewRow): Exclude<PreviewStatusFilter, ""> {
   if (!row.ok) return "error";
@@ -61,6 +62,80 @@ function formatImportPeriod(start?: string | null, end?: string | null) {
   );
 }
 
+function EventImportGuideReference() {
+  const columns: Array<{ group: string; rows: Array<[string, string]> }> = [
+    {
+      group: "Обязательные",
+      rows: [
+        ["Aircraft", "борт"],
+        ["Event_name", "тип события"],
+        ["startAt, endAt", "оперативный период"]
+      ]
+    },
+    {
+      group: "Событие",
+      rows: [
+        ["Event_Title", "название, пусто = Event_name"],
+        ["Operator", "сверка с бортом"],
+        ["AircraftType", "тип берётся по борту"],
+        ["Status", "пусто = на согласовании с исполнителем"],
+        ["Reason", "причина продления"],
+        ["Comment", "комментарий"]
+      ]
+    },
+    {
+      group: "Периоды",
+      rows: [
+        ["budget*", "бюджет, обе даты"],
+        ["actual*", "факт, обе даты"],
+        ["tow*", "буксировка внутри периода"],
+        ["DeadLine", "позже окончания — предупреждение"]
+      ]
+    },
+    {
+      group: "Место и цех",
+      rows: [
+        ["Hangar", "активный ангар"],
+        ["HangarStand", "место, нужен ангар"],
+        ["Workshop", "цех: код или название"],
+        ["LineBase", "L/B, пусто берётся из цеха"]
+      ]
+    }
+  ];
+
+  return (
+    <section className="eventImportGuide eventImportColumnsCard" aria-label="Колонки и правила импорта">
+      <div className="eventImportGuideLead">
+        <h2>Колонки и правила</h2>
+        <p>xlsx, xls или csv, первый лист. Дата без пояса — местное время (MSK). Пустая ячейка не заполняет поле.</p>
+      </div>
+      <div className="eventImportColumns">
+        {columns.map((section) => (
+          <div key={section.group} className="eventImportColumnGroup">
+            <h3>{section.group}</h3>
+            <dl>
+              {section.rows.map(([name, text]) => (
+                <div key={name}>
+                  <dt>{name}</dt>
+                  <dd>{text}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ))}
+      </div>
+      <p className="eventImportColumnsNote">
+        Трудоёмкость: <code>laborBudget_*</code>, <code>laborMps_*</code>, <code>laborActual_*</code> и ADD/NRC, ч/ч ≥ 0.
+        Квалификации ME, AV, INT, NDT, SHOP, CabRep.
+      </p>
+      <div className="eventImportColumnRules">
+        <p><strong>Предупреждение</strong> Дубль того же борта и типа, нахлёст места или схемы, чужой оператор или тип ВС, окончание позже DeadLine.</p>
+        <p><strong>Ошибка</strong> Нет борта, типа, ангара или цеха, неверные даты, неактивный справочник, статус «Удалено».</p>
+      </div>
+    </section>
+  );
+}
+
 const REQUIRED_IMPORT_COLUMNS = ["Aircraft", "Event_name", "startAt", "endAt"] as const;
 
 function validateImportRowsShape(rows: any[]): string | null {
@@ -84,7 +159,7 @@ function validateImportRowsShape(rows: any[]): string | null {
     parts.push("Похоже, это файл массового планирования — перейдите на вкладку «Массовое планирование».");
   } else {
     parts.push(
-      "Нужны колонки: Aircraft, Event_name, startAt, endAt (также можно Operator, AircraftType, Event_Title, Hangar, HangarStand, Workshop, LineBase, laborBudget_*/laborAddBudget_*/laborNrcBudget_*/laborMps_*/laborActual_*/laborAddPlan_*/laborNrcPlan_*/laborAddActual_*/laborNrcActual_*)."
+      "Нужны колонки: Aircraft, Event_name, startAt, endAt (также можно Operator, AircraftType, Event_Title, Hangar, HangarStand, Workshop, LineBase, DeadLine, laborBudget_*/laborAddBudget_*/laborNrcBudget_*/laborMps_*/laborActual_*/laborAddPlan_*/laborNrcPlan_*/laborAddActual_*/laborNrcActual_*)."
     );
   }
   return parts.join(" ");
@@ -107,18 +182,21 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
   const statusCounts = useMemo(() => {
     let ok = 0;
     let warn = 0;
+    let duplicate = 0;
     let error = 0;
     for (const row of previewRows) {
       const status = rowStatus(row);
       if (status === "ok") ok += 1;
       else if (status === "warn") warn += 1;
       else error += 1;
+      if (rowHasProbableDuplicate(row)) duplicate += 1;
     }
-    return { all: previewRows.length, ok, warn, error };
+    return { all: previewRows.length, ok, warn, duplicate, error };
   }, [previewRows]);
 
   const filteredPreviewRows = useMemo(() => {
     if (!statusFilter) return previewRows;
+    if (statusFilter === "duplicate") return previewRows.filter((row) => rowHasProbableDuplicate(row));
     return previewRows.filter((row) => rowStatus(row) === statusFilter);
   }, [previewRows, statusFilter]);
 
@@ -201,12 +279,35 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
       )}
 
       <div className="card" style={{ display: "grid", gap: 10 }}>
-        <div className="muted">
-          Excel/CSV. Шапка: Operator, Aircraft, AircraftType, Event_Title, Event_name, startAt, endAt, budgetStartAt, budgetEndAt,
-          actualStartAt, actualEndAt, towStartAt, towEndAt, Hangar, HangarStand, Workshop, LineBase. Периоды можно оставлять пустыми.
-          Места назначаются только в активных вариантах расстановки. Цех и L/B — по коду/названию; пустой L/B берётся из цеха.
-          Даты без часового пояса и ячейки Excel трактуются как местное время (MSK).
-        </div>
+        <section className="eventImportGuide" aria-label="Как устроен импорт событий">
+          <div className="eventImportGuideLead">
+            <h2>Как загрузить события</h2>
+            <p>
+              Одна строка файла — одно событие с конкретным бортом, типом работ и оперативным периодом.
+              Запись идёт в текущий контур: рабочий план или активную песочницу.
+              Серии с виртуальными бортами загружаются на вкладке «Массовое планирование».
+            </p>
+          </div>
+
+          <ol className="eventImportSteps">
+            <li>
+              <strong>Подготовьте файл</strong>
+              <span>Скачайте шаблон или свой Excel/CSV. В шаблоне пример лежит на листе «Данные», пояснения — на листе «Инструкция».</span>
+            </li>
+            <li>
+              <strong>Проверьте без записи</strong>
+              <span>«Предпросмотр» сверяет справочники, даты и места. События при этом не создаются.</span>
+            </li>
+            <li>
+              <strong>Разберите строки</strong>
+              <span>«Готово» и «Предупреждение» можно импортировать. «Ошибка» пропускается — её правят в файле и проверяют снова.</span>
+            </li>
+            <li>
+              <strong>Запишите в план</strong>
+              <span>«Импортировать» создаёт строки без ошибок. Крупный файл уходит пакетами. На «Плане» события видны в диапазоне текущего контура.</span>
+            </li>
+          </ol>
+        </section>
         <div className="row" style={{ alignItems: "flex-end" }}>
           <label style={{ display: "grid", gap: 6 }}>
             <span className="muted">Файл (.xlsx/.csv)</span>
@@ -378,6 +479,7 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
                         { id: "" as PreviewStatusFilter, label: "Все", count: statusCounts.all },
                         { id: "ok" as PreviewStatusFilter, label: "Готово", count: statusCounts.ok },
                         { id: "warn" as PreviewStatusFilter, label: "Предупреждение", count: statusCounts.warn },
+                        { id: "duplicate" as PreviewStatusFilter, label: "Дубли", count: statusCounts.duplicate },
                         { id: "error" as PreviewStatusFilter, label: "Ошибка", count: statusCounts.error }
                       ]
                     ).map((tab) => (
@@ -419,6 +521,7 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
                           <th>Вариант</th>
                           <th>Цех</th>
                           <th>L/B</th>
+                          <th>DeadLine</th>
                           <th>Комментарий</th>
                         </tr>
                       </thead>
@@ -467,6 +570,7 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
                               <td>{row.layout || "—"}</td>
                               <td>{row.workshop || "—"}</td>
                               <td>{formatLineBase(row.lineBase)}</td>
+                              <td>{formatImportDate(row.deadlineAt ?? undefined)}</td>
                               <td className="eventImportMessageCell">
                                 {row.error ? <div className="eventImportErrorText">{row.error}</div> : null}
                                 {row.warnings?.length ? (
@@ -505,18 +609,7 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
         ) : null}
       </div>
 
-      <div className="card">
-        <div className="muted" style={{ display: "grid", gap: 6 }}>
-          <div>
-            Подсказка: сначала нажмите <strong>«Предпросмотр»</strong> — он покажет ошибки сопоставления/конфликтов, и только потом
-            станет доступна кнопка <strong>«Импортировать»</strong>. Большие файлы (сотни и тысячи строк) отправляются пакетами,
-            чтобы не упираться в таймаут прокси.
-          </div>
-          <div>
-            После импорта откройте «План» — события появятся в выбранном диапазоне текущего контура.
-          </div>
-        </div>
-      </div>
+      <EventImportGuideReference />
     </div>
   );
 }

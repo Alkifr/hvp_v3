@@ -147,11 +147,9 @@ export function downloadEventImportTemplate(params?: {
   const hangar = params?.hangar || "";
   const hangarStand = params?.hangarStand || "";
 
-  const laborExample = {
-    ...laborImportExampleValues("laborBudget"),
-    ...laborImportExampleValues("laborMps"),
-    ...laborImportExampleValues("laborActual")
-  };
+  const laborExample = Object.fromEntries(
+    LABOR_IMPORT_BLOCKS.flatMap((block) => Object.entries(laborImportExampleValues(block.prefix)))
+  );
 
   const laborInstructionRows = LABOR_IMPORT_BLOCKS.flatMap((block) =>
     LABOR_IMPORT_DEPARTMENTS.map((dep) => ({
@@ -183,6 +181,7 @@ export function downloadEventImportTemplate(params?: {
           HangarStand: hangarStand,
           Workshop: "",
           LineBase: "",
+          DeadLine: "2026-07-20 18:00",
           Status: "Согласовано с заказчиком",
           Reason: "",
           Comment: "",
@@ -207,6 +206,12 @@ export function downloadEventImportTemplate(params?: {
         { Колонка: "HangarStand", Обязательно: "нет", Описание: "Место в активном варианте расстановки" },
         { Колонка: "Workshop", Обязательно: "нет", Описание: "Ответственный цех: код, название или id. Алиасы: Цех, ответственный цех" },
         { Колонка: "LineBase", Обязательно: "нет", Описание: "Контур L/B: L, LINE, L (Line) или B, BASE, B (Base). Пусто = из цеха. Алиасы: L/B, контур" },
+        {
+          Колонка: "DeadLine",
+          Обязательно: "нет",
+          Описание:
+            "Крайний срок окончания (местное время MSK). Пусто = не задавать. Если оперативное окончание позже DeadLine, строка получит предупреждение, но импортируется. Алиасы: deadlineAt, deadline, Дедлайн"
+        },
         { Колонка: "Status", Обязательно: "нет", Описание: "Статус события: название из справочника или код (например «Завершено», DONE). Пусто = «На согласовании с исполнителем». Алиас: Статус" },
         { Колонка: "Reason", Обязательно: "нет", Описание: "Причина продления слота (от согласованного плана). Алиас: Причина" },
         { Колонка: "Comment", Обязательно: "нет", Описание: "Свободный комментарий события. Алиас: Комментарий" },

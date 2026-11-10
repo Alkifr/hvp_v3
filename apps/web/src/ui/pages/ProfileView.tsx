@@ -7,7 +7,7 @@ import {
   authUpdateProfile,
   MeResponse
 } from "../auth/authApi";
-import { grantedGroupCount, hasPermission } from "../../lib/permissionCatalog";
+import { SYSTEM_ROLE_GUIDE, grantedGroupCount, hasPermission } from "../../lib/permissionCatalog";
 import {
   allowedHomePageOptions,
   NOTIFICATION_KIND_OPTIONS,
@@ -29,11 +29,8 @@ type ActivityPane = "edits" | "presence";
 type NavPage = "admin" | "sandboxes" | "gantt";
 
 const ROLE_LABEL: Record<string, string> = {
-  ADMIN: "Администратор",
-  PLANNER: "Планировщик",
-  VIEWER: "Наблюдатель",
-  PILOT: "Пилот",
-  SUPER_ADMIN: "Супер-админ"
+  ...Object.fromEntries(SYSTEM_ROLE_GUIDE.map((role) => [role.code, role.name])),
+  PILOT: "Пилот"
 };
 
 const SANDBOX_ROLE: Record<string, string> = {

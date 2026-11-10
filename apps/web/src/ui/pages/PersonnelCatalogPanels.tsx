@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MutableRefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiDelete, apiGet, apiPost, apiPut } from "../../lib/api";
@@ -46,12 +46,31 @@ function errorText(error: unknown) {
   return String((error as Error)?.message ?? error);
 }
 
-export function PersonnelCatalogPanel({ kind, search, canWrite }: { kind: PersonnelCatalogKind; search: string; canWrite: boolean }) {
-  if (kind === "personnel-hours") return <HoursPanel canWrite={canWrite} search={search} />;
-  if (kind === "personnel-factors") return <FactorsPanel canWrite={canWrite} search={search} />;
-  if (kind === "personnel-composition") return <CompositionPanel canWrite={canWrite} search={search} />;
-  if (kind === "personnel-categories") return <CategoriesPanel canWrite={canWrite} search={search} />;
-  return <AircraftWorkshopPanel canWrite={canWrite} search={search} />;
+export function PersonnelCatalogPanel({
+  kind,
+  search,
+  canWrite,
+  createActionRef
+}: {
+  kind: PersonnelCatalogKind;
+  search: string;
+  canWrite: boolean;
+  createActionRef: MutableRefObject<(() => void) | null>;
+}) {
+  if (kind === "personnel-hours") return <HoursPanel canWrite={canWrite} search={search} createActionRef={createActionRef} />;
+  if (kind === "personnel-factors") return <FactorsPanel canWrite={canWrite} search={search} createActionRef={createActionRef} />;
+  if (kind === "personnel-composition") return <CompositionPanel canWrite={canWrite} search={search} createActionRef={createActionRef} />;
+  if (kind === "personnel-categories") return <CategoriesPanel canWrite={canWrite} search={search} createActionRef={createActionRef} />;
+  return <AircraftWorkshopPanel canWrite={canWrite} search={search} createActionRef={createActionRef} />;
+}
+
+function useBindCreate(ref: MutableRefObject<(() => void) | null>, open: () => void, enabled: boolean) {
+  useEffect(() => {
+    ref.current = enabled ? open : null;
+    return () => {
+      if (ref.current === open) ref.current = null;
+    };
+  });
 }
 
 function formatCatalogDate(value: string) {
@@ -59,7 +78,7 @@ function formatCatalogDate(value: string) {
   return day && month && year ? `${day}.${month}.${year}` : dateKey(value);
 }
 
-function HoursPanel({ canWrite, search }: { canWrite: boolean; search: string }) {
+function HoursPanel({ canWrite, search, createActionRef }: { canWrite: boolean; search: string; createActionRef: MutableRefObject<(() => void) | null> }) {
   const qc = useQueryClient();
   const today = dateKey(new Date());
   const normsQ = useQuery({ queryKey: ["personnel", "norms"], queryFn: () => apiGet<{ items: Norm[] }>(`${API}/norms`) });
@@ -99,6 +118,7 @@ function HoursPanel({ canWrite, search }: { canWrite: boolean; search: string })
     setInitial({ effectiveFrom: nextDate, hours: nextHours });
     setAttempted(false);
   };
+  useBindCreate(createActionRef, openCreate, canWrite);
   const refresh = async () => qc.invalidateQueries({ queryKey: ["personnel", "norms"] });
   const saveM = useMutation({
     mutationFn: () => mode === "create"
@@ -112,9 +132,6 @@ function HoursPanel({ canWrite, search }: { canWrite: boolean; search: string })
   });
   return (
     <section>
-      <div className="personnelSectionHead">
-        {canWrite ? <button className="btn btnPrimary" style={{ marginLeft: "auto" }} onClick={openCreate}>+ Добавить</button> : null}
-      </div>
       <table className="table refTable">
         <thead><tr><th>С даты</th><th>Часов</th></tr></thead>
         <tbody>
@@ -159,7 +176,7 @@ function HoursPanel({ canWrite, search }: { canWrite: boolean; search: string })
   );
 }
 
-function FactorsPanel({ canWrite, search }: { canWrite: boolean; search: string }) {
+function FactorsPanel({ canWrite, search, createActionRef }: { canWrite: boolean; search: string; createActionRef: MutableRefObject<(() => void) | null> }) {
   const qc = useQueryClient();
   const today = dateKey(new Date());
   const metaQ = useQuery({ queryKey: ["personnel", "meta"], queryFn: () => apiGet<Meta>(`${API}/meta`) });
@@ -206,6 +223,7 @@ function FactorsPanel({ canWrite, search }: { canWrite: boolean; search: string 
     setInitial({ typeIds: nextTypes, effectiveFrom: nextDate, factor: nextFactor });
     setAttempted(false);
   };
+  useBindCreate(createActionRef, openCreate, canWrite);
   const refresh = async () => qc.invalidateQueries({ queryKey: ["personnel", "factors"] });
   const saveM = useMutation({
     mutationFn: () => apiPost(`${API}/factors`, {
@@ -222,9 +240,6 @@ function FactorsPanel({ canWrite, search }: { canWrite: boolean; search: string 
   });
   return (
     <section>
-      <div className="personnelSectionHead">
-        {canWrite ? <button className="btn btnPrimary" style={{ marginLeft: "auto" }} onClick={openCreate}>+ Добавить</button> : null}
-      </div>
       <table className="table refTable">
         <thead><tr><th>Тип ВС</th><th>С даты</th><th>Коэффициент</th></tr></thead>
         <tbody>
@@ -288,7 +303,7 @@ function FactorsPanel({ canWrite, search }: { canWrite: boolean; search: string 
 type CompositionItem = { code: string; name: string; department: string | null; sortOrder: number };
 type CompositionResponse = { departments: string[]; items: CompositionItem[] };
 
-function CompositionPanel({ canWrite, search }: { canWrite: boolean; search: string }) {
+function CompositionPanel({ canWrite, search, createActionRef }: { canWrite: boolean; search: string; createActionRef: MutableRefObject<(() => void) | null> }) {
   const qc = useQueryClient();
   const rowsQ = useQuery({
     queryKey: ["personnel", "category-composition"],
@@ -321,6 +336,7 @@ function CompositionPanel({ canWrite, search }: { canWrite: boolean; search: str
     setInitialCodes([]);
     setAttempted(false);
   };
+  useBindCreate(createActionRef, openCreate, canWrite);
   const chooseDepartment = (code: string) => {
     const current = items.filter((row) => row.department === code).map((row) => row.code);
     setDepartment(code);
@@ -352,9 +368,6 @@ function CompositionPanel({ canWrite, search }: { canWrite: boolean; search: str
   const dirty = codes.slice().sort().join() !== initialCodes.slice().sort().join() || (mode === "create" && Boolean(department));
   return (
     <section>
-      <div className="personnelSectionHead">
-        {canWrite ? <button className="btn btnPrimary" style={{ marginLeft: "auto" }} onClick={openCreate}>+ Добавить</button> : null}
-      </div>
       <table className="table refTable">
         <thead><tr><th>Категория</th><th>Квалификации</th></tr></thead>
         <tbody>
@@ -420,7 +433,7 @@ type WorkshopSkillRow = {
 };
 type SkillOption = { id: string; code: string; name: string; isActive?: boolean };
 
-function CategoriesPanel({ canWrite, search }: { canWrite: boolean; search: string }) {
+function CategoriesPanel({ canWrite, search, createActionRef }: { canWrite: boolean; search: string; createActionRef: MutableRefObject<(() => void) | null> }) {
   const qc = useQueryClient();
   const rowsQ = useQuery({ queryKey: ["ref", "workshop-skills"], queryFn: () => apiGet<WorkshopSkillRow[]>("/api/ref/workshop-skills") });
   const workshopsQ = useQuery({ queryKey: ["ref", "workshops"], queryFn: () => apiGet<RefRow[]>("/api/ref/workshops") });
@@ -444,6 +457,7 @@ function CategoriesPanel({ canWrite, search }: { canWrite: boolean; search: stri
     setInitialSkillIds([]);
     setAttempted(false);
   };
+  useBindCreate(createActionRef, openCreate, canWrite);
   const openEdit = (row: WorkshopSkillRow) => {
     const ids = row.skills.map((skill) => skill.id);
     setMode("edit");
@@ -470,9 +484,6 @@ function CategoriesPanel({ canWrite, search }: { canWrite: boolean; search: stri
   const workshopChoices = (workshopsQ.data ?? []).filter((row) => mode === "edit" || !taken.has(row.id));
   return (
     <section>
-      <div className="personnelSectionHead">
-        {canWrite ? <button className="btn btnPrimary" style={{ marginLeft: "auto" }} onClick={openCreate}>+ Добавить</button> : null}
-      </div>
       <table className="table refTable">
         <thead><tr><th>Цех</th><th>Категории</th></tr></thead>
         <tbody>
@@ -604,7 +615,7 @@ function aircraftCountLabel(count: number) {
   return `${count} ${word}`;
 }
 
-function AircraftWorkshopPanel({ canWrite, search }: { canWrite: boolean; search: string }) {
+function AircraftWorkshopPanel({ canWrite, search, createActionRef }: { canWrite: boolean; search: string; createActionRef: MutableRefObject<(() => void) | null> }) {
   const qc = useQueryClient();
   const listQ = useQuery({ queryKey: ["ref", "aircraft-workshops"], queryFn: () => apiGet<Assignment[]>("/api/ref/aircraft-workshops") });
   const workshopsQ = useQuery({ queryKey: ["ref", "workshops"], queryFn: () => apiGet<RefRow[]>("/api/ref/workshops") });
@@ -687,6 +698,7 @@ function AircraftWorkshopPanel({ canWrite, search }: { canWrite: boolean; search
     setGroupKey("");
     applyForm(emptyForm);
   };
+  useBindCreate(createActionRef, openCreate, canWrite);
   const openEdit = (group: AssignmentGroup) => {
     setMode("edit");
     setGroupKey(group.key);
@@ -738,9 +750,6 @@ function AircraftWorkshopPanel({ canWrite, search }: { canWrite: boolean; search
   const title = mode === "create" ? "Новая привязка" : typeOptions.find((option) => option.id === typeId)?.label || editing?.typeName || "Борт и цех";
   return (
     <section>
-      <div className="personnelSectionHead">
-        {canWrite ? <button className="btn btnPrimary" style={{ marginLeft: "auto" }} onClick={openCreate}>+ Добавить</button> : null}
-      </div>
       <table className="table refTable">
         <thead><tr><th>Тип</th><th>Оператор</th><th>Форма</th><th>Цех</th><th>Ангар</th><th>Назначение</th><th>Борта</th></tr></thead>
         <tbody>

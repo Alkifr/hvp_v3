@@ -56,7 +56,7 @@ export const NOTIFICATION_KIND_OPTIONS: Array<{
   {
     kind: "EVENT_STATUS_DONE",
     label: "Автостатус «Завершено»",
-    hint: "Событие завершено после заполнения факта"
+    hint: "Событие завершено: фактическое окончание уже наступило"
   },
   {
     kind: "USER_ERROR",

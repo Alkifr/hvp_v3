@@ -18,6 +18,13 @@ test("legacy events:read is kept until module codes appear", () => {
   assert.deepEqual(expandPermissionCodes(["events:read"]), ["events:read"]);
 });
 
+test("overlap is a separate plan right and only implies view", () => {
+  assert.equal(hasPermission(["gantt:write"], "gantt:overlap"), false);
+  assert.equal(hasPermission(["gantt:overlap"], "gantt:write"), false);
+  assert.equal(hasPermission(["gantt:overlap"], "gantt:read"), true);
+  assert.ok(expandPermissionCodes(["gantt:overlap"]).includes("events:read"));
+});
+
 test("analytics-only does not inherit gantt", () => {
   assert.equal(hasPermission(["analytics:read", "events:read"], "gantt:read"), false);
   assert.equal(hasPermission(["gantt:read"], "events:read"), true);

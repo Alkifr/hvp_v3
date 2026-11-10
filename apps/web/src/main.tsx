@@ -2,8 +2,11 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+import { installRandomUuidPolyfill } from "./lib/randomId";
 import { App } from "./ui/App";
 import "./ui/styles.css";
+
+installRandomUuidPolyfill();
 
 const qc = new QueryClient({
   defaultOptions: {

@@ -1,9 +1,8 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Fragment, startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiGet, apiPost, apiPut } from "../../lib/api";
+import { apiGet, apiPost } from "../../lib/api";
 import {
-  availabilityKey,
   balanceClass,
   clampResourcePeriod,
   dateKey,
@@ -12,6 +11,7 @@ import {
   periodDates,
   personnelViewDefaults,
   readPersonnelView,
+  savedIdList,
   type PersonnelTab,
   shiftPeriod,
   periodTimelinePosition
@@ -20,8 +20,11 @@ import { contrastTextColor } from "../../lib/colorContrast";
 import { exportPersonnelPlanExcel } from "../../lib/personnelPlanExcel";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { authMe } from "../auth/authApi";
+import { BlockHelp } from "../components/BlockHelp";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { PersonnelCapacityPanel } from "./PersonnelCapacityPanel";
+import { PersonnelResourceGrid } from "./PersonnelResourceGrid";
+import { PersonnelDraftStore } from "../../lib/personnelResourceModel";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 
 type Tab = PersonnelTab;
@@ -199,35 +202,22 @@ function readSavedScale(): "week" | "month" {
 function readSavedResourceWorkshops(fallback: string) {
   try {
     const raw = JSON.parse(window.localStorage.getItem(PERSONNEL_UI_LS_KEY) ?? "null") as Record<string, unknown> | null;
-    const ids = Array.isArray(raw?.resourceWorkshopIds) ? raw.resourceWorkshopIds.filter((id): id is string => typeof id === "string" && Boolean(id)) : [];
-    if (ids.length) return ids;
+    return savedIdList(raw?.resourceWorkshopIds, fallback);
   } catch {
-    // ignore
+    return savedIdList(undefined, fallback);
   }
-  return fallback ? [fallback] : [];
 }
 
 function readSavedIdList(key: "workshopIds" | "aircraftTypeIds", fallback: string) {
   try {
     const raw = JSON.parse(window.localStorage.getItem(PERSONNEL_UI_LS_KEY) ?? "null") as Record<string, unknown> | null;
-    const ids = Array.isArray(raw?.[key]) ? raw[key].filter((id): id is string => typeof id === "string" && Boolean(id)) : [];
-    if (ids.length) return ids;
+    return savedIdList(raw?.[key], fallback);
   } catch {
-    // ignore
+    return savedIdList(undefined, fallback);
   }
-  return fallback ? [fallback] : [];
 }
 
-function resourceCellKey(workshopId: string, date: string, shiftId: string, aircraftTypeId: string, token: string) {
-  return `${workshopId}|${availabilityKey(date, shiftId, aircraftTypeId, token)}`;
-}
-
-function shiftLabel(shift: { code: string; name: string; startMin: number }) {
-  const code = shift.code.toUpperCase();
-  if (code === "DAY" || code.includes("ДЕН")) return "д";
-  if (code === "NIGHT" || code.includes("НОЧ") || code.includes("EVE")) return "н";
-  return shift.startMin >= 18 * 60 ? "н" : shift.startMin <= 10 * 60 ? "д" : shift.name;
-}
+const NO_SHIFTS: Meta["shifts"] = [];
 
 export function RmPersonnelView() {
   const qc = useQueryClient();
@@ -247,7 +237,8 @@ export function RmPersonnelView() {
   const [planExporting, setPlanExporting] = useState(false);
   const [planExportError, setPlanExportError] = useState("");
   const [openDates, setOpenDates] = useState<string[]>([]);
-  const [draft, setDraft] = useState<Record<string, string>>({});
+  const draftStore = useRef<PersonnelDraftStore | null>(null);
+  const resourceDraft = draftStore.current ?? (draftStore.current = new PersonnelDraftStore());
 
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: authMe });
   const permissions = meQ.data?.ok ? meQ.data.user.permissions : [];
@@ -265,9 +256,10 @@ export function RmPersonnelView() {
     if (!meta?.workshops.length) return;
     const known = new Set(meta.workshops.map((row) => row.id));
     setResourceWorkshopIds((old) => {
+      if (!old.length) return old;
       const next = old.filter((id) => known.has(id));
-      if (next.length) return next.length === old.length ? old : next;
-      return [meta.workshops[0].id];
+      if (next.length === old.length) return old;
+      return next.length ? next : [meta.workshops[0].id];
     });
     if (!known.has(workshopId)) setWorkshopId(meta.workshops[0].id);
   }, [meta, workshopId]);
@@ -346,7 +338,9 @@ export function RmPersonnelView() {
   const availabilityQ = useQuery({
     queryKey: ["personnel", "availability", [...orderedResourceIds].sort().join(","), periodFrom, periodTo],
     queryFn: () => apiGet<AvailabilityResponse>(`${API}/availability?${new URLSearchParams({ workshopIds: orderedResourceIds.join(","), from: periodFrom, to: periodTo })}`),
-    enabled: production && orderedResourceIds.length > 0
+    enabled: production && tab === "resources" && orderedResourceIds.length > 0,
+    placeholderData: keepPreviousData,
+    staleTime: 10_000
   });
   const resourceSheets = useMemo(() => {
     const byId = new Map((availabilityQ.data?.sheets ?? []).map((sheet) => [sheet.workshopId, sheet]));
@@ -355,28 +349,8 @@ export function RmPersonnelView() {
       return sheet ? [sheet] : [];
     });
   }, [availabilityQ.data?.sheets, orderedResourceIds]);
-  const baselineGrid = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const sheet of resourceSheets) {
-      for (const row of sheet.items) {
-        const token = row.skillId || row.categoryCode;
-        if (!token) continue;
-        out[resourceCellKey(sheet.workshopId, row.date, row.shiftId, row.aircraftTypeId, token)] = String(Number(row.headcount));
-      }
-    }
-    return out;
-  }, [resourceSheets]);
-  const [cleanGrid, setCleanGrid] = useState<Record<string, string>>({});
-  useEffect(() => {
-    setDraft(baselineGrid);
-    setCleanGrid(baselineGrid);
-  }, [baselineGrid]);
 
   const dates = useMemo(() => periodDates(periodFrom, periodTo), [periodFrom, periodTo]);
-  const lockedWeeks = useMemo(
-    () => new Set(resourceSheets.flatMap((sheet) => sheet.weeks.filter((row) => row.isLocked).map((row) => dateKey(row.weekStart)))),
-    [resourceSheets]
-  );
   const today = dateKey(new Date());
   const categories = week?.mappedCategories ?? [];
   const balance = tab === "balance" ? balanceQ.data : week;
@@ -407,48 +381,6 @@ export function RmPersonnelView() {
       };
     });
   }, [balance, aircraftTypeId, meta?.departments, tab]);
-  const dirtySet = useMemo(
-    () => new Set(Object.keys(draft).filter((key) => (draft[key] ?? "") !== (cleanGrid[key] ?? ""))),
-    [draft, cleanGrid]
-  );
-  const dirtyKeys = [...dirtySet];
-  const [savedFlash, setSavedFlash] = useState(false);
-  const savedTimer = useRef<number | null>(null);
-  useEffect(() => () => {
-    if (savedTimer.current != null) window.clearTimeout(savedTimer.current);
-  }, []);
-  const saveM = useMutation({
-    mutationFn: async () => {
-      const saved = { ...draft };
-      const byWeek = new Map<string, Array<Record<string, unknown>>>();
-      for (const key of dirtyKeys) {
-        const [ownerId, date, shiftId, typeId, token] = key.split("|");
-        const sheet = resourceSheets.find((row) => row.workshopId === ownerId);
-        const skill = sheet?.mappedCategories.find((row) => row.skillId === token);
-        const item = skill
-          ? { date, shiftId, aircraftTypeId: typeId, skillId: token, headcount: Number(draft[key] || 0) }
-          : { date, shiftId, aircraftTypeId: typeId, categoryCode: token, headcount: Number(draft[key] || 0) };
-        const monday = mondayOfWeek(date);
-        const bucket = `${ownerId}|${monday}`;
-        byWeek.set(bucket, [...(byWeek.get(bucket) ?? []), item]);
-      }
-      for (const [bucket, items] of byWeek) {
-        const [ownerId, monday] = bucket.split("|");
-        const version = resourceSheets.find((row) => row.workshopId === ownerId)?.weeks.find((row) => dateKey(row.weekStart) === monday)?.version ?? 0;
-        await apiPut(`${API}/availability`, { workshopId: ownerId, weekStart: monday, expectedVersion: version, items });
-      }
-      return saved;
-    },
-    onSuccess: async (saved) => {
-      setCleanGrid(saved);
-      setSavedFlash(true);
-      if (savedTimer.current != null) window.clearTimeout(savedTimer.current);
-      savedTimer.current = window.setTimeout(() => setSavedFlash(false), 7000);
-      await qc.invalidateQueries({ queryKey: ["personnel", "availability"] });
-      await qc.invalidateQueries({ queryKey: ["personnel", "week"] });
-      await qc.invalidateQueries({ queryKey: ["personnel", "balance"] });
-    }
-  });
   const lockM = useMutation({
     mutationFn: (action: "lock" | "unlock") => apiPost(`${API}/weeks/${planWorkshopId}/${planMonday}/${action}`, {}),
     onSuccess: async () => {
@@ -471,6 +403,7 @@ export function RmPersonnelView() {
       await exportPersonnelPlanExcel({
         from: periodFrom,
         to: periodTo,
+        scale: planScale,
         dates,
         shifts: meta?.shifts ?? [],
         sheets: workshopIds.flatMap((id) => {
@@ -557,7 +490,6 @@ export function RmPersonnelView() {
         <div className="massHeroText">
           <div className="massEyebrow">Ресурсное планирование · рабочий контур</div>
           <h1>РМ Персонал</h1>
-          <p className="muted">Доступный ресурс вносится на первой вкладке. Норма часов, коэффициенты и категории цеха задаются в справочнике. Баланс сравнивает ресурс с MPS событий.</p>
         </div>
         <div className="massHeroStats">
           <span><b>{tab === "resources" ? resourceSheets.reduce((sum, sheet) => sum + sheet.mappedCategories.length, 0) : categories.length}</b> квалификаций</span>
@@ -569,18 +501,18 @@ export function RmPersonnelView() {
 
       <section className="card personnelToolbar">
         <div className="personnelFilters">
-          <button className="btn" onClick={() => { const next = shiftPeriod(periodFrom, periodTo, -1); setPeriodFrom(next.from); setPeriodTo(next.to); }}>←</button>
-          <label>С<input type="date" value={periodFrom} onChange={(e) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return; const next = clampResourcePeriod(e.target.value, periodTo); if (!next.from) return; setPeriodFrom(next.from); setPeriodTo(next.to); }} /></label>
-          <label>По<input type="date" value={periodTo} max={clampResourcePeriod(periodFrom, "2999-12-31").to} onChange={(e) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return; const next = clampResourcePeriod(periodFrom, e.target.value); if (!next.from) return; setPeriodFrom(next.from); setPeriodTo(next.to); }} /></label>
-          <button className="btn" onClick={() => { const next = shiftPeriod(periodFrom, periodTo, 1); setPeriodFrom(next.from); setPeriodTo(next.to); }}>→</button>
+          <button type="button" className="btn" onClick={() => startTransition(() => { const next = shiftPeriod(periodFrom, periodTo, -1); setPeriodFrom(next.from); setPeriodTo(next.to); })}>←</button>
+          <label>С<input type="date" name="personnelPeriodFrom" autoComplete="off" value={periodFrom} onChange={(e) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return; const next = clampResourcePeriod(e.target.value, periodTo); if (!next.from) return; startTransition(() => { setPeriodFrom(next.from); setPeriodTo(next.to); }); }} /></label>
+          <label>По<input type="date" name="personnelPeriodTo" autoComplete="off" value={periodTo} max={clampResourcePeriod(periodFrom, "2999-12-31").to} onChange={(e) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return; const next = clampResourcePeriod(periodFrom, e.target.value); if (!next.from) return; startTransition(() => { setPeriodFrom(next.from); setPeriodTo(next.to); }); }} /></label>
+          <button type="button" className="btn" onClick={() => startTransition(() => { const next = shiftPeriod(periodFrom, periodTo, 1); setPeriodFrom(next.from); setPeriodTo(next.to); })}>→</button>
           {tab === "resources" ? null : (
             <>
-              <label>Цех<MultiSelectDropdown options={workshopFilterOptions} value={workshopIds} onChange={setWorkshopIds} placeholder="Цех" selectedLabelMode="labels" compact portal /></label>
-              <label>Тип ВС<MultiSelectDropdown options={typeFilterOptions} value={aircraftTypeIds} onChange={setAircraftTypeIds} placeholder="Все типы цеха" selectedLabelMode="labels" compact portal /></label>
+              <label>Цех<MultiSelectDropdown options={workshopFilterOptions} value={workshopIds} onChange={(ids) => startTransition(() => setWorkshopIds(ids))} placeholder="Цех" selectedLabelMode="labels" collapseAllLabel="Все цеха" compact portal /></label>
+              <label>Тип ВС<MultiSelectDropdown options={typeFilterOptions} value={aircraftTypeIds} onChange={(ids) => startTransition(() => setAircraftTypeIds(ids))} placeholder="Все типы цеха" selectedLabelMode="labels" collapseAllLabel="Все типы" compact portal /></label>
             </>
           )}
           {tab === "resources" ? (
-            <label>Цех<MultiSelectDropdown options={(meta?.workshops ?? []).map((row) => ({ id: row.id, label: row.code }))} value={resourceWorkshopIds} onChange={setResourceWorkshopIds} placeholder="Цех" selectedLabelMode="labels" compact portal /></label>
+            <label>Цех<MultiSelectDropdown options={(meta?.workshops ?? []).map((row) => ({ id: row.id, label: row.code }))} value={resourceWorkshopIds} onChange={(ids) => startTransition(() => setResourceWorkshopIds(ids))} placeholder="Цех" selectedLabelMode="labels" collapseAllLabel="Все цеха" compact portal /></label>
           ) : null}
           {tab === "week" ? (
             <div className="personnelScale" role="group" aria-label="Масштаб">
@@ -601,7 +533,7 @@ export function RmPersonnelView() {
         ] as Array<[Tab, string]>).map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}
       </div>
 
-      {metaQ.isLoading || ((tab === "balance" || tab === "week") && weekQ.isLoading) || (tab === "resources" && availabilityQ.isLoading && !resourceSheets.length) || (tab !== "resources" && balanceQ.isLoading) ? <section className="card">Загрузка…</section> : null}
+      {metaQ.isLoading || ((tab === "balance" || tab === "week") && weekQ.isLoading) || (tab === "resources" && orderedResourceIds.length > 0 && !resourceSheets.length && (availabilityQ.isLoading || availabilityQ.isFetching)) || (tab !== "resources" && balanceQ.isLoading) ? <section className="card">Загрузка…</section> : null}
       {metaQ.error || weekQ.error || availabilityQ.error || balanceQ.error ? <div className="error">{errorText(metaQ.error || weekQ.error || availabilityQ.error || balanceQ.error)}</div> : null}
 
       {tab === "resources" && !orderedResourceIds.length ? (
@@ -609,96 +541,15 @@ export function RmPersonnelView() {
       ) : null}
 
       {tab === "resources" && orderedResourceIds.length > 0 && resourceSheets.length > 0 ? (
-        <section className="card personnelMatrixCard">
-          <div className="personnelSectionHead">
-            <div><h2>Доступный ресурс</h2><div className="muted">Численность по квалификации, типу ВС и смене. Несколько цехов идут друг под другом: у каждого сверху подпись, внизу своя итоговая строка. «д» — дневная смена, «н» — ночная. Даты раньше сегодняшней закрыты и закрашены серым. Строка категории — сумма её квалификаций, «Итого» у типа ВС — его численность, нижняя строка цеха — сумма по всем типам.</div></div>
-            <div className="personnelSaveRow">
-              <button className="btn btnPrimary" disabled={!canWrite || !dirtyKeys.length || saveM.isPending} onClick={() => saveM.mutate()}>Сохранить {dirtyKeys.length ? `(${dirtyKeys.length})` : ""}</button>
-              {savedFlash ? <span className="personnelSaved" role="status">Сохранено!</span> : null}
-            </div>
-          </div>
-          <div className="personnelTableScroll personnelResourceScroll">
-            <table className="personnelMatrix personnelMatrixRange">
-              <colgroup>
-                <col className="personnelColLabel" />
-                <col className="personnelColType" />
-                {dates.flatMap((date) => (meta?.shifts ?? []).map((shift) => <col key={`${date}:${shift.id}`} className="personnelColShift" />))}
-              </colgroup>
-              <thead><tr><th rowSpan={2}>Квалификация</th><th rowSpan={2}>Тип ВС</th>{dates.map((date) => <th key={date} colSpan={meta?.shifts.length ?? 1} className={date < today ? "isPast" : undefined}>{fmtDayMonth(date)}</th>)}</tr>
-              <tr>{dates.flatMap((date) => (meta?.shifts ?? []).map((shift) => <th key={`${date}:${shift.id}`} className={date < today ? "isPast" : undefined} title={shift.name}>{shiftLabel(shift)}</th>))}</tr></thead>
-              <tbody>{resourceSheets.map((sheet) => {
-                const categoriesForSheet = sheet.mappedCategories;
-                const typesForSheet = sheet.aircraftTypes;
-                const sheetLocked = new Set(sheet.weeks.filter((row) => row.isLocked).map((row) => dateKey(row.weekStart)));
-                const label = sheet.name && sheet.name !== sheet.code ? `${sheet.code} · ${sheet.name}` : (sheet.code || "Цех");
-                const span = 2 + dates.length * (meta?.shifts.length ?? 0);
-                return (
-                  <Fragment key={sheet.workshopId}>
-                    <tr className="personnelWorkshopBanner">
-                      <th colSpan={span}><span className="personnelWorkshopBannerLabel">{label}</span></th>
-                    </tr>
-                    {!categoriesForSheet.length ? (
-                      <tr><td className="personnelWorkshopNote" colSpan={span}>Для цеха не назначены квалификации. Укажите их в справочнике «Состав категорий».</td></tr>
-                    ) : !typesForSheet.length ? (
-                      <tr><td className="personnelWorkshopNote" colSpan={span}>Для цеха нет типов ВС. Привяжите борты в справочнике «Борт и цех».</td></tr>
-                    ) : [...typesForSheet.flatMap((type) => {
-                      const departments: Array<NonNullable<(typeof categoriesForSheet)[number]["department"]>> = [];
-                      for (const row of categoriesForSheet) if (row.department && !departments.includes(row.department)) departments.push(row.department);
-                      const inputRow = (mapping: (typeof categoriesForSheet)[number]) => (
-                        <tr key={`${sheet.workshopId}:${mapping.skillId || mapping.categoryCode}:${type.id}`}>
-                          <th><b>{mapping.categoryCode}</b></th>
-                          <td>{type.icaoType || type.name}</td>
-                          {dates.flatMap((date) => (meta?.shifts ?? []).map((shift) => {
-                            const key = resourceCellKey(sheet.workshopId, date, shift.id, type.id, mapping.skillId || mapping.categoryCode);
-                            const disabled = !canWrite || date < today || sheetLocked.has(mondayOfWeek(date));
-                            return <td key={key} className={date < today ? "isPast" : ""}><input type="number" min="0" step="1" className={dirtySet.has(key) ? "isDirty" : undefined} value={draft[key] ?? ""} disabled={disabled} aria-label={`${label} ${mapping.categoryCode} ${type.icaoType || type.name} ${date} ${shiftLabel(shift)}`} onChange={(e) => setDraft((old) => ({ ...old, [key]: e.target.value }))} /></td>;
-                          }))}
-                        </tr>
-                      );
-                      const headcountCells = (rows: typeof categoriesForSheet, keyPrefix: string) => dates.flatMap((date) => (meta?.shifts ?? []).map((shift) => {
-                        const values = rows.map((row) => draft[resourceCellKey(sheet.workshopId, date, shift.id, type.id, row.skillId || row.categoryCode)] ?? "");
-                        const total = values.reduce((sum, value) => sum + (value === "" ? 0 : Number(value)), 0);
-                        return <td key={`${sheet.workshopId}:${keyPrefix}:${type.id}:${date}:${shift.id}`} className={date < today ? "isPast" : ""}>{values.some((value) => value !== "") ? total : ""}</td>;
-                      }));
-                      return [
-                        ...departments.flatMap((department) => {
-                          const qualifications = categoriesForSheet.filter((row) => row.department === department);
-                          return [
-                            ...qualifications.map(inputRow),
-                            <tr key={`${sheet.workshopId}:sum:${department}:${type.id}`} className="personnelSumRow">
-                              <th><b>{DEPT_LABEL[department]}</b><small>{qualifications.map((row) => row.categoryCode).join(" + ")}</small></th>
-                              <td>{type.icaoType || type.name}</td>
-                              {headcountCells(qualifications, department)}
-                            </tr>
-                          ];
-                        }),
-                        ...categoriesForSheet.filter((row) => !row.department).map(inputRow),
-                        <tr key={`${sheet.workshopId}:total:${type.id}`} className="personnelTotalRow">
-                          <th><b>Итого</b><small>численность</small></th>
-                          <td>{type.icaoType || type.name}</td>
-                          {headcountCells(categoriesForSheet, "total")}
-                        </tr>
-                      ];
-                    }), (
-                      <tr key={`${sheet.workshopId}:grand-total`} className="personnelGrandTotalRow">
-                        <th><b>Итого</b><small>все типы ВС</small></th>
-                        <td>Все</td>
-                        {dates.flatMap((date) => (meta?.shifts ?? []).map((shift) => {
-                          const values = typesForSheet.flatMap((type) => categoriesForSheet.map((row) => draft[resourceCellKey(sheet.workshopId, date, shift.id, type.id, row.skillId || row.categoryCode)] ?? ""));
-                          const total = values.reduce((sum, value) => sum + (value === "" ? 0 : Number(value)), 0);
-                          return <td key={`${sheet.workshopId}:grand:${date}:${shift.id}`} className={date < today ? "isPast" : ""}>{values.some((value) => value !== "") ? total : ""}</td>;
-                        }))}
-                      </tr>
-                    )]}
-                  </Fragment>
-                );
-              })}</tbody>
-            </table>
-          </div>
-          {dates.some((date) => lockedWeeks.has(mondayOfWeek(date))) ? <div className="personnelNotice">Даты зафиксированных недель закрыты для правки.</div> : null}
-          {dates.some((date) => date < today) ? <div className="personnelNotice">Даты раньше сегодняшней закрыты для правки.</div> : null}
-          {saveM.error ? <div className="error">{errorText(saveM.error)}</div> : null}
-        </section>
+        <PersonnelResourceGrid
+          store={resourceDraft}
+          sheets={resourceSheets}
+          dates={dates}
+          shifts={meta?.shifts ?? NO_SHIFTS}
+          today={today}
+          canWrite={canWrite}
+          fetching={availabilityQ.isFetching}
+        />
       ) : null}
 
       {tab === "balance" && !workshopIds.length ? (
@@ -825,7 +676,7 @@ function BalancePanel({ days, lines, openDates, onToggleDate, events, added, res
   return (
     <div className="personnelStack">
       <section className="card">
-        <div className="personnelSectionHead"><div><h2>Баланс по суткам</h2><div className="muted">Разница = доступный ресурс − плановая трудоёмкость.</div></div></div>
+        <div className="personnelSectionHead"><div><h2 className="personnelResourceTitle">Баланс по суткам<BlockHelp label="Баланс по суткам"><p>Сутки выбранного периода: хватает ли доступного ресурса на плановую трудоёмкость событий.</p><ul><li>П — плановая трудоёмкость, ч·ч. Д — доступный ресурс, ч·ч. Diff — разница: доступный ресурс минус план.</li><li>Зелёная разница — ресурс больше плана, красная — план больше ресурса.</li><li>Дальше идут группы по категориям. В каждой снова П, Д и Diff: план категории и ресурс, который к ней относится.</li><li>«+» у даты раскрывает события, из которых собрана плановая трудоёмкость этих суток: борт, часы, заказчик, название и размещение.</li><li>Строка «Итого» суммирует все сутки периода.</li><li>Если под таблицей есть строка «База», сравнение идёт с зафиксированными неделями.</li></ul></BlockHelp></h2></div></div>
         <div className="personnelTableScroll"><table className="personnelBalance">
           <colgroup>
             <col className="personnelColDrill" />
@@ -892,7 +743,7 @@ function BalancePanel({ days, lines, openDates, onToggleDate, events, added, res
 }
 
 function EventsTable({ events, added, resourceWorkshop }: { events: PersonnelEvent[]; added: Set<string>; resourceWorkshop: string }) {
-  return <section className="card"><div className="personnelSectionHead"><div><h2>События спроса</h2><div className="muted">Обязательные реквизиты и все периоды размещений, вошедшие в расчёт выбранного периода.</div></div></div>
+  return <section className="card"><div className="personnelSectionHead"><div><h2 className="personnelResourceTitle">События спроса<BlockHelp label="События спроса"><p>События, чья плановая трудоёмкость вошла в баланс выбранного периода.</p><ul><li>В строке — название, борт, тип ВС, заказчик, форма ТО, статус и вид планирования.</li><li>Цех сверху — выбранные в фильтре цеха ресурса. Под ним — цех самого события.</li><li>Период события показан тремя контурами: план, бюджет и факт. Так же расписано каждое размещение: ангар, место и те же три контура.</li><li>«MPS по отделам» — плановые человеко-часы события по категориям.</li><li>Метка «новое» стоит на событии, которого не было в зафиксированной базе.</li><li>Список учитывает фильтр цехов и типов ВС. Событие без размещения остаётся в таблице с пометкой «Без размещений».</li></ul></BlockHelp></h2></div></div>
     <div className="personnelTableScroll"><table className="personnelEvents"><thead><tr><th>Событие</th><th>ВС / оператор</th><th>Тип / статус</th><th>Цех</th><th>Период события</th><th>Размещения</th><th>MPS по отделам</th></tr></thead>
       <tbody>{events.length ? events.map((event) => <tr key={event.id}><td><b>{event.title}</b>{added.has(event.id) ? <span className="personnelNewBadge">новое</span> : null}</td><td>{event.aircraftLabel || event.aircraft?.tailNumber || "—"}<small>{event.aircraftType?.icaoType || event.aircraftType?.name || "—"} · {event.operator?.code || event.operator?.name || "—"}</small></td><td>{event.eventType?.name || event.eventType?.code || "—"}<small>{event.statusLabel || event.status} · {event.planningKind || "—"}</small></td><td>{resourceWorkshop}<small>Цех события: {event.workshop?.code || event.workshop?.name || "—"}</small></td><td>План: {fmtDate(event.startAt, true)} — {fmtDate(event.endAt, true)}<small>Бюджет: {fmtDate(event.budgetStartAt, true)} — {fmtDate(event.budgetEndAt, true)}<br />Факт: {fmtDate(event.actualStartAt, true)} — {fmtDate(event.actualEndAt, true)}</small></td><td>{event.placements.length ? event.placements.map((p, i) => <div key={p.id} className="personnelPlacement"><b>{i + 1}. {p.hangar?.code || p.hangar?.name || "Ангар"} / {p.stand?.code || p.stand?.name || "место —"}</b><br />План: {fmtDate(p.startAt, true)} — {fmtDate(p.endAt, true)}<br />Бюджет: {fmtDate(p.budgetStartAt, true)} — {fmtDate(p.budgetEndAt, true)}<br />Факт: {fmtDate(p.actualStartAt, true)} — {fmtDate(p.actualEndAt, true)}</div>) : "Без размещений"}</td><td>{event.reportMetrics.map((m) => <div key={m.department}>{DEPT_LABEL[m.department]}: {formatPersonnelNumber(Number(m.manHours))}</div>)}</td></tr>) : <tr><td colSpan={7}>Нет событий спроса за выбранный период.</td></tr>}</tbody>
     </table></div></section>;
@@ -1061,7 +912,6 @@ function WeeklyTimeline({ events, from, to, palette, slices, demandDays, worksho
       difference: recordLevels(day?.strictBalance)
     };
   });
-  const hours = dates.flatMap((date) => Array.from({ length: 24 }, (_, hour) => ({ date, hour })));
   const rangeStart = new Date(`${from}T00:00:00+03:00`).getTime();
   const rangeEnd = new Date(`${to}T00:00:00+03:00`).getTime() + 86_400_000;
   const dayCount = Math.max(dates.length, 1);
@@ -1070,15 +920,16 @@ function WeeklyTimeline({ events, from, to, palette, slices, demandDays, worksho
   const typeName = new Map(aircraftTypes.map((row) => [row.id, row.icaoType || row.name]));
   const summaryRows = [...slices].sort((a, b) => (workshopName.get(a.workshopId) || a.workshopId).localeCompare(workshopName.get(b.workshopId) || b.workshopId, "ru", { numeric: true }) || (typeName.get(a.aircraftTypeId) || a.aircraftTypeId).localeCompare(typeName.get(b.aircraftTypeId) || b.aircraftTypeId, "ru", { numeric: true }));
   const summaryTotal = summaryRows.reduce((sum, row) => ({ planned: sum.planned + row.planned, available: sum.available + row.available, difference: sum.difference + row.difference }), { planned: 0, available: 0, difference: 0 });
-  return <section className="card personnelTimelineCard"><div className="personnelSectionHead personnelPlanHead"><div><h2>График/План</h2><div className="muted">События собраны под оранжевой полосой ангара. На полосе события — название и время начала и окончания. Категории — только те, что заданы выбранным цехам; тип ВС сужает цеха. Красная заливка на полосе — период буксировки.</div></div><button type="button" className="btn ganttIconBtn" onClick={onExport} disabled={exporting} title="Выгрузить график в Excel" aria-label="Выгрузить график в Excel"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5z" /><path d="M12 2v4h4" /><path d="M7 14l2-4" /><path d="M11 14l-2-4" /><path d="M12.5 14h2.5" /><path d="M12.5 10h2.5" /></svg></button></div>
-    <div className="personnelTimelineScroll"><table className={month ? "personnelPlan personnelPlanMonth" : "personnelPlan"} style={{ width: "100%", minWidth: !month && dates.length > 7 ? `${(dates.length / 7) * 100}%` : undefined, ["--plan-slot-columns" as string]: slotColumns }}>
+  const quarterCount = dayCount * 4;
+  return <section className="card personnelTimelineCard"><div className="personnelSectionHead personnelPlanHead"><div><h2 className="personnelResourceTitle">График/План<BlockHelp label="График/План"><p>События выбранного периода на шкале времени, с потребностью по категориям.</p><ul><li>Оранжевая полоса — ангар. Под ней строки бортов, которые стоят в этом ангаре. Событие без ангара собрано в группу «Без ангара».</li><li>Слева — борт, ангар, цех, заказчик, тип ВС, место и статус.</li><li>Цветная полоса — само событие. На ней название. Время начала и окончания стоит снаружи у краёв. Если событие кончается позже периода, на полосе остаётся till с датой окончания.</li><li>Красная заливка на полосе — период буксировки.</li><li>Под полосой — плановые человеко-часы события по категориям на каждый день. Категории только те, что заданы выбранным цехам. Фильтр типа ВС сужает и цеха, и события.</li><li>Шкала «Неделя» показывает часы 0, 6, 12 и 18. «Месяц» сжимает те же сутки. Стрелки периода листают окно.</li><li>Три нижние строки — итог по всем событиям: потребность, доступный ресурс и разница. Разница окрашена: зелёная, если ресурс больше потребности, красная — если меньше.</li><li>Кнопка с листом выгружает этот график в Excel.</li></ul></BlockHelp></h2></div><button type="button" className="btn ganttIconBtn" onClick={onExport} disabled={exporting} title="Выгрузить график в Excel" aria-label="Выгрузить график в Excel"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5z" /><path d="M12 2v4h4" /><path d="M7 14l2-4" /><path d="M11 14l-2-4" /><path d="M12.5 14h2.5" /><path d="M12.5 10h2.5" /></svg></button></div>
+    <div className="personnelTimelineScroll"><table className={month ? "personnelPlan personnelPlanMonth" : "personnelPlan"} style={{ width: "100%", minWidth: !month && dates.length > 7 ? `${(dates.length / 7) * 100}%` : undefined, ["--plan-slot-columns" as string]: slotColumns, ["--plan-days" as string]: dayCount, ["--plan-quarters" as string]: quarterCount }}>
       <thead>
         <tr>
           <th className="personnelPlanIdentity">Событие</th>
           <th className="personnelPlanBandsCol">Категории</th>
           <th className="personnelPlanScale">
-            <div className="personnelPlanDays" style={{ gridTemplateColumns: `repeat(${dayCount}, 1fr)` }}>{dates.map((date) => <span key={date}>{fmtDayMonth(date)}</span>)}</div>
-            {month ? null : <div className="personnelPlanHours" style={{ gridTemplateColumns: `repeat(${Math.max(hours.length, 1)}, 1fr)` }}>{hours.map((slot) => <span key={`${slot.date}-${slot.hour}`}>{slot.hour % 6 === 0 ? slot.hour : ""}</span>)}</div>}
+            <div className="personnelPlanDays" style={{ gridTemplateColumns: `repeat(${dayCount}, minmax(0, 1fr))` }}>{dates.map((date) => <span key={date}>{fmtDayMonth(date)}</span>)}</div>
+            <div className="personnelPlanHours" style={{ gridTemplateColumns: `repeat(${dayCount}, minmax(0, 1fr))` }}>{dates.map((date) => <div key={date} className="personnelPlanHourMarks"><span>0</span><span>6</span><span>12</span><span>18</span></div>)}</div>
           </th>
         </tr>
       </thead>
@@ -1095,9 +946,8 @@ function WeeklyTimeline({ events, from, to, palette, slices, demandDays, worksho
             const tail = event.aircraftLabel || event.aircraft?.tailNumber || "—";
             const fill = barColor(event, palette);
             const startLabel = fmtClock(event.startAt);
-            const endLabel = pos?.endsAfter ? `till ${fmtTill(event.endAt)}` : fmtClock(event.endAt);
-            const startOutside = pos !== null && !month && pos.left >= 8;
-            const endOutside = pos !== null && !month && !pos.endsAfter && pos.left + pos.width <= 92;
+            const till = pos?.endsAfter === true;
+            const endLabel = till ? `till ${fmtTill(event.endAt)}` : fmtClock(event.endAt);
             return <tr key={event.id}>
               <td className="personnelPlanIdentity" title={event.title}>
                 <b>{tail}</b>
@@ -1109,14 +959,14 @@ function WeeklyTimeline({ events, from, to, palette, slices, demandDays, worksho
                 <div className="personnelPlanLane" />
                 <BandLabels bands={bands} />
               </td>
-              <td className="personnelPlanTrack" style={{ backgroundImage: `repeating-linear-gradient(to right, transparent 0, transparent calc(100% / ${dayCount} - 1px), #94a3b8 calc(100% / ${dayCount} - 1px), #94a3b8 calc(100% / ${dayCount}))` }}>
+              <td className="personnelPlanTrack">
+                <div className="personnelPlanGridLines" />
                 <div className="personnelPlanLane">
                   {pos ? <>
-                    {startOutside ? <span className="personnelPlanClock" style={{ left: `${pos.left}%` }}>{startLabel}</span> : null}
+                    <span className="personnelPlanClock" style={{ left: `${pos.left}%` }}>{startLabel}</span>
                     <div className="personnelPlanBar" style={{ left: `${pos.left}%`, width: `${pos.width}%`, background: fill, color: contrastTextColor(fill) }} title={`${startLabel} ${event.title} ${endLabel}`.trim()}>
-                      {startOutside ? null : <span className="personnelPlanBarTime">{startLabel}</span>}
                       <span className="personnelPlanBarTitle">{event.title}</span>
-                      {endOutside ? null : <span className="personnelPlanBarTime">{endLabel}</span>}
+                      {till ? <span className="personnelPlanBarTime">{endLabel}</span> : null}
                       {(event.towSegments ?? []).map((tow) => {
                         const towStart = new Date(tow.startAt).getTime();
                         const towEnd = new Date(tow.endAt).getTime();
@@ -1126,10 +976,10 @@ function WeeklyTimeline({ events, from, to, palette, slices, demandDays, worksho
                         return <span key={tow.id} className="personnelPlanTow" style={{ left: `${((visibleStart - barStart) / (barEnd - barStart)) * 100}%`, width: `${((visibleEnd - visibleStart) / (barEnd - barStart)) * 100}%` }} title="Буксировка" />;
                       })}
                     </div>
-                    {endOutside ? <span className="personnelPlanClock personnelPlanClockEnd" style={{ left: `${pos.left + pos.width}%` }}>{endLabel}</span> : null}
+                    {till ? null : <span className="personnelPlanClock personnelPlanClockEnd" style={{ left: `${pos.left + pos.width}%` }}>{endLabel}</span>}
                   </> : null}
                 </div>
-                <div className="personnelPlanLabor" style={{ gridTemplateColumns: `repeat(${dayCount}, 1fr)` }}>
+                <div className="personnelPlanLabor" style={{ gridTemplateColumns: `repeat(${dayCount}, minmax(0, 1fr))` }}>
                   {dates.map((date) => <div key={date} className="personnelPlanLaborDay"><HourBands bands={bands} levels={demandLevels(demandDays, event.id, date)} /></div>)}
                 </div>
               </td>
@@ -1140,23 +990,23 @@ function WeeklyTimeline({ events, from, to, palette, slices, demandDays, worksho
           <tr className="personnelTotalRow">
             <td className="personnelPlanIdentity">Итого потребность</td>
             <td className="personnelPlanBandsCol"><BandLabels bands={bands} /></td>
-            <td className="personnelPlanNumbers"><div className="personnelPlanLabor" style={{ gridTemplateColumns: `repeat(${dayCount}, 1fr)` }}>{dayTotals.map((day) => <div key={day.date} className="personnelPlanLaborDay"><HourBands bands={bands} levels={day.demand} /></div>)}</div></td>
+            <td className="personnelPlanNumbers"><div className="personnelPlanGridLines" /><div className="personnelPlanLabor" style={{ gridTemplateColumns: `repeat(${dayCount}, minmax(0, 1fr))` }}>{dayTotals.map((day) => <div key={day.date} className="personnelPlanLaborDay"><HourBands bands={bands} levels={day.demand} /></div>)}</div></td>
           </tr>
           <tr className="personnelTotalRow">
             <td className="personnelPlanIdentity">Итого доступный ресурс</td>
             <td className="personnelPlanBandsCol"><BandLabels bands={bands} /></td>
-            <td className="personnelPlanNumbers"><div className="personnelPlanLabor" style={{ gridTemplateColumns: `repeat(${dayCount}, 1fr)` }}>{dayTotals.map((day) => <div key={day.date} className="personnelPlanLaborDay"><HourBands bands={bands} levels={day.supply} /></div>)}</div></td>
+            <td className="personnelPlanNumbers"><div className="personnelPlanGridLines" /><div className="personnelPlanLabor" style={{ gridTemplateColumns: `repeat(${dayCount}, minmax(0, 1fr))` }}>{dayTotals.map((day) => <div key={day.date} className="personnelPlanLaborDay"><HourBands bands={bands} levels={day.supply} /></div>)}</div></td>
           </tr>
           <tr className="personnelTotalRow">
             <td className="personnelPlanIdentity" title="Доступный ресурс − потребность">Итого разница</td>
             <td className="personnelPlanBandsCol"><BandLabels bands={bands} /></td>
-            <td className="personnelPlanNumbers"><div className="personnelPlanLabor" style={{ gridTemplateColumns: `repeat(${dayCount}, 1fr)` }}>{dayTotals.map((day) => <div key={day.date} className="personnelPlanLaborDay"><HourBands bands={bands} levels={day.difference} balance /></div>)}</div></td>
+            <td className="personnelPlanNumbers"><div className="personnelPlanGridLines" /><div className="personnelPlanLabor" style={{ gridTemplateColumns: `repeat(${dayCount}, minmax(0, 1fr))` }}>{dayTotals.map((day) => <div key={day.date} className="personnelPlanLaborDay"><HourBands bands={bands} levels={day.difference} balance /></div>)}</div></td>
           </tr>
         </> : <tr><td colSpan={3}>Нет событий за выбранный период.</td></tr>}
       </tbody>
     </table></div>
     <div className="personnelPlanSummary">
-      <h3>Сводка за период</h3>
+      <h3 className="personnelResourceTitle">Сводка за период<BlockHelp label="Сводка за период"><p>Плановая трудоёмкость и доступный ресурс за весь выбранный период, без разбивки по суткам.</p><ul><li>Строка — один цех и один тип ВС из фильтра.</li><li>Плановая трудоёмкость — сумма человеко-часов событий. Доступный ресурс — численность, пересчитанная в человеко-часы. Разница — ресурс минус план.</li><li>Зелёная разница — запас, красная — нехватка.</li><li>«Итого» складывает все строки. Это тот же разрез, что таблица «Ёмкость по цеху и типу ВС» на вкладке Capacity.</li></ul></BlockHelp></h3>
       <table className="personnelSimpleTable">
         <thead><tr><th>Цех</th><th>Тип ВС</th><th>Плановая трудоемкость</th><th>Доступный ресурс</th><th>Разница</th></tr></thead>
         <tbody>

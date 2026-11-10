@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import * as XLSX from "xlsx";
 
+import { DraftNumberInput } from "../components/DraftNumberInput";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { ClickRow, RecordCard } from "./FleetRefCards";
@@ -709,11 +710,11 @@ export function RemainingRefCard(props: {
           <TextField label="Название" value={v.name} maxLength={80} error={show(nameError)} disabled={!props.canEdit} onChange={(name) => props.onChange({ name })} />
           <div className="operatorCardMetrics">
             <Field label="Начало, мин" error={show(startError)}>
-              <input className={`refInput${show(startError) ? " refInputInvalid" : ""}`} type="number" min={0} max={1440} step={15} value={String(v.startMin)} disabled={!props.canEdit} onChange={(e) => props.onChange({ startMin: e.target.value === "" ? 0 : Number(e.target.value) })} />
+              <DraftNumberInput className={`refInput${show(startError) ? " refInputInvalid" : ""}`} min={0} max={1440} step={15} value={v.startMin} disabled={!props.canEdit} aria-invalid={Boolean(show(startError))} onChange={(startMin) => props.onChange({ startMin })} />
               <span className="muted">{clock(v.startMin)}</span>
             </Field>
             <Field label="Окончание, мин" error={show(endError)}>
-              <input className={`refInput${show(endError) ? " refInputInvalid" : ""}`} type="number" min={0} max={1440} step={15} value={String(v.endMin)} disabled={!props.canEdit} onChange={(e) => props.onChange({ endMin: e.target.value === "" ? 0 : Number(e.target.value) })} />
+              <DraftNumberInput className={`refInput${show(endError) ? " refInputInvalid" : ""}`} min={0} max={1440} step={15} value={v.endMin} disabled={!props.canEdit} aria-invalid={Boolean(show(endError))} onChange={(endMin) => props.onChange({ endMin })} />
               <span className="muted">{clock(v.endMin)}</span>
             </Field>
           </div>
@@ -792,7 +793,7 @@ export function RemainingRefCard(props: {
           <TextField label="Название" value={v.name} maxLength={200} error={show(nameError)} disabled={!props.canEdit} autoFocus={props.mode === "edit"} onChange={(name) => props.onChange({ name })} />
           <ColorField label="Цвет полоски на Гантте" value={v.color} error={show(colorError)} disabled={!props.canEdit} allowEmpty onChange={(color) => props.onChange({ color })} />
           <Field label="Порядок" error={show(orderError)}>
-            <input className={`refInput${show(orderError) ? " refInputInvalid" : ""}`} type="number" min={0} max={10000} step={10} value={String(v.sortOrder)} disabled={!props.canEdit} onChange={(e) => props.onChange({ sortOrder: e.target.value === "" ? 0 : Number(e.target.value) })} />
+            <DraftNumberInput className={`refInput${show(orderError) ? " refInputInvalid" : ""}`} min={0} max={10000} step={10} value={v.sortOrder} disabled={!props.canEdit} aria-invalid={Boolean(show(orderError))} onChange={(sortOrder) => props.onChange({ sortOrder })} />
           </Field>
           <SwitchToggle checked={v.allowsAutoInProgress} onChange={(allowsAutoInProgress) => props.onChange({ allowsAutoInProgress })} disabled={!props.canEdit || terminal} label="Автоперевод в «В работе»" hint="После наступления оперативного начала событие само перейдёт во «В работе»." />
           <SwitchToggle checked={v.manualOnly} onChange={(manualOnly) => props.onChange({ manualOnly })} disabled={!props.canEdit || deleted} label="Только вручную" hint="Не слать уведомление о просрочке без факта." />
@@ -891,7 +892,7 @@ export function RemainingRefCard(props: {
             </select>
           </Field>
           <Field label="Значение">
-            <input className="refInput" type="number" step={10} value={String(v.scoreValue)} disabled={!props.canEdit} onChange={(e) => props.onChange({ scoreValue: e.target.value === "" ? 0 : Number(e.target.value) })} />
+            <DraftNumberInput className="refInput" step={10} value={v.scoreValue} disabled={!props.canEdit} onChange={(scoreValue) => props.onChange({ scoreValue })} />
           </Field>
           <Field label="Единица">
             <select className="refInput" value={v.scoreUnit} disabled={!props.canEdit} onChange={(e) => props.onChange({ scoreUnit: e.target.value })}>
@@ -974,7 +975,7 @@ export function RemainingRefCard(props: {
           </select>
         </Field>
         <Field label="Балл приоритета" error={show(scoreError)}>
-          <input className={`refInput${show(scoreError) ? " refInputInvalid" : ""}`} type="number" step={50} value={String(v.priorityScore)} disabled={!props.canEdit} onChange={(e) => props.onChange({ priorityScore: e.target.value === "" ? 0 : Number(e.target.value) })} />
+          <DraftNumberInput className={`refInput${show(scoreError) ? " refInputInvalid" : ""}`} step={50} value={v.priorityScore} disabled={!props.canEdit} aria-invalid={Boolean(show(scoreError))} onChange={(priorityScore) => props.onChange({ priorityScore })} />
         </Field>
         <Field label="Типы событий">
           <MultiSelectDropdown options={props.eventTypes} value={v.priorityEventTypeIds} onChange={(priorityEventTypeIds) => props.onChange({ priorityEventTypeIds })} placeholder="любой тип события" width={600} searchable selectedLabelMode="labels" disabled={!props.canEdit} />

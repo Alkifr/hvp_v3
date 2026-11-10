@@ -13,6 +13,7 @@ import {
 } from "chart.js";
 import { Chart } from "react-chartjs-2";
 
+import { BlockHelp } from "../components/BlockHelp";
 import {
   capacityHours,
   categoryCapacity,
@@ -204,7 +205,7 @@ export function PersonnelCapacityPanel(props: {
       <section className="card">
         <div className="personnelSectionHead">
           <div>
-            <h2>Capacity</h2>
+            <h2 className="personnelResourceTitle">Capacity<BlockHelp label="Capacity"><p>Ёмкость цехов и загрузка планом событий за выбранный период, в человеко-часах.</p><ul><li>Ёмкость — доступный ресурс, пересчитанный в ч·ч. Загрузка — плановая трудоёмкость MPS.</li><li>Резерв — ёмкость минус загрузка. Положительный резерв — запас, отрицательный — перегруз.</li><li>«Загрузка ёмкости» — доля плана от ёмкости. Выше 100% значит, что план больше ресурса.</li><li>Карточки сверху — сумма по всем выбранным цехам, типам ВС и суткам. Графики и таблицы ниже раскладывают ту же сумму.</li><li>Фильтр цеха и типа ВС на панели сверху ограничивает и ёмкость, и события.</li></ul></BlockHelp></h2>
           </div>
         </div>
         <div className="analyticsStats">
@@ -233,11 +234,11 @@ export function PersonnelCapacityPanel(props: {
 
       <div className="personnelCapacityCharts">
         <section className="card">
-          <h3>Загрузка и ёмкость</h3>
+          <h3 className="personnelResourceTitle">Загрузка и ёмкость<BlockHelp label="Загрузка и ёмкость"><p>Каждый столбец шкалы — одни сутки выбранного периода.</p><ul><li>Столбик — загрузка, ч·ч: плановая трудоёмкость событий в эти сутки.</li><li>Линия — ёмкость, ч·ч: доступный ресурс этих суток.</li><li>Если столбик выше линии, сутки перегружены. Наведение показывает резерв и процент загрузки.</li></ul></BlockHelp></h3>
           <div className="personnelCapacityChart">{days.length ? <Chart type="bar" data={levelData} options={levelOptions} /> : <div className="muted">Нет суток в периоде.</div>}</div>
         </section>
         <section className="card">
-          <h3>Резерв по суткам</h3>
+          <h3 className="personnelResourceTitle">Резерв по суткам<BlockHelp label="Резерв по суткам"><p>Резерв суток: ёмкость минус загрузка, ч·ч.</p><ul><li>Зелёный столбик — запас, красный — перегруз, серый — резерв около нуля.</li><li>Ноль на шкале — сутки, где план совпал с ёмкостью.</li><li>Это те же сутки, что на графике «Загрузка и ёмкость», только сразу разница, без двух рядов.</li></ul></BlockHelp></h3>
           <div className="personnelCapacityChart">{days.length ? <Chart type="bar" data={slackData} options={slackOptions} /> : <div className="muted">Нет суток в периоде.</div>}</div>
         </section>
       </div>
@@ -245,8 +246,7 @@ export function PersonnelCapacityPanel(props: {
       <section className="card">
         <div className="personnelSectionHead">
           <div>
-            <h2>Резерв по категориям</h2>
-            <div className="muted">В ячейке — резерв категории за сутки, ч·ч. Красный — загрузка выше ёмкости, зелёный — избыток. Насыщенность показывает, насколько загрузка ушла от 100% ёмкости.</div>
+            <h2 className="personnelResourceTitle">Резерв по категориям<BlockHelp label="Резерв по категориям"><p>Резерв каждой категории по суткам, человеко-часы.</p><ul><li>В ячейке — ёмкость категории минус её загрузка за эти сутки. Пустая ячейка — и ёмкости, и загрузки нет.</li><li>Красный — загрузка выше ёмкости, зелёный — избыток, серый — без разрыва. Чем насыщеннее цвет, тем дальше загрузка от 100% ёмкости.</li><li>Наведение на ячейку показывает ёмкость, загрузку и процент.</li><li>Столбец «Период» и строка «Итого» складывают соответствующие ячейки.</li><li>Полосы под таблицей сортируют категории от самого малого резерва. Слева от середины — перегруз, справа — запас.</li></ul></BlockHelp></h2>
           </div>
         </div>
         <div className="personnelHeatLegend">
@@ -314,8 +314,7 @@ export function PersonnelCapacityPanel(props: {
         <section className="card">
           <div className="personnelSectionHead">
             <div>
-              <h2>Ёмкость по цеху и типу ВС</h2>
-              <div className="muted">Сначала строки с наименьшим резервом. Это тот же разрез, что сводка под графиком.</div>
+              <h2 className="personnelResourceTitle">Ёмкость по цеху и типу ВС<BlockHelp label="Ёмкость по цеху и типу ВС"><p>Тот же разрез, что «Сводка за период» на вкладке «График/План», но в показателях ёмкости.</p><ul><li>Строка — один цех и один тип ВС. Сначала строки с наименьшим резервом.</li><li>Ёмкость — доступный ресурс, ч·ч. Загрузка — плановая трудоёмкость, ч·ч.</li><li>Резерв — ёмкость минус загрузка. Второй столбец «Загрузка» — процент плана от ёмкости. Выше 100% — перегруз.</li></ul></BlockHelp></h2>
             </div>
           </div>
           <div className="personnelTableScroll">

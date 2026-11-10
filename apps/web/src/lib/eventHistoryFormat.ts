@@ -623,6 +623,23 @@ export function historyCommentRow(reason: string): HistoryTableRow {
   return { field: "Комментарий", previous: "", current: reason.trim() };
 }
 
+export function historyReasonRows(entry: {
+  reason?: string | null;
+  changeReasonNames?: string[] | null;
+  changeReasonComment?: string | null;
+}): HistoryTableRow[] {
+  const names = (entry.changeReasonNames ?? []).map((name) => name.trim()).filter(Boolean);
+  const comment = String(entry.changeReasonComment ?? "").trim();
+  if (names.length || comment) {
+    const rows: HistoryTableRow[] = [];
+    if (names.length) rows.push({ field: "Причина", previous: "", current: names.join(", ") });
+    if (comment) rows.push(historyCommentRow(comment));
+    return rows;
+  }
+  const legacy = String(entry.reason ?? "").trim();
+  return legacy ? [historyCommentRow(legacy)] : [];
+}
+
 export function formatHistoryActor(actor: string | null | undefined): string {
   const a = String(actor ?? "").trim();
   if (!a || a === "system" || a === "browser") return a === "system" ? "Система" : a || "—";
