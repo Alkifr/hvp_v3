@@ -8,7 +8,7 @@ import {
   planDuplicateWarnings,
   type ImportDuplicateRow,
   type PlanDuplicateEvent
-} from "./importDuplicates.ts";
+} from "./importDuplicates.js";
 
 const aircraft = "aircraft-1";
 const otherAircraft = "aircraft-2";
