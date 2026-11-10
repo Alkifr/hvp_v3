@@ -238,7 +238,7 @@ export function App() {
       return;
     }
     if (!me || me.mustChangePassword) {
-      document.title = "HVP / Вход";
+      document.title = "HVP · Вход";
       return;
     }
     document.title = browserDocumentTitle(resolvedPage);

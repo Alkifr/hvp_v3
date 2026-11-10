@@ -39,7 +39,7 @@ test("parseMutedNotificationKinds drops unknown kinds", () => {
 });
 
 test("browserDocumentTitle includes the current section", () => {
-  assert.equal(browserDocumentTitle("gantt"), "HVP / Гантт");
-  assert.equal(browserDocumentTitle("analytics"), "HVP / Аналитика");
+  assert.equal(browserDocumentTitle("gantt"), "HVP · Гантт");
+  assert.equal(browserDocumentTitle("analytics"), "HVP · Аналитика");
   assert.equal(browserDocumentTitle(null), "HVP");
 });
