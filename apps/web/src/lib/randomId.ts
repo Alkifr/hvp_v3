@@ -1,6 +1,8 @@
 /** UUID v4 без `crypto.randomUUID`: на обычном HTTP (не localhost) этого метода нет. */
 
-function fallbackUuid(): string {
+type UuidString = `${string}-${string}-${string}-${string}-${string}`;
+
+function fallbackUuid(): UuidString {
   const bytes = new Uint8Array(16);
   try {
     const fill = globalThis.crypto?.getRandomValues;
@@ -51,7 +53,7 @@ export function installRandomUuidPolyfill(): void {
       // Заменяем ниже.
     }
   }
-  const polyfill = function randomUUID(): string {
+  const polyfill = function randomUUID(): UuidString {
     return fallbackUuid();
   };
   try {
