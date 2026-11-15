@@ -356,6 +356,7 @@ function CompositionPanel({ canWrite, search, createActionRef }: { canWrite: boo
     await qc.invalidateQueries({ queryKey: ["personnel", "category-composition"] });
     await qc.invalidateQueries({ queryKey: ["personnel", "week"] });
     await qc.invalidateQueries({ queryKey: ["personnel", "availability"] });
+    await qc.invalidateQueries({ queryKey: ["personnel", "balance"] });
   };
   const saveM = useMutation({
     mutationFn: () => apiPut(`${API}/category-composition`, { department, codes }),

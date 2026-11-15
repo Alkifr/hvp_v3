@@ -5,7 +5,7 @@ import dayjs from "dayjs";
 
 import { apiDelete, apiGet, apiPatch, apiPost } from "../../lib/api";
 import { EventWatchButton } from "./EventWatchButton";
-import { formatMskDateTime, fromInputMskOptional, toInputMsk } from "../../lib/localDate";
+import { formatMskDate, formatMskDateTime, fromInputMskDate, fromInputMskOptional, toInputMsk, toInputMskDate } from "../../lib/localDate";
 import {
   buildGanttTableColumns,
   defaultWidths,
@@ -28,7 +28,7 @@ import {
   type GanttTableColId,
   type PrimaryCatalogField
 } from "../../lib/ganttTableColumns";
-import { DEADLINE_SLOT_HINT, slotExitAfterDeadline } from "../../lib/deadline";
+import { DEADLINE_SLOT_HINT, slotStartAfterDeadline } from "../../lib/deadline";
 import {
   CHANGE_REASON_REQUIRED_MESSAGE,
   changeReasonBlocksSave,
@@ -357,7 +357,7 @@ function draftFromEvent(
     standId: ev.reservation?.stand?.id ?? "",
     allowOverlap: eventAllowsOverlap(ev, allEvents),
     lineBase: parseLineBase(ev.lineBase) ?? lineBaseAfterWorkshopChange(workshopId, workshops, ""),
-    deadlineAtLocal: toInputLocal(ev.deadlineAt),
+    deadlineAtLocal: toInputMskDate(ev.deadlineAt),
     multiPlacement: placements.length > 1,
     hasVirtualAircraft: !ev.aircraft?.id && !!ev.virtualAircraft
   };
@@ -1474,7 +1474,7 @@ export function GanttEventsTable(props: {
       }
       payload.workshopId = draft.workshopId || null;
       payload.lineBase = parseLineBase(draft.lineBase);
-      payload.deadlineAt = fromInputLocalOptional(draft.deadlineAtLocal);
+      payload.deadlineAt = fromInputMskDate(draft.deadlineAtLocal);
 
       await apiPatch(`/api/events/${draft.id}`, payload);
     },
@@ -1683,7 +1683,7 @@ export function GanttEventsTable(props: {
       case "lineBase":
         return formatLineBase(ev.lineBase);
       case "deadlineAt":
-        return formatCellDate(ev.deadlineAt);
+        return formatMskDate(ev.deadlineAt) || "—";
       case "startAtLocal":
         return formatCellDate(ev.startAt);
       case "endAtLocal":
@@ -1928,7 +1928,7 @@ export function GanttEventsTable(props: {
         return (
           <input
             className="evInput ganttTableInput"
-            type="datetime-local"
+            type="date"
             value={d.deadlineAtLocal}
             disabled={d.status === "DONE"}
             title={d.status === "DONE" ? "Нельзя менять DeadLine у завершённого события" : "DeadLine"}
@@ -1941,6 +1941,7 @@ export function GanttEventsTable(props: {
             className="evInput ganttTableInput"
             type="datetime-local"
             value={d.startAtLocal}
+            title={slotStartAfterDeadline(d.startAtLocal, d.deadlineAtLocal) ? DEADLINE_SLOT_HINT : undefined}
             onChange={(e) => patchDraft({ startAtLocal: e.target.value })}
           />
         );
@@ -1950,7 +1951,6 @@ export function GanttEventsTable(props: {
             className="evInput ganttTableInput"
             type="datetime-local"
             value={d.endAtLocal}
-            title={slotExitAfterDeadline(d.endAtLocal, d.deadlineAtLocal) ? DEADLINE_SLOT_HINT : undefined}
             onChange={(e) => patchDraft({ endAtLocal: e.target.value })}
           />
         );
@@ -2139,7 +2139,7 @@ export function GanttEventsTable(props: {
   return (
     <div className="ganttTablePanel">
       {localError && !confirmOpen ? <div className="error ganttTableError">{localError}</div> : null}
-      {draft && slotExitAfterDeadline(draft.endAtLocal, draft.deadlineAtLocal) ? (
+      {draft && slotStartAfterDeadline(draft.startAtLocal, draft.deadlineAtLocal) ? (
         <div className="ganttTableDeadlineHint" role="status">
           {DEADLINE_SLOT_HINT}
         </div>

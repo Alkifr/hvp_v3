@@ -33,7 +33,7 @@ export type PersonnelPlanExcelInput = {
     code: string;
     name: string;
     aircraftTypes: Array<{ id: string; name: string; icaoType?: string | null }>;
-    categories: Array<{ code: string; department: string | null }>;
+    categories: Array<{ code: string; department: string | null; countsInPlannedResource?: boolean }>;
     items: Array<{ date: string; shiftId: string; aircraftTypeId: string; categoryCode: string; headcount: number }>;
   }>;
   days: Array<{
@@ -352,11 +352,13 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
               put(ws.getCell(row, column), count > 0 ? count : "", { align: "center", numFmt: "0" });
             });
           });
-          for (const key of dates.flatMap((date, dateIndex) => shifts.map((shift, shiftIndex) => {
-            const column = 5 + dateIndex * shiftCount + shiftIndex;
-            return { key: `${date}|${shift.id}`, ref: localRef(column, row) };
-          }))) {
-            inputRefs.set(key.key, [...(inputRefs.get(key.key) ?? []), key.ref]);
+          if (category.countsInPlannedResource !== false) {
+            for (const key of dates.flatMap((date, dateIndex) => shifts.map((shift, shiftIndex) => {
+              const column = 5 + dateIndex * shiftCount + shiftIndex;
+              return { key: `${date}|${shift.id}`, ref: localRef(column, row) };
+            }))) {
+              inputRefs.set(key.key, [...(inputRefs.get(key.key) ?? []), key.ref]);
+            }
           }
           row += 1;
         }
@@ -380,8 +382,10 @@ function buildResourceSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput
             const column = 5 + dateIndex * shiftCount + shiftIndex;
             const count = headcountOf(sheet, type.id, category.code, date, shift.id);
             put(ws.getCell(row, column), count > 0 ? count : "", { align: "center", numFmt: "0" });
-            const key = `${date}|${shift.id}`;
-            inputRefs.set(key, [...(inputRefs.get(key) ?? []), localRef(column, row)]);
+            if (category.countsInPlannedResource !== false) {
+              const key = `${date}|${shift.id}`;
+              inputRefs.set(key, [...(inputRefs.get(key) ?? []), localRef(column, row)]);
+            }
           });
         });
         row += 1;

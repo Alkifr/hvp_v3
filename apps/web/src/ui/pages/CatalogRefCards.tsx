@@ -37,6 +37,8 @@ export type RemainingRefValues = {
   allowsAutoInProgress: boolean;
   manualOnly: boolean;
   defaultLineBase: "" | "LINE" | "BASE";
+  withoutAircraftType: boolean;
+  countsInPlannedResource: boolean;
   uom: string;
   personSkillIds: string[];
   startMin: number;
@@ -299,13 +301,31 @@ export function RemainingRefTable(props: {
   if (props.kind === "workshops") {
     return (
       <DataTable
-        headers={["Код", "Название", "Контур", "Статус"]}
+        headers={["Код", "Название", "Контур", "Тип ВС", "Статус"]}
         rows={props.rows.map((row) => ({
           ...open(row),
           cells: [
             codeCell(row.code),
             <strong key="n">{row.name || "—"}</strong>,
             lineBaseLabel(row.defaultLineBase),
+            row.withoutAircraftType ? "без привязки" : "по типу",
+            activeMark(row.isActive !== false)
+          ]
+        }))}
+      />
+    );
+  }
+
+  if (props.kind === "skills") {
+    return (
+      <DataTable
+        headers={["Код", "Название", "В расчёт", "Статус"]}
+        rows={props.rows.map((row) => ({
+          ...open(row),
+          cells: [
+            codeCell(row.code),
+            <strong key="n">{row.name || "—"}</strong>,
+            row.countsInPlannedResource === false ? "нет" : "да",
             activeMark(row.isActive !== false)
           ]
         }))}
@@ -550,7 +570,7 @@ export function RemainingRefCard(props: {
     const codeMin = props.kind === "skills" ? 2 : 1;
     const codeError = text(v.code, "Укажите код", codeMax, codeMin);
     const nameError = text(v.name, "Укажите название", 200);
-    const dirty = baseDirty;
+    const dirty = baseDirty || (props.kind === "skills" && v.countsInPlannedResource !== initial.current.countsInPlannedResource);
     const title = props.mode === "create" ? (props.kind === "skills" ? "Новая квалификация" : "Новый склад") : v.name.trim() || "Запись";
     return shell({
       titleId: "namedRefCardTitle",
@@ -572,6 +592,15 @@ export function RemainingRefCard(props: {
         <>
           <TextField label="Код" value={v.code} maxLength={codeMax} error={show(codeError)} disabled={!props.canEdit} autoFocus placeholder={props.kind === "skills" ? "Например, ME" : "Например, MAIN"} spellCheck={false} onChange={(code) => props.onChange({ code })} />
           <TextField label="Название" value={v.name} maxLength={200} error={show(nameError)} disabled={!props.canEdit} onChange={(name) => props.onChange({ name })} />
+          {props.kind === "skills" ? (
+            <SwitchToggle
+              checked={v.countsInPlannedResource}
+              onChange={(countsInPlannedResource) => props.onChange({ countsInPlannedResource })}
+              disabled={!props.canEdit}
+              label="В расчёт численности"
+              hint="Квалификация заполняется в «Доступном ресурсе» цеха. Если выключено, её численность не входит в «Итого» и в плановый ресурс."
+            />
+          ) : null}
           {activeSwitch()}
         </>
       )
@@ -581,7 +610,7 @@ export function RemainingRefCard(props: {
   if (props.kind === "workshops") {
     const codeError = text(v.code, "Укажите код", 32);
     const nameError = text(v.name, "Укажите название", 200);
-    const dirty = baseDirty || v.defaultLineBase !== initial.current.defaultLineBase;
+    const dirty = baseDirty || v.defaultLineBase !== initial.current.defaultLineBase || v.withoutAircraftType !== initial.current.withoutAircraftType;
     return shell({
       titleId: "workshopCardTitle",
       kicker: "Справочники · Цеха",
@@ -609,6 +638,13 @@ export function RemainingRefCard(props: {
               <option value="BASE">B (Base)</option>
             </select>
           </Field>
+          <SwitchToggle
+            checked={v.withoutAircraftType}
+            onChange={(withoutAircraftType) => props.onChange({ withoutAircraftType })}
+            disabled={!props.canEdit}
+            label="Без привязки к типу ВС"
+            hint="Техники работают без авторизации на конкретный тип ВС. В РМ Персонал численность задаётся на цех целиком."
+          />
           {activeSwitch()}
         </>
       )
@@ -1019,7 +1055,9 @@ export function downloadRemainingRefXlsx(kind: RemainingRefKind, rows: any[]) {
   } else if (kind === "optimization-score-rules") {
     sheet("Правила", "optimization-score-rules.xlsx", sorted.map((row) => ({ Профиль: row.profile?.name ?? "", Код: row.code ?? "", Название: row.name ?? "", Категория: categoryLabel(row.category), Область: scopeLabel(row.scope), Значение: row.value ?? 0, Единица: unitLabel(row.unit), Статус: statusText(row.isActive !== false) })), [24, 20, 32, 16, 24, 12, 16, 14]);
   } else if (kind === "workshops") {
-    sheet("Цеха", "workshops.xlsx", sorted.map((row) => ({ Код: row.code ?? "", Название: row.name ?? "", Контур: lineBaseLabel(row.defaultLineBase), Статус: statusText(row.isActive !== false) })), [16, 32, 16, 14]);
+    sheet("Цеха", "workshops.xlsx", sorted.map((row) => ({ Код: row.code ?? "", Название: row.name ?? "", Контур: lineBaseLabel(row.defaultLineBase), "Тип ВС": row.withoutAircraftType ? "без привязки" : "по типу", Статус: statusText(row.isActive !== false) })), [16, 32, 16, 16, 14]);
+  } else if (kind === "skills") {
+    sheet("Квалификации", "skills.xlsx", sorted.map((row) => ({ Код: row.code ?? "", Название: row.name ?? "", "В расчёт": row.countsInPlannedResource === false ? "Нет" : "Да", Статус: statusText(row.isActive !== false) })), [16, 32, 14, 14]);
   } else if (kind === "persons") {
     sheet("Сотрудники", "persons.xlsx", sorted.map((row) => ({ Код: row.code ?? "", Имя: row.name ?? "", Квалификации: personSkills(row), Статус: statusText(row.isActive !== false) })), [16, 32, 40, 14]);
   } else if (kind === "shifts") {

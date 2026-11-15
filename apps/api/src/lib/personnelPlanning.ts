@@ -64,6 +64,23 @@ export type CatalogQualification = {
   name?: string;
 };
 
+export type CatalogSkill = {
+  code: string;
+  id?: string | null;
+  name?: string;
+  countsInPlannedResource?: boolean;
+};
+
+export type ResourceQualification = {
+  code: string;
+  name: string;
+  department: string | null;
+  isAuthorized: boolean;
+  sortOrder: number;
+  countsInPlannedResource: boolean;
+  skillId: string | null;
+};
+
 /** Квалификации справочника, входящие в выбранные категории. Состав категорий в коде не задаётся. */
 export function qualificationsForDepartments<T extends CatalogQualification>(
   qualifications: readonly T[],
@@ -94,8 +111,88 @@ export function qualificationsForWorkshopSkills<T extends CatalogQualification>(
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.code.localeCompare(b.code));
 }
 
+/** Строки доступного ресурса по квалификациям цеха из справочника skills. */
+export function resourceQualifications(
+  qualifications: readonly CatalogQualification[],
+  skills: readonly CatalogSkill[]
+): ResourceQualification[] {
+  const rows = new Map<string, ResourceQualification>();
+  for (const skill of skills) {
+    const counts = skill.countsInPlannedResource !== false;
+    const produced = qualificationsForWorkshopSkills(qualifications, [skill.code]);
+    if (!produced.length) {
+      const key = `skill:${skill.id || skill.code}`;
+      if (!rows.has(key)) {
+        rows.set(key, {
+          code: skill.code,
+          name: skill.name || skill.code,
+          department: null,
+          isAuthorized: false,
+          sortOrder: 10_000,
+          countsInPlannedResource: counts,
+          skillId: skill.id ?? null
+        });
+      }
+      continue;
+    }
+    for (const row of produced) {
+      const existing = rows.get(row.code);
+      if (!existing) {
+        rows.set(row.code, {
+          code: row.code,
+          name: row.name ?? row.code,
+          department: row.department,
+          isAuthorized: row.isAuthorized,
+          sortOrder: row.sortOrder ?? 0,
+          countsInPlannedResource: counts,
+          skillId: null
+        });
+      } else if (counts) {
+        existing.countsInPlannedResource = true;
+      }
+    }
+  }
+  return [...rows.values()].sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code));
+}
+
 export const DEFAULT_PERSONNEL_HOURS_NORM = 11;
 export const DEFAULT_AIRCRAFT_MPS_FACTOR = 1.4;
+/** Численность цеха без привязки к типу ВС. В базе это NULL, в ключах ячеек — пустая строка. */
+export const UNTYPED_AIRCRAFT_TYPE_ID = "";
+
+export function isUntypedAircraftType(aircraftTypeId: string | null | undefined) {
+  return !aircraftTypeId;
+}
+
+/** Строка численности видна только в том режиме, в котором её записали. */
+export function availabilityRowVisible(
+  row: { workshopId: string; aircraftTypeId: string | null | undefined },
+  untypedWorkshopIds: ReadonlySet<string>
+) {
+  return untypedWorkshopIds.has(row.workshopId) === isUntypedAircraftType(row.aircraftTypeId);
+}
+
+/** Численность без типа входит в общий расчёт при любом фильтре типов и не дублируется внутри одного типа. */
+export function availabilityIncluded(
+  row: { workshopId: string; aircraftTypeId: string | null | undefined },
+  untypedWorkshopIds: ReadonlySet<string>,
+  selectedTypeIds: ReadonlySet<string> | null,
+  aircraftTypeId?: string
+) {
+  if (!availabilityRowVisible(row, untypedWorkshopIds)) return false;
+  if (aircraftTypeId) return row.aircraftTypeId === aircraftTypeId;
+  if (!selectedTypeIds || untypedWorkshopIds.has(row.workshopId)) return true;
+  return selectedTypeIds.has(row.aircraftTypeId ?? "");
+}
+
+export function sliceAircraftTypeId(
+  workshopId: string,
+  aircraftTypeId: string | null | undefined,
+  untypedWorkshopIds: ReadonlySet<string>
+) {
+  return untypedWorkshopIds.has(workshopId) ? UNTYPED_AIRCRAFT_TYPE_ID : (aircraftTypeId ?? UNTYPED_AIRCRAFT_TYPE_ID);
+}
+
 const DAY_MS = 86_400_000;
 
 export type EffectiveValue = { effectiveFrom: string; value: number };
@@ -103,6 +200,8 @@ export type PersonnelCategoryRule = {
   code: string;
   department: PersonnelDepartment | null;
   isAuthorized: boolean;
+  /** false — строка видна, но не входит в итог численности и в плановый ресурс. */
+  countsInPlannedResource?: boolean;
 };
 export type PersonnelDemandEvent = {
   id: string;
@@ -308,7 +407,7 @@ export function calculatePersonnelWeek(input: {
     const norm = effectiveValue(input.norms, date, DEFAULT_PERSONNEL_HOURS_NORM);
     for (const row of availabilityByDate.get(date) ?? []) {
       const category = categoryByCode.get(row.categoryCode);
-      if (!category) continue;
+      if (!category || category.countsInPlannedResource === false) continue;
       const hours = row.headcount * norm;
       overallSupply += hours;
       if (category.department) authorizedSupply[category.department] += hours;

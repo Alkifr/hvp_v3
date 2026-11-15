@@ -17,16 +17,22 @@ const DEPT_LABEL: Record<string, string> = {
   PAINT: "Paint"
 };
 
+const PERSONNEL_CATEGORY_CODES = new Set(["B1", "LBMM", "B2", "LBMA", "AM", "SM", "NDT", "SHOP", "INT", "CAB_REP", "PAINT"]);
+
+export const UNTYPED_AIRCRAFT_TYPE_ID = "";
+export const UNTYPED_AIRCRAFT_TYPE_LABEL = "Без типа";
+
 export type ResourceGridSheet = {
   workshopId: string;
   code: string;
   name: string;
+  withoutAircraftType?: boolean;
   aircraftTypes: Array<{ id: string; name: string; icaoType?: string | null }>;
-  mappedCategories: Array<{ categoryCode: string; skillId?: string | null; department: string | null }>;
+  mappedCategories: Array<{ categoryCode: string; skillId?: string | null; department: string | null; countsInPlannedResource?: boolean }>;
   items: Array<{
     date: string;
     shiftId: string;
-    aircraftTypeId: string;
+    aircraftTypeId: string | null;
     categoryCode: string | null;
     skillId?: string | null;
     skill?: { code?: string | null } | null;
@@ -85,13 +91,15 @@ export function buildResourceRows(sheets: readonly ResourceGridSheet[]): Resourc
     const label = workshopLabel(sheet);
     rows.push({ kind: "banner", key: `${sheet.workshopId}:banner`, height: RESOURCE_ROW_HEIGHT.banner, label });
     const categories = sheet.mappedCategories.filter((row) => categoryToken(row));
-    const types = sheet.aircraftTypes;
+    const types = sheet.withoutAircraftType
+      ? [{ id: UNTYPED_AIRCRAFT_TYPE_ID, name: UNTYPED_AIRCRAFT_TYPE_LABEL, icaoType: null }]
+      : sheet.aircraftTypes;
     if (!categories.length) {
       rows.push({
         kind: "note",
         key: `${sheet.workshopId}:no-skills`,
         height: RESOURCE_ROW_HEIGHT.note,
-        text: "Для цеха не назначены квалификации. Укажите их в справочнике «Состав категорий»."
+        text: "Для цеха не назначены квалификации. Укажите их в справочнике «Категории цеха»."
       });
       continue;
     }
@@ -106,7 +114,7 @@ export function buildResourceRows(sheets: readonly ResourceGridSheet[]): Resourc
     }
     const departments: string[] = [];
     for (const row of categories) if (row.department && !departments.includes(row.department)) departments.push(row.department);
-    const allTokens = categories.map(categoryToken);
+    const plannedTokens = categories.filter((row) => row.countsInPlannedResource !== false).map(categoryToken);
     for (const type of types) {
       const typeLabel = type.icaoType || type.name;
       for (const department of departments) {
@@ -157,29 +165,31 @@ export function buildResourceRows(sheets: readonly ResourceGridSheet[]): Resourc
       }
       rows.push({
         kind: "aggregate",
-        key: `${sheet.workshopId}:total:${type.id}`,
+        key: `${sheet.workshopId}:total:${type.id || "untyped"}`,
         height: RESOURCE_ROW_HEIGHT.sum,
         className: "personnelTotalRow",
         workshopId: sheet.workshopId,
         title: "Итого",
-        hint: "численность",
+        hint: sheet.withoutAircraftType ? "весь цех" : "численность",
         typeLabel,
         typeIds: [type.id],
-        tokens: allTokens
+        tokens: plannedTokens
       });
     }
-    rows.push({
-      kind: "aggregate",
-      key: `${sheet.workshopId}:grand`,
-      height: RESOURCE_ROW_HEIGHT.sum,
-      className: "personnelGrandTotalRow",
-      workshopId: sheet.workshopId,
-      title: "Итого",
-      hint: "все типы ВС",
-      typeLabel: "Все",
-      typeIds: types.map((type) => type.id),
-      tokens: allTokens
-    });
+    if (!sheet.withoutAircraftType) {
+      rows.push({
+        kind: "aggregate",
+        key: `${sheet.workshopId}:grand`,
+        height: RESOURCE_ROW_HEIGHT.sum,
+        className: "personnelGrandTotalRow",
+        workshopId: sheet.workshopId,
+        title: "Итого",
+        hint: "все типы ВС",
+        typeLabel: "Все",
+        typeIds: types.map((type) => type.id),
+        tokens: plannedTokens
+      });
+    }
   }
   return rows;
 }
@@ -397,7 +407,7 @@ export function baselineFromSheets(sheets: readonly ResourceGridSheet[]): Record
       if (!token || !tokens.has(token)) return;
       const headcount = Number(row.headcount);
       if (!Number.isFinite(headcount)) return;
-      const key = resourceCellKey(sheet.workshopId, dateKey(row.date), row.shiftId, row.aircraftTypeId, token);
+      const key = resourceCellKey(sheet.workshopId, dateKey(row.date), row.shiftId, row.aircraftTypeId || UNTYPED_AIRCRAFT_TYPE_ID, token);
       if (!overwrite && Object.hasOwn(out, key)) return;
       out[key] = String(headcount);
     };
@@ -405,6 +415,7 @@ export function baselineFromSheets(sheets: readonly ResourceGridSheet[]): Record
     for (const row of sheet.items) {
       if (row.categoryCode) continue;
       write(row.skill?.code ?? "", row, false);
+      if (row.skillId) write(row.skillId, row, false);
     }
   }
   return out;
@@ -417,7 +428,7 @@ export type AvailabilityWriteGroup = {
     date: string;
     shiftId: string;
     aircraftTypeId: string;
-    categoryCode: string;
+    categoryCode?: string;
     skillId?: string;
     headcount: number;
   }>;
@@ -439,7 +450,7 @@ export function groupAvailabilityWrites(
     const aircraftTypeId = parts[3]!;
     const token = parts[4]!;
     const category = categoryOf(workshopId, token);
-    if (!category?.categoryCode) throw new Error("Не удалось сопоставить квалификацию для сохранения");
+    if (!category?.categoryCode && !category?.skillId) throw new Error("Не удалось сопоставить квалификацию для сохранения");
     const numeric = Number(valueOf(key));
     const headcount = Math.max(0, Math.min(100_000, Math.round(Number.isFinite(numeric) ? numeric : 0)));
     const weekStart = mondayOfWeek(date);
@@ -450,13 +461,14 @@ export function groupAvailabilityWrites(
       groups.set(bucket, group);
     }
     group.entries.push([key, valueOf(key)]);
+    const personnelCategory = category.categoryCode && PERSONNEL_CATEGORY_CODES.has(category.categoryCode) ? category.categoryCode : undefined;
     group.items.push({
       date,
       shiftId,
       aircraftTypeId,
-      categoryCode: category.categoryCode,
-      ...(category.skillId ? { skillId: category.skillId } : {}),
-      headcount
+      headcount,
+      ...(personnelCategory ? { categoryCode: personnelCategory } : {}),
+      ...(category.skillId ? { skillId: category.skillId } : {})
     });
   }
   return [...groups.values()];

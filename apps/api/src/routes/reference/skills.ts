@@ -16,6 +16,7 @@ export const skillsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         code: z.string().trim().min(2).max(32),
         name: z.string().trim().min(1).max(200),
+        countsInPlannedResource: z.boolean().optional(),
         isActive: z.boolean().optional()
       })
       .parse(req.body);
@@ -29,6 +30,7 @@ export const skillsRoutes: FastifyPluginAsync = async (app) => {
       .object({
         code: z.string().trim().min(2).max(32).optional(),
         name: z.string().trim().min(1).max(200).optional(),
+        countsInPlannedResource: z.boolean().optional(),
         isActive: z.boolean().optional()
       })
       .parse(req.body);

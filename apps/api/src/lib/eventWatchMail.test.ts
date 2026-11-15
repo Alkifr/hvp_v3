@@ -67,6 +67,13 @@ test("summarizeChanges показывает было и стало", () => {
   assert.equal(lines[1], "Примечание: — → ок");
 });
 
+test("DeadLine в письме показывается датой без времени", () => {
+  const lines = summarizeChanges({
+    deadlineAt: { from: "2026-07-01T21:00:00.000Z", to: "2026-07-02" }
+  });
+  assert.equal(lines[0], "DeadLine: 02.07.2026 → 02.07.2026");
+});
+
 const HANGAR_A = "11111111-1111-4111-8111-111111111111";
 const HANGAR_B = "22222222-2222-4222-8222-222222222222";
 const LAYOUT_A = "33333333-3333-4333-8333-333333333333";

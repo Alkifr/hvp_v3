@@ -34,7 +34,7 @@ type Meta = {
   categories: Array<{ code: string; name: string; department: Department | null; isAuthorized: boolean; sortOrder: number }>;
   workshopCategoryMappings: Array<{ workshopId: string; categoryCode: string }>;
   shifts: Array<{ id: string; code: string; name: string; startMin: number; endMin: number }>;
-  workshops: Array<{ id: string; code: string; name: string }>;
+  workshops: Array<{ id: string; code: string; name: string; withoutAircraftType?: boolean }>;
   aircraftTypes: Array<{ id: string; name: string; icaoType?: string | null }>;
   workshopAircraftTypes?: Array<{ workshopId: string; aircraftTypeId: string }>;
 };
@@ -101,6 +101,7 @@ type ResourceSheet = {
   workshopId: string;
   code: string;
   name: string;
+  withoutAircraftType?: boolean;
   aircraftTypes: Array<{ id: string; name: string; icaoType?: string | null }>;
   mappedCategories: ResourceCategory[];
   items: AvailabilityCell[];
@@ -116,7 +117,7 @@ type WeekResponse = {
   aircraftTypes: Array<{ id: string; name: string; icaoType?: string | null }>;
   demandDepartments?: Department[];
   balanceLines?: BalanceLine[];
-  mappedCategories: Array<{ categoryCode: string; skillId?: string | null; department: Department | null; category: { code?: string; name?: string; department: Department | null } }>;
+  mappedCategories: Array<{ categoryCode: string; skillId?: string | null; department: Department | null; countsInPlannedResource?: boolean; category: { code?: string; name?: string; department: Department | null; countsInPlannedResource?: boolean } }>;
   availability: Array<{ date: string; shiftId: string; aircraftTypeId: string; categoryCode: string | null; skillId?: string | null; headcount: number | string }>;
   events: PersonnelEvent[];
   calculation: DayCalculation[];
@@ -283,10 +284,14 @@ export function RmPersonnelView() {
     if (!types.length) return;
     if (!types.some((type) => type.id === aircraftTypeId)) setAircraftTypeId(types[0].id);
   }, [week?.aircraftTypes, aircraftTypeId]);
+  const untypedWorkshopIds = useMemo(
+    () => new Set((meta?.workshops ?? []).filter((workshop) => workshop.withoutAircraftType).map((workshop) => workshop.id)),
+    [meta]
+  );
   const workshopFilterOptions = useMemo(() => {
     const links = meta?.workshopAircraftTypes ?? [];
     return (meta?.workshops ?? [])
-      .filter((workshop) => !aircraftTypeIds.length || links.some((link) => link.workshopId === workshop.id && aircraftTypeIds.includes(link.aircraftTypeId)))
+      .filter((workshop) => workshop.withoutAircraftType || !aircraftTypeIds.length || links.some((link) => link.workshopId === workshop.id && aircraftTypeIds.includes(link.aircraftTypeId)))
       .map((workshop) => ({ id: workshop.id, label: workshop.code }));
   }, [meta, aircraftTypeIds]);
   const typeFilterOptions = useMemo(() => {
@@ -325,10 +330,11 @@ export function RmPersonnelView() {
     return map;
   }, [paletteQ.data]);
   const balanceTypeIds = aircraftTypeIds.length ? aircraftTypeIds : typeFilterOptions.map((row) => row.id);
+  const balanceReady = workshopIds.length > 0 && (balanceTypeIds.length > 0 || workshopIds.every((id) => untypedWorkshopIds.has(id)));
   const balanceQ = useQuery({
     queryKey: ["personnel", "balance", [...workshopIds].sort().join(","), [...balanceTypeIds].sort().join(","), periodFrom, periodTo],
     queryFn: () => apiGet<WeekResponse>(`${API}/balance?${new URLSearchParams({ workshopIds: workshopIds.join(","), aircraftTypeIds: balanceTypeIds.join(","), from: periodFrom, to: periodTo })}`),
-    enabled: production && tab !== "resources" && workshopIds.length > 0 && balanceTypeIds.length > 0
+    enabled: production && tab !== "resources" && balanceReady
   });
   const orderedResourceIds = useMemo(() => {
     const selected = new Set(resourceWorkshopIds);
@@ -361,6 +367,7 @@ export function RmPersonnelView() {
   const selectedEvents = useMemo(() => {
     const events = sheet?.events ?? [];
     if (tab === "resources") return events.filter((event) => event.aircraftType?.id === aircraftTypeId);
+    if (!balanceTypeIds.length) return events.filter((event) => event.aircraftType?.id);
     const allowed = new Set(balanceTypeIds);
     return events.filter((event) => event.aircraftType?.id && allowed.has(event.aircraftType.id));
   }, [sheet?.events, aircraftTypeId, balanceTypeIds, tab]);
@@ -409,21 +416,28 @@ export function RmPersonnelView() {
         sheets: workshopIds.flatMap((id) => {
           const sheet = byId.get(id);
           if (!sheet) return [];
-          const categories = sheet.mappedCategories.map((row) => ({ code: row.categoryCode, department: row.department }));
+          const categories = sheet.mappedCategories.map((row) => ({
+            code: row.categoryCode,
+            department: row.department,
+            countsInPlannedResource: row.countsInPlannedResource !== false && row.category?.countsInPlannedResource !== false
+          }));
           const known = new Set(categories.map((row) => row.code));
           return [{
             workshopId: sheet.workshopId,
             code: sheet.code,
             name: sheet.name,
-            aircraftTypes: sheet.aircraftTypes.filter((type) => allowed.has(type.id)),
+            aircraftTypes: sheet.withoutAircraftType
+              ? [{ id: "", name: "Без типа", icaoType: null }]
+              : sheet.aircraftTypes.filter((type) => allowed.has(type.id)),
             categories,
             items: sheet.items.flatMap((item) => {
               const raw = item as AvailabilityCell & { skill?: { code?: string | null } | null };
               const code = raw.skill?.code || raw.categoryCode || "";
               const date = dateKey(raw.date);
               const headcount = Number(raw.headcount);
-              if (!code || !known.has(code) || !allowed.has(raw.aircraftTypeId) || !dateSet.has(date) || !Number.isFinite(headcount) || headcount === 0) return [];
-              return [{ date, shiftId: raw.shiftId, aircraftTypeId: raw.aircraftTypeId, categoryCode: code, headcount }];
+              const untyped = sheet.withoutAircraftType && !raw.aircraftTypeId;
+              if (!code || !known.has(code) || (!untyped && !allowed.has(raw.aircraftTypeId)) || !dateSet.has(date) || !Number.isFinite(headcount) || headcount === 0) return [];
+              return [{ date, shiftId: raw.shiftId, aircraftTypeId: untyped ? "" : raw.aircraftTypeId, categoryCode: code, headcount }];
             })
           }];
         }),
@@ -459,7 +473,7 @@ export function RmPersonnelView() {
           workshopId: row.workshopId,
           workshop: workshopCode.get(row.workshopId) || "—",
           aircraftTypeId: row.aircraftTypeId,
-          aircraftType: typeCode.get(row.aircraftTypeId) || "—"
+          aircraftType: row.aircraftTypeId ? (typeCode.get(row.aircraftTypeId) || "—") : "Без типа"
         }))
       });
     } catch (error) {
@@ -555,7 +569,7 @@ export function RmPersonnelView() {
       {tab === "balance" && !workshopIds.length ? (
         <section className="card personnelEmpty"><h2>Выберите цех</h2></section>
       ) : null}
-      {tab === "balance" && workshopIds.length > 0 && !balanceTypeIds.length ? (
+      {tab === "balance" && workshopIds.length > 0 && !balanceReady ? (
         <section className="card personnelEmpty"><h2>Для выбранных цехов нет типов ВС</h2></section>
       ) : null}
       {tab === "balance" && workshopIds.length > 0 && balance ? (
@@ -574,10 +588,10 @@ export function RmPersonnelView() {
       {tab === "capacity" && !workshopIds.length ? (
         <section className="card personnelEmpty"><h2>Выберите цех</h2></section>
       ) : null}
-      {tab === "capacity" && workshopIds.length > 0 && !balanceTypeIds.length ? (
+      {tab === "capacity" && workshopIds.length > 0 && !balanceReady ? (
         <section className="card personnelEmpty"><h2>Для выбранных цехов нет типов ВС</h2></section>
       ) : null}
-      {tab === "capacity" && workshopIds.length > 0 && balanceTypeIds.length > 0 && balanceQ.data ? (
+      {tab === "capacity" && balanceReady && balanceQ.data ? (
         <PersonnelCapacityPanel
           days={balanceQ.data.calculation ?? []}
           lines={balanceQ.data.balanceLines ?? []}
@@ -590,10 +604,10 @@ export function RmPersonnelView() {
       {tab === "week" && !workshopIds.length ? (
         <section className="card personnelEmpty"><h2>Выберите цех</h2></section>
       ) : null}
-      {tab === "week" && workshopIds.length > 0 && !balanceTypeIds.length ? (
+      {tab === "week" && workshopIds.length > 0 && !balanceReady ? (
         <section className="card personnelEmpty"><h2>Для выбранных цехов нет типов ВС</h2></section>
       ) : null}
-      {tab === "week" && workshopIds.length > 0 && balanceTypeIds.length > 0 && balanceQ.data ? (
+      {tab === "week" && balanceReady && balanceQ.data ? (
         <WeeklyTimeline
           events={selectedEvents}
           from={periodFrom}

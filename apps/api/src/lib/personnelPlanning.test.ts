@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  availabilityIncluded,
+  availabilityRowVisible,
   balanceColumns,
   calculatePersonnelWeek,
   departmentForSkillCode,
+  sliceAircraftTypeId,
   summarizeResourceSlices,
   effectiveValue,
   mondayOfLocalWeek,
@@ -12,6 +15,7 @@ import {
   periodDateKeys,
   qualificationsForDepartments,
   qualificationsForWorkshopSkills,
+  resourceQualifications,
   weekDateKeys
 } from "./personnelPlanning.js";
 import { personnelBaselineDelta } from "./personnelPlanningData.js";
@@ -227,6 +231,42 @@ test("B1 and LBMM hours add into ME, AM stays in the overall pool", () => {
   assert.equal(monday!.qualificationSupply.AM, 44);
 });
 
+test("available resource rows follow workshop skills and the skill flag", () => {
+  const catalog = [
+    { code: "B1", department: "ME", isAuthorized: true, sortOrder: 10 },
+    { code: "LBMM", department: "ME", isAuthorized: true, sortOrder: 20 },
+    { code: "AM", department: null, isAuthorized: false, sortOrder: 50 },
+    { code: "SM", department: null, isAuthorized: false, sortOrder: 60 }
+  ];
+  const rows = resourceQualifications(catalog, [
+    { code: "ME", countsInPlannedResource: true },
+    { code: "AM", countsInPlannedResource: false },
+    { id: "skill-weld", code: "WELD", name: "Сварка", countsInPlannedResource: false }
+  ]);
+  assert.deepEqual(rows.map((row) => row.code), ["B1", "LBMM", "AM", "WELD"]);
+  assert.equal(rows.find((row) => row.code === "B1")?.countsInPlannedResource, true);
+  assert.equal(rows.find((row) => row.code === "AM")?.countsInPlannedResource, false);
+  assert.equal(rows.find((row) => row.code === "WELD")?.skillId, "skill-weld");
+  assert.deepEqual(resourceQualifications(catalog, [{ code: "ME" }]).map((row) => row.code), ["B1", "LBMM"]);
+  const [monday] = calculatePersonnelWeek({
+    weekStart: "2026-10-26",
+    events: [],
+    availability: [
+      { date: "2026-10-26", categoryCode: "B1", headcount: 1 },
+      { date: "2026-10-26", categoryCode: "AM", headcount: 4 }
+    ],
+    categories: [
+      { code: "B1", department: "ME", isAuthorized: true, countsInPlannedResource: true },
+      { code: "AM", department: null, isAuthorized: false, countsInPlannedResource: false }
+    ],
+    norms: [],
+    factorsByAircraftType: {}
+  });
+  assert.equal(monday!.authorizedSupply.ME, 11);
+  assert.equal(monday!.overallSupply, 11);
+  assert.equal(monday!.qualificationSupply.AM, undefined);
+});
+
 test("plan columns follow the catalog and keep a category without a department", () => {
   assert.deepEqual(
     balanceColumns([
@@ -370,4 +410,17 @@ test("builds current-versus-locked-baseline calculation and event deltas", () =>
   assert.equal(delta.calculation[0]!.overallBalance, 9);
   assert.equal(delta.calculation[0]!.departments.ME.demand, 2);
   assert.equal(delta.calculationByAircraftType.a320[0]!.overallBalance, 9);
+});
+
+test("workshop without aircraft type keeps one headcount outside type filters", () => {
+  const untyped = new Set(["paint"]);
+  assert.equal(availabilityRowVisible({ workshopId: "paint", aircraftTypeId: null }, untyped), true);
+  assert.equal(availabilityRowVisible({ workshopId: "paint", aircraftTypeId: "a320" }, untyped), false);
+  assert.equal(availabilityRowVisible({ workshopId: "cpto", aircraftTypeId: "a320" }, untyped), true);
+  assert.equal(availabilityRowVisible({ workshopId: "cpto", aircraftTypeId: null }, untyped), false);
+  const row = { workshopId: "paint", aircraftTypeId: null };
+  assert.equal(availabilityIncluded(row, untyped, new Set(["a320"])), true);
+  assert.equal(availabilityIncluded(row, untyped, new Set(["a320"]), "a320"), false);
+  assert.equal(sliceAircraftTypeId("paint", "a320", untyped), "");
+  assert.equal(sliceAircraftTypeId("cpto", "a320", untyped), "a320");
 });

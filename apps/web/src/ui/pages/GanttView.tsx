@@ -36,7 +36,7 @@ import {
   type TowDraftRow,
   type TowServerRow
 } from "../../lib/towDraft";
-import { DEADLINE_SLOT_HINT, slotExitAfterDeadline } from "../../lib/deadline";
+import { DEADLINE_SLOT_HINT, slotStartAfterDeadline } from "../../lib/deadline";
 import { formatEventTooltip, type LaborPresence } from "../../lib/eventTooltip";
 import { planDndDisplace, planDndLayoutLock, type DndDisplacePlan, type DndStandOccupant } from "../../lib/dndDisplace";
 import { planEdgeTows, type EdgePlacement } from "../../lib/edgeTowPlan";
@@ -78,7 +78,7 @@ import {
   virtualAircraftDisplayLabel,
   virtualAircraftStatusError
 } from "../../lib/virtualAircraft";
-import { formatMskDateTime, fromInputMskOptional, MSK_OFFSET_MINUTES, startOfMskDayIso, toInputMsk } from "../../lib/localDate";
+import { formatMskDate, formatMskDateTime, fromInputMskDate, fromInputMskOptional, MSK_OFFSET_MINUTES, startOfMskDayIso, toInputMsk, toInputMskDate } from "../../lib/localDate";
 import { authMe } from "../auth/authApi";
 import { EventPlacementsEditor } from "../components/EventPlacementsEditor";
 import { EventWatchButton } from "../components/EventWatchButton";
@@ -346,7 +346,22 @@ function toExcelDate(v: string | Date | null | undefined): Date | "" {
   return d.isValid() ? d.toDate() : "";
 }
 
-function formatReportCell(v: unknown): string {
+function toExcelDeadline(v: string | Date | null | undefined): Date | "" {
+  const day = toInputMskDate(v);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "";
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(year!, month! - 1, date!);
+}
+
+function formatReportCell(v: unknown, column?: string): string {
+  if (column === "DeadLine") {
+    if (v instanceof Date && Number.isFinite(v.getTime())) {
+      const day = String(v.getDate()).padStart(2, "0");
+      const month = String(v.getMonth() + 1).padStart(2, "0");
+      return `${day}.${month}.${v.getFullYear()}`;
+    }
+    return formatMskDate(typeof v === "string" ? v : null) || "—";
+  }
   if (v instanceof Date) return formatExportDate(v);
   return String(v ?? "");
 }
@@ -3673,7 +3688,7 @@ export function GanttView() {
           workshopsQ.data ?? [],
           ""
         ),
-      deadlineAtLocal: toInputLocal(ev.deadlineAt),
+      deadlineAtLocal: toInputMskDate(ev.deadlineAt),
       multiPlacement: placements.length > 1,
       autoFillGapPlacements: true,
       placements
@@ -3727,7 +3742,7 @@ export function GanttView() {
           workshopsQ.data ?? [],
           ""
         ),
-      deadlineAtLocal: toInputLocal(ev.deadlineAt),
+      deadlineAtLocal: toInputMskDate(ev.deadlineAt),
       multiPlacement: placements.length > 1,
       autoFillGapPlacements: true,
       placements
@@ -4393,7 +4408,7 @@ export function GanttView() {
         hangarId: draft.hangarId || null,
         workshopId: draft.workshopId || null,
         lineBase: parseLineBase(draft.lineBase),
-        deadlineAt: fromInputLocalOptional(draft.deadlineAtLocal),
+        deadlineAt: fromInputMskDate(draft.deadlineAtLocal),
         layoutId: draft.layoutId || null,
         placements: placementsPayload,
         notes: draft.notes?.trim() ? draft.notes : null,
@@ -5979,7 +5994,7 @@ export function GanttView() {
           "Тип планирования": PLANNING_KIND_LABEL[eventPlanningKind(ev)] ?? eventPlanningKind(ev),
           "Начало": toExcelDate(ev.startAt),
           "Окончание": toExcelDate(ev.endAt),
-          "DeadLine": toExcelDate(ev.deadlineAt),
+          "DeadLine": toExcelDeadline(ev.deadlineAt),
           "Оперативный TAT, часов": Number(durationHours.toFixed(2)),
           "Оперативный TAT, дней": Number((durationHours / 24).toFixed(2)),
           "Начало в выбранном периоде": rangeDurationHours > 0 ? rangeStart.toDate() : "",
@@ -6054,7 +6069,7 @@ export function GanttView() {
         if (!dateColumns.has(key)) continue;
         for (let row = range.s.r + 1; row <= range.e.r; row++) {
           const cell = ws[XLSX.utils.encode_cell({ r: row, c: idx })];
-          if (cell && cell.t === "d") cell.z = "dd.mm.yyyy hh:mm";
+          if (cell && cell.t === "d") cell.z = key === "DeadLine" ? "dd.mm.yyyy" : "dd.mm.yyyy hh:mm";
         }
       }
     }
@@ -6068,7 +6083,7 @@ export function GanttView() {
     const columns = Object.keys(reportRows[0] ?? {});
     const header = columns.map((c) => `<th>${htmlEscape(c)}</th>`).join("");
     const body = reportRows
-      .map((row) => `<tr>${columns.map((c) => `<td>${htmlEscape(formatReportCell((row as any)[c]))}</td>`).join("")}</tr>`)
+      .map((row) => `<tr>${columns.map((c) => `<td>${htmlEscape(formatReportCell((row as any)[c], c))}</td>`).join("")}</tr>`)
       .join("");
     openPrintableDocument(
       "Отчёт по событиям Гантта",
@@ -8238,7 +8253,7 @@ export function GanttView() {
                       <span className="evFieldLabel">DeadLine</span>
                       <input
                         className="evInput"
-                        type="datetime-local"
+                        type="date"
                         value={draft.deadlineAtLocal}
                         disabled={scheduleLockedByDone}
                         title={
@@ -8263,7 +8278,7 @@ export function GanttView() {
                       <p>Три периода события для планирования и сравнения.</p>
                       <ul>
                         <li>Оперативный период управляет полоской на Гантте и размещением в ангаре.</li>
-                        <li>Если окончание оперативного слота позже DeadLine, показывается подсказка. Сохранение при этом не блокируется.</li>
+                        <li>Если начало оперативного слота позже DeadLine, показывается подсказка. Сохранение при этом не блокируется.</li>
                         <li>Бюджетный период нужен для планового TAT; у внеплановых событий он скрыт.</li>
                         <li>Фактический период заполняется по ходу работы. Статус «Завершено» ставится автоматически, когда фактическое окончание уже наступило, и снимается, если эта дата ещё впереди.</li>
                       </ul>
@@ -8302,7 +8317,7 @@ export function GanttView() {
                     <span className="evFieldLabel">TAT</span>
                     <input className="evInput evInputReadonly" value={formatTatDetailed(draft.startAtLocal, draft.endAtLocal)} readOnly />
                   </label>
-                  {slotExitAfterDeadline(draft.endAtLocal, draft.deadlineAtLocal) ? (
+                  {slotStartAfterDeadline(draft.startAtLocal, draft.deadlineAtLocal) ? (
                     <div className="evDeadlineHint" role="status">
                       {DEADLINE_SLOT_HINT}
                     </div>

@@ -44,6 +44,13 @@ function decodeCsv(buffer: ArrayBuffer) {
   return replacementCount > 0 || mojibakeCount > 1 ? cp1251 : utf8;
 }
 
+function formatImportDay(value?: string) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (!Number.isFinite(d.valueOf())) return value;
+  return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Moscow" });
+}
+
 function formatImportDate(value?: string) {
   if (!value) return "—";
   const d = new Date(value);
@@ -89,7 +96,7 @@ function EventImportGuideReference() {
         ["budget*", "бюджет, обе даты"],
         ["actual*", "факт, обе даты"],
         ["tow*", "буксировка внутри периода"],
-        ["DeadLine", "позже окончания — предупреждение"]
+        ["DeadLine", "дата; начало слота позже — предупреждение"]
       ]
     },
     {
@@ -129,7 +136,7 @@ function EventImportGuideReference() {
         Квалификации ME, AV, INT, NDT, SHOP, CabRep.
       </p>
       <div className="eventImportColumnRules">
-        <p><strong>Предупреждение</strong> Дубль того же борта и типа, нахлёст места или схемы, чужой оператор или тип ВС, окончание позже DeadLine.</p>
+        <p><strong>Предупреждение</strong> Дубль того же борта и типа, нахлёст места или схемы, чужой оператор или тип ВС, начало слота позже DeadLine.</p>
         <p><strong>Ошибка</strong> Нет борта, типа, ангара или цеха, неверные даты, неактивный справочник, статус «Удалено».</p>
       </div>
     </section>
@@ -570,7 +577,7 @@ export function EventImportView(props: { hideHero?: boolean; onOpenMassPlan?: ()
                               <td>{row.layout || "—"}</td>
                               <td>{row.workshop || "—"}</td>
                               <td>{formatLineBase(row.lineBase)}</td>
-                              <td>{formatImportDate(row.deadlineAt ?? undefined)}</td>
+                              <td>{formatImportDay(row.deadlineAt ?? undefined)}</td>
                               <td className="eventImportMessageCell">
                                 {row.error ? <div className="eventImportErrorText">{row.error}</div> : null}
                                 {row.warnings?.length ? (

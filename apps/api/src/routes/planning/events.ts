@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { EventAuditAction, EventPlacementOrigin, PlanningLevel, Prisma, type PrismaClient } from "@prisma/client";
 
-import { parseImportDateTime } from "../../lib/localDate.js";
+import { mskCalendarDate, parseImportDateTime, startOfMskCalendarDay } from "../../lib/localDate.js";
 import { normalizePlacementGaps } from "../../lib/placementGaps.js";
 import {
   importLineBaseProvided,
@@ -43,7 +43,7 @@ import {
 } from "../../lib/changeReason.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { inferTowRoute, type TowPlacementInput } from "../../lib/towReport.js";
-import { EDGE_TOW_NORM_CODE, planEdgeTows, remapTowPlacementId, type TowLinkPlacement } from "../../lib/edgeTows.js";
+import { EDGE_TOW_NORM_CODE, planEdgeTows, remapTowPlacementId, selectPlannedEdges, type TowLinkPlacement } from "../../lib/edgeTows.js";
 import { ensureTowNorms } from "../../lib/towNorm.js";
 import { laborPresenceFromMetrics } from "../../lib/laborPresence.js";
 import { LABOR_EDITABLE_BLOCKS } from "../../lib/primaryMetricDepartments.js";
@@ -750,7 +750,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     const body = z
       .object({
         changeReason: z.string().trim().min(1).max(1000).optional(),
-        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional(),
+        role: z.enum(["event-in", "event-out", "gap-in", "gap-out"]).optional()
       })
       .parse(req.body ?? {});
 
@@ -784,10 +785,16 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       existing: ev.towSegments.map((tow) => ({ startAt: tow.startAt, endAt: tow.endAt }))
     });
 
+    const chosen = selectPlannedEdges(plan, body.role);
+    if (body.role && chosen.length === 0) {
+      const skipped = plan.skipped[0];
+      throw app.httpErrors.badRequest(skipped ? `${skipped.label}: ${skipped.reason}` : "Этот край уже занят");
+    }
+
     const sbId = sandboxIdFor(req);
     const created = await app.prisma.$transaction(async (tx) => {
       const rows = [];
-      for (const tow of plan.create) {
+      for (const tow of chosen) {
         rows.push(
           await tx.eventTow.create({
             data: {
@@ -1355,7 +1362,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       if (v instanceof Date || typeof v === "string" || typeof v === "number") return v;
       return String(v);
     };
-    const IMPORT_DEADLINE_HINT = "Дата выхода со слота позже DeadLine.";
+    const IMPORT_DEADLINE_HINT = "Дата начала слота позже DeadLine.";
+    const deadlineDate = (value: Date | null) => (value ? startOfMskCalendarDay(value) : null);
     const validateOptionalPeriod = (start: Date | null, end: Date | null, label: string) => {
       if ((start && !end) || (!start && end)) throw new Error(`Заполните обе даты периода "${label}"`);
       if (start && end && end <= start) throw new Error(`Окончание периода "${label}" должно быть позже начала`);
@@ -1685,11 +1693,11 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         if (towStartAt && towEndAt && (towStartAt < startAt || towEndAt > endAt)) {
           throw new Error("Период буксировки должен быть внутри startAt/endAt");
         }
-        const deadlineAt = parseOptionalDate(
+        const deadlineAt = deadlineDate(parseOptionalDate(
           asImportDateCell(pickImportCell(r as Record<string, unknown>, deadlineCellAliases)),
           "DeadLine"
-        );
-        if (deadlineAt && endAt > deadlineAt) warnings.push(IMPORT_DEADLINE_HINT);
+        ));
+        if (deadlineAt && mskCalendarDate(startAt) > mskCalendarDate(deadlineAt)) warnings.push(IMPORT_DEADLINE_HINT);
 
         const laborMetrics = collectLaborMetricsFromImportRow(r as Record<string, unknown>);
 
@@ -1943,10 +1951,10 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         const actualEndAt = parseOptionalDate(r.actualEndAt, "actualEndAt");
         const towStartAt = parseOptionalDate(r.towStartAt, "towStartAt");
         const towEndAt = parseOptionalDate(r.towEndAt, "towEndAt");
-        const deadlineAt = parseOptionalDate(
+        const deadlineAt = deadlineDate(parseOptionalDate(
           asImportDateCell(pickImportCell(r as Record<string, unknown>, deadlineCellAliases)),
           "DeadLine"
-        );
+        ));
 
         const aircraft = aircraftByTail.get(aircraftTail)!;
         const eventType = eventTypeByKey.get(eventKey)!;
@@ -2213,6 +2221,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
     const { changeReason, placements, allowOverlap: requestedOverlap, autoFillGapPlacements, lineBase, ...data } = body;
+    if (data.deadlineAt) data.deadlineAt = startOfMskCalendarDay(data.deadlineAt);
     const allowOverlap = gateAllowOverlapRequest(requestedOverlap, requirePermission(req, "gantt:overlap")) ?? false;
     const resolvedLineBase = resolveEventLineBase({
       requestedProvided: lineBase !== undefined,
@@ -2514,6 +2523,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         changeReasonIds: z.array(z.string().uuid()).max(20).optional()
       })
       .parse(req.body);
+    if (body.deadlineAt) body.deadlineAt = startOfMskCalendarDay(body.deadlineAt);
 
     const existing = await app.prisma.maintenanceEvent.findFirst({
       where: { id, ...sandboxFilter(req) },

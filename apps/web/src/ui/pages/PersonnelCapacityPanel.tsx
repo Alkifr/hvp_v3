@@ -333,7 +333,7 @@ export function PersonnelCapacityPanel(props: {
                 {sliceRows.map((row) => (
                   <tr key={`${row.workshopId}:${row.aircraftTypeId}`}>
                     <td>{workshopName.get(row.workshopId) || "—"}</td>
-                    <td>{typeName.get(row.aircraftTypeId) || "—"}</td>
+                    <td>{row.aircraftTypeId ? (typeName.get(row.aircraftTypeId) || "—") : "Без типа"}</td>
                     <td className="num">{formatPersonnelNumber(row.point.capacity)}</td>
                     <td className="num">{formatPersonnelNumber(row.point.load)}</td>
                     <td className={`num balance-${row.point.slack < -EPS ? "negative" : row.point.slack > EPS ? "positive" : "neutral"}`}>{formatSigned(row.point.slack)}</td>

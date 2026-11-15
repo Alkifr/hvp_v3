@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { formatPrimaryDateDisplay } from "./dateFormat.js";
+import { PRIMARY_TABLE_COLUMN_BY_KEY } from "./columnCatalog.generated.js";
 import { toPrimaryTableRow } from "./rowMapper.js";
 
 test("maps a golden event row including metrics and external analytics", () => {
@@ -54,7 +56,9 @@ test("maps a golden event row including metrics and external analytics", () => {
   assert.equal(row["primary.n"], "SVO");
   assert.equal(row["primary.t"], 4);
   assert.equal(row["primary.ab"], 1);
-  assert.equal(row["primary.gi"], "2026-07-02T12:00:00.000Z");
+  assert.equal(row["primary.gi"], "2026-07-02");
+  assert.equal(PRIMARY_TABLE_COLUMN_BY_KEY.get("primary.gi")?.type, "date");
+  assert.equal(formatPrimaryDateDisplay(row["primary.gi"], "date"), "02.07.2026");
   assert.equal(row["primary.ac"], 24);
   assert.equal(row["primary.ai"], "Завершено");
   assert.equal(row["primary.aq"], 0);

@@ -88,6 +88,17 @@ function parseNaiveParts(raw: string): DateParts | null {
   return null;
 }
 
+/** Calendar date `YYYY-MM-DD` of an instant in MSK. */
+export function mskCalendarDate(value: Date): string {
+  return new Date(value.getTime() + MSK_OFFSET_MINUTES * 60_000).toISOString().slice(0, 10);
+}
+
+/** Start of the MSK calendar day that contains the instant. */
+export function startOfMskCalendarDay(value: Date): Date {
+  const [year, month, day] = mskCalendarDate(value).split("-").map(Number);
+  return fromWallClock(year!, month!, day!, 0, 0, 0, 0, MSK_OFFSET_MINUTES);
+}
+
 /**
  * Parse import date/time. Naive values (Excel serial, date-only, datetime without offset)
  * are wall-clock in MSK by default. Values with Z / numeric offset stay absolute.

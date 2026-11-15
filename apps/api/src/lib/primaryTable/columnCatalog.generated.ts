@@ -3052,7 +3052,7 @@ export const PRIMARY_TABLE_COLUMNS: PrimaryTableColumnDef[] = [
     "owner": "ОПП",
     "fillMode": "MANUAL",
     "applicability": "ALL",
-    "type": "datetime",
+    "type": "date",
     "availability": "available",
     "source": "MaintenanceEvent.deadlineAt",
     "formula": null,

@@ -226,6 +226,7 @@ test("tows range and filters round-trip", () => {
     filterOperatorIds: ["op1"],
     filterAircraftTypeIds: ["t1"],
     filterAircraftIds: ["a1"],
+    tab: "plan",
     sandboxId: "sb9"
   });
   assert.equal(q.get("from"), "2026-09-01");
@@ -234,10 +235,12 @@ test("tows range and filters round-trip", () => {
   assert.equal(q.get("op"), "op1");
   assert.equal(q.get("type"), "t1");
   assert.equal(q.get("ac"), "a1");
+  assert.equal(q.get("tab"), "plan");
   assert.equal(q.get("sandbox"), "sb9");
   const parsed = parseTowsViewShare(q);
   assert.ok(parsed);
   assert.equal(parsed.fromDate, "2026-09-01");
+  assert.equal(parsed.tab, "plan");
   assert.deepEqual(parsed.filterHangarIds, ["h1"]);
   assert.deepEqual(parsed.filterAircraftIds, ["a1"]);
 });

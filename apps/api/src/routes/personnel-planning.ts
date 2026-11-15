@@ -398,7 +398,7 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
             z.object({
               date: zDateKey,
               shiftId: zUuid,
-              aircraftTypeId: zUuid,
+              aircraftTypeId: z.union([zUuid, z.literal(""), z.null()]).optional(),
               categoryCode: zCategory.optional(),
               skillId: zUuid.optional(),
               headcount: z.number().int().min(0).max(100_000)
@@ -414,7 +414,7 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
       if (!allowedDates.has(item.date)) throw app.httpErrors.badRequest("Availability date is outside weekStart");
       if (item.date < today) throw app.httpErrors.badRequest("Past availability dates cannot be changed");
     }
-    const [mapped, skillLinks] = await Promise.all([
+    const [mapped, skillLinks, workshop] = await Promise.all([
       app.prisma.personnelWorkshopCategory.findMany({
         where: { workshopId: body.workshopId, isActive: true },
         select: { categoryCode: true }
@@ -422,14 +422,22 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
       app.prisma.workshopSkill.findMany({
         where: { workshopId: body.workshopId },
         select: { skill: { select: { id: true, code: true } } }
+      }),
+      app.prisma.workshop.findUnique({
+        where: { id: body.workshopId },
+        select: { id: true, withoutAircraftType: true }
       })
     ]);
-    const assignedTypes = await app.prisma.aircraft.findMany({
-      where: { workshopAssignments: { some: { workshopId: body.workshopId } } },
-      distinct: ["typeId"],
-      select: { typeId: true }
-    });
+    if (!workshop) throw app.httpErrors.notFound("Workshop not found");
+    const assignedTypes = workshop.withoutAircraftType
+      ? []
+      : await app.prisma.aircraft.findMany({
+          where: { workshopAssignments: { some: { workshopId: body.workshopId } } },
+          distinct: ["typeId"],
+          select: { typeId: true }
+        });
     const allowedTypeIds = new Set(assignedTypes.map((row) => row.typeId));
+    const items = body.items.map((item) => ({ ...item, aircraftTypeId: item.aircraftTypeId || null }));
     const catalogQualifications = skillLinks.length
       ? await app.prisma.personnelCategory.findMany({
           where: { isActive: true },
@@ -441,9 +449,16 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
         ? qualificationsForWorkshopSkills(catalogQualifications, skillLinks.map((row) => row.skill.code)).map((row) => row.code)
         : mapped.map((row) => row.categoryCode)
     );
-    for (const item of body.items) {
-      if (!allowedTypeIds.has(item.aircraftTypeId)) throw app.httpErrors.badRequest("Тип ВС не привязан к выбранному цеху");
-      if (!item.categoryCode || !allowedCategories.has(item.categoryCode)) {
+    const allowedSkillIds = new Set(skillLinks.map((row) => row.skill.id));
+    for (const item of items) {
+      if (workshop.withoutAircraftType) {
+        if (item.aircraftTypeId) throw app.httpErrors.badRequest("Для этого цеха тип ВС не задаётся");
+      } else if (!item.aircraftTypeId || !allowedTypeIds.has(item.aircraftTypeId)) {
+        throw app.httpErrors.badRequest("Тип ВС не привязан к выбранному цеху");
+      }
+      if (item.skillId) {
+        if (!allowedSkillIds.has(item.skillId)) throw app.httpErrors.badRequest("Квалификация не назначена выбранному цеху");
+      } else if (!item.categoryCode || !allowedCategories.has(item.categoryCode)) {
         throw app.httpErrors.badRequest(
           `Категория ${item.categoryCode ?? ""} не относится к квалификациям выбранного цеха`
         );
@@ -472,10 +487,11 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
         throw error;
       }
       const skillCodeById = new Map(skillLinks.map((row) => [row.skill.id, row.skill.code]));
-      const existingRows = body.items.length ? await tx.personnelAvailability.findMany({
+      const typeKey = (aircraftTypeId: string | null | undefined) => aircraftTypeId || "";
+      const existingRows = items.length ? await tx.personnelAvailability.findMany({
         where: {
           workshopId: body.workshopId,
-          OR: body.items.map((item) => ({
+          OR: items.map((item) => ({
             date: dateFromKey(item.date),
             shiftId: item.shiftId,
             aircraftTypeId: item.aircraftTypeId,
@@ -485,11 +501,11 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
         select: { date: true, shiftId: true, aircraftTypeId: true, categoryCode: true, skillId: true, headcount: true }
       }) : [];
       const existingByKey = new Map(existingRows.map((row) => [
-        `${row.date.toISOString().slice(0, 10)}|${row.shiftId}|${row.aircraftTypeId}|${row.skillId || row.categoryCode}`,
+        `${row.date.toISOString().slice(0, 10)}|${row.shiftId}|${typeKey(row.aircraftTypeId)}|${row.skillId || row.categoryCode}`,
         row.headcount
       ]));
-      const changeRows = body.items.flatMap((item) => {
-        const key = `${item.date}|${item.shiftId}|${item.aircraftTypeId}|${item.skillId || item.categoryCode}`;
+      const changeRows = items.flatMap((item) => {
+        const key = `${item.date}|${item.shiftId}|${typeKey(item.aircraftTypeId)}|${item.skillId || item.categoryCode}`;
         const headcountFrom = existingByKey.has(key) ? existingByKey.get(key)! : null;
         const headcountTo = item.headcount > 0 ? item.headcount : null;
         if (headcountFrom === headcountTo) return [];
@@ -497,7 +513,7 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
           workshopId: body.workshopId,
           date: dateFromKey(item.date),
           shiftId: item.shiftId,
-          aircraftTypeId: item.aircraftTypeId,
+          aircraftTypeId: typeKey(item.aircraftTypeId),
           categoryCode: item.categoryCode || skillCodeById.get(item.skillId ?? "") || "",
           skillId: item.skillId ?? null,
           headcountFrom,
@@ -506,8 +522,8 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
         }];
       });
       if (changeRows.length) await tx.personnelAvailabilityChange.createMany({ data: changeRows });
-      const clears = body.items.filter((item) => item.headcount === 0);
-      const writes = body.items.filter((item) => item.headcount > 0);
+      const clears = items.filter((item) => item.headcount === 0);
+      const writes = items.filter((item) => item.headcount > 0);
       for (const chunk of chunks(clears, 200)) {
         await tx.personnelAvailability.deleteMany({
           where: {
@@ -521,8 +537,10 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
           }
         });
       }
-      const categoryWrites = writes.filter((item) => !item.skillId);
-      const skillWrites = writes.filter((item) => item.skillId);
+      const categoryWrites = writes.filter((item) => !item.skillId && item.aircraftTypeId);
+      const untypedCategoryWrites = writes.filter((item) => !item.skillId && !item.aircraftTypeId);
+      const skillWrites = writes.filter((item) => item.skillId && item.aircraftTypeId);
+      const untypedSkillWrites = writes.filter((item) => item.skillId && !item.aircraftTypeId);
       for (const chunk of chunks(categoryWrites, 200)) {
         const values = chunk.map(
           (item) =>
@@ -537,6 +555,20 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
           DO UPDATE SET "headcount" = EXCLUDED."headcount", "updatedAt" = CURRENT_TIMESTAMP
         `;
       }
+      for (const chunk of chunks(untypedCategoryWrites, 200)) {
+        const values = chunk.map(
+          (item) =>
+            Prisma.sql`(${dateFromKey(item.date)}::date, ${body.workshopId}, ${item.shiftId}, ${item.categoryCode}::public."PersonnelCategoryCode", ${item.headcount}::int)`
+        );
+        await tx.$executeRaw`
+          INSERT INTO public."PersonnelAvailability"
+            ("id", "date", "workshopId", "shiftId", "categoryCode", "headcount", "createdAt", "updatedAt")
+          SELECT gen_random_uuid()::text, v."date", v."workshopId", v."shiftId", v."categoryCode", v."headcount", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          FROM (VALUES ${Prisma.join(values)}) AS v("date", "workshopId", "shiftId", "categoryCode", "headcount")
+          ON CONFLICT ("date", "workshopId", "shiftId", "categoryCode") WHERE "aircraftTypeId" IS NULL AND "categoryCode" IS NOT NULL
+          DO UPDATE SET "headcount" = EXCLUDED."headcount", "updatedAt" = CURRENT_TIMESTAMP
+        `;
+      }
       for (const chunk of chunks(skillWrites, 200)) {
         const values = chunk.map(
           (item) =>
@@ -548,6 +580,20 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
           SELECT gen_random_uuid()::text, v."date", v."workshopId", v."shiftId", v."aircraftTypeId", v."skillId", v."headcount", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           FROM (VALUES ${Prisma.join(values)}) AS v("date", "workshopId", "shiftId", "aircraftTypeId", "skillId", "headcount")
           ON CONFLICT ("date", "workshopId", "shiftId", "aircraftTypeId", "skillId")
+          DO UPDATE SET "headcount" = EXCLUDED."headcount", "updatedAt" = CURRENT_TIMESTAMP
+        `;
+      }
+      for (const chunk of chunks(untypedSkillWrites, 200)) {
+        const values = chunk.map(
+          (item) =>
+            Prisma.sql`(${dateFromKey(item.date)}::date, ${body.workshopId}, ${item.shiftId}, ${item.skillId}::text, ${item.headcount}::int)`
+        );
+        await tx.$executeRaw`
+          INSERT INTO public."PersonnelAvailability"
+            ("id", "date", "workshopId", "shiftId", "skillId", "headcount", "createdAt", "updatedAt")
+          SELECT gen_random_uuid()::text, v."date", v."workshopId", v."shiftId", v."skillId", v."headcount", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          FROM (VALUES ${Prisma.join(values)}) AS v("date", "workshopId", "shiftId", "skillId", "headcount")
+          ON CONFLICT ("date", "workshopId", "shiftId", "skillId") WHERE "aircraftTypeId" IS NULL AND "skillId" IS NOT NULL
           DO UPDATE SET "headcount" = EXCLUDED."headcount", "updatedAt" = CURRENT_TIMESTAMP
         `;
       }

@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import dayjs from "dayjs";
 
 import { eventStatusLabel } from "./eventStatusCatalog.js";
+import { mskCalendarDate } from "./localDate.js";
 import { isSmtpReady, sendMail, smtpConfigFromSettings } from "./mailer.js";
 
 export type AuditNote = {
@@ -158,7 +159,19 @@ function refValue(key: string | undefined, value: string, labels?: WatchLabels):
   }
 }
 
+function formatDeadline(value: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-");
+    return `${day}.${month}.${year}`;
+  }
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return value;
+  const [year, month, day] = mskCalendarDate(parsed).split("-");
+  return `${day}.${month}.${year}`;
+}
+
 function formatScalar(key: string | undefined, value: string, labels?: WatchLabels): string {
+  if (key === "deadlineAt" || key === "deadlineAtLocal") return formatDeadline(value);
   if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
     const d = dayjs(value);
     if (d.isValid()) return d.format("DD.MM.YYYY HH:mm");

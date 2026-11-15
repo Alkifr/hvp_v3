@@ -6,7 +6,12 @@ import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { DONE_SCHEDULE_LOCK_MESSAGE, isDoneScheduleLocked } from "../../lib/eventStatus.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
-import { buildTowReportRow, type TowPlacementInput, type TowReportRow } from "../../lib/towReport.js";
+import { buildTowBoardRow, type TowBoardInput } from "../../lib/towBoard.js";
+import { buildTowRegistryLetter } from "../../lib/towRegistryMail.js";
+import { formatMskDateTime, buildTowReportRow, type TowPlacementInput, type TowReportRow } from "../../lib/towReport.js";
+import { ensureTowNorms } from "../../lib/towNorm.js";
+import { EDGE_TOW_NORM_CODE } from "../../lib/edgeTows.js";
+import { isSmtpReady, sendMail, smtpConfigFromSettings } from "../../lib/mailer.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertAnyPermission, assertPermission } from "../../lib/rbac.js";
 import {
@@ -160,33 +165,61 @@ export async function resolveVirtualNames(
   return out;
 }
 
+const zIdList = z.array(z.string().trim().min(1).max(80)).max(200);
+
+const zRange = z
+  .object({
+    from: zDateTime,
+    to: zDateTime,
+    q: z.string().trim().max(200).optional(),
+    hangarIds: zIdList.optional(),
+    operatorIds: zIdList.optional(),
+    aircraftTypeIds: zIdList.optional(),
+    aircraftIds: zIdList.optional(),
+    recipients: z.array(z.string().trim().email().max(200)).max(50).optional(),
+    target: z.enum(["self", "list"]).optional(),
+    note: z.string().trim().max(2000).optional()
+  })
+  .refine((v) => v.to > v.from, { message: UserMsg.END_AFTER_START });
+
+async function loadTowReportItems(prisma: any, req: any, from: Date, to: Date): Promise<TowReportRow[]> {
+  const rows = await prisma.eventTow.findMany({
+    where: {
+      ...sandboxFilter(req),
+      startAt: { lt: to },
+      endAt: { gt: from },
+      event: { status: { not: EventStatus.DELETED } }
+    },
+    include: towInclude,
+    orderBy: [{ startAt: "asc" }, { id: "asc" }]
+  });
+  const virtualNames = await resolveVirtualNames(prisma, rows);
+  return rows.map((row: TowLoaded) => serializeTowReportRow(row, virtualNames.get(row.id)));
+}
+
+function rowMatchesSendFilters(
+  row: TowReportRow,
+  filters: { hangarIds?: string[]; operatorIds?: string[]; aircraftTypeIds?: string[]; aircraftIds?: string[] }
+): boolean {
+  if (filters.hangarIds?.length && !filters.hangarIds.includes(row.hangarId)) return false;
+  if (filters.operatorIds?.length && !filters.operatorIds.includes(row.operatorId)) return false;
+  if (filters.aircraftTypeIds?.length && !filters.aircraftTypeIds.includes(row.aircraftTypeId)) return false;
+  if (filters.aircraftIds?.length && !filters.aircraftIds.includes(row.aircraftId)) return false;
+  return true;
+}
+
+function periodLabel(from: Date, to: Date): string {
+  const end = new Date(to.getTime() - 60_000);
+  return `${formatMskDateTime(from).slice(0, 10)}–${formatMskDateTime(end).slice(0, 10)}`;
+}
+
 export const towsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (req) => {
     assertPermission(req, "tows:read");
-    const query = z
-      .object({
-        from: zDateTime,
-        to: zDateTime,
-        q: z.string().trim().max(200).optional()
-      })
-      .refine((v) => v.to > v.from, { message: UserMsg.END_AFTER_START })
-      .parse((req.query ?? {}) as any);
+    const query = zRange.parse((req.query ?? {}) as any);
 
     const q = query.q?.toLowerCase() ?? "";
-    const rows = await app.prisma.eventTow.findMany({
-      where: {
-        ...sandboxFilter(req),
-        startAt: { lt: query.to },
-        endAt: { gt: query.from },
-        event: { status: { not: EventStatus.DELETED } }
-      },
-      include: towInclude,
-      orderBy: [{ startAt: "asc" }, { id: "asc" }]
-    });
-
-    const virtualNames = await resolveVirtualNames(app.prisma, rows);
-    const items = rows
-      .map((row) => serializeTowReportRow(row, virtualNames.get(row.id)))
+    const items = (await loadTowReportItems(app.prisma, req, query.from, query.to))
       .filter((row) => {
         if (!q) return true;
         const hay = [
@@ -207,6 +240,169 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
       .map((row, idx) => ({ ...row, seq: idx + 1 }));
 
     return { items };
+  });
+
+  app.get("/board", async (req) => {
+    assertPermission(req, "tows:read");
+    const query = zRange.parse((req.query ?? {}) as any);
+    await ensureTowNorms(app.prisma);
+    const norm = await app.prisma.towNorm.findUnique({ where: { code: EDGE_TOW_NORM_CODE } });
+    const minutes = norm && norm.isActive && norm.minutes > 0 ? norm.minutes : null;
+
+    const events = await app.prisma.maintenanceEvent.findMany({
+      where: {
+        ...sandboxFilter(req),
+        status: { notIn: [EventStatus.DELETED, EventStatus.CANCELLED] },
+        OR: [
+          { startAt: { lt: query.to }, endAt: { gt: query.from } },
+          { actualStartAt: { lt: query.to }, actualEndAt: { gt: query.from } },
+          { placements: { some: { startAt: { lt: query.to }, endAt: { gt: query.from } } } },
+          { placements: { some: { actualStartAt: { lt: query.to }, actualEndAt: { gt: query.from } } } }
+        ]
+      },
+      include: {
+        aircraft: { include: { operator: true, type: true } },
+        hangar: true,
+        placements: {
+          include: { hangar: true, stand: true },
+          orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }]
+        },
+        towSegments: { orderBy: [{ startAt: "asc" }] }
+      },
+      orderBy: [{ startAt: "asc" }, { id: "asc" }]
+    });
+
+    const operatorIds = new Set<string>();
+    const typeIds = new Set<string>();
+    for (const event of events) {
+      if (event.aircraftId) continue;
+      const virtual = event.virtualAircraft as { operatorId?: string; aircraftTypeId?: string } | null;
+      if (virtual?.operatorId) operatorIds.add(virtual.operatorId);
+      if (virtual?.aircraftTypeId) typeIds.add(virtual.aircraftTypeId);
+    }
+    const operators = operatorIds.size
+      ? await app.prisma.operator.findMany({
+          where: { id: { in: [...operatorIds] } },
+          select: { id: true, code: true, name: true }
+        })
+      : [];
+    const types = typeIds.size
+      ? await app.prisma.aircraftType.findMany({
+          where: { id: { in: [...typeIds] } },
+          select: { id: true, icaoType: true, name: true }
+        })
+      : [];
+    const operatorById = new Map(operators.map((row) => [row.id, row.code || row.name]));
+    const typeById = new Map(types.map((row) => [row.id, row.icaoType || row.name]));
+
+    const items = events.map((event) => {
+      const virtual = event.virtualAircraft as { operatorId?: string; aircraftTypeId?: string } | null;
+      const input: TowBoardInput = {
+        id: event.id,
+        title: event.title,
+        status: event.status,
+        startAt: event.startAt,
+        endAt: event.endAt,
+        hangarId: event.hangarId,
+        hangarName: event.hangar?.name ?? null,
+        hangarCode: event.hangar?.code ?? null,
+        tailNumber: event.aircraft?.tailNumber ?? null,
+        aircraftId: event.aircraftId,
+        virtual: !event.aircraftId && virtual != null,
+        aircraftTypeId: event.aircraft?.typeId ?? virtual?.aircraftTypeId ?? null,
+        aircraftType:
+          event.aircraft?.type?.icaoType ||
+          event.aircraft?.type?.name ||
+          (virtual?.aircraftTypeId ? (typeById.get(virtual.aircraftTypeId) ?? null) : null),
+        operatorId: event.aircraft?.operatorId ?? virtual?.operatorId ?? null,
+        operator:
+          event.aircraft?.operator?.code ||
+          event.aircraft?.operator?.name ||
+          (virtual?.operatorId ? (operatorById.get(virtual.operatorId) ?? null) : null),
+        placements: event.placements.map((placement) => ({
+          id: placement.id,
+          origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
+          startAt: placement.startAt,
+          endAt: placement.endAt,
+          hangarId: placement.hangarId,
+          hangarName: placement.hangar?.name ?? null,
+          hangarCode: placement.hangar?.code ?? null,
+          standCode: placement.stand?.code || placement.stand?.name || null
+        })),
+        tows: event.towSegments.map((tow) => ({
+          id: tow.id,
+          placementId: tow.placementId,
+          occupancyEndAt: tow.occupancyEndAt,
+          startChangeReason: tow.startChangeReason,
+          startAt: tow.startAt,
+          endAt: tow.endAt,
+          fromLabel: tow.fromLabel,
+          toLabel: tow.toLabel
+        }))
+      };
+      return buildTowBoardRow(input, minutes);
+    });
+
+    return { minutes, items };
+  });
+
+  app.post("/send", async (req) => {
+    assertCanWriteTow(req);
+    const body = zRange.parse(req.body ?? {});
+
+    const target = body.target ?? "list";
+    const selfEmail = String((req as any).auth?.email ?? "")
+      .trim()
+      .toLowerCase();
+    const recipients =
+      target === "self"
+        ? selfEmail
+          ? [selfEmail]
+          : []
+        : [...new Set((body.recipients ?? []).map((email) => email.trim().toLowerCase()))];
+    if (!recipients.length) {
+      throw app.httpErrors.badRequest(target === "self" ? "У учётной записи нет адреса почты" : "Укажите получателей");
+    }
+
+    const settings = await app.prisma.mailDigestSettings.upsert({
+      where: { id: "default" },
+      create: { id: "default" },
+      update: {}
+    });
+    if (!isSmtpReady(settings)) {
+      throw app.httpErrors.badRequest("Почта не настроена. SMTP задаёт администратор в разделе «Рассылка».");
+    }
+    const smtp = smtpConfigFromSettings(settings);
+    if (!smtp) {
+      throw app.httpErrors.badRequest("Почта не настроена. SMTP задаёт администратор в разделе «Рассылка».");
+    }
+
+    const items = (await loadTowReportItems(app.prisma, req, body.from, body.to))
+      .filter((row) => rowMatchesSendFilters(row, body))
+      .map((row, idx) => ({ ...row, seq: idx + 1 }));
+    if (!items.length) {
+      throw app.httpErrors.badRequest("В выбранном периоде нет буксировок для отправки");
+    }
+
+    const contour = (req as any).sandbox?.name ? `Песочница «${(req as any).sandbox.name}»` : "Рабочий контур";
+    const letter = buildTowRegistryLetter({
+      rows: items,
+      periodLabel: periodLabel(body.from, body.to),
+      contour,
+      note: body.note
+    });
+
+    try {
+      const sent = await sendMail(smtp, {
+        to: recipients,
+        subject: letter.subject,
+        text: letter.text,
+        html: letter.html
+      });
+      return { ok: true as const, messageId: sent.messageId, recipients, subject: letter.subject, rows: items.length };
+    } catch (e) {
+      throw app.httpErrors.badRequest(e instanceof Error ? e.message : "Не удалось отправить письмо");
+    }
   });
 
   app.patch("/:id", async (req) => {

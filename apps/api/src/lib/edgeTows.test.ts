@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { planEdgeTows, remapTowPlacementId, type EdgePlacement } from "./edgeTows.js";
+import { planEdgeTows, remapTowPlacementId, selectPlannedEdges, type EdgePlacement } from "./edgeTows.js";
 
 const at = (iso: string) => new Date(iso);
 
@@ -154,4 +154,15 @@ test("drops the placement link when the stand changed", () => {
     }
   ];
   assert.equal(remapTowPlacementId(tow, previous, next), null);
+});
+
+test("selects one edge role or the whole plan", () => {
+  const plan = planEdgeTows({
+    minutes: 30,
+    placements: [stage("p1", "MANUAL", "2026-10-01T07:00:00.000Z", "2026-10-01T15:00:00.000Z", "A1")],
+    existing: []
+  });
+  assert.equal(selectPlannedEdges(plan).length, 2);
+  assert.equal(selectPlannedEdges(plan, "event-out")[0]?.role, "event-out");
+  assert.equal(selectPlannedEdges(plan, "gap-in").length, 0);
 });

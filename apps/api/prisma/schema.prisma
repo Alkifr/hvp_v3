@@ -225,6 +225,8 @@ model Skill {
   id        String   @id @default(uuid())
   code      String   @unique
   name      String
+  /// Строки этой квалификации видны в «Доступном ресурсе». false — не входят в итог численности и в плановый ресурс.
+  countsInPlannedResource Boolean @default(true)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -729,6 +731,8 @@ model Workshop {
   name            String
   /// Дефолтный контур L/B для событий этого цеха
   defaultLineBase EventLineBase?
+  /// Техники не авторизованы на конкретный тип ВС: численность задаётся на цех.
+  withoutAircraftType Boolean    @default(false)
   isActive        Boolean        @default(true)
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
@@ -791,12 +795,13 @@ model WorkshopSkill {
 }
 
 /// Production availability by local calendar day, shift, aircraft type and category.
+/// aircraftTypeId пустой у цеха с withoutAircraftType: одна численность на все типы ВС.
 model PersonnelAvailability {
   id             String                @id @default(uuid())
   date           DateTime              @db.Date
   workshopId     String
   shiftId        String
-  aircraftTypeId String
+  aircraftTypeId String?
   categoryCode   PersonnelCategoryCode?
   skillId        String?
   headcount      Int
@@ -805,7 +810,7 @@ model PersonnelAvailability {
 
   workshop     Workshop          @relation(fields: [workshopId], references: [id], onDelete: Cascade)
   shift        Shift             @relation(fields: [shiftId], references: [id])
-  aircraftType AircraftType      @relation(fields: [aircraftTypeId], references: [id])
+  aircraftType AircraftType?     @relation(fields: [aircraftTypeId], references: [id])
   category     PersonnelCategory? @relation(fields: [categoryCode], references: [code])
   skill        Skill?            @relation(fields: [skillId], references: [id])
 
@@ -1151,7 +1156,7 @@ model MaintenanceEvent {
   /// Контур ТО L (Line) / B (Base). Авто из цеха, можно переопределить вручную.
   lineBase EventLineBase?
 
-  /// DeadLine: дата/время, до которого должен завершиться слот. Меняется, пока событие не завершено.
+  /// DeadLine: календарная дата. В базе это начало суток MSK. Меняется, пока событие не завершено.
   deadlineAt DateTime?
 
   notes String?

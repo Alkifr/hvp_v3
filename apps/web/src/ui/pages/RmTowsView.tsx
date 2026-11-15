@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
-import { apiGet, apiPatch } from "../../lib/api";
+import { apiGet, apiPatch, apiPost } from "../../lib/api";
 import { isValidDateInput } from "../../lib/dateInput";
 import { parseHashPage } from "../../lib/eventDeepLink";
 import { fromInputMskOptional, MSK_OFFSET_MINUTES, startOfMskDayIso, endOfMskDayIso } from "../../lib/localDate";
@@ -13,6 +13,7 @@ import { parseTowsViewShare, syncTowsViewHash } from "../../lib/viewShareUrl";
 import { authMe } from "../auth/authApi";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
+import { TowPlanBoard, type PlanBoardRow } from "./TowPlanBoard";
 
 dayjs.extend(utc);
 
@@ -56,6 +57,34 @@ export type TowReportRow = {
 };
 
 type TowListResponse = { items: TowReportRow[] };
+
+type TowBoardHangar = { id: string; label: string };
+
+type TowBoardRow = PlanBoardRow & {
+  status: string;
+  startMsk: string;
+  endMsk: string;
+  hangars: TowBoardHangar[];
+  aircraftTypeId: string;
+  aircraftId: string;
+  operatorId: string;
+  standLabel: string;
+  towCount: number;
+  pendingEdges: string[];
+  existingTows: string[];
+};
+
+type TowBoardResponse = { minutes: number | null; items: TowBoardRow[] };
+
+type FacetRow = {
+  hangars: TowBoardHangar[];
+  operatorId: string;
+  operator: string;
+  aircraftTypeId: string;
+  aircraftType: string;
+  aircraftId: string;
+  tailNumber: string;
+};
 
 type TowFilters = {
   hangarIds: string[];
@@ -137,14 +166,51 @@ function isDirty(row: TowReportRow, draft: Draft): boolean {
   );
 }
 
-function rowMatchesFilters(row: TowReportRow, filters: TowFilters, skip?: TowFilterKey): boolean {
-  if (skip !== "hangarIds" && filters.hangarIds.length > 0 && !filters.hangarIds.includes(row.hangarId)) return false;
+function facetMatches(row: FacetRow, filters: TowFilters, skip?: TowFilterKey): boolean {
+  if (skip !== "hangarIds" && filters.hangarIds.length > 0 && !row.hangars.some((hangar) => filters.hangarIds.includes(hangar.id))) {
+    return false;
+  }
   if (skip !== "operatorIds" && filters.operatorIds.length > 0 && !filters.operatorIds.includes(row.operatorId)) return false;
   if (skip !== "aircraftTypeIds" && filters.aircraftTypeIds.length > 0 && !filters.aircraftTypeIds.includes(row.aircraftTypeId)) {
     return false;
   }
   if (skip !== "aircraftIds" && filters.aircraftIds.length > 0 && !filters.aircraftIds.includes(row.aircraftId)) return false;
   return true;
+}
+
+function towFacet(row: TowReportRow): FacetRow {
+  return {
+    hangars: row.hangarId ? [{ id: row.hangarId, label: row.hangarNumber || row.hangarId }] : [],
+    operatorId: row.operatorId,
+    operator: row.operator,
+    aircraftTypeId: row.aircraftTypeId,
+    aircraftType: row.aircraftType,
+    aircraftId: row.aircraftId,
+    tailNumber: row.tailNumber
+  };
+}
+
+function boardFacet(row: TowBoardRow): FacetRow {
+  return {
+    hangars: row.hangars,
+    operatorId: row.operatorId,
+    operator: row.operator,
+    aircraftTypeId: row.aircraftTypeId,
+    aircraftType: row.aircraftType,
+    aircraftId: row.aircraftId,
+    tailNumber: row.tailNumber
+  };
+}
+
+function parseEmails(raw: string): string[] {
+  return [
+    ...new Set(
+      raw
+        .split(/[\s,;]+/)
+        .map((item) => item.trim().toLowerCase())
+        .filter((item) => item.includes("@"))
+    )
+  ];
 }
 
 const TOWS_UI_LS_KEY = "hangarPlanning:towsUi:v1";
@@ -186,7 +252,8 @@ export function RmTowsView() {
       ...ls,
       ...share,
       fromDate: share.fromDate || ls?.fromDate,
-      toDate: share.toDate || ls?.toDate
+      toDate: share.toDate || ls?.toDate,
+      tab: share.tab || ls?.tab
     };
   }, []);
   const defaultFrom = mskNow().startOf("month").format("YYYY-MM-DD");
@@ -201,6 +268,11 @@ export function RmTowsView() {
   const [operatorIds, setOperatorIds] = useState<string[]>(() => readStringArray(savedUi?.filterOperatorIds));
   const [aircraftTypeIds, setAircraftTypeIds] = useState<string[]>(() => readStringArray(savedUi?.filterAircraftTypeIds));
   const [aircraftIds, setAircraftIds] = useState<string[]>(() => readStringArray(savedUi?.filterAircraftIds));
+  const [pane, setPane] = useState<"plan" | "registry">(() => (savedUi?.tab === "registry" ? "registry" : "plan"));
+  const [recipientsText, setRecipientsText] = useState(() => String(savedUi?.recipients ?? ""));
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendNote, setSendNote] = useState("");
+  const [sendMessage, setSendMessage] = useState("");
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [exporting, setExporting] = useState(false);
 
@@ -209,62 +281,80 @@ export function RmTowsView() {
   const canWrite = hasPermission(permissions, "tows:write") || hasPermission(permissions, "gantt:write");
   const canGantt = hasPermission(permissions, "gantt:read");
 
+  const periodParams = () => {
+    const params = new URLSearchParams();
+    params.set("from", startOfMskDayIso(rangeFrom) ?? dayjs(rangeFrom).toISOString());
+    params.set("to", endOfMskDayIso(rangeTo) ?? dayjs(rangeTo).endOf("day").toISOString());
+    return params;
+  };
+
   const listQ = useQuery({
     queryKey: ["tows-report", rangeFrom, rangeTo, activeSandbox?.id ?? null],
     enabled: isValidDateInput(rangeFrom) && isValidDateInput(rangeTo),
-    queryFn: () => {
-      const params = new URLSearchParams();
-      params.set("from", startOfMskDayIso(rangeFrom) ?? dayjs(rangeFrom).toISOString());
-      params.set("to", endOfMskDayIso(rangeTo) ?? dayjs(rangeTo).endOf("day").toISOString());
-      return apiGet<TowListResponse>(`/api/tows?${params.toString()}`);
-    }
+    queryFn: () => apiGet<TowListResponse>(`/api/tows?${periodParams().toString()}`)
+  });
+
+  const boardQ = useQuery({
+    queryKey: ["tows-board", rangeFrom, rangeTo, activeSandbox?.id ?? null],
+    enabled: isValidDateInput(rangeFrom) && isValidDateInput(rangeTo),
+    queryFn: () => apiGet<TowBoardResponse>(`/api/tows/board?${periodParams().toString()}`)
   });
 
   const loaded = listQ.data?.items ?? [];
+  const boardLoaded = boardQ.data?.items ?? [];
   const filters = useMemo<TowFilters>(
     () => ({ hangarIds, operatorIds, aircraftTypeIds, aircraftIds }),
     [hangarIds, operatorIds, aircraftTypeIds, aircraftIds]
   );
+  const facetRows = useMemo(() => {
+    const rows: FacetRow[] = [];
+    if (boardQ.isSuccess) rows.push(...boardLoaded.map(boardFacet));
+    if (listQ.isSuccess) rows.push(...loaded.map(towFacet));
+    return rows;
+  }, [boardQ.isSuccess, boardLoaded, listQ.isSuccess, loaded]);
 
   useEffect(() => {
     safeWriteTowsUi({
       fromDate: rangeFrom,
       toDate: rangeTo,
+      tab: pane,
+      recipients: recipientsText,
       filterHangarIds: hangarIds,
       filterOperatorIds: operatorIds,
       filterAircraftTypeIds: aircraftTypeIds,
       filterAircraftIds: aircraftIds
     });
-  }, [rangeFrom, rangeTo, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
+  }, [rangeFrom, rangeTo, pane, recipientsText, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
 
   useEffect(() => {
     syncTowsViewHash({
       fromDate: rangeFrom,
       toDate: rangeTo,
+      tab: pane,
       filterHangarIds: hangarIds,
       filterOperatorIds: operatorIds,
       filterAircraftTypeIds: aircraftTypeIds,
       filterAircraftIds: aircraftIds,
       sandboxId: activeSandboxId
     });
-  }, [rangeFrom, rangeTo, hangarIds, operatorIds, aircraftTypeIds, aircraftIds, activeSandboxId]);
+  }, [rangeFrom, rangeTo, pane, hangarIds, operatorIds, aircraftTypeIds, aircraftIds, activeSandboxId]);
 
   const smartFilterOptions = useMemo(() => {
     const hangarMap = new Map<string, string>();
     const operatorMap = new Map<string, string>();
     const typeMap = new Map<string, string>();
     const aircraftMap = new Map<string, string>();
-    for (const row of loaded) {
-      if (row.hangarId && rowMatchesFilters(row, filters, "hangarIds")) {
-        hangarMap.set(row.hangarId, row.hangarNumber || row.hangarId);
+    for (const row of facetRows) {
+      if (facetMatches(row, filters, "hangarIds")) {
+        for (const hangar of row.hangars) hangarMap.set(hangar.id, hangar.label || hangar.id);
       }
-      if (row.operatorId && rowMatchesFilters(row, filters, "operatorIds")) {
+      if (row.operatorId && facetMatches(row, filters, "operatorIds")) {
         operatorMap.set(row.operatorId, row.operator || row.operatorId);
       }
-      if (row.aircraftTypeId && rowMatchesFilters(row, filters, "aircraftTypeIds")) {
+      if (row.aircraftTypeId && facetMatches(row, filters, "aircraftTypeIds")) {
         typeMap.set(row.aircraftTypeId, row.aircraftType || row.aircraftTypeId);
       }
-      if (row.aircraftId && rowMatchesFilters(row, filters, "aircraftIds")) {
+      if (row.aircraftId && facetMatches(row, filters, "aircraftIds")) {
         aircraftMap.set(row.aircraftId, row.tailNumber || row.aircraftId);
       }
     }
@@ -278,10 +368,10 @@ export function RmTowsView() {
       aircraftTypes: toOpts(typeMap),
       aircraft: toOpts(aircraftMap)
     };
-  }, [loaded, filters]);
+  }, [facetRows, filters]);
 
   useEffect(() => {
-    if (loaded.length === 0) return;
+    if (facetRows.length === 0) return;
     const prune = (selected: string[], available: Set<string>) => selected.filter((id) => available.has(id));
     const hangarAvail = new Set(smartFilterOptions.hangars.map((o) => o.id));
     const operatorAvail = new Set(smartFilterOptions.operators.map((o) => o.id));
@@ -295,11 +385,16 @@ export function RmTowsView() {
     if (nextTypes.length !== aircraftTypeIds.length) setAircraftTypeIds(nextTypes);
     const nextAircraft = prune(aircraftIds, aircraftAvail);
     if (nextAircraft.length !== aircraftIds.length) setAircraftIds(nextAircraft);
-  }, [loaded.length, smartFilterOptions, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
+  }, [facetRows.length, smartFilterOptions, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
+
+  const boardItems = useMemo(
+    () => boardLoaded.filter((row) => facetMatches(boardFacet(row), filters)),
+    [boardLoaded, filters]
+  );
 
   const items = useMemo(() => {
     return loaded
-      .filter((row) => rowMatchesFilters(row, filters))
+      .filter((row) => facetMatches(towFacet(row), filters))
       .map((row, idx) => ({ ...row, seq: idx + 1 }));
   }, [loaded, filters]);
 
@@ -343,8 +438,40 @@ export function RmTowsView() {
     onSuccess: async (updated) => {
       setDrafts((prev) => ({ ...prev, [updated.id]: draftFromRow(updated) }));
       await qc.invalidateQueries({ queryKey: ["tows-report"] });
+      await qc.invalidateQueries({ queryKey: ["tows-board"] });
     }
   });
+
+  const sendM = useMutation({
+    mutationFn: async (target: "self" | "list") => {
+      const recipients = parseEmails(recipientsText);
+      if (target === "list" && recipients.length === 0) throw new Error("Укажите получателей");
+      return apiPost<{ ok: true; recipients: string[]; subject: string; rows: number }>("/api/tows/send", {
+        from: startOfMskDayIso(rangeFrom) ?? dayjs(rangeFrom).toISOString(),
+        to: endOfMskDayIso(rangeTo) ?? dayjs(rangeTo).endOf("day").toISOString(),
+        hangarIds,
+        operatorIds,
+        aircraftTypeIds,
+        aircraftIds,
+        recipients: target === "list" ? recipients : undefined,
+        target,
+        note: sendNote.trim() || undefined
+      });
+    },
+    onSuccess: (res) => {
+      setSendMessage(`Письмо «${res.subject}» отправлено: ${res.recipients.join(", ")}. Строк: ${res.rows}.`);
+    }
+  });
+
+  const dirtyCount = useMemo(
+    () => items.filter((row) => isDirty(row, drafts[row.id] ?? draftFromRow(row))).length,
+    [items, drafts]
+  );
+  const waitingEdges = useMemo(
+    () => boardItems.filter((row) => !row.locked && row.pendingEdges.length > 0).length,
+    [boardItems]
+  );
+  const selfEmail = meQ.data && meQ.data.ok ? meQ.data.user.email : "";
 
   const exportXlsx = async () => {
     setExporting(true);
@@ -369,17 +496,35 @@ export function RmTowsView() {
         <div className="massHeroText">
           <div className="massEyebrow">Рабочее место буксировок</div>
           <h1>РМ Буксировки</h1>
+          <p className="muted towsPaneHint">
+            {pane === "plan"
+              ? "Неделя показывает начало и конец этапа: зелёная плашка — буксировка назначена, красная — нет. Шкала события и сутки ангара остаются рядом."
+              : "Сводный реестр буксировок за период. Письмо уходит по тем же столбцам, что и Excel."}
+          </p>
         </div>
         <div className="massHeroStats" aria-label="Сводка буксировок">
-          <span>
-            <b>{items.length}</b> буксировок
-          </span>
-          <span>
-            <b>{inbound}</b> закаток
-          </span>
-          <span>
-            <b>{outbound}</b> выкаток
-          </span>
+          {pane === "plan" ? (
+            <>
+              <span>
+                <b>{boardItems.length}</b> бортов
+              </span>
+              <span>
+                <b>{waitingEdges}</b> ждут края
+              </span>
+            </>
+          ) : (
+            <>
+              <span>
+                <b>{items.length}</b> буксировок
+              </span>
+              <span>
+                <b>{inbound}</b> закаток
+              </span>
+              <span>
+                <b>{outbound}</b> выкаток
+              </span>
+            </>
+          )}
           <span>
             <b>{activeSandbox ? "Песочница" : "Рабочий контур"}</b>
           </span>
@@ -456,6 +601,12 @@ export function RmTowsView() {
               </label>
             </div>
             <div className="ganttToolbarGroup towsToolbarExport">
+              {pane === "registry" ? (
+                <button className="btn" type="button" onClick={() => setSendOpen((open) => !open)} disabled={!canWrite}>
+                  Отправить реестр
+                </button>
+              ) : null}
+              {pane === "registry" ? (
               <button
                 className="btn ganttIconBtn"
                 type="button"
@@ -473,14 +624,93 @@ export function RmTowsView() {
                   <path d="M12.5 10h2.5" />
                 </svg>
               </button>
+              ) : null}
             </div>
           </div>
-          {listQ.isFetching ? <div className="muted">обновление…</div> : null}
+          {listQ.isFetching || boardQ.isFetching ? <div className="muted">обновление…</div> : null}
           {listQ.error ? <div className="error">{String((listQ.error as Error).message ?? listQ.error)}</div> : null}
+          {boardQ.error ? <div className="error">{String((boardQ.error as Error).message ?? boardQ.error)}</div> : null}
         </div>
       </section>
 
+      <div className="sandboxesTabs" role="tablist" aria-label="Окна РМ Буксировки">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === "plan"}
+          className={pane === "plan" ? "sandboxesTab active" : "sandboxesTab"}
+          onClick={() => setPane("plan")}
+        >
+          План <span className="sandboxesTabCount">{boardItems.length}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === "registry"}
+          className={pane === "registry" ? "sandboxesTab active" : "sandboxesTab"}
+          onClick={() => setPane("registry")}
+        >
+          Реестр <span className="sandboxesTabCount">{items.length}</span>
+        </button>
+      </div>
+
+      {pane === "plan" ? (
+        <TowPlanBoard
+          rows={boardItems}
+          canWrite={canWrite}
+          canGantt={canGantt}
+          rangeFrom={rangeFrom}
+          rangeTo={rangeTo}
+          onOpenEvent={openEvent}
+        />
+      ) : (
       <section className="card towsTableCard">
+        {sendOpen ? (
+          <div className="towsSendPanel">
+            <label className="tgField">
+              <span className="tgFieldLabel">Получатели</span>
+              <textarea
+                className="towsMemo"
+                rows={2}
+                value={recipientsText}
+                placeholder="адреса через запятую или с новой строки"
+                onChange={(e) => {
+                  setRecipientsText(e.target.value);
+                  setSendMessage("");
+                }}
+              />
+            </label>
+            <label className="tgField">
+              <span className="tgFieldLabel">Комментарий к письму</span>
+              <textarea className="towsMemo" rows={2} value={sendNote} onChange={(e) => setSendNote(e.target.value)} />
+            </label>
+            <div className="row">
+              <button
+                className="btn btnPrimary"
+                type="button"
+                disabled={!canWrite || sendM.isPending || items.length === 0}
+                onClick={() => sendM.mutate("list")}
+              >
+                Отправить
+              </button>
+              <button
+                className="btn"
+                type="button"
+                disabled={!canWrite || sendM.isPending || items.length === 0 || !selfEmail}
+                onClick={() => sendM.mutate("self")}
+              >
+                Себе
+              </button>
+              <span className="muted">
+                Уйдут сохранённые строки за период ({items.length}), столбцы как в Excel.
+                {selfEmail ? ` Себе — ${selfEmail}.` : ""}
+              </span>
+            </div>
+            {dirtyCount > 0 ? <div className="muted">Несохранённые правки в письмо не входят.</div> : null}
+            {sendMessage ? <div className="muted">{sendMessage}</div> : null}
+            {sendM.error ? <div className="error">{String((sendM.error as Error).message ?? sendM.error)}</div> : null}
+          </div>
+        ) : null}
         <div className="itpTableWrap towsTableWrap">
           <table className="itpTable towsTable">
             <thead>
@@ -506,7 +736,7 @@ export function RmTowsView() {
               {items.length === 0 ? (
                 <tr>
                   <td colSpan={(canWrite || canGantt ? 1 : 0) + 14} className="muted">
-                    Нет буксировок в выбранном периоде. Интервалы создаются в карточке события на Гантте.
+                    Нет буксировок в выбранном периоде. Расставьте края на вкладке «План».
                   </td>
                 </tr>
               ) : (
@@ -654,6 +884,7 @@ export function RmTowsView() {
         </div>
         {saveM.error ? <div className="error">{String((saveM.error as Error).message ?? saveM.error)}</div> : null}
       </section>
+      )}
     </div>
   );
 }

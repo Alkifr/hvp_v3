@@ -178,6 +178,11 @@ export function planEdgeTows(params: {
   return { create, skipped, kept };
 }
 
+export function selectPlannedEdges(plan: EdgeTowPlan, role?: PlannedEdgeTow["role"]): PlannedEdgeTow[] {
+  if (!role) return plan.create;
+  return plan.create.filter((tow) => tow.role === role);
+}
+
 export type TowLinkPlacement = {
   id: string;
   origin: "MANUAL" | "AUTO_GAP";

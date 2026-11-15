@@ -101,6 +101,7 @@ export type TowsViewShare = {
   filterOperatorIds: string[];
   filterAircraftTypeIds: string[];
   filterAircraftIds: string[];
+  tab?: "plan" | "registry";
 };
 
 export function queryHasViewShare(query: URLSearchParams): boolean {
@@ -367,13 +368,15 @@ export function parseTowsViewShare(query: URLSearchParams): TowsViewShare | null
   if (!queryHasViewShare(query)) return null;
   const from = readDate(query, "from");
   const to = readDate(query, "to");
+  const tab = query.get("tab");
   return {
     fromDate: from ?? "",
     toDate: to ?? "",
     filterHangarIds: csv(query, "hangar"),
     filterOperatorIds: csv(query, "op"),
     filterAircraftTypeIds: csv(query, "type"),
-    filterAircraftIds: csv(query, "ac")
+    filterAircraftIds: csv(query, "ac"),
+    ...(tab === "plan" || tab === "registry" ? { tab } : {})
   };
 }
 
@@ -385,6 +388,7 @@ export function serializeTowsViewShare(state: TowsViewShare & { sandboxId?: stri
   setCsv(q, "op", state.filterOperatorIds);
   setCsv(q, "type", state.filterAircraftTypeIds);
   setCsv(q, "ac", state.filterAircraftIds);
+  if (state.tab === "plan" || state.tab === "registry") q.set("tab", state.tab);
   putSandbox(q, state.sandboxId);
   return q;
 }

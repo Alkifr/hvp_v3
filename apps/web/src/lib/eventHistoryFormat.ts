@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 
+import { formatMskDate } from "./localDate";
 import { STATUS_LABEL } from "./eventStatusCatalog";
 import { LINE_BASE_LABEL } from "./lineBase";
 
@@ -562,6 +563,13 @@ export function resolveHistoryValue(rawKey: string | undefined, v: unknown, maps
   }
 
   if (typeof v === "string") {
+    if (rawKey === "deadlineAt" || rawKey === "deadlineAtLocal") {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+        const [year, month, day] = v.split("-");
+        return `${day}.${month}.${year}`;
+      }
+      return formatMskDate(v) || "—";
+    }
     if (rawKey && /AtLocal$/.test(rawKey) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) {
       const d = dayjs(v);
       if (d.isValid()) return d.format("DD.MM.YYYY HH:mm");

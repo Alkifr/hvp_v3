@@ -85,7 +85,7 @@ async function loadPersonnelGroups(prisma: PrismaClient, actor: string | null, q
     orderBy: [{ date: "asc" }, { categoryCode: "asc" }]
   });
   const shiftIds = [...new Set(lines.map((line) => line.shiftId))];
-  const typeIds = [...new Set(lines.map((line) => line.aircraftTypeId))];
+  const typeIds = [...new Set(lines.map((line) => line.aircraftTypeId).filter(Boolean))];
   const [shifts, types] = await Promise.all([
     shiftIds.length ? prisma.shift.findMany({ where: { id: { in: shiftIds } }, select: { id: true, name: true, code: true } }) : [],
     typeIds.length ? prisma.aircraftType.findMany({ where: { id: { in: typeIds } }, select: { id: true, name: true, icaoType: true } }) : []
@@ -105,7 +105,8 @@ async function loadPersonnelGroups(prisma: PrismaClient, actor: string | null, q
     const changes: Record<string, unknown> = { kind: "personnelAvailability" };
     for (const row of rows) {
       const day = row.date.toISOString().slice(0, 10).split("-");
-      const label = `${day[2]}.${day[1]}.${day[0]} · ${shiftName.get(row.shiftId) ?? "смена"} · ${typeName.get(row.aircraftTypeId) ?? "тип ВС"} · ${row.categoryCode}`;
+      const typeLabel = row.aircraftTypeId ? (typeName.get(row.aircraftTypeId) ?? "тип ВС") : "без типа";
+      const label = `${day[2]}.${day[1]}.${day[0]} · ${shiftName.get(row.shiftId) ?? "смена"} · ${typeLabel} · ${row.categoryCode}`;
       changes[label] = { from: row.headcountFrom, to: row.headcountTo };
     }
     const createdAt = new Date(group.createdAt);

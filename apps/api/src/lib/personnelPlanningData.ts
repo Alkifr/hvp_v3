@@ -1,10 +1,15 @@
 import {
+  availabilityIncluded,
+  availabilityRowVisible,
   balanceColumns,
   calculatePersonnelWeek,
   PERSONNEL_DEPARTMENTS,
-  qualificationsForWorkshopSkills,
+  resourceQualifications,
+  sliceAircraftTypeId,
   summarizeResourceSlices,
+  UNTYPED_AIRCRAFT_TYPE_ID,
   weekDateKeys,
+  type CatalogSkill,
   type EffectiveValue,
   type PersonnelDepartment
 } from "./personnelPlanning.js";
@@ -74,26 +79,29 @@ export async function loadPersonnelWeekData(
     name: row.name as string
   }));
   const workshopsWithSkills = new Set((workshopSkills as any[]).map((link: any) => link.workshopId));
-  const workshopSkillCodes = [
-    ...new Set((workshopSkills as any[]).map((link: any) => String(link.skill.code)))
-  ] as string[];
-  const fromSkills = workshopSkillCodes.length
-    ? qualificationsForWorkshopSkills(catalogQualifications, workshopSkillCodes).map((row) => ({
-        workshopId: params.workshopId,
-        categoryCode: row.code,
-        skillId: null,
-        department: row.department,
-        sortOrder: row.sortOrder ?? 0,
-        isActive: true,
-        category: {
-          code: row.code,
-          name: row.name ?? row.code,
-          department: row.department,
-          isAuthorized: row.isAuthorized,
-          sortOrder: row.sortOrder ?? 0
-        }
-      }))
-    : [];
+  const plannedSkills = (workshopSkills as any[]).map((link: any) => ({
+    id: link.skill.id as string,
+    code: String(link.skill.code),
+    name: link.skill.name as string | undefined,
+    countsInPlannedResource: link.skill.countsInPlannedResource !== false
+  }));
+  const fromSkills = resourceQualifications(catalogQualifications, plannedSkills).map((row) => ({
+    workshopId: params.workshopId,
+    categoryCode: row.code,
+    skillId: row.skillId,
+    department: row.department,
+    sortOrder: row.sortOrder,
+    isActive: true,
+    countsInPlannedResource: row.countsInPlannedResource,
+    category: {
+      code: row.code,
+      name: row.name,
+      department: row.department,
+      isAuthorized: row.isAuthorized,
+      countsInPlannedResource: row.countsInPlannedResource,
+      sortOrder: row.sortOrder
+    }
+  }));
   const seenCategories = new Set(fromSkills.map((row) => row.categoryCode));
   const legacyCategories = mappings
     .filter((mapping: any) => !workshopsWithSkills.has(mapping.workshopId) && !seenCategories.has(mapping.categoryCode))
@@ -120,7 +128,7 @@ export async function loadPersonnelWeekData(
   const demandDepartments = columns.departments;
   const balanceLines = columns.lines;
 
-  const [availability, norms, factors, rawEvents, assignedAircraft, statusRows] = await Promise.all([
+  const [availability, norms, factors, rawEvents, assignedAircraft, statusRows, workshopFlags] = await Promise.all([
     prisma.personnelAvailability.findMany({
       where: { workshopId: { in: workshopIds }, date: { gte: rangeStart, lt: rangeEnd } },
       include: { skill: { select: { id: true, code: true } } },
@@ -201,8 +209,17 @@ export async function loadPersonnelWeekData(
       distinct: ["typeId"],
       select: { typeId: true, type: { select: { id: true, name: true, icaoType: true } } }
     }),
-    prisma.eventStatusCatalog.findMany({ select: { code: true, name: true } })
+    prisma.eventStatusCatalog.findMany({ select: { code: true, name: true } }),
+    prisma.workshop.findMany({
+      where: { id: { in: workshopIds } },
+      select: { id: true, withoutAircraftType: true }
+    })
   ]);
+  const untypedWorkshopIds = new Set<string>(
+    (workshopFlags as Array<{ id: string; withoutAircraftType?: boolean }>)
+      .filter((row) => row.withoutAircraftType)
+      .map((row) => row.id)
+  );
 
   const virtualOperatorIds = Array.from(
     new Set(
@@ -274,24 +291,26 @@ export async function loadPersonnelWeekData(
   const categoryRules = mappedCategories.map((row: any) => ({
       code: row.categoryCode,
       department: row.department,
-      isAuthorized: row.category?.isAuthorized ?? false
+      isAuthorized: row.category?.isAuthorized ?? false,
+      countsInPlannedResource: row.countsInPlannedResource !== false
     }));
   const normInput = norms.map((row: any) => ({
       effectiveFrom: row.effectiveFrom.toISOString().slice(0, 10),
       value: numberOf(row.hours)
     }));
+  const availabilityInput = (row: any) => ({
+    date: row.date.toISOString().slice(0, 10),
+    categoryCode: row.skill?.code ?? row.categoryCode,
+    headcount: numberOf(row.headcount)
+  });
   const calculate = (aircraftTypeId?: string) =>
     calculatePersonnelWeek({
       weekStart: params.weekStart,
       dates,
       events: calculationEvents.filter((event: any) => (!aircraftTypeId || event.aircraftTypeId === aircraftTypeId) && (!selectedTypeIds || selectedTypeIds.has(event.aircraftTypeId))),
       availability: availability
-        .filter((row: any) => (!aircraftTypeId || row.aircraftTypeId === aircraftTypeId) && (!selectedTypeIds || selectedTypeIds.has(row.aircraftTypeId)))
-        .map((row: any) => ({
-          date: row.date.toISOString().slice(0, 10),
-          categoryCode: row.skill?.code ?? row.categoryCode,
-          headcount: numberOf(row.headcount)
-        })),
+        .filter((row: any) => availabilityIncluded(row, untypedWorkshopIds, selectedTypeIds, aircraftTypeId))
+        .map(availabilityInput),
       categories: categoryRules,
       demandDepartments,
       norms: normInput,
@@ -301,7 +320,7 @@ export async function loadPersonnelWeekData(
     });
   const calculation = calculate();
   const aircraftTypeIds = new Set<string>([
-    ...availability.map((row: any) => row.aircraftTypeId),
+    ...availability.flatMap((row: any) => row.aircraftTypeId ? [row.aircraftTypeId as string] : []),
     ...calculationEvents.map((event: any) => event.aircraftTypeId)
   ]);
   const calculationByAircraftType = Object.fromEntries(
@@ -311,13 +330,18 @@ export async function loadPersonnelWeekData(
     ? summarizeResourceSlices({
         weekStart: params.weekStart,
         dates,
-        events: calculationEvents.filter((event: any) => !selectedTypeIds || selectedTypeIds.has(event.aircraftTypeId)),
+        events: calculationEvents
+          .filter((event: any) => !selectedTypeIds || selectedTypeIds.has(event.aircraftTypeId))
+          .map((event: any) => ({
+            ...event,
+            aircraftTypeId: sliceAircraftTypeId(event.workshopId, event.aircraftTypeId, untypedWorkshopIds)
+          })),
         availability: availability
-          .filter((row: any) => !selectedTypeIds || selectedTypeIds.has(row.aircraftTypeId))
+          .filter((row: any) => availabilityIncluded(row, untypedWorkshopIds, selectedTypeIds))
           .map((row: any) => ({
             date: row.date.toISOString().slice(0, 10),
             workshopId: row.workshopId as string,
-            aircraftTypeId: row.aircraftTypeId as string,
+            aircraftTypeId: sliceAircraftTypeId(row.workshopId, row.aircraftTypeId, untypedWorkshopIds),
             categoryCode: (row.skill?.code ?? row.categoryCode) as string,
             headcount: numberOf(row.headcount)
           })),
@@ -357,45 +381,43 @@ type ResourceCategory = {
   skillId: string | null;
   department: string | null;
   isActive: boolean;
-  category: { code: string; name: string; department: string | null; isAuthorized: boolean };
+  countsInPlannedResource: boolean;
+  category: { code: string; name: string; department: string | null; isAuthorized: boolean; countsInPlannedResource: boolean };
 };
 
 function resourceCategoriesForWorkshop(
   workshopId: string,
   catalog: Array<{ code: string; department: string | null; isAuthorized: boolean; sortOrder: number; name: string }>,
-  skillCodes: string[],
+  skills: CatalogSkill[],
   mappings: Array<{ categoryCode: string; department?: string | null; isActive?: boolean; category?: { name?: string; department?: string | null; isAuthorized?: boolean } | null }>
 ): ResourceCategory[] {
-  const uniqueSkills = [...new Set(skillCodes)];
-  const fromSkills = uniqueSkills.length
-    ? qualificationsForWorkshopSkills(catalog, uniqueSkills).map((row) => ({
-        workshopId,
-        categoryCode: row.code,
-        skillId: null,
-        department: row.department,
-        isActive: true,
-        category: { code: row.code, name: row.name ?? row.code, department: row.department, isAuthorized: row.isAuthorized }
-      }))
-    : [];
-  if (fromSkills.length) return fromSkills;
-  const seen = new Set<string>();
-  return mappings.flatMap((mapping) => {
-    if (seen.has(mapping.categoryCode)) return [];
-    seen.add(mapping.categoryCode);
+  const toRow = (
+    row: { code: string; name?: string; department: string | null; isAuthorized: boolean; countsInPlannedResource?: boolean; skillId?: string | null },
+    isActive = true
+  ): ResourceCategory => ({
+    workshopId,
+    categoryCode: row.code,
+    skillId: row.skillId ?? null,
+    department: row.department,
+    isActive,
+    countsInPlannedResource: row.countsInPlannedResource !== false,
+    category: {
+      code: row.code,
+      name: row.name ?? row.code,
+      department: row.department,
+      isAuthorized: row.isAuthorized,
+      countsInPlannedResource: row.countsInPlannedResource !== false
+    }
+  });
+  if (skills.length) return resourceQualifications(catalog, skills).map((row) => toRow(row));
+  return mappings.map((mapping) => {
     const department = mapping.category?.department ?? mapping.department ?? null;
-    return [{
-      workshopId,
-      categoryCode: mapping.categoryCode,
-      skillId: null,
+    return toRow({
+      code: mapping.categoryCode,
+      name: mapping.category?.name ?? mapping.categoryCode,
       department,
-      isActive: mapping.isActive !== false,
-      category: {
-        code: mapping.categoryCode,
-        name: mapping.category?.name ?? mapping.categoryCode,
-        department,
-        isAuthorized: Boolean(mapping.category?.isAuthorized)
-      }
-    }];
+      isAuthorized: Boolean(mapping.category?.isAuthorized)
+    }, mapping.isActive !== false);
   });
 }
 
@@ -430,7 +452,7 @@ export async function loadPersonnelResourceSheets(
     }),
     prisma.workshop.findMany({
       where: { id: { in: workshopIds } },
-      select: { id: true, code: true, name: true }
+      select: { id: true, code: true, name: true, withoutAircraftType: true }
     })
   ]);
   const catalog = categories.map((row: any) => ({
@@ -440,11 +462,16 @@ export async function loadPersonnelResourceSheets(
     sortOrder: Number(row.sortOrder ?? 0),
     name: row.name as string
   }));
-  const skillsByWorkshop = new Map<string, string[]>();
+  const skillsByWorkshop = new Map<string, CatalogSkill[]>();
   for (const link of workshopSkills) {
-    const codes = skillsByWorkshop.get(link.workshopId) ?? [];
-    codes.push(String(link.skill.code));
-    skillsByWorkshop.set(link.workshopId, codes);
+    const list = skillsByWorkshop.get(link.workshopId) ?? [];
+    list.push({
+      id: link.skill.id as string,
+      code: String(link.skill.code),
+      name: link.skill.name as string | undefined,
+      countsInPlannedResource: link.skill.countsInPlannedResource !== false
+    });
+    skillsByWorkshop.set(link.workshopId, list);
   }
   const mappingsByWorkshop = new Map<string, any[]>();
   for (const mapping of mappings) {
@@ -462,14 +489,22 @@ export async function loadPersonnelResourceSheets(
   for (const row of availability) {
     itemsByWorkshop.set(row.workshopId, [...(itemsByWorkshop.get(row.workshopId) ?? []), row]);
   }
-  const workshopById = new Map<string, { id: string; code: string; name: string }>(workshops.map((row: any) => [row.id, row]));
+  const workshopById = new Map<string, { id: string; code: string; name: string; withoutAircraftType?: boolean }>(workshops.map((row: any) => [row.id, row]));
+  const untypedWorkshopIds = new Set<string>(
+    workshops.filter((row: { withoutAircraftType?: boolean }) => row.withoutAircraftType).map((row: { id: string }) => row.id)
+  );
+  const untypedAircraftType = { id: UNTYPED_AIRCRAFT_TYPE_ID, name: "Без типа", icaoType: null };
   return workshopIds.map((workshopId) => {
     const workshop = workshopById.get(workshopId);
-    const aircraftTypes = [...(typesByWorkshop.get(workshopId) ?? [])].sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    const withoutAircraftType = Boolean(workshop?.withoutAircraftType);
+    const aircraftTypes = withoutAircraftType
+      ? [untypedAircraftType]
+      : [...(typesByWorkshop.get(workshopId) ?? [])].sort((a, b) => a.name.localeCompare(b.name, "ru"));
     return {
       workshopId,
       code: workshop?.code ?? "",
       name: workshop?.name ?? "",
+      withoutAircraftType,
       aircraftTypes,
       mappedCategories: resourceCategoriesForWorkshop(
         workshopId,
@@ -477,7 +512,9 @@ export async function loadPersonnelResourceSheets(
         skillsByWorkshop.get(workshopId) ?? [],
         mappingsByWorkshop.get(workshopId) ?? []
       ),
-      items: itemsByWorkshop.get(workshopId) ?? []
+      items: (itemsByWorkshop.get(workshopId) ?? [])
+        .filter((row: { workshopId: string; aircraftTypeId: string | null }) => availabilityRowVisible(row, untypedWorkshopIds))
+        .map((row: { aircraftTypeId: string | null }) => ({ ...row, aircraftTypeId: row.aircraftTypeId ?? UNTYPED_AIRCRAFT_TYPE_ID }))
     };
   });
 }

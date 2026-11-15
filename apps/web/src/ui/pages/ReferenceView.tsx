@@ -76,7 +76,7 @@ const REF_GROUPS: RefGroup[] = [
     items: [
       { kind: "workshops", title: "Цеха" },
       { kind: "skills", title: "Квалификации" },
-      { kind: "personnel-composition", title: "Состав категорий", hint: "категория и квалификации" },
+      { kind: "personnel-composition", title: "Состав категорий", hint: "квалификации внутри категории" },
       { kind: "personnel-categories", title: "Категории цеха", hint: "цех и категории" },
       { kind: "personnel-hours", title: "Норма часов", hint: "часов на человека в смене" },
       { kind: "personnel-factors", title: "Коэффициенты MPS", hint: "по типу ВС" },
@@ -175,7 +175,7 @@ type LayoutDetail = Layout & {
   }>;
   hangar?: Hangar;
 };
-type Skill = { id: string; code: string; name: string; isActive: boolean };
+type Skill = { id: string; code: string; name: string; countsInPlannedResource?: boolean; isActive: boolean };
 type OptimizationProfile = { id: string; code: string; name: string; isDefault?: boolean; isActive: boolean };
 
 function TextInput(props: { value: string; onChange: (v: string) => void; placeholder?: string; style?: React.CSSProperties; maxLength?: number }) {
@@ -645,6 +645,8 @@ export function ReferenceView() {
   const [fIsActive, setFIsActive] = useState(true);
   const [fIsPhysical, setFIsPhysical] = useState(true);
   const [fDefaultLineBase, setFDefaultLineBase] = useState<"" | "LINE" | "BASE">("");
+  const [fWithoutAircraftType, setFWithoutAircraftType] = useState(false);
+  const [fCountsInPlannedResource, setFCountsInPlannedResource] = useState(true);
   const [fIcaoType, setFIcaoType] = useState("");
   const [fManufacturer, setFManufacturer] = useState("");
   const [fTailNumber, setFTailNumber] = useState("");
@@ -774,6 +776,7 @@ export function ReferenceView() {
       setFCode("");
       setFName("");
       setFDefaultLineBase("");
+      setFWithoutAircraftType(false);
     } else if (k === "hangars") {
       setFCode("");
       setFName("");
@@ -799,6 +802,7 @@ export function ReferenceView() {
     } else if (k === "skills") {
       setFCode("");
       setFName("");
+      setFCountsInPlannedResource(true);
     } else if (k === "persons") {
       setFCode("");
       setFName("");
@@ -879,6 +883,8 @@ export function ReferenceView() {
     setFIsActive(Boolean(row.isActive ?? true));
     setFIsPhysical(row.isPhysical !== false);
     setFDefaultLineBase(row.defaultLineBase === "LINE" || row.defaultLineBase === "BASE" ? row.defaultLineBase : "");
+    setFWithoutAircraftType(Boolean(row.withoutAircraftType));
+    setFCountsInPlannedResource(row.countsInPlannedResource !== false);
     setFCode(String(row.code ?? ""));
     setFName(String(row.name ?? ""));
     setFMinutes(Number(row.minutes ?? 30));
@@ -967,7 +973,7 @@ export function ReferenceView() {
         color: fColor.trim(),
         isActive: fIsActive
       };
-    if (kind === "skills") return { code: fCode.trim(), name: fName.trim(), isActive: fIsActive };
+    if (kind === "skills") return { code: fCode.trim(), name: fName.trim(), countsInPlannedResource: fCountsInPlannedResource, isActive: fIsActive };
     if (kind === "persons")
       return {
         code: fCode.trim() ? fCode.trim() : mode === "edit" ? null : undefined,
@@ -1029,6 +1035,7 @@ export function ReferenceView() {
         code: fCode.trim(),
         name: fName.trim(),
         defaultLineBase: fDefaultLineBase === "LINE" || fDefaultLineBase === "BASE" ? fDefaultLineBase : null,
+        withoutAircraftType: fWithoutAircraftType,
         isActive: fIsActive
       };
     if (kind === "hangars") {
@@ -1170,6 +1177,8 @@ export function ReferenceView() {
         allowsAutoInProgress: fAllowsAutoInProgress,
         manualOnly: fManualOnly,
         defaultLineBase: fDefaultLineBase,
+        withoutAircraftType: fWithoutAircraftType,
+        countsInPlannedResource: fCountsInPlannedResource,
         uom: fUom,
         personSkillIds: fPersonSkillIds,
         startMin: fStartMin,
@@ -1215,6 +1224,8 @@ export function ReferenceView() {
         if (patch.allowsAutoInProgress != null) setFAllowsAutoInProgress(patch.allowsAutoInProgress);
         if (patch.manualOnly != null) setFManualOnly(patch.manualOnly);
         if (patch.defaultLineBase != null) setFDefaultLineBase(patch.defaultLineBase);
+        if (patch.withoutAircraftType != null) setFWithoutAircraftType(patch.withoutAircraftType);
+        if (patch.countsInPlannedResource != null) setFCountsInPlannedResource(patch.countsInPlannedResource);
         if (patch.uom != null) setFUom(patch.uom);
         if (patch.personSkillIds != null) setFPersonSkillIds(patch.personSkillIds);
         if (patch.startMin != null) setFStartMin(patch.startMin);

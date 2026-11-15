@@ -180,6 +180,23 @@ export function toInputMsk(value: string | Date | null | undefined): string {
   return d.isValid() ? d.format("YYYY-MM-DDTHH:mm") : "";
 }
 
+/** Absolute instant → `YYYY-MM-DD` wall date in MSK. */
+export function toInputMskDate(value: string | Date | null | undefined): string {
+  return toInputMsk(value).slice(0, 10);
+}
+
+/** `YYYY-MM-DD` → 00:00:00.000 MSK as ISO. */
+export function fromInputMskDate(value: string): string | null {
+  return startOfMskDayIso(value.trim().slice(0, 10));
+}
+
+/** Absolute instant → `DD.MM.YYYY` in MSK. */
+export function formatMskDate(value: string | Date | null | undefined): string {
+  if (value == null || value === "") return "";
+  const d = dayjs(value).utcOffset(MSK_OFFSET_MINUTES);
+  return d.isValid() ? d.format("DD.MM.YYYY") : "";
+}
+
 /** Absolute instant → `DD.MM.YYYY HH:mm` in MSK. */
 export function formatMskDateTime(value: string | Date | null | undefined): string {
   if (value == null || value === "") return "";

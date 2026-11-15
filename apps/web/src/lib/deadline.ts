@@ -1,12 +1,9 @@
-import dayjs from "dayjs";
+export const DEADLINE_SLOT_HINT = "Дата начала слота позже DeadLine.";
 
-export const DEADLINE_SLOT_HINT = "Дата выхода со слота позже DeadLine.";
-
-/** Оперативное окончание слота позже DeadLine. Пустые значения не считаются превышением. */
-export function slotExitAfterDeadline(endAtLocal: string, deadlineLocal: string): boolean {
-  if (!endAtLocal || !deadlineLocal) return false;
-  const end = dayjs(endAtLocal);
-  const deadline = dayjs(deadlineLocal);
-  if (!end.isValid() || !deadline.isValid()) return false;
-  return end.isAfter(deadline);
+/** Календарный день начала оперативного слота позже DeadLine. Время не учитывается. */
+export function slotStartAfterDeadline(startAtLocal: string, deadlineLocal: string): boolean {
+  const startDay = startAtLocal.slice(0, 10);
+  const deadlineDay = deadlineLocal.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDay) || !/^\d{4}-\d{2}-\d{2}$/.test(deadlineDay)) return false;
+  return startDay > deadlineDay;
 }

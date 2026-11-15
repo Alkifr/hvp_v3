@@ -228,3 +228,48 @@ test("unsaved headcount survives a new page load and a stale snapshot", () => {
     else delete (globalThis as { sessionStorage?: Storage }).sessionStorage;
   }
 });
+
+test("workshop without aircraft type is edited as one block", () => {
+  const sheets: ResourceGridSheet[] = [{
+    workshopId: "paint",
+    code: "ЦПОИ",
+    name: "Окрасочный",
+    withoutAircraftType: true,
+    aircraftTypes: [],
+    mappedCategories: [{ categoryCode: "PAINT", skillId: null, department: "PAINT" }],
+    weeks: [],
+    items: [{ date: "2026-11-02", shiftId: "day", aircraftTypeId: null, categoryCode: "PAINT", skillId: null, headcount: 4 }]
+  }];
+  const rows = buildResourceRows(sheets);
+  assert.equal(rows.some((row) => row.kind === "note"), false);
+  const input = rows.find((row) => row.kind === "input");
+  assert.equal(input && input.kind === "input" ? input.typeId : "missing", "");
+  assert.equal(input && input.kind === "input" ? input.typeLabel : "", "Без типа");
+  assert.equal(rows.some((row) => row.kind === "aggregate" && row.key.endsWith(":grand")), false);
+  assert.equal(baselineFromSheets(sheets)[resourceCellKey("paint", "2026-11-02", "day", "", "PAINT")], "4");
+  const groups = groupAvailabilityWrites(
+    [resourceCellKey("paint", "2026-11-02", "day", "", "PAINT")],
+    () => "4",
+    () => ({ categoryCode: "PAINT", skillId: null })
+  );
+  assert.equal(groups[0]?.items[0]?.aircraftTypeId, "");
+});
+
+test("unauthorized qualification is visible and stays out of the headcount total", () => {
+  const sheets: ResourceGridSheet[] = [{
+    workshopId: "w",
+    code: "ЦПТО",
+    name: "Цех",
+    aircraftTypes: [{ id: "a320", name: "A320" }],
+    mappedCategories: [
+      { categoryCode: "B1", skillId: null, department: "ME", countsInPlannedResource: true },
+      { categoryCode: "AM", skillId: null, department: null, countsInPlannedResource: false }
+    ],
+    weeks: [],
+    items: []
+  }];
+  const rows = buildResourceRows(sheets);
+  assert.equal(rows.filter((row) => row.kind === "input").map((row) => row.kind === "input" ? row.title : "").join(","), "B1,AM");
+  const total = rows.find((row) => row.kind === "aggregate" && row.key.endsWith(":total:a320"));
+  assert.deepEqual(total && total.kind === "aggregate" ? total.tokens : [], ["B1"]);
+});

@@ -7918,6 +7918,488 @@ input[type="number"]::-webkit-inner-spin-button {
   box-sizing: border-box;
 }
 
+.towsPaneHint {
+  margin: 6px 0 0;
+  max-width: 68ch;
+}
+
+.towsPlanActions {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.towsEdgeBtn {
+  white-space: normal;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.25;
+  max-width: 190px;
+}
+
+.towsPlanTable {
+  min-width: max(100%, 1180px);
+}
+
+.towsPlanTable th.towsPlanAction,
+.towsPlanTable td.towsPlanAction {
+  max-width: 210px;
+  min-width: 180px;
+  white-space: normal;
+}
+
+.towsTable td.towsWrap,
+.towsTable th.towsWrap {
+  white-space: normal;
+  max-width: 260px;
+  min-width: 140px;
+}
+
+.towsSendPanel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.towsSendPanel .towsMemo {
+  width: min(560px, 100%);
+}
+
+.towPlanHead,
+.towDayNav,
+.towEditorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.towPlanHead {
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.towPlanLegend,
+.towDayNav {
+  margin-bottom: 12px;
+}
+
+.towScaleList,
+.towDayList,
+.towDayGroup,
+.towScaleMeta {
+  display: grid;
+  gap: 8px;
+}
+
+.towScaleRow,
+.towDayRow,
+.towDayAxis {
+  display: grid;
+  grid-template-columns: minmax(180px, 230px) minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.towScaleTrack {
+  position: relative;
+  height: 56px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: rgba(241, 245, 249, 0.7);
+}
+
+.towDayTrack {
+  height: 36px;
+}
+
+.towPlacement {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.28);
+  color: #334155;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.towPlacementGap {
+  background: transparent;
+  border: 1px dashed rgba(100, 116, 139, 0.7);
+}
+
+.towChip {
+  position: absolute;
+  top: 16px;
+  z-index: 1;
+  height: 24px;
+  min-width: 72px;
+  max-width: 42%;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 22px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.towDayTrack .towChip {
+  top: 6px;
+}
+
+.towChipFilled {
+  background: #1e3a8a;
+  color: #fff;
+}
+
+.towChipPending {
+  background: #fff;
+  border-style: dashed;
+  border-color: #64748b;
+  color: #0f172a;
+}
+
+.towChipConflict {
+  box-shadow: inset 0 0 0 2px #b91c1c;
+}
+
+.towChipSelected {
+  box-shadow: inset 0 0 0 2px #93c5fd;
+}
+
+.towChip:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.towChipSample {
+  position: static;
+  display: inline-block;
+  min-width: 0;
+  height: auto;
+  max-width: none;
+  padding: 2px 8px;
+  line-height: 18px;
+}
+
+.towScaleTimes,
+.towDayAxisScale {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.towScaleTimes {
+  grid-column: 2;
+  display: flex;
+  justify-content: space-between;
+}
+
+.towDayAxisScale {
+  position: relative;
+  height: 16px;
+}
+
+.towDayAxisScale span,
+.towDayGridLine {
+  position: absolute;
+}
+
+.towDayAxisScale span {
+  transform: translateX(-50%);
+}
+
+.towDayGridLine {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.towDayHangar {
+  margin: 8px 0 0;
+  font-size: 15px;
+}
+
+.towEditor {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.towEditorTitle {
+  width: 100%;
+  font-weight: 600;
+}
+
+.towWeek {
+  display: grid;
+  gap: 10px;
+}
+
+.towWeekBar,
+.towWeekLayout {
+  display: grid;
+  gap: 10px;
+}
+
+.towWeekBar {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: end;
+}
+
+.towWeekSummary {
+  margin: 0;
+}
+
+.towWeekLayout {
+  grid-template-columns: minmax(0, 1fr) 320px;
+  align-items: start;
+}
+
+.towWeekBoard {
+  overflow: auto;
+  max-height: calc(100vh - 280px);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.towWeekGrid {
+  display: grid;
+  grid-template-columns: 72px repeat(7, minmax(120px, 1fr));
+  min-width: 920px;
+}
+
+.towWeekHead,
+.towWeekAxis {
+  position: sticky;
+  z-index: 2;
+  background: #f8fafc;
+}
+
+.towWeekHead {
+  top: 0;
+  padding: 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.45);
+  border-right: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.towWeekHead b {
+  display: block;
+  font-size: 13px;
+}
+
+.towWeekHead span,
+.towWeekTick span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.towWeekCol {
+  position: relative;
+  border-right: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.towWeekAxis {
+  left: 0;
+  z-index: 3;
+  background: #fff;
+}
+
+.towWeekTick,
+.towWeekMinor {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid #e7edf3;
+}
+
+.towWeekMinor {
+  border-top-style: dashed;
+  border-top-color: #eef2f6;
+}
+
+.towWeekTick span {
+  position: absolute;
+  top: 1px;
+  left: 6px;
+  background: #fff;
+}
+
+.towWeekBlock {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.towWeekBlock b,
+.towWeekBlock span {
+  display: block;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.towWeekBlockOn {
+  background: #15803d;
+}
+
+.towWeekBlockOff {
+  background: #dc2626;
+}
+
+.towWeekBlockLong {
+  box-shadow: inset 3px 0 0 #ca8a04;
+}
+
+.towWeekBlockSelected {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.towWeekBlock:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.towWeekSwatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #334155;
+  font-size: 12px;
+}
+
+.towWeekSwatch::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.towWeekSwatchOn::before {
+  background: #15803d;
+}
+
+.towWeekSwatchOff::before {
+  background: #dc2626;
+}
+
+.towWeekEditor {
+  position: sticky;
+  top: 0;
+}
+
+.towWeekEditor .towEditor {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+}
+
+.towWeekEditor .tgField,
+.towWeekEditor .tgField input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.towWeekRegistry {
+  margin-top: 12px;
+}
+
+.towWeekTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.towWeekTable th,
+.towWeekTable td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.towWeekTable th {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.towWeekTable tr {
+  cursor: pointer;
+}
+
+.towWeekRowSelected {
+  background: #eff6ff;
+}
+
+.towWeekDotOn,
+.towWeekDotOff {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+}
+
+.towWeekDotOn {
+  background: #15803d;
+}
+
+.towWeekDotOff {
+  background: #dc2626;
+}
+
+@media (max-width: 980px) {
+  .towWeekLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .towWeekEditor {
+    position: static;
+  }
+}
+
+@media (max-width: 800px) {
+  .towScaleRow,
+  .towDayRow,
+  .towDayAxis {
+    grid-template-columns: 1fr;
+  }
+
+  .towScaleTimes {
+    grid-column: 1;
+  }
+}
+
 .towsMemo {
   display: block;
   box-sizing: border-box;
@@ -10190,9 +10672,11 @@ button.evCardHelpBtn {
   margin: 0;
   padding: 6px 8px;
   border-radius: 8px;
-  background: #eef0f3;
-  color: #4b5563;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
   font-size: 12px;
+  font-weight: 600;
   line-height: 1.35;
 }
 
@@ -10205,9 +10689,11 @@ button.evCardHelpBtn {
   margin: 0 0 8px;
   padding: 6px 10px;
   border-radius: 8px;
-  background: #eef0f3;
-  color: #4b5563;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
   font-size: 12px;
+  font-weight: 600;
 }
 
 .evFieldVirtualAircraft .evInput,
