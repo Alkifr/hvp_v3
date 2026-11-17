@@ -289,6 +289,12 @@ test("personnel plan workbook pulls chart values from the resource and plan shee
   assert.equal(week.getCell(weekDate.row - 1, weekDate.col + 24).value, "Tuesday");
   assert.equal(week.getCell(weekDate.row, weekDate.col).value, "02.11");
   assert.equal(week.getColumn(weekDate.col).width, 1.08);
+  const dayBook = buildPersonnelPlanWorkbook({ ...input, scale: "day" }).getWorksheet("Chart")!;
+  const dayDate = findCell(dayBook, "02.11")!;
+  assert.equal(dayBook.getCell(dayDate.row + 1, dayDate.col).value, "ночь");
+  assert.equal(dayBook.getCell(dayDate.row + 1, dayDate.col + 8).value, "день");
+  assert.equal(dayBook.getCell(dayDate.row + 1, dayDate.col + 20).value, "ночь");
+  assert.equal(dayBook.getColumn(dayDate.col).width, 3.2);
   const weekTow = findRowBy(week, { 1: "RA-999", 4: "" });
   assert.equal(week.getCell(weekTow, weekDate.col).isMerged, false);
   assert.equal((week.getCell(findCell(week, "Ангар 1")!.row, weekDate.col).fill as ExcelJS.FillPattern).fgColor?.argb, "FFF97316");

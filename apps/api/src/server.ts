@@ -27,6 +27,7 @@ import { userDirectoryRoutes } from "./routes/users.js";
 import { personnelPlanningRoutes } from "./routes/personnel-planning.js";
 import { mailDigestComposeRoutes } from "./routes/mailDigest.js";
 import { subscriptionRoutes } from "./routes/subscriptions.js";
+import { eventUnsubscribeRoutes } from "./routes/eventUnsubscribe.js";
 import { runEventStatusMaintenance } from "./lib/eventMaintenance.js";
 import { runScheduledMailDigest } from "./lib/mailDigestSend.js";
 import { prunePresenceEvents } from "./lib/userPresence.js";
@@ -66,6 +67,7 @@ export async function buildServer() {
   await app.register(personnelPlanningRoutes, { prefix: "/api/personnel-planning" });
   await app.register(mailDigestComposeRoutes, { prefix: "/api/mail-digest" });
   await app.register(subscriptionRoutes, { prefix: "/api/subscriptions" });
+  await app.register(eventUnsubscribeRoutes);
   await app.register(adminRoutes, { prefix: "/api/admin" });
   await app.register(sandboxRoutes, { prefix: "/api/sandboxes" });
   const webRoot = await registerWebStatic(app);

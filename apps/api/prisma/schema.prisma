@@ -481,6 +481,7 @@ model User {
   eventChangeSubscriptions    EventChangeSubscription[]
   personnelWeekLocks          PersonnelPlanningWeek[]        @relation("PersonnelWeekLockedBy")
   personnelSnapshots          PersonnelPlanningSnapshot[]    @relation("PersonnelSnapshotCreatedBy")
+  personnelPlanArchives       PersonnelPlanArchive[]         @relation("PersonnelPlanArchiveCreatedBy")
   personnelAvailabilityChanges PersonnelAvailabilityChange[] @relation("PersonnelAvailabilityChangedBy")
 
   @@index([isActive])
@@ -944,6 +945,25 @@ model PersonnelPlanningSnapshot {
   @@index([createdAt])
 }
 
+/// Saved project of a personnel plan. The live chart keeps following the Gantt.
+model PersonnelPlanArchive {
+  id            String   @id @default(uuid())
+  weekStart     DateTime @db.Date
+  periodFrom    DateTime @db.Date
+  periodTo      DateTime @db.Date
+  title         String
+  workshopLabel String
+  eventCount    Int
+  payload       Json
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  createdBy User? @relation("PersonnelPlanArchiveCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([weekStart])
+}
+
 model Hangar {
   id         String   @id @default(uuid())
   code       String   @unique
@@ -1190,6 +1210,8 @@ model MaintenanceEvent {
   placements   EventPlacement[]
   auditTrail   MaintenanceEventAudit[]
   towSegments  EventTow[]
+  towWaivers   EventTowWaiver[]
+  towFieldChanges TowFieldChange[]
 
   workPlanLines        EventWorkPlanLine[]
   workActualLines      EventWorkActualLine[]
@@ -1527,6 +1549,67 @@ model TowNorm {
   updatedAt DateTime @updatedAt
 }
 
+/// Край события, на котором буксировка явно не требуется.
+model EventTowWaiver {
+  id        String   @id @default(uuid())
+  eventId   String
+  sandboxId String?
+  /// event-in | event-out
+  role      String
+  actor     String   @default("")
+  createdAt DateTime @default(now())
+
+  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, role])
+  @@index([sandboxId])
+}
+
+/// Шаблон письма реестра буксировок. Снимок плана хранится отдельно, в TowRegistrySend.
+model TowRegistryMailTemplate {
+  id               String   @id @default("default")
+  subjectTemplate  String   @default("Реестр буксировок {{period}}")
+  bodyTemplate     String   @default("")
+  updatedAt        DateTime @updatedAt
+}
+
+/// Зафиксированная версия реестра буксировок. rows — снимок строк окна. messageId заполняется при отправке.
+model TowRegistrySend {
+  id         String   @id @default(uuid())
+  sandboxId  String?
+  fromAt     DateTime
+  toAt       DateTime
+  actor      String
+  recipients Json
+  note       String?
+  subject    String
+  messageId  String?
+  rows       Json
+  createdAt  DateTime @default(now())
+
+  @@index([sandboxId, createdAt])
+  @@index([fromAt, toAt])
+}
+
+/// Сохранённая правка строки реестра: поле, было, стало.
+model TowFieldChange {
+  id        String   @id @default(uuid())
+  eventId   String
+  towId     String?
+  sandboxId String?
+  actor     String
+  field     String
+  before    String   @default("")
+  after     String   @default("")
+  reason    String?
+  createdAt DateTime @default(now())
+
+  event MaintenanceEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt])
+  @@index([sandboxId, createdAt])
+}
+
 /// Уведомления (колокольчик): просрочка без факта, ошибки пользователей (только админам) и др.
 model AppNotification {
   id        String   @id @default(uuid())
@@ -1684,7 +1767,8 @@ model MailDigestVariant {
   periodMode       String              @default("last7")
   periodCustomFrom String?
   periodCustomTo   String?
-  /// manual | daily | weekly | monthly
+  /// manual | daily | weekly | monthly | trigger
+  /// Источник письма (plan | tows) хранится колонкой source через raw SQL и не выбирается клиентом Prisma.
   scheduleMode     String              @default("manual")
   /// HH:mm, время по МСК
   scheduleTime     String              @default("09:00")

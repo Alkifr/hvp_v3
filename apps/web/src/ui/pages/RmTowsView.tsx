@@ -1,83 +1,29 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
-import { apiGet, apiPatch, apiPost } from "../../lib/api";
-import { isValidDateInput } from "../../lib/dateInput";
+import { apiGet, apiPost } from "../../lib/api";
+import { isValidDateInput, isValidDateTimeLocal } from "../../lib/dateInput";
 import { parseHashPage } from "../../lib/eventDeepLink";
-import { fromInputMskOptional, MSK_OFFSET_MINUTES, startOfMskDayIso, endOfMskDayIso } from "../../lib/localDate";
+import { fromInputMskOptional, MSK_OFFSET_MINUTES } from "../../lib/localDate";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { downloadTowReportXlsx } from "../../lib/towReportExcel";
 import { parseTowsViewShare, syncTowsViewHash } from "../../lib/viewShareUrl";
 import { authMe } from "../auth/authApi";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
-import { TowPlanBoard, type PlanBoardRow } from "./TowPlanBoard";
+import { TowPlanGrid, type TowPlanRow } from "./TowPlanGrid";
+import { TowReportTable, type TowReportRow } from "./TowReportTable";
 
 dayjs.extend(utc);
 
-export type TowReportRow = {
-  id: string;
-  eventId: string;
-  eventTitle: string;
-  eventStatus: string;
-  seq: number;
-  direction: string;
-  directionLabel: string;
-  hangarId: string;
-  hangarNumber: string;
-  aircraftTypeId: string;
-  aircraftType: string;
-  aircraftId: string;
-  tailNumber: string;
-  operatorId: string;
-  operator: string;
-  fromStand: string;
-  toStand: string;
-  plannedStartAt: string;
-  plannedStartMsk: string;
-  plannedEndAt: string;
-  plannedEndMsk: string;
-  occupancyEndAt: string;
-  occupancyEndMsk: string;
-  inferredOccupancyEndAt: string;
-  standOccupancy: string;
-  standOccupancyMinutes: number | null;
-  notes: string;
-  toSlotEndAt: string;
-  toSlotEndMsk: string;
-  toSlotDuration: string;
-  toSlotMinutes: number | null;
-  positionComment: string;
-  startChangeReason: string;
-  fromLabel: string;
-  toLabel: string;
-  placementId: string;
+type PlanResponse = {
+  items: TowPlanRow[];
 };
-
-type TowListResponse = { items: TowReportRow[] };
-
-type TowBoardHangar = { id: string; label: string };
-
-type TowBoardRow = PlanBoardRow & {
-  status: string;
-  startMsk: string;
-  endMsk: string;
-  hangars: TowBoardHangar[];
-  aircraftTypeId: string;
-  aircraftId: string;
-  operatorId: string;
-  standLabel: string;
-  towCount: number;
-  pendingEdges: string[];
-  existingTows: string[];
-};
-
-type TowBoardResponse = { minutes: number | null; items: TowBoardRow[] };
 
 type FacetRow = {
-  hangars: TowBoardHangar[];
+  hangars: Array<{ id: string; label: string }>;
   operatorId: string;
   operator: string;
   aircraftTypeId: string;
@@ -95,130 +41,40 @@ type TowFilters = {
 
 type TowFilterKey = keyof TowFilters;
 
-type Draft = {
-  fromStand: string;
-  toStand: string;
-  notes: string;
-  positionComment: string;
-  startChangeReason: string;
-  startLocal: string;
-  endLocal: string;
-};
-
 function mskNow() {
   return dayjs().utcOffset(MSK_OFFSET_MINUTES);
 }
 
-function toInputMsk(iso: string): string {
-  const d = dayjs(iso).utcOffset(MSK_OFFSET_MINUTES);
-  return d.isValid() ? d.format("YYYY-MM-DDTHH:mm") : "";
-}
-
-function IconSave() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M5 3h11l3 3v15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-      <path d="M8 3v6h8V3" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M8 17h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function occupancyDurationLabel(startLocal: string, endLocal: string): string {
-  const startIso = fromInputMskOptional(startLocal);
-  const endIso = fromInputMskOptional(endLocal);
-  if (!startIso || !endIso) return "";
-  const ms = dayjs(endIso).valueOf() - dayjs(startIso).valueOf();
-  if (!Number.isFinite(ms) || ms <= 0) return "";
-  const totalMin = Math.round(ms / 60_000);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h > 0 && m > 0) return `${h} ч ${m} мин`;
-  if (h > 0) return `${h} ч`;
-  return `${m} мин`;
-}
-
-function draftFromRow(row: TowReportRow): Draft {
+function operationalWindow(now = mskNow()) {
+  const start = now.hour() < 8 ? now.subtract(1, "day") : now;
   return {
-    fromStand: row.fromStand,
-    toStand: row.toStand,
-    notes: row.notes,
-    positionComment: row.positionComment,
-    startChangeReason: row.startChangeReason,
-    startLocal: toInputMsk(row.plannedStartAt),
-    endLocal: toInputMsk(row.occupancyEndAt || row.inferredOccupancyEndAt)
+    from: `${start.format("YYYY-MM-DD")}T08:00`,
+    to: `${start.add(1, "day").format("YYYY-MM-DD")}T08:00`
   };
 }
 
-function isDirty(row: TowReportRow, draft: Draft): boolean {
-  return (
-    draft.fromStand !== row.fromStand ||
-    draft.toStand !== row.toStand ||
-    draft.notes !== row.notes ||
-    draft.positionComment !== row.positionComment ||
-    draft.startChangeReason !== row.startChangeReason ||
-    draft.startLocal !== toInputMsk(row.plannedStartAt) ||
-    draft.endLocal !== toInputMsk(row.occupancyEndAt || row.inferredOccupancyEndAt)
-  );
-}
-
-function facetMatches(row: FacetRow, filters: TowFilters, skip?: TowFilterKey): boolean {
-  if (skip !== "hangarIds" && filters.hangarIds.length > 0 && !row.hangars.some((hangar) => filters.hangarIds.includes(hangar.id))) {
-    return false;
-  }
-  if (skip !== "operatorIds" && filters.operatorIds.length > 0 && !filters.operatorIds.includes(row.operatorId)) return false;
-  if (skip !== "aircraftTypeIds" && filters.aircraftTypeIds.length > 0 && !filters.aircraftTypeIds.includes(row.aircraftTypeId)) {
-    return false;
-  }
-  if (skip !== "aircraftIds" && filters.aircraftIds.length > 0 && !filters.aircraftIds.includes(row.aircraftId)) return false;
-  return true;
-}
-
-function towFacet(row: TowReportRow): FacetRow {
+function shiftOperationalDay(fromLocal: string, days: number): { from: string; to: string } {
+  const raw = isValidDateTimeLocal(fromLocal) || isValidDateInput(fromLocal) ? fromLocal.slice(0, 10) : operationalWindow().from.slice(0, 10);
+  const start = dayjs(raw).add(days, "day");
   return {
-    hangars: row.hangarId ? [{ id: row.hangarId, label: row.hangarNumber || row.hangarId }] : [],
-    operatorId: row.operatorId,
-    operator: row.operator,
-    aircraftTypeId: row.aircraftTypeId,
-    aircraftType: row.aircraftType,
-    aircraftId: row.aircraftId,
-    tailNumber: row.tailNumber
+    from: `${start.format("YYYY-MM-DD")}T08:00`,
+    to: `${start.add(1, "day").format("YYYY-MM-DD")}T08:00`
   };
 }
 
-function boardFacet(row: TowBoardRow): FacetRow {
-  return {
-    hangars: row.hangars,
-    operatorId: row.operatorId,
-    operator: row.operator,
-    aircraftTypeId: row.aircraftTypeId,
-    aircraftType: row.aircraftType,
-    aircraftId: row.aircraftId,
-    tailNumber: row.tailNumber
-  };
+function asDateTime(value: string, fallback: string): string {
+  if (isValidDateTimeLocal(value)) return value;
+  if (isValidDateInput(value)) return `${value}T08:00`;
+  return fallback;
 }
 
-function parseEmails(raw: string): string[] {
-  return [
-    ...new Set(
-      raw
-        .split(/[\s,;]+/)
-        .map((item) => item.trim().toLowerCase())
-        .filter((item) => item.includes("@"))
-    )
-  ];
-}
+const TOWS_UI_LS_KEY = "hangarPlanning:towsUi:v2";
+const TOWS_UI_LS_KEY_V1 = "hangarPlanning:towsUi:v1";
 
-const TOWS_UI_LS_KEY = "hangarPlanning:towsUi:v1";
-
-function safeReadTowsUi(): any | null {
+function safeRead(key: string): any | null {
   try {
     if (typeof window === "undefined") return null;
-    const raw = window.localStorage.getItem(TOWS_UI_LS_KEY);
+    const raw = window.localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -238,11 +94,50 @@ function readStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.map(String).filter(Boolean) : [];
 }
 
+function facetMatches(row: FacetRow, filters: TowFilters, skip?: TowFilterKey): boolean {
+  if (skip !== "hangarIds" && filters.hangarIds.length > 0 && !row.hangars.some((hangar) => filters.hangarIds.includes(hangar.id))) {
+    return false;
+  }
+  if (skip !== "operatorIds" && filters.operatorIds.length > 0 && !filters.operatorIds.includes(row.operatorId)) return false;
+  if (skip !== "aircraftTypeIds" && filters.aircraftTypeIds.length > 0 && !filters.aircraftTypeIds.includes(row.aircraftTypeId)) {
+    return false;
+  }
+  if (skip !== "aircraftIds" && filters.aircraftIds.length > 0 && !filters.aircraftIds.includes(row.aircraftId)) return false;
+  return true;
+}
+
+function reportFacet(row: TowReportRow): FacetRow {
+  return {
+    hangars: row.hangarId ? [{ id: row.hangarId, label: row.hangarNumber || row.hangarId }] : [],
+    operatorId: row.operatorId,
+    operator: row.operator,
+    aircraftTypeId: row.aircraftTypeId,
+    aircraftType: row.aircraftType,
+    aircraftId: row.aircraftId,
+    tailNumber: row.tailNumber
+  };
+}
+
+function rowFacet(row: TowPlanRow): FacetRow {
+  return {
+    hangars: row.hangars,
+    operatorId: row.operatorId,
+    operator: row.operator,
+    aircraftTypeId: row.aircraftTypeId,
+    aircraftType: row.aircraftType,
+    aircraftId: row.aircraftId,
+    tailNumber: row.tailNumber
+  };
+}
+
 export function RmTowsView() {
   const qc = useQueryClient();
   const { active: activeSandbox, activeId: activeSandboxId } = useActiveSandbox();
+  const windowDefault = operationalWindow();
   const savedUi = useMemo(() => {
-    const ls = safeReadTowsUi();
+    const current = safeRead(TOWS_UI_LS_KEY);
+    const legacy = safeRead(TOWS_UI_LS_KEY_V1);
+    const ls = current ?? (legacy ? { ...legacy, fromDate: "", toDate: "" } : null);
     if (typeof window === "undefined") return ls;
     const { page, query } = parseHashPage(location.hash);
     if (page !== "tows") return ls;
@@ -252,79 +147,79 @@ export function RmTowsView() {
       ...ls,
       ...share,
       fromDate: share.fromDate || ls?.fromDate,
-      toDate: share.toDate || ls?.toDate,
-      tab: share.tab || ls?.tab
+      toDate: share.toDate || ls?.toDate
     };
   }, []);
-  const defaultFrom = mskNow().startOf("month").format("YYYY-MM-DD");
-  const defaultTo = mskNow().endOf("month").format("YYYY-MM-DD");
-  const [rangeFrom, setRangeFrom] = useState(() =>
-    isValidDateInput(String(savedUi?.fromDate ?? "")) ? String(savedUi.fromDate) : defaultFrom
-  );
-  const [rangeTo, setRangeTo] = useState(() =>
-    isValidDateInput(String(savedUi?.toDate ?? "")) ? String(savedUi.toDate) : defaultTo
-  );
+  const [rangeFrom, setRangeFrom] = useState(() => asDateTime(String(savedUi?.fromDate ?? ""), windowDefault.from));
+  const [rangeTo, setRangeTo] = useState(() => asDateTime(String(savedUi?.toDate ?? ""), windowDefault.to));
   const [hangarIds, setHangarIds] = useState<string[]>(() => readStringArray(savedUi?.filterHangarIds));
   const [operatorIds, setOperatorIds] = useState<string[]>(() => readStringArray(savedUi?.filterOperatorIds));
   const [aircraftTypeIds, setAircraftTypeIds] = useState<string[]>(() => readStringArray(savedUi?.filterAircraftTypeIds));
   const [aircraftIds, setAircraftIds] = useState<string[]>(() => readStringArray(savedUi?.filterAircraftIds));
   const [pane, setPane] = useState<"plan" | "registry">(() => (savedUi?.tab === "registry" ? "registry" : "plan"));
-  const [recipientsText, setRecipientsText] = useState(() => String(savedUi?.recipients ?? ""));
-  const [sendOpen, setSendOpen] = useState(false);
-  const [sendNote, setSendNote] = useState("");
-  const [sendMessage, setSendMessage] = useState("");
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [fixOpen, setFixOpen] = useState(false);
+  const [fixMessage, setFixMessage] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [planDirty, setPlanDirty] = useState(0);
+  const [reportDirty, setReportDirty] = useState(0);
+  const onPlanDirty = useCallback((count: number) => setPlanDirty(count), []);
+  const onReportDirty = useCallback((count: number) => setReportDirty(count), []);
 
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe() });
   const permissions = meQ.data && meQ.data.ok ? meQ.data.user.permissions : [];
-  const canWrite = hasPermission(permissions, "tows:write") || hasPermission(permissions, "gantt:write");
+  const canWrite =
+    hasPermission(permissions, "tows:write") ||
+    hasPermission(permissions, "events:write") ||
+    hasPermission(permissions, "gantt:write");
   const canGantt = hasPermission(permissions, "gantt:read");
+  const rangeReady = isValidDateTimeLocal(rangeFrom) && isValidDateTimeLocal(rangeTo) && rangeTo > rangeFrom;
+  const fromIso = fromInputMskOptional(rangeFrom);
+  const toIso = fromInputMskOptional(rangeTo);
 
-  const periodParams = () => {
-    const params = new URLSearchParams();
-    params.set("from", startOfMskDayIso(rangeFrom) ?? dayjs(rangeFrom).toISOString());
-    params.set("to", endOfMskDayIso(rangeTo) ?? dayjs(rangeTo).endOf("day").toISOString());
-    return params;
-  };
-
-  const listQ = useQuery({
-    queryKey: ["tows-report", rangeFrom, rangeTo, activeSandbox?.id ?? null],
-    enabled: isValidDateInput(rangeFrom) && isValidDateInput(rangeTo),
-    queryFn: () => apiGet<TowListResponse>(`/api/tows?${periodParams().toString()}`)
+  const planQ = useQuery({
+    queryKey: ["tows-plan", fromIso, toIso, activeSandbox?.id ?? null],
+    enabled: rangeReady && Boolean(fromIso && toIso),
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("from", fromIso!);
+      params.set("to", toIso!);
+      return apiGet<PlanResponse>(`/api/tows/plan?${params.toString()}`);
+    }
   });
-
-  const boardQ = useQuery({
-    queryKey: ["tows-board", rangeFrom, rangeTo, activeSandbox?.id ?? null],
-    enabled: isValidDateInput(rangeFrom) && isValidDateInput(rangeTo),
-    queryFn: () => apiGet<TowBoardResponse>(`/api/tows/board?${periodParams().toString()}`)
+  const reportQ = useQuery({
+    queryKey: ["tows-report", fromIso, toIso, activeSandbox?.id ?? null],
+    enabled: rangeReady && Boolean(fromIso && toIso),
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set("from", fromIso!);
+      params.set("to", toIso!);
+      return apiGet<{ items: TowReportRow[] }>(`/api/tows?${params.toString()}`);
+    }
   });
-
-  const loaded = listQ.data?.items ?? [];
-  const boardLoaded = boardQ.data?.items ?? [];
+  const loaded = planQ.data?.items ?? [];
+  const reportLoaded = reportQ.data?.items ?? [];
   const filters = useMemo<TowFilters>(
     () => ({ hangarIds, operatorIds, aircraftTypeIds, aircraftIds }),
     [hangarIds, operatorIds, aircraftTypeIds, aircraftIds]
   );
-  const facetRows = useMemo(() => {
-    const rows: FacetRow[] = [];
-    if (boardQ.isSuccess) rows.push(...boardLoaded.map(boardFacet));
-    if (listQ.isSuccess) rows.push(...loaded.map(towFacet));
-    return rows;
-  }, [boardQ.isSuccess, boardLoaded, listQ.isSuccess, loaded]);
+  const facetRows = useMemo(() => [...loaded.map(rowFacet), ...reportLoaded.map(reportFacet)], [loaded, reportLoaded]);
 
   useEffect(() => {
     safeWriteTowsUi({
       fromDate: rangeFrom,
       toDate: rangeTo,
       tab: pane,
-      recipients: recipientsText,
       filterHangarIds: hangarIds,
       filterOperatorIds: operatorIds,
       filterAircraftTypeIds: aircraftTypeIds,
       filterAircraftIds: aircraftIds
     });
-  }, [rangeFrom, rangeTo, pane, recipientsText, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
+  }, [rangeFrom, rangeTo, pane, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
+
+  useEffect(() => {
+    if (pane !== "registry") return;
+    void qc.refetchQueries({ queryKey: ["tows-report"] });
+  }, [pane, fromIso, toIso, activeSandbox?.id, qc]);
 
   useEffect(() => {
     syncTowsViewHash({
@@ -348,20 +243,14 @@ export function RmTowsView() {
       if (facetMatches(row, filters, "hangarIds")) {
         for (const hangar of row.hangars) hangarMap.set(hangar.id, hangar.label || hangar.id);
       }
-      if (row.operatorId && facetMatches(row, filters, "operatorIds")) {
-        operatorMap.set(row.operatorId, row.operator || row.operatorId);
-      }
+      if (row.operatorId && facetMatches(row, filters, "operatorIds")) operatorMap.set(row.operatorId, row.operator || row.operatorId);
       if (row.aircraftTypeId && facetMatches(row, filters, "aircraftTypeIds")) {
         typeMap.set(row.aircraftTypeId, row.aircraftType || row.aircraftTypeId);
       }
-      if (row.aircraftId && facetMatches(row, filters, "aircraftIds")) {
-        aircraftMap.set(row.aircraftId, row.tailNumber || row.aircraftId);
-      }
+      if (row.aircraftId && facetMatches(row, filters, "aircraftIds")) aircraftMap.set(row.aircraftId, row.tailNumber || row.aircraftId);
     }
     const toOpts = (map: Map<string, string>) =>
-      [...map.entries()]
-        .map(([id, label]) => ({ id, label }))
-        .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+      [...map.entries()].map(([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label, "ru"));
     return {
       hangars: toOpts(hangarMap),
       operators: toOpts(operatorMap),
@@ -373,114 +262,57 @@ export function RmTowsView() {
   useEffect(() => {
     if (facetRows.length === 0) return;
     const prune = (selected: string[], available: Set<string>) => selected.filter((id) => available.has(id));
-    const hangarAvail = new Set(smartFilterOptions.hangars.map((o) => o.id));
-    const operatorAvail = new Set(smartFilterOptions.operators.map((o) => o.id));
-    const typeAvail = new Set(smartFilterOptions.aircraftTypes.map((o) => o.id));
-    const aircraftAvail = new Set(smartFilterOptions.aircraft.map((o) => o.id));
-    const nextHangars = prune(hangarIds, hangarAvail);
+    const nextHangars = prune(hangarIds, new Set(smartFilterOptions.hangars.map((item) => item.id)));
     if (nextHangars.length !== hangarIds.length) setHangarIds(nextHangars);
-    const nextOperators = prune(operatorIds, operatorAvail);
+    const nextOperators = prune(operatorIds, new Set(smartFilterOptions.operators.map((item) => item.id)));
     if (nextOperators.length !== operatorIds.length) setOperatorIds(nextOperators);
-    const nextTypes = prune(aircraftTypeIds, typeAvail);
+    const nextTypes = prune(aircraftTypeIds, new Set(smartFilterOptions.aircraftTypes.map((item) => item.id)));
     if (nextTypes.length !== aircraftTypeIds.length) setAircraftTypeIds(nextTypes);
-    const nextAircraft = prune(aircraftIds, aircraftAvail);
+    const nextAircraft = prune(aircraftIds, new Set(smartFilterOptions.aircraft.map((item) => item.id)));
     if (nextAircraft.length !== aircraftIds.length) setAircraftIds(nextAircraft);
   }, [facetRows.length, smartFilterOptions, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
 
-  const boardItems = useMemo(
-    () => boardLoaded.filter((row) => facetMatches(boardFacet(row), filters)),
-    [boardLoaded, filters]
+  const items = useMemo(() => loaded.filter((row) => facetMatches(rowFacet(row), filters)), [loaded, filters]);
+  const reportItems = useMemo(
+    () => reportLoaded.filter((row) => facetMatches(reportFacet(row), filters)).map((row, index) => ({ ...row, seq: index + 1 })),
+    [reportLoaded, filters]
   );
+  const waiting = useMemo(() => items.filter((row) => !row.towId).length, [items]);
 
-  const items = useMemo(() => {
-    return loaded
-      .filter((row) => facetMatches(towFacet(row), filters))
-      .map((row, idx) => ({ ...row, seq: idx + 1 }));
-  }, [loaded, filters]);
-
-  useEffect(() => {
-    setDrafts((prev) => {
-      const next = { ...prev };
-      for (const row of items) {
-        if (!next[row.id]) next[row.id] = draftFromRow(row);
-      }
-      return next;
-    });
-  }, [items]);
-
-  const inbound = useMemo(() => items.filter((r) => r.direction === "IN").length, [items]);
-  const outbound = useMemo(() => items.filter((r) => r.direction === "OUT").length, [items]);
-
-  const saveM = useMutation({
-    mutationFn: async (row: TowReportRow) => {
-      const draft = drafts[row.id] ?? draftFromRow(row);
-      const startIso = fromInputMskOptional(draft.startLocal);
-      const endIso = fromInputMskOptional(draft.endLocal);
-      const startChanged = draft.startLocal !== toInputMsk(row.plannedStartAt);
-      const inferredEndLocal = toInputMsk(row.inferredOccupancyEndAt);
-      const storedEndLocal = toInputMsk(row.occupancyEndAt || row.inferredOccupancyEndAt);
-      const endChanged = draft.endLocal !== storedEndLocal;
-      if (startChanged && !draft.startChangeReason.trim()) {
-        throw new Error("Укажите причину изменения времени начала буксировки");
-      }
-      const occupancyMatchesDefault = draft.endLocal === inferredEndLocal;
-      return apiPatch<TowReportRow>(`/api/tows/${row.id}`, {
-        fromLabel: draft.fromStand.trim() || null,
-        toLabel: draft.toStand.trim() || null,
-        notes: draft.notes.trim() || null,
-        positionComment: draft.positionComment.trim() || null,
-        startChangeReason: draft.startChangeReason.trim() || null,
-        startAt: startChanged && startIso ? startIso : undefined,
-        occupancyEndAt: endChanged ? (occupancyMatchesDefault ? null : endIso) : undefined,
-        changeReason: draft.startChangeReason.trim() || "Буксировка"
-      });
-    },
-    onSuccess: async (updated) => {
-      setDrafts((prev) => ({ ...prev, [updated.id]: draftFromRow(updated) }));
-      await qc.invalidateQueries({ queryKey: ["tows-report"] });
-      await qc.invalidateQueries({ queryKey: ["tows-board"] });
-    }
-  });
-
-  const sendM = useMutation({
-    mutationFn: async (target: "self" | "list") => {
-      const recipients = parseEmails(recipientsText);
-      if (target === "list" && recipients.length === 0) throw new Error("Укажите получателей");
-      return apiPost<{ ok: true; recipients: string[]; subject: string; rows: number }>("/api/tows/send", {
-        from: startOfMskDayIso(rangeFrom) ?? dayjs(rangeFrom).toISOString(),
-        to: endOfMskDayIso(rangeTo) ?? dayjs(rangeTo).endOf("day").toISOString(),
+  const fixM = useMutation({
+    mutationFn: async () => {
+      if (!fromIso || !toIso) throw new Error("Укажите период");
+      if (reportItems.length === 0) throw new Error("В выбранном периоде нет назначенных буксировок");
+      return apiPost<{ ok: true; subject: string; rows: number }>("/api/tows/fix", {
+        from: fromIso,
+        to: toIso,
         hangarIds,
         operatorIds,
         aircraftTypeIds,
-        aircraftIds,
-        recipients: target === "list" ? recipients : undefined,
-        target,
-        note: sendNote.trim() || undefined
+        aircraftIds
       });
     },
-    onSuccess: (res) => {
-      setSendMessage(`Письмо «${res.subject}» отправлено: ${res.recipients.join(", ")}. Строк: ${res.rows}.`);
+    onSuccess: async (res) => {
+      setFixMessage(`План зафиксирован: ${res.rows} строк. Письмо отправляется из раздела «Рассылка».`);
+      await qc.invalidateQueries({ queryKey: ["tows-report"] });
+      await qc.invalidateQueries({ queryKey: ["tows-sends"] });
     }
   });
-
-  const dirtyCount = useMemo(
-    () => items.filter((row) => isDirty(row, drafts[row.id] ?? draftFromRow(row))).length,
-    [items, drafts]
-  );
-  const waitingEdges = useMemo(
-    () => boardItems.filter((row) => !row.locked && row.pendingEdges.length > 0).length,
-    [boardItems]
-  );
-  const selfEmail = meQ.data && meQ.data.ok ? meQ.data.user.email : "";
 
   const exportXlsx = async () => {
     setExporting(true);
     try {
       const stamp = mskNow().format("YYYYMMDD-HHmm");
-      await downloadTowReportXlsx(items, `buksirovki-${stamp}.xlsx`);
+      await downloadTowReportXlsx(reportItems, `buksirovki-${stamp}.xlsx`);
     } finally {
       setExporting(false);
     }
+  };
+
+  const shiftDay = (days: number) => {
+    const next = shiftOperationalDay(rangeFrom, days);
+    setRangeFrom(next.from);
+    setRangeTo(next.to);
   };
 
   const openEvent = (eventId: string) => {
@@ -498,33 +330,19 @@ export function RmTowsView() {
           <h1>РМ Буксировки</h1>
           <p className="muted towsPaneHint">
             {pane === "plan"
-              ? "Неделя показывает начало и конец этапа: зелёная плашка — буксировка назначена, красная — нет. Шкала события и сутки ангара остаются рядом."
-              : "Сводный реестр буксировок за период. Письмо уходит по тем же столбцам, что и Excel."}
+              ? "План — все события выбранного периода. Откуда, куда и время буксировки заполняются вместе. Буксировка видна в строке, только если её время попадает в период."
+              : "Реестр — только буксировки, заполненные на плане. Занятие МС, примечание, позиция и причина правятся здесь. Слот ТО показан датой окончания."}
           </p>
         </div>
         <div className="massHeroStats" aria-label="Сводка буксировок">
+          <span>
+            <b>{pane === "plan" ? items.length : reportItems.length}</b> {pane === "plan" ? "строк" : "буксировок"}
+          </span>
           {pane === "plan" ? (
-            <>
-              <span>
-                <b>{boardItems.length}</b> бортов
-              </span>
-              <span>
-                <b>{waitingEdges}</b> ждут края
-              </span>
-            </>
-          ) : (
-            <>
-              <span>
-                <b>{items.length}</b> буксировок
-              </span>
-              <span>
-                <b>{inbound}</b> закаток
-              </span>
-              <span>
-                <b>{outbound}</b> выкаток
-              </span>
-            </>
-          )}
+            <span>
+              <b>{waiting}</b> без буксировки
+            </span>
+          ) : null}
           <span>
             <b>{activeSandbox ? "Песочница" : "Рабочий контур"}</b>
           </span>
@@ -535,14 +353,20 @@ export function RmTowsView() {
         <div className="ganttToolbar">
           <div className="ganttToolbarRow">
             <div className="ganttToolbarGroup">
+              <button className="btn towsDayStep" type="button" aria-label="Предыдущие сутки" title="Предыдущие сутки, 08:00–08:00" onClick={() => shiftDay(-1)}>
+                ‹
+              </button>
               <label className="tgField">
                 <span className="tgFieldLabel">с</span>
-                <input type="date" value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)} style={{ width: 150 }} />
+                <input type="datetime-local" value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)} />
               </label>
               <label className="tgField">
                 <span className="tgFieldLabel">по</span>
-                <input type="date" value={rangeTo} onChange={(e) => setRangeTo(e.target.value)} style={{ width: 150 }} />
+                <input type="datetime-local" value={rangeTo} onChange={(e) => setRangeTo(e.target.value)} />
               </label>
+              <button className="btn towsDayStep" type="button" aria-label="Следующие сутки" title="Следующие сутки, 08:00–08:00" onClick={() => shiftDay(1)}>
+                ›
+              </button>
               <label className={`tgField${hangarIds.length ? " tgFieldActive" : ""}`}>
                 <span className="tgFieldLabel">Ангар</span>
                 <MultiSelectDropdown
@@ -602,8 +426,8 @@ export function RmTowsView() {
             </div>
             <div className="ganttToolbarGroup towsToolbarExport">
               {pane === "registry" ? (
-                <button className="btn" type="button" onClick={() => setSendOpen((open) => !open)} disabled={!canWrite}>
-                  Отправить реестр
+                <button className="btn" type="button" onClick={() => setFixOpen((open) => !open)} disabled={!canWrite}>
+                  Зафиксировать план
                 </button>
               ) : null}
               {pane === "registry" ? (
@@ -611,7 +435,7 @@ export function RmTowsView() {
                 className="btn ganttIconBtn"
                 type="button"
                 onClick={() => void exportXlsx()}
-                disabled={exporting || items.length === 0}
+                disabled={exporting || reportItems.length === 0}
                 title="Выгрузить Excel"
                 aria-label="Выгрузить Excel"
               >
@@ -627,11 +451,33 @@ export function RmTowsView() {
               ) : null}
             </div>
           </div>
-          {listQ.isFetching || boardQ.isFetching ? <div className="muted">обновление…</div> : null}
-          {listQ.error ? <div className="error">{String((listQ.error as Error).message ?? listQ.error)}</div> : null}
-          {boardQ.error ? <div className="error">{String((boardQ.error as Error).message ?? boardQ.error)}</div> : null}
+          {!rangeReady ? <div className="error">Окончание окна должно быть позже начала</div> : null}
+          {planQ.error ? <div className="error">{String((planQ.error as Error).message ?? planQ.error)}</div> : null}
+          {reportQ.error ? <div className="error">{String((reportQ.error as Error).message ?? reportQ.error)}</div> : null}
+          <div className="towsDirtySlot">
+            {pane === "plan" && planDirty > 0 ? <span className="muted">Несохранённых буксировок: {planDirty}.</span> : null}
+            {pane === "registry" && reportDirty > 0 ? <span className="muted">Несохранённых строк: {reportDirty}. В фиксацию они не входят.</span> : null}
+          </div>
         </div>
       </section>
+
+      {pane === "registry" && fixOpen ? (
+        <section className="card towsSendPanel">
+          <div className="muted">Сохраняется снимок видимых строк. Шаблон письма, Excel и журнал отправок — в разделе «Рассылка».</div>
+          <div className="row">
+            <button
+              className="btn btnPrimary"
+              type="button"
+              disabled={!canWrite || fixM.isPending || reportItems.length === 0 || reportDirty > 0}
+              onClick={() => fixM.mutate()}
+            >
+              Зафиксировать
+            </button>
+          </div>
+          {fixM.isError ? <div className="error">{String((fixM.error as Error).message ?? fixM.error)}</div> : null}
+          {fixMessage ? <div className="muted">{fixMessage}</div> : null}
+        </section>
+      ) : null}
 
       <div className="sandboxesTabs" role="tablist" aria-label="Окна РМ Буксировки">
         <button
@@ -641,7 +487,7 @@ export function RmTowsView() {
           className={pane === "plan" ? "sandboxesTab active" : "sandboxesTab"}
           onClick={() => setPane("plan")}
         >
-          План <span className="sandboxesTabCount">{boardItems.length}</span>
+          План <span className="sandboxesTabCount">{items.length}</span>
         </button>
         <button
           type="button"
@@ -650,240 +496,24 @@ export function RmTowsView() {
           className={pane === "registry" ? "sandboxesTab active" : "sandboxesTab"}
           onClick={() => setPane("registry")}
         >
-          Реестр <span className="sandboxesTabCount">{items.length}</span>
+          Реестр <span className="sandboxesTabCount">{reportItems.length}</span>
         </button>
       </div>
 
       {pane === "plan" ? (
-        <TowPlanBoard
-          rows={boardItems}
-          canWrite={canWrite}
-          canGantt={canGantt}
-          rangeFrom={rangeFrom}
-          rangeTo={rangeTo}
-          onOpenEvent={openEvent}
-        />
+        <section className="card towsTableCard">
+          <TowPlanGrid items={items} canWrite={canWrite} dataUpdatedAt={planQ.dataUpdatedAt} onDirtyChange={onPlanDirty} />
+        </section>
       ) : (
-      <section className="card towsTableCard">
-        {sendOpen ? (
-          <div className="towsSendPanel">
-            <label className="tgField">
-              <span className="tgFieldLabel">Получатели</span>
-              <textarea
-                className="towsMemo"
-                rows={2}
-                value={recipientsText}
-                placeholder="адреса через запятую или с новой строки"
-                onChange={(e) => {
-                  setRecipientsText(e.target.value);
-                  setSendMessage("");
-                }}
-              />
-            </label>
-            <label className="tgField">
-              <span className="tgFieldLabel">Комментарий к письму</span>
-              <textarea className="towsMemo" rows={2} value={sendNote} onChange={(e) => setSendNote(e.target.value)} />
-            </label>
-            <div className="row">
-              <button
-                className="btn btnPrimary"
-                type="button"
-                disabled={!canWrite || sendM.isPending || items.length === 0}
-                onClick={() => sendM.mutate("list")}
-              >
-                Отправить
-              </button>
-              <button
-                className="btn"
-                type="button"
-                disabled={!canWrite || sendM.isPending || items.length === 0 || !selfEmail}
-                onClick={() => sendM.mutate("self")}
-              >
-                Себе
-              </button>
-              <span className="muted">
-                Уйдут сохранённые строки за период ({items.length}), столбцы как в Excel.
-                {selfEmail ? ` Себе — ${selfEmail}.` : ""}
-              </span>
-            </div>
-            {dirtyCount > 0 ? <div className="muted">Несохранённые правки в письмо не входят.</div> : null}
-            {sendMessage ? <div className="muted">{sendMessage}</div> : null}
-            {sendM.error ? <div className="error">{String((sendM.error as Error).message ?? sendM.error)}</div> : null}
-          </div>
-        ) : null}
-        <div className="itpTableWrap towsTableWrap">
-          <table className="itpTable towsTable">
-            <thead>
-              <tr>
-                {canWrite || canGantt ? <th className="towsActionsCol" /> : null}
-                <th>Строка</th>
-                <th>Ангар</th>
-                <th>Тип ВС</th>
-                <th>Борт</th>
-                <th>Оператор</th>
-                <th>Откуда (с МС)</th>
-                <th>Куда (на МС)</th>
-                <th>Начало (мск)</th>
-                <th>Конец (мск)</th>
-                <th>Продолжительность занятия МС</th>
-                <th>Примечание</th>
-                <th>Слот ТО</th>
-                <th>Позиция</th>
-                <th>Причина сдвига начала</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.length === 0 ? (
-                <tr>
-                  <td colSpan={(canWrite || canGantt ? 1 : 0) + 14} className="muted">
-                    Нет буксировок в выбранном периоде. Расставьте края на вкладке «План».
-                  </td>
-                </tr>
-              ) : (
-                items.map((row) => {
-                  const draft = drafts[row.id] ?? draftFromRow(row);
-                  const dirty = isDirty(row, draft);
-                  const scheduleLocked = row.eventStatus === "DONE";
-                  const rowCanWrite = canWrite && !scheduleLocked;
-                  return (
-                    <tr key={row.id}>
-                      {canWrite || canGantt ? (
-                        <td className="towsActionsCol">
-                          <div className="ganttTableRowActions">
-                            {canWrite ? (
-                              <button
-                                className="ganttTableIconBtn ganttTableIconBtnPrimary"
-                                type="button"
-                                title="Сохранить"
-                                aria-label="Сохранить"
-                                disabled={!rowCanWrite || !dirty || saveM.isPending}
-                                onClick={() => saveM.mutate(row)}
-                              >
-                                <IconSave />
-                              </button>
-                            ) : null}
-                            {canGantt ? (
-                              <button
-                                className="ganttTableIconBtn"
-                                type="button"
-                                title="К событию"
-                                aria-label="К событию"
-                                onClick={() => openEvent(row.eventId)}
-                              >
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <path d="M10 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                                  <path d="M14 4h6v6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                                  <path d="M10 14 20 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              </button>
-                            ) : null}
-                          </div>
-                        </td>
-                      ) : null}
-                      <td>{row.seq}</td>
-                      <td>
-                        <div>{row.hangarNumber || "—"}</div>
-                        {row.directionLabel ? <div className="muted">{row.directionLabel}</div> : null}
-                        {scheduleLocked ? <div className="muted">Завершено — правки недоступны</div> : null}
-                      </td>
-                      <td>{row.aircraftType || "—"}</td>
-                      <td>{row.tailNumber || "—"}</td>
-                      <td>{row.operator || "—"}</td>
-                      <td>
-                        {rowCanWrite ? (
-                          <input
-                            value={draft.fromStand}
-                            onChange={(e) => setDrafts((p) => ({ ...p, [row.id]: { ...draft, fromStand: e.target.value } }))}
-                          />
-                        ) : (
-                          row.fromStand || "—"
-                        )}
-                      </td>
-                      <td>
-                        {rowCanWrite ? (
-                          <input
-                            value={draft.toStand}
-                            onChange={(e) => setDrafts((p) => ({ ...p, [row.id]: { ...draft, toStand: e.target.value } }))}
-                          />
-                        ) : (
-                          row.toStand || "—"
-                        )}
-                      </td>
-                      <td>
-                        {rowCanWrite ? (
-                          <input
-                            type="datetime-local"
-                            value={draft.startLocal}
-                            onChange={(e) => setDrafts((p) => ({ ...p, [row.id]: { ...draft, startLocal: e.target.value } }))}
-                          />
-                        ) : (
-                          row.plannedStartMsk
-                        )}
-                      </td>
-                      <td>
-                        {rowCanWrite ? (
-                          <input
-                            type="datetime-local"
-                            value={draft.endLocal}
-                            onChange={(e) => setDrafts((p) => ({ ...p, [row.id]: { ...draft, endLocal: e.target.value } }))}
-                          />
-                        ) : (
-                          row.occupancyEndMsk || "—"
-                        )}
-                      </td>
-                      <td>{occupancyDurationLabel(draft.startLocal, draft.endLocal) || row.standOccupancy || "—"}</td>
-                      <td>
-                        {rowCanWrite ? (
-                          <textarea
-                            className="towsMemo"
-                            rows={2}
-                            value={draft.notes}
-                            onChange={(e) => setDrafts((p) => ({ ...p, [row.id]: { ...draft, notes: e.target.value } }))}
-                          />
-                        ) : (
-                          row.notes || "—"
-                        )}
-                      </td>
-                      <td>{row.toSlotEndMsk || "—"}</td>
-                      <td>
-                        {rowCanWrite ? (
-                          <textarea
-                            className="towsMemo"
-                            rows={2}
-                            value={draft.positionComment}
-                            placeholder="комментарий"
-                            onChange={(e) =>
-                              setDrafts((p) => ({ ...p, [row.id]: { ...draft, positionComment: e.target.value } }))
-                            }
-                          />
-                        ) : (
-                          row.positionComment || "—"
-                        )}
-                      </td>
-                      <td>
-                        {rowCanWrite ? (
-                          <textarea
-                            className="towsMemo"
-                            rows={2}
-                            value={draft.startChangeReason}
-                            placeholder="если сдвигали начало"
-                            onChange={(e) =>
-                              setDrafts((p) => ({ ...p, [row.id]: { ...draft, startChangeReason: e.target.value } }))
-                            }
-                          />
-                        ) : (
-                          row.startChangeReason || "—"
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-        {saveM.error ? <div className="error">{String((saveM.error as Error).message ?? saveM.error)}</div> : null}
-      </section>
+        <section className="card towsTableCard">
+          <TowReportTable
+            items={reportItems}
+            canWrite={canWrite}
+            canGantt={canGantt}
+            onOpenEvent={openEvent}
+            onDirtyChange={onReportDirty}
+          />
+        </section>
       )}
     </div>
   );

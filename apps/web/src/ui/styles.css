@@ -48,6 +48,7 @@
 
 .personnelTabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   border-bottom: 1px solid #cbd5e1;
 }
@@ -769,6 +770,41 @@
 
 .personnelPlanScale {
   padding: 0 !important;
+  cursor: context-menu;
+}
+
+.personnelPlanScaleCanvas {
+  position: relative;
+  height: 44px;
+  margin-inline: var(--plan-label-gutter);
+}
+
+.personnelPlanMinorTick {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border-right: 1px solid rgba(148, 163, 184, 0.18);
+  color: #64748b;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+  padding-left: 4px;
+  white-space: nowrap;
+}
+
+.personnelPlanMinorTickHour {
+  font-size: 10px;
+  text-align: center;
+  padding-left: 0;
+}
+
+.personnelPlanMinorTickSparse {
+  font-size: 8px;
+  font-weight: 400;
+  text-align: left;
+  padding-left: 2px;
 }
 
 .personnelPlanBandsCol {
@@ -814,7 +850,11 @@
   min-width: 0;
   overflow: hidden;
   padding: 6px 0;
-  border-left: 0.5px dashed #475569;
+  border-left: 0;
+}
+
+.personnelPlanDays span + span {
+  border-left: 1.5px solid #334155;
 }
 
 .personnelPlanHours {
@@ -865,7 +905,8 @@
 }
 
 .personnelPlanGridLines {
-  --plan-line: 0.5px;
+  --plan-line: 1.5px;
+  --plan-hour-line: 0.5px;
   position: absolute;
   z-index: -1;
   top: 0;
@@ -874,10 +915,39 @@
   left: var(--plan-label-gutter);
   pointer-events: none;
   background-image:
-    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--plan-days) - var(--plan-line)), #475569 calc(100% / var(--plan-days) - var(--plan-line)), #475569 calc(100% / var(--plan-days))),
-    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--plan-quarters) - var(--plan-line)), #94a3b8 calc(100% / var(--plan-quarters) - var(--plan-line)), #94a3b8 calc(100% / var(--plan-quarters)));
-  -webkit-mask-image: repeating-linear-gradient(to bottom, #000 0 2px, transparent 2px 5px);
-  mask-image: repeating-linear-gradient(to bottom, #000 0 2px, transparent 2px 5px);
+    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--plan-days) - var(--plan-line)), #334155 calc(100% / var(--plan-days) - var(--plan-line)), #334155 calc(100% / var(--plan-days)));
+}
+
+.personnelPlanHourGrid .personnelPlanGridLines {
+  background-image:
+    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--plan-days) - var(--plan-line)), #334155 calc(100% / var(--plan-days) - var(--plan-line)), #334155 calc(100% / var(--plan-days))),
+    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--plan-quarters) - var(--plan-hour-line)), #94a3b8 calc(100% / var(--plan-quarters) - var(--plan-hour-line)), #94a3b8 calc(100% / var(--plan-quarters)));
+}
+
+.personnelPlanDayNight .personnelPlanGridLines {
+  background-image:
+    repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--plan-days) - var(--plan-line)), #334155 calc(100% / var(--plan-days) - var(--plan-line)), #334155 calc(100% / var(--plan-days))),
+    repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(100% / var(--plan-days) * 8 / 24 - var(--plan-hour-line)),
+      #64748b calc(100% / var(--plan-days) * 8 / 24 - var(--plan-hour-line)),
+      #64748b calc(100% / var(--plan-days) * 8 / 24),
+      transparent calc(100% / var(--plan-days) * 8 / 24),
+      transparent calc(100% / var(--plan-days) * 20 / 24 - var(--plan-hour-line)),
+      #64748b calc(100% / var(--plan-days) * 20 / 24 - var(--plan-hour-line)),
+      #64748b calc(100% / var(--plan-days) * 20 / 24),
+      transparent calc(100% / var(--plan-days) * 20 / 24),
+      transparent calc(100% / var(--plan-days))
+    );
+}
+
+.personnelPlanMinorTickDayNight {
+  font-size: 11px;
+  font-weight: 650;
+  text-align: center;
+  padding-left: 0;
+  color: #334155;
 }
 
 .personnelPlanTrack > .personnelPlanLabor,
@@ -932,6 +1002,10 @@
 
 .personnelPlanLaborDay {
   min-width: 0;
+}
+
+.personnelPlanLabor > .personnelPlanLaborDay + .personnelPlanLaborDay {
+  border-left: 1.5px solid #334155;
 }
 
 .personnelPlanBands {
@@ -1074,6 +1148,37 @@
 .personnelPlanMonth .personnelPlanBar,
 .personnelPlanMonth .personnelPlanBarTime {
   font-size: 9px;
+}
+
+.personnelArchiveCard { margin-bottom: 12px; }
+.personnelArchiveRow { cursor: pointer; }
+.personnelArchiveRow:hover td { background: #f8fafc; }
+.personnelArchiveActive td { background: #ffedd5; }
+.personnelArchiveBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff7ed;
+  color: #9a3412;
+}
+.personnelArchiveNotice { margin: 8px 0 0; color: #9a3412; }
+.personnelArchiveExport {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin: 8px 0;
+}
+.personnelArchiveExport label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #64748b;
 }
 
 .personnelPlanSummary {
@@ -7865,6 +7970,91 @@ input[type="number"]::-webkit-inner-spin-button {
   flex-wrap: nowrap;
 }
 
+.towsDirtySlot {
+  min-height: 1.25rem;
+}
+
+.towSendJournalItem {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+}
+
+.towSendJournal select {
+  min-width: 0;
+}
+
+.towFlatTable {
+  min-width: max(100%, 1100px);
+}
+
+.towFlatTable th {
+  max-width: none;
+  white-space: nowrap;
+}
+
+.towFlatTable td {
+  vertical-align: middle;
+}
+
+.towFlatTable input {
+  min-width: 7rem;
+  max-width: 11rem;
+}
+
+.towFlatTable input[type="datetime-local"] {
+  min-width: 11.5rem;
+  max-width: 12.5rem;
+}
+
+.towFlatActions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.towFlatActions .btn {
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.towEdgeEmpty {
+  color: #dc2626;
+}
+
+.towRowWaived td {
+  color: #94a3b8;
+  background: #f8fafc;
+}
+
+.towRowWaived input {
+  color: #94a3b8;
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  pointer-events: none;
+}
+
+.towDiff {
+  background: #fffbeb;
+  box-shadow: inset 0 0 0 1px #d97706;
+}
+
+.towMarkNew {
+  color: #1d4ed8;
+}
+
+.towChangeLog,
+.towCompare,
+.towSendJournal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .towsTableWrap {
   max-height: calc(100vh - 280px);
   max-width: 100%;
@@ -7916,6 +8106,30 @@ input[type="number"]::-webkit-inner-spin-button {
   min-width: 110px;
   max-width: 220px;
   box-sizing: border-box;
+}
+
+.towsTable.towFlatTable {
+  min-width: max(100%, 1100px);
+}
+
+.towsTable.towFlatTable th {
+  max-width: none;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.towsTable.towFlatTable td {
+  vertical-align: middle;
+}
+
+.towsTable.towFlatTable input {
+  min-width: 7rem;
+  max-width: 11rem;
+}
+
+.towsTable.towFlatTable input[type="datetime-local"] {
+  min-width: 11.5rem;
+  max-width: 12.5rem;
 }
 
 .towsPaneHint {
@@ -16813,5 +17027,132 @@ textarea.refInput.refMemo {
   .announceModal {
     width: min(520px, 96vw);
   }
+}
+
+.towGrid {
+  --rdg-color: #0f172a;
+  --rdg-border-color: #e2e8f0;
+  --rdg-background-color: #fff;
+  --rdg-header-background-color: #f8fafc;
+  --rdg-row-hover-background-color: #f8fafc;
+  --rdg-selection-color: #2563eb;
+  font-size: 13px;
+}
+
+.towGrid .rdg-cell {
+  border-inline-end: 1px solid #e2e8f0;
+  border-block-end: 1px solid #e2e8f0;
+}
+
+.towGrid .rdg-cell.towGridReadonly {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.towGrid .rdg-row.towHangarBand .rdg-cell,
+.towGrid .rdg-cell.towHangarBand {
+  background: rgb(255, 217, 102);
+  color: #0f172a;
+  font-weight: 600;
+  border-color: rgb(255, 217, 102);
+}
+
+.towGridNew {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.towGrid .rdg-cell.towGridRequired {
+  background: #fee2e2;
+  box-shadow: inset 0 0 0 1px #dc2626;
+}
+
+.towGrid .rdg-cell.towGridRequired select.towGridInput {
+  background: #fee2e2;
+}
+
+.towGridInput {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  font: inherit;
+}
+
+.towOccupancyEdit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+}
+
+.towOccupancyEdit .towGridInput {
+  min-width: 0;
+}
+
+.towGrid select.towGridInput {
+  background: #fff;
+  cursor: pointer;
+}
+
+.towGrid .rdg-cell.towGridReadonly select.towGridInput {
+  background: transparent;
+  color: #64748b;
+  cursor: default;
+}
+
+.towGrid .rdg-cell:has(.towGridActions) {
+  white-space: normal;
+  line-height: 1.3;
+  align-items: flex-start;
+  padding-block: 4px;
+}
+
+.towGridActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  width: 100%;
+  white-space: normal;
+}
+
+.towGridMessage {
+  flex: 1 0 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.towGridActions .btn {
+  padding: 2px 8px;
+}
+
+.towGridActions .towIconBtn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.towGridActions .towIconBtnDanger {
+  color: #b91c1c;
+}
+
+.towGridEmpty {
+  padding: 12px 4px;
+}
+
+.towsDayStep {
+  align-self: end;
+  min-width: 34px;
+  padding: 6px 10px;
+  font-size: 18px;
+  line-height: 1;
 }
 

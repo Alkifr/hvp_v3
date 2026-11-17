@@ -45,6 +45,10 @@ test("period timeline clips to the selected dates and marks edges outside the fr
   assert.equal(beyond?.endsAfter, true);
   assert.equal(beyond?.left, 0);
   assert.equal(beyond?.width, 100);
+  const utc = periodTimelinePosition("2026-10-25T21:00:00Z", "2026-10-27T21:00:00Z", "2026-10-26", "2026-11-01", "UTC");
+  assert.equal(utc?.startsBefore, true);
+  assert.equal(utc?.left, 0);
+  assert.ok(utc && Math.abs(utc.width - (45 / 168) * 100) < 0.001);
 });
 
 test("timeline clips periods to the selected week", () => {

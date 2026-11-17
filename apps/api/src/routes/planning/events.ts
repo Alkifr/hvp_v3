@@ -42,9 +42,11 @@ import {
   resolveStoredChangeReason
 } from "../../lib/changeReason.js";
 import { UserMsg } from "../../lib/userErrors.js";
-import { inferTowRoute, type TowPlacementInput } from "../../lib/towReport.js";
+import { formatMskDateTime, inferTowRoute, type TowPlacementInput } from "../../lib/towReport.js";
 import { EDGE_TOW_NORM_CODE, planEdgeTows, remapTowPlacementId, selectPlannedEdges, type TowLinkPlacement } from "../../lib/edgeTows.js";
+import { createAutomaticEdgeTows, recordTowFieldChanges } from "../../lib/towEdgeCreate.js";
 import { ensureTowNorms } from "../../lib/towNorm.js";
+import { coveredEdgeRole, towChangeRows } from "../../lib/towRegistry.js";
 import { laborPresenceFromMetrics } from "../../lib/laborPresence.js";
 import { LABOR_EDITABLE_BLOCKS } from "../../lib/primaryMetricDepartments.js";
 import {
@@ -773,6 +775,15 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Не задан норматив буксировки");
     }
 
+    const waivers = await app.prisma.eventTowWaiver.findMany({
+      where: { eventId },
+      select: { role: true }
+    });
+    const waived = new Set(waivers.map((waiver) => waiver.role));
+    if (body.role && waived.has(body.role)) {
+      throw app.httpErrors.badRequest("Буксировка на этом крае не требуется");
+    }
+
     const plan = planEdgeTows({
       minutes: norm.minutes,
       placements: ev.placements.map((placement) => ({
@@ -785,7 +796,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       existing: ev.towSegments.map((tow) => ({ startAt: tow.startAt, endAt: tow.endAt }))
     });
 
-    const chosen = selectPlannedEdges(plan, body.role);
+    const chosen = selectPlannedEdges(plan, body.role).filter((tow) => !waived.has(tow.role));
     if (body.role && chosen.length === 0) {
       const skipped = plan.skipped[0];
       throw app.httpErrors.badRequest(skipped ? `${skipped.label}: ${skipped.reason}` : "Этот край уже занят");
@@ -834,6 +845,25 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
       return rows;
     });
+
+    await recordTowFieldChanges(
+      app.prisma,
+      created.flatMap((row) =>
+        towChangeRows({
+          eventId,
+          towId: row.id,
+          sandboxId: sbId,
+          actor: getActor(req),
+          reason: body.changeReason ?? "Норматив края",
+          pairs: [
+            { field: "Начало буксировки (мск)", before: "", after: formatMskDateTime(row.startAt) },
+            { field: "Окончание буксировки (мск)", before: "", after: formatMskDateTime(row.endAt) },
+            { field: "Откуда", before: "", after: row.fromLabel ?? "" },
+            { field: "Куда", before: "", after: row.toLabel ?? "" }
+          ]
+        })
+      )
+    );
 
     return {
       minutes: norm.minutes,
@@ -927,6 +957,34 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         notes: body.notes ?? null
       }
     });
+    const covered = coveredEdgeRole(
+      created,
+      ev.placements.map((placement) => ({
+        id: placement.id,
+        origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
+        startAt: placement.startAt,
+        endAt: placement.endAt
+      }))
+    );
+    if (covered) {
+      await app.prisma.eventTowWaiver.deleteMany({ where: { eventId, role: covered } });
+    }
+    await recordTowFieldChanges(
+      app.prisma,
+      towChangeRows({
+        eventId,
+        towId: created.id,
+        sandboxId: sbId,
+        actor: getActor(req),
+        reason: body.changeReason ?? "Буксировка",
+        pairs: [
+          { field: "Начало буксировки (мск)", before: "", after: formatMskDateTime(created.startAt) },
+          { field: "Окончание буксировки (мск)", before: "", after: formatMskDateTime(created.endAt) },
+          { field: "Откуда", before: "", after: created.fromLabel ?? "" },
+          { field: "Куда", before: "", after: created.toLabel ?? "" }
+        ]
+      })
+    );
 
     await app.prisma.maintenanceEventAudit.create({
       data: {
@@ -1111,6 +1169,22 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     if (!existing) return { ok: true, deleted: 0 };
 
     await app.prisma.eventTow.delete({ where: { id: towId } });
+    await recordTowFieldChanges(
+      app.prisma,
+      towChangeRows({
+        eventId,
+        towId,
+        sandboxId: sandboxIdFor(req),
+        actor: getActor(req),
+        reason: query.changeReason ?? "Снятие буксировки",
+        pairs: [
+          { field: "Начало буксировки (мск)", before: formatMskDateTime(existing.startAt), after: "" },
+          { field: "Окончание буксировки (мск)", before: formatMskDateTime(existing.endAt), after: "" },
+          { field: "Откуда", before: existing.fromLabel ?? "", after: "" },
+          { field: "Куда", before: existing.toLabel ?? "", after: "" }
+        ]
+      })
+    );
     await app.prisma.maintenanceEventAudit.create({
       data: {
         eventId,
@@ -1933,6 +2007,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       for (const e of owned) importedEventIds.add(e.id);
     }
 
+    await ensureTowNorms(app.prisma);
     for (let i = 0; i < previewRows.length; i++) {
       if (!previewRows[i]!.ok) continue;
       const r = rows[i]!;
@@ -2124,6 +2199,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
             });
             createdTow = true;
           }
+          const autoTows = await createAutomaticEdgeTows(tx, { eventId: created.id, sandboxId: sbId });
+          if (autoTows > 0) createdTow = true;
 
           const importReason = previewRows[i]!.reason;
           if (importReason) {
@@ -2251,6 +2328,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       virtualAircraft: data.virtualAircraft ?? null,
       status: statusReconciled.status
     });
+    await ensureTowNorms(app.prisma);
     const created = await app.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const event = await tx.maintenanceEvent.create({
         data: {
@@ -2336,6 +2414,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
           }
         }
       });
+
+      await createAutomaticEdgeTows(tx, { eventId: event.id, sandboxId: sbId });
 
       return await tx.maintenanceEvent.findUniqueOrThrow({ where: { id: event.id }, include: eventInclude });
     });

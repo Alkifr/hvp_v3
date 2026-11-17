@@ -5,13 +5,28 @@ import { EventAuditAction, Prisma } from "@prisma/client";
 import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { DONE_SCHEDULE_LOCK_MESSAGE, isDoneScheduleLocked } from "../../lib/eventStatus.js";
 import { UserMsg } from "../../lib/userErrors.js";
-import { virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
+import { isVirtualAircraftPlaceholder, virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
 import { buildTowBoardRow, type TowBoardInput } from "../../lib/towBoard.js";
 import { buildTowRegistryLetter } from "../../lib/towRegistryMail.js";
-import { formatMskDateTime, buildTowReportRow, type TowPlacementInput, type TowReportRow } from "../../lib/towReport.js";
+import { DEFAULT_TOW_SUBJECT, readTowMailTemplate } from "../../lib/towMailTemplate.js";
+import { deliverTowRegistrySend, dispatchTowTriggers } from "../../lib/towRegistryDispatch.js";
+import { buildTowPlanRows, type TowPlanEvent, type TowPlanHangar } from "../../lib/towPlan.js";
+import { recordTowFieldChanges } from "../../lib/towEdgeCreate.js";
+import {
+  buildRegistryRows,
+  markRegistryRows,
+  readRegistrySnapshot,
+  registryPeriodLabel,
+  readSendRows,
+  compareSentRows,
+  towChangeRows,
+  type RegistryEdgeRole,
+  type RegistryEventInput
+} from "../../lib/towRegistry.js";
+import { formatMskDateTime, buildTowReportRow, TOW_EXPORT_COLUMNS, type TowPlacementInput, type TowReportRow } from "../../lib/towReport.js";
 import { ensureTowNorms } from "../../lib/towNorm.js";
 import { EDGE_TOW_NORM_CODE } from "../../lib/edgeTows.js";
-import { isSmtpReady, sendMail, smtpConfigFromSettings } from "../../lib/mailer.js";
+import { isSmtpReady, smtpConfigFromSettings } from "../../lib/mailer.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertAnyPermission, assertPermission } from "../../lib/rbac.js";
 import {
@@ -197,20 +212,289 @@ async function loadTowReportItems(prisma: any, req: any, from: Date, to: Date): 
   return rows.map((row: TowLoaded) => serializeTowReportRow(row, virtualNames.get(row.id)));
 }
 
-function rowMatchesSendFilters(
-  row: TowReportRow,
-  filters: { hangarIds?: string[]; operatorIds?: string[]; aircraftTypeIds?: string[]; aircraftIds?: string[] }
-): boolean {
-  if (filters.hangarIds?.length && !filters.hangarIds.includes(row.hangarId)) return false;
-  if (filters.operatorIds?.length && !filters.operatorIds.includes(row.operatorId)) return false;
-  if (filters.aircraftTypeIds?.length && !filters.aircraftTypeIds.includes(row.aircraftTypeId)) return false;
-  if (filters.aircraftIds?.length && !filters.aircraftIds.includes(row.aircraftId)) return false;
-  return true;
+function periodLabel(from: Date, to: Date): string {
+  return registryPeriodLabel(from, to);
 }
 
-function periodLabel(from: Date, to: Date): string {
-  const end = new Date(to.getTime() - 60_000);
-  return `${formatMskDateTime(from).slice(0, 10)}–${formatMskDateTime(end).slice(0, 10)}`;
+async function collectRegistryItems(prisma: any, req: any, body: z.infer<typeof zRange>): Promise<TowReportRow[]> {
+  return (await loadTowReportItems(prisma, req, body.from, body.to))
+    .filter((row) => {
+      if (body.hangarIds?.length && !body.hangarIds.includes(row.hangarId)) return false;
+      if (body.operatorIds?.length && !body.operatorIds.includes(row.operatorId)) return false;
+      if (body.aircraftTypeIds?.length && !body.aircraftTypeIds.includes(row.aircraftTypeId)) return false;
+      if (body.aircraftIds?.length && !body.aircraftIds.includes(row.aircraftId)) return false;
+      return true;
+    })
+    .map((row, index) => ({ ...row, seq: index + 1 }));
+}
+
+function registrySnapshot(items: TowReportRow[]): Array<Record<string, string>> {
+  return items.map((row) => {
+    const stored: Record<string, string> = {
+      id: row.id,
+      eventId: row.eventId,
+      tailNumber: row.tailNumber,
+      eventTitle: row.eventTitle,
+      hangarNumber: row.hangarNumber
+    };
+    for (const column of TOW_EXPORT_COLUMNS) {
+      const value = row[column.key];
+      stored[column.key] = value == null ? "" : String(value);
+    }
+    return stored;
+  });
+}
+
+function rowsFromSnapshot(value: unknown): TowReportRow[] {
+  return readSendRows(value).map((row) => ({ ...(row as unknown as TowReportRow), seq: Number(row.seq) || 0, hangarNumber: row.hangarNumber ?? "" }));
+}
+
+const SEND_HISTORY_LIMIT = 200;
+
+async function loadRegistry(prisma: any, req: any, from: Date, to: Date) {
+  await ensureTowNorms(prisma);
+  const norm = await prisma.towNorm.findUnique({ where: { code: EDGE_TOW_NORM_CODE } });
+  const minutes = norm && norm.isActive && norm.minutes > 0 ? norm.minutes : null;
+  const events = await prisma.maintenanceEvent.findMany({
+    where: {
+      ...sandboxFilter(req),
+      status: { notIn: [EventStatus.DELETED, EventStatus.CANCELLED] },
+      OR: [
+        { startAt: { lt: to }, endAt: { gt: from } },
+        { actualStartAt: { lt: to }, actualEndAt: { gt: from } },
+        { placements: { some: { startAt: { lt: to }, endAt: { gt: from } } } },
+        { placements: { some: { actualStartAt: { lt: to }, actualEndAt: { gt: from } } } }
+      ]
+    },
+    include: {
+      aircraft: { include: { operator: true, type: true } },
+      hangar: true,
+      placements: {
+        include: { hangar: true, stand: true },
+        orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }]
+      },
+      towSegments: { orderBy: [{ startAt: "asc" }] },
+      towWaivers: { select: { role: true } }
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }]
+  });
+
+  const operatorIds = new Set<string>();
+  const typeIds = new Set<string>();
+  for (const event of events) {
+    if (event.aircraftId) continue;
+    const virtual = event.virtualAircraft as { operatorId?: string; aircraftTypeId?: string } | null;
+    if (virtual?.operatorId) operatorIds.add(virtual.operatorId);
+    if (virtual?.aircraftTypeId) typeIds.add(virtual.aircraftTypeId);
+  }
+  const operators = operatorIds.size
+    ? await prisma.operator.findMany({
+        where: { id: { in: [...operatorIds] } },
+        select: { id: true, code: true, name: true }
+      })
+    : [];
+  const types = typeIds.size
+    ? await prisma.aircraftType.findMany({
+        where: { id: { in: [...typeIds] } },
+        select: { id: true, icaoType: true, name: true }
+      })
+    : [];
+  const operatorById = new Map(operators.map((row: { id: string; code: string; name: string }) => [row.id, row.code || row.name]));
+  const typeById = new Map(types.map((row: { id: string; icaoType: string | null; name: string }) => [row.id, row.icaoType || row.name]));
+
+  const inputs: RegistryEventInput[] = events.map((event: any) => {
+    const virtual = event.virtualAircraft as { operatorId?: string; aircraftTypeId?: string } | null;
+    const waivedRoles = (event.towWaivers as Array<{ role: string }>)
+      .map((waiver) => waiver.role)
+      .filter((role): role is RegistryEdgeRole => role === "event-in" || role === "event-out");
+    return {
+      id: event.id,
+      title: event.title,
+      status: event.status,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      hangarId: event.hangarId,
+      hangarName: event.hangar?.name ?? null,
+      hangarCode: event.hangar?.code ?? null,
+      tailNumber: event.aircraft?.tailNumber ?? null,
+      aircraftId: event.aircraftId,
+      virtual: !event.aircraftId && virtual != null,
+      aircraftTypeId: event.aircraft?.typeId ?? virtual?.aircraftTypeId ?? null,
+      aircraftType:
+        event.aircraft?.type?.icaoType ||
+        event.aircraft?.type?.name ||
+        (virtual?.aircraftTypeId ? (typeById.get(virtual.aircraftTypeId) ?? null) : null),
+      operatorId: event.aircraft?.operatorId ?? virtual?.operatorId ?? null,
+      operator:
+        event.aircraft?.operator?.code ||
+        event.aircraft?.operator?.name ||
+        (virtual?.operatorId ? (operatorById.get(virtual.operatorId) ?? null) : null),
+      createdAt: event.createdAt,
+      placements: event.placements.map((placement: any) => ({
+        id: placement.id,
+        origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
+        startAt: placement.startAt,
+        endAt: placement.endAt,
+        hangarId: placement.hangarId,
+        hangarName: placement.hangar?.name ?? null,
+        hangarCode: placement.hangar?.code ?? null,
+        standCode: placement.stand?.code || placement.stand?.name || null
+      })),
+      tows: event.towSegments.map((tow: any) => ({
+        id: tow.id,
+        placementId: tow.placementId,
+        startAt: tow.startAt,
+        endAt: tow.endAt,
+        fromLabel: tow.fromLabel,
+        toLabel: tow.toLabel
+      })),
+      waivedRoles
+    };
+  });
+
+  const sends = await prisma.towRegistrySend.findMany({
+    where: sandboxFilter(req),
+    orderBy: { createdAt: "desc" },
+    take: SEND_HISTORY_LIMIT
+  });
+  const history = sends
+    .filter((send: any) => Array.isArray(send.rows) && send.rows.some((row: any) => row && typeof row === "object" && "inMark" in row))
+    .map((send: any) => ({
+      sentAt: send.createdAt.toISOString(),
+      fromAt: send.fromAt.toISOString(),
+      toAt: send.toAt.toISOString(),
+      rows: readRegistrySnapshot(send.rows)
+    }));
+  const marked = markRegistryRows(buildRegistryRows(inputs, minutes), history, {
+    from: from.toISOString(),
+    to: to.toISOString()
+  });
+  return { minutes, ...marked };
+}
+
+function hangarLabelOf(hangar: { name?: string | null; code?: string | null } | null | undefined): string {
+  return String(hangar?.name ?? hangar?.code ?? "").trim();
+}
+
+function hangarNumberOf(hangar: { name?: string | null; code?: string | null } | null | undefined): string {
+  const name = String(hangar?.name ?? "").trim();
+  const code = String(hangar?.code ?? "").trim();
+  const fromName = name.match(/(\d+)/);
+  if (/ангар/i.test(name) && fromName) return fromName[1]!;
+  const fromCode = code.match(/(\d+)/);
+  if (fromCode) return fromCode[1]!;
+  return name || code;
+}
+
+async function loadTowPlan(prisma: any, req: any, from: Date, to: Date) {
+  const events = await prisma.maintenanceEvent.findMany({
+    where: {
+      ...sandboxFilter(req),
+      status: { notIn: [EventStatus.DELETED, EventStatus.CANCELLED] },
+      OR: [
+        { startAt: { lt: to }, endAt: { gt: from } },
+        { actualStartAt: { lt: to }, actualEndAt: { gt: from } },
+        { placements: { some: { startAt: { lt: to }, endAt: { gt: from } } } },
+        { placements: { some: { actualStartAt: { lt: to }, actualEndAt: { gt: from } } } }
+      ]
+    },
+    include: {
+      aircraft: { include: { operator: true, type: true } },
+      eventType: true,
+      hangar: true,
+      placements: { include: { hangar: true, layout: true, stand: true }, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
+      towSegments: { orderBy: [{ startAt: "asc" }] }
+    },
+    orderBy: [{ startAt: "asc" }, { id: "asc" }]
+  });
+  const operatorIds = new Set<string>();
+  const typeIds = new Set<string>();
+  for (const event of events) {
+    if (event.aircraftId) continue;
+    const virtual = event.virtualAircraft as { operatorId?: string; aircraftTypeId?: string } | null;
+    if (virtual?.operatorId) operatorIds.add(virtual.operatorId);
+    if (virtual?.aircraftTypeId) typeIds.add(virtual.aircraftTypeId);
+  }
+  const operators = operatorIds.size
+    ? await prisma.operator.findMany({ where: { id: { in: [...operatorIds] } }, select: { id: true, code: true, name: true } })
+    : [];
+  const types = typeIds.size
+    ? await prisma.aircraftType.findMany({
+        where: { id: { in: [...typeIds] } },
+        select: { id: true, icaoType: true, name: true }
+      })
+    : [];
+  const operatorById = new Map(operators.map((row: { id: string; code: string; name: string }) => [row.id, row.code || row.name]));
+  const typeById = new Map(types.map((row: { id: string; icaoType: string | null; name: string }) => [row.id, row.icaoType || row.name]));
+  const inputs: TowPlanEvent[] = events.map((event: any) => {
+    const virtual = event.virtualAircraft as { operatorId?: string; aircraftTypeId?: string } | null;
+    const hangars = new Map<string, string>();
+    const eventHangar = hangarLabelOf(event.hangar);
+    if (event.hangarId && eventHangar) hangars.set(event.hangarId, eventHangar);
+    for (const placement of event.placements) {
+      const label = hangarLabelOf(placement.hangar);
+      if (placement.hangarId && label) hangars.set(placement.hangarId, label);
+    }
+    const hangarList: TowPlanHangar[] = [...hangars.entries()].map(([id, label]) => ({ id, label }));
+    return {
+      id: event.id,
+      status: event.status,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      createdAt: event.createdAt,
+      locked: isDoneScheduleLocked(event.status),
+      hangarId: event.hangarId,
+      hangars: hangarList,
+      aircraftTypeId: event.aircraft?.typeId ?? virtual?.aircraftTypeId ?? "",
+      aircraftType:
+        event.aircraft?.type?.icaoType ||
+        event.aircraft?.type?.name ||
+        (virtual?.aircraftTypeId ? (typeById.get(virtual.aircraftTypeId) ?? "") : ""),
+      aircraftId: event.aircraftId ?? "",
+      tailNumber: event.aircraft?.tailNumber || (isVirtualAircraftPlaceholder(event) ? virtualAircraftDisplayLabel() : ""),
+      operatorId: event.aircraft?.operatorId ?? virtual?.operatorId ?? "",
+      operator:
+        event.aircraft?.operator?.code ||
+        event.aircraft?.operator?.name ||
+        (virtual?.operatorId ? (operatorById.get(virtual.operatorId) ?? "") : ""),
+      eventTitle: event.title ?? "",
+      eventType: event.eventType?.name || event.eventType?.code || "",
+      placements: event.placements.map((placement: any) => ({
+        id: placement.id,
+        origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
+        startAt: placement.startAt,
+        endAt: placement.endAt,
+        hangarId: placement.hangarId,
+        hangarLabel: hangarLabelOf(placement.hangar),
+        hangarNumber: hangarNumberOf(placement.hangar),
+        layoutName: placement.layout?.name || placement.layout?.code || null,
+        standCode: placement.stand?.code || placement.stand?.name || null
+      })),
+      tows: event.towSegments.map((tow: any) => ({
+        id: tow.id,
+        startAt: tow.startAt,
+        endAt: tow.endAt,
+        fromLabel: tow.fromLabel,
+        toLabel: tow.toLabel,
+        placementId: tow.placementId,
+        occupancyEndAt: tow.occupancyEndAt
+      }))
+    };
+  });
+  const rows = buildTowPlanRows(inputs, from, to);
+  const previous = await prisma.towRegistrySend.findFirst({
+    where: { sandboxId: sandboxIdFor(req), fromAt: from, toAt: to },
+    orderBy: { createdAt: "desc" }
+  });
+  const known = new Set(
+    previous ? readSendRows(previous.rows).map((row) => row.eventId).filter(Boolean) : []
+  );
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+  return rows.map((row) => ({
+    ...row,
+    isNew: previous ? !known.has(row.eventId) : row.createdAt >= fromIso && row.createdAt < toIso
+  }));
 }
 
 export const towsRoutes: FastifyPluginAsync = async (app) => {
@@ -346,14 +630,222 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     return { minutes, items };
   });
 
-  app.post("/send", async (req) => {
+  app.get("/plan", async (req) => {
+    assertPermission(req, "tows:read");
+    const query = zRange.parse((req.query ?? {}) as any);
+    return { items: await loadTowPlan(app.prisma, req, query.from, query.to) };
+  });
+
+  app.get("/registry", async (req) => {
+    assertPermission(req, "tows:read");
+    const query = zRange.parse((req.query ?? {}) as any);
+    return loadRegistry(app.prisma, req, query.from, query.to);
+  });
+
+  app.get("/sends", async (req) => {
+    assertAnyPermission(req, ["tows:read", "mail:send", "admin:mail"]);
+    const sends = await app.prisma.towRegistrySend.findMany({
+      where: sandboxFilter(req),
+      orderBy: { createdAt: "desc" },
+      take: 50
+    });
+    return {
+      items: sends.map((send) => ({
+        id: send.id,
+        fromAt: send.fromAt.toISOString(),
+        toAt: send.toAt.toISOString(),
+        fromMsk: formatMskDateTime(send.fromAt),
+        toMsk: formatMskDateTime(send.toAt),
+        actor: send.actor,
+        subject: send.subject,
+        note: send.note ?? "",
+        recipients: Array.isArray(send.recipients) ? send.recipients.map(String) : [],
+        messageId: send.messageId ?? "",
+        sentAt: send.createdAt.toISOString(),
+        sentMsk: formatMskDateTime(send.createdAt),
+        rowCount: readSendRows(send.rows).length
+      }))
+    };
+  });
+
+  app.get("/sends/compare", async (req) => {
+    assertPermission(req, "tows:read");
+    const query = z
+      .object({ left: zUuid, right: zUuid })
+      .parse((req.query ?? {}) as any);
+    const [left, right] = await Promise.all([
+      app.prisma.towRegistrySend.findFirst({ where: { id: query.left, ...sandboxFilter(req) } }),
+      app.prisma.towRegistrySend.findFirst({ where: { id: query.right, ...sandboxFilter(req) } })
+    ]);
+    if (!left || !right) throw app.httpErrors.notFound(UserMsg.RECORD_NOT_FOUND);
+    return compareSentRows(left.rows, right.rows);
+  });
+
+  app.get("/changes", async (req) => {
+    assertPermission(req, "tows:read");
+    const query = z.object({ eventId: zUuid }).parse((req.query ?? {}) as any);
+    const event = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: query.eventId, ...sandboxFilter(req) },
+      select: { id: true }
+    });
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+    const items = await app.prisma.towFieldChange.findMany({
+      where: { eventId: query.eventId },
+      orderBy: { createdAt: "desc" },
+      take: 100
+    });
+    return {
+      items: items.map((item) => ({
+        id: item.id,
+        towId: item.towId ?? "",
+        actor: item.actor,
+        field: item.field,
+        before: item.before,
+        after: item.after,
+        reason: item.reason ?? "",
+        createdAt: item.createdAt.toISOString(),
+        createdMsk: formatMskDateTime(item.createdAt)
+      }))
+    };
+  });
+
+  app.post("/waiver", async (req) => {
+    assertCanWriteTow(req);
+    const body = z
+      .object({
+        eventId: zUuid,
+        role: z.enum(["event-in", "event-out"]),
+        waived: z.boolean()
+      })
+      .parse(req.body ?? {});
+    const event = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: body.eventId, ...sandboxFilter(req) },
+      include: {
+        placements: { orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
+        towSegments: true,
+        towWaivers: { select: { role: true } }
+      }
+    });
+    if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+    if (isDoneScheduleLocked(event.status)) throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    const input: RegistryEventInput = {
+      id: event.id,
+      title: event.title,
+      status: event.status,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      hangarId: event.hangarId,
+      hangarName: null,
+      hangarCode: null,
+      tailNumber: null,
+      aircraftId: event.aircraftId,
+      virtual: false,
+      aircraftTypeId: null,
+      aircraftType: null,
+      operatorId: null,
+      operator: null,
+      placements: event.placements.map((placement) => ({
+        id: placement.id,
+        origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
+        startAt: placement.startAt,
+        endAt: placement.endAt,
+        hangarId: placement.hangarId,
+        hangarName: null,
+        hangarCode: null,
+        standCode: null
+      })),
+      tows: event.towSegments.map((tow) => ({
+        id: tow.id,
+        placementId: tow.placementId,
+        startAt: tow.startAt,
+        endAt: tow.endAt,
+        fromLabel: tow.fromLabel,
+        toLabel: tow.toLabel
+      })),
+      waivedRoles: event.towWaivers
+        .map((waiver) => waiver.role)
+        .filter((role): role is RegistryEdgeRole => role === "event-in" || role === "event-out")
+    };
+    const [row] = buildRegistryRows([input], null);
+    const edge = body.role === "event-in" ? row?.inEdge : row?.outEdge;
+    if (body.waived && edge?.state === "assigned") {
+      throw app.httpErrors.badRequest("На этом крае уже есть буксировка");
+    }
+    const label = body.role === "event-in" ? "Закатка" : "Выкатка";
+    const sbId = sandboxIdFor(req);
+    if (body.waived) {
+      await app.prisma.eventTowWaiver.upsert({
+        where: { eventId_role: { eventId: body.eventId, role: body.role } },
+        create: { eventId: body.eventId, sandboxId: sbId, role: body.role, actor: getActor(req) },
+        update: { actor: getActor(req) }
+      });
+    } else {
+      await app.prisma.eventTowWaiver.deleteMany({ where: { eventId: body.eventId, role: body.role } });
+    }
+    await recordTowFieldChanges(
+      app.prisma,
+      towChangeRows({
+        eventId: body.eventId,
+        sandboxId: sbId,
+        actor: getActor(req),
+        reason: body.waived ? "Буксировка не требуется" : "Край снова ожидает буксировку",
+        pairs: [
+          {
+            field: label,
+            before: body.waived ? edge?.state === "waived" ? "не требуется" : "не назначена" : "не требуется",
+            after: body.waived ? "не требуется" : "не назначена"
+          }
+        ]
+      })
+    );
+    return { ok: true as const };
+  });
+
+  app.post("/fix", async (req) => {
     assertCanWriteTow(req);
     const body = zRange.parse(req.body ?? {});
+    const items = await collectRegistryItems(app.prisma, req, body);
+    if (!items.length) {
+      throw app.httpErrors.badRequest("В выбранном периоде нет назначенных буксировок");
+    }
+    const template = await readTowMailTemplate(app.prisma).catch(() => ({
+      subjectTemplate: DEFAULT_TOW_SUBJECT,
+      bodyTemplate: ""
+    }));
+    const contour = (req as any).sandbox?.name ? `Песочница «${(req as any).sandbox.name}»` : "Рабочий контур";
+    const letter = buildTowRegistryLetter({
+      rows: items,
+      periodLabel: periodLabel(body.from, body.to),
+      contour,
+      subjectTemplate: template.subjectTemplate
+    });
+    const saved = await app.prisma.towRegistrySend.create({
+      data: {
+        sandboxId: sandboxIdFor(req),
+        fromAt: body.from,
+        toAt: body.to,
+        actor: getActor(req),
+        recipients: [],
+        note: null,
+        subject: letter.subject,
+        rows: registrySnapshot(items)
+      }
+    });
+    await dispatchTowTriggers(app.prisma, saved.id).catch((err) => app.log.warn({ err }, "tow trigger mail failed"));
+    return { ok: true as const, sendId: saved.id, subject: letter.subject, rows: items.length };
+  });
 
+  app.post("/dispatch", async (req) => {
+    assertAnyPermission(req, ["mail:send", "admin:mail"]);
+    const body = z
+      .object({
+        sendId: zUuid,
+        recipients: z.array(z.string().trim().email().max(200)).max(50).optional(),
+        target: z.enum(["self", "list"]).optional()
+      })
+      .parse(req.body ?? {});
     const target = body.target ?? "list";
-    const selfEmail = String((req as any).auth?.email ?? "")
-      .trim()
-      .toLowerCase();
+    const selfEmail = String((req as any).auth?.email ?? "").trim().toLowerCase();
     const recipients =
       target === "self"
         ? selfEmail
@@ -363,7 +855,6 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     if (!recipients.length) {
       throw app.httpErrors.badRequest(target === "self" ? "У учётной записи нет адреса почты" : "Укажите получателей");
     }
-
     const settings = await app.prisma.mailDigestSettings.upsert({
       where: { id: "default" },
       create: { id: "default" },
@@ -376,33 +867,18 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     if (!smtp) {
       throw app.httpErrors.badRequest("Почта не настроена. SMTP задаёт администратор в разделе «Рассылка».");
     }
-
-    const items = (await loadTowReportItems(app.prisma, req, body.from, body.to))
-      .filter((row) => rowMatchesSendFilters(row, body))
-      .map((row, idx) => ({ ...row, seq: idx + 1 }));
-    if (!items.length) {
-      throw app.httpErrors.badRequest("В выбранном периоде нет буксировок для отправки");
-    }
-
-    const contour = (req as any).sandbox?.name ? `Песочница «${(req as any).sandbox.name}»` : "Рабочий контур";
-    const letter = buildTowRegistryLetter({
-      rows: items,
-      periodLabel: periodLabel(body.from, body.to),
-      contour,
-      note: body.note
+    const existing = await app.prisma.towRegistrySend.findFirst({ where: { id: body.sendId, ...sandboxFilter(req) } });
+    if (!existing) throw app.httpErrors.notFound(UserMsg.RECORD_NOT_FOUND);
+    const result = await deliverTowRegistrySend(app.prisma, {
+      sendId: existing.id,
+      recipients,
+      smtp: settings,
+      target: target === "self" ? "self" : "all",
+      actorEmail: getActor(req),
+      variantName: "Буксировки"
     });
-
-    try {
-      const sent = await sendMail(smtp, {
-        to: recipients,
-        subject: letter.subject,
-        text: letter.text,
-        html: letter.html
-      });
-      return { ok: true as const, messageId: sent.messageId, recipients, subject: letter.subject, rows: items.length };
-    } catch (e) {
-      throw app.httpErrors.badRequest(e instanceof Error ? e.message : "Не удалось отправить письмо");
-    }
+    if (!result.ok) throw app.httpErrors.badRequest(result.error || "Не удалось отправить письмо");
+    return { ok: true as const, recipients: result.recipients, subject: result.subject, rows: result.rows, sendId: existing.id };
   });
 
   app.patch("/:id", async (req) => {
@@ -448,8 +924,9 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     const startChanged = body.startAt != null && body.startAt.getTime() !== existing.startAt.getTime();
     const endChanged = body.endAt != null && body.endAt.getTime() !== existing.endAt.getTime();
     const scheduleChanged = startChanged || endChanged;
-    if (startChanged && !String(body.startChangeReason ?? "").trim()) {
-      throw app.httpErrors.badRequest("Укажите причину изменения времени начала буксировки");
+    const shortShift = startChanged && Math.abs(nextStart.getTime() - existing.startAt.getTime()) < 60 * 60_000;
+    if (shortShift && !String(body.startChangeReason ?? "").trim()) {
+      throw app.httpErrors.badRequest("Укажите причину изменения времени начала буксировки меньше чем на 60 минут");
     }
     assertChangeReasonIfNeeded(req, true, body.changeReason ?? body.startChangeReason ?? "Буксировка");
 
@@ -478,6 +955,32 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
       },
       include: towInclude
     });
+
+    const textOr = (value: string | null | undefined) => String(value ?? "");
+    await recordTowFieldChanges(
+      app.prisma,
+      towChangeRows({
+        eventId: existing.eventId,
+        towId: id,
+        sandboxId: sandboxIdFor(req),
+        actor: getActor(req),
+        reason: body.changeReason ?? body.startChangeReason ?? "Буксировка",
+        pairs: [
+          { field: "Начало буксировки (мск)", before: formatMskDateTime(existing.startAt), after: formatMskDateTime(nextStart) },
+          { field: "Окончание буксировки (мск)", before: formatMskDateTime(existing.endAt), after: formatMskDateTime(nextTowEnd) },
+          { field: "Откуда", before: textOr(existing.fromLabel), after: textOr(updated.fromLabel) },
+          { field: "Куда", before: textOr(existing.toLabel), after: textOr(updated.toLabel) },
+          { field: "Примечание", before: textOr(existing.notes), after: textOr(updated.notes) },
+          { field: "Позиция", before: textOr(existing.positionComment), after: textOr(updated.positionComment) },
+          {
+            field: "Окончание занятия МС (мск)",
+            before: existing.occupancyEndAt ? formatMskDateTime(existing.occupancyEndAt) : "",
+            after: updated.occupancyEndAt ? formatMskDateTime(updated.occupancyEndAt) : ""
+          },
+          { field: "Причина сдвига начала", before: textOr(existing.startChangeReason), after: textOr(updated.startChangeReason) }
+        ]
+      })
+    );
 
     await app.prisma.maintenanceEventAudit.create({
       data: {

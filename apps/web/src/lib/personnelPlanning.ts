@@ -1,3 +1,5 @@
+import { timelineBoundsMs, type TimelineTimeMode } from "./timelineScale";
+
 const DAY_MS = 86_400_000;
 
 export function dateKey(value: string | Date): string {
@@ -73,7 +75,7 @@ export function shiftPeriod(from: string, to: string, direction: -1 | 1): { from
   return clampResourcePeriod(addDays(from, direction * days), addDays(to, direction * days));
 }
 
-const PERSONNEL_TABS = ["resources", "balance", "week", "capacity"] as const;
+const PERSONNEL_TABS = ["resources", "balance", "week", "archive", "capacity"] as const;
 export type PersonnelTab = (typeof PERSONNEL_TABS)[number];
 
 export type PersonnelViewState = {
@@ -180,15 +182,15 @@ export function capacityConstraint<T extends CapacityHours & { label: string }>(
   return { ...worst, kind: worst.slack < -CAPACITY_EPS ? "overload" : "nearest" };
 }
 
-/** Inclusive local dates. `to` is the last visible day. */
+/** Inclusive dates. `to` is the last visible day. LOCAL — сутки MSK, UTC — сутки UTC. */
 export function periodTimelinePosition(
   startAt: string,
   endAt: string,
   from: string,
-  to: string
+  to: string,
+  mode: TimelineTimeMode = "LOCAL"
 ): { left: number; width: number; startsBefore: boolean; endsAfter: boolean } | null {
-  const start = new Date(`${from.slice(0, 10)}T00:00:00+03:00`).getTime();
-  const end = new Date(`${to.slice(0, 10)}T00:00:00+03:00`).getTime() + DAY_MS;
+  const { start, end } = timelineBoundsMs(from, to, mode);
   const itemStart = new Date(startAt).getTime();
   const itemEnd = new Date(endAt).getTime();
   const clippedStart = Math.max(start, itemStart);

@@ -574,3 +574,97 @@ export function personnelBaselineDelta(current: any, baseline: any | null | unde
     factorsChanged: comparable(current.factors) !== comparable(baseline.factors)
   };
 }
+
+function archiveDateLabel(value: string) {
+  const [year, month, day] = value.slice(0, 10).split("-");
+  return day && month && year ? `${day}.${month}.${year}` : value;
+}
+
+function archiveTypeId(event: { aircraftType?: { id?: string | null } | null }) {
+  return event.aircraftType?.id || "";
+}
+
+/** Frozen weekly plan: the live chart keeps following the Gantt, this copy does not. */
+export function buildPersonnelPlanArchive(input: {
+  from: string;
+  to: string;
+  weekStart: string;
+  workshopIds: string[];
+  aircraftTypeIds: string[];
+  workshops: Array<{ id: string; code: string; name: string }>;
+  data: {
+    aircraftTypes?: Array<{ id: string; name: string; icaoType?: string | null }>;
+    demandDepartments?: string[];
+    events?: any[];
+    calculation?: any[];
+    resourceSlices?: any[];
+  };
+}) {
+  const allowed = new Set(input.aircraftTypeIds);
+  const events = (input.data.events ?? []).flatMap((event) => {
+    const typeId = archiveTypeId(event);
+    if (allowed.size ? !allowed.has(typeId) : !typeId) return [];
+    return [{
+      id: event.id,
+      title: event.title,
+      aircraftLabel: event.aircraftLabel,
+      status: event.status,
+      statusLabel: event.statusLabel,
+      planningKind: event.planningKind,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      budgetStartAt: event.budgetStartAt ?? null,
+      budgetEndAt: event.budgetEndAt ?? null,
+      actualStartAt: event.actualStartAt ?? null,
+      actualEndAt: event.actualEndAt ?? null,
+      workshopId: event.workshopId ?? event.workshop?.id ?? "",
+      aircraft: event.aircraft?.tailNumber ? { tailNumber: event.aircraft.tailNumber } : null,
+      aircraftType: typeId ? { id: typeId, name: event.aircraftType?.name ?? null, icaoType: event.aircraftType?.icaoType ?? null } : null,
+      operator: event.operator ? { id: event.operator.id, code: event.operator.code, name: event.operator.name } : null,
+      workshop: event.workshop ? { id: event.workshop.id, code: event.workshop.code, name: event.workshop.name } : null,
+      hangar: event.hangar ? { code: event.hangar.code, name: event.hangar.name } : null,
+      placements: (event.placements ?? []).map((placement: any) => ({
+        id: placement.id,
+        startAt: placement.startAt,
+        endAt: placement.endAt,
+        hangar: placement.hangar ? { code: placement.hangar.code, name: placement.hangar.name } : null,
+        stand: placement.stand ? { code: placement.stand.code, name: placement.stand.name } : null
+      })),
+      towSegments: (event.towSegments ?? []).map((tow: any) => ({ id: tow.id, startAt: tow.startAt, endAt: tow.endAt })),
+      reportMetrics: event.reportMetrics ?? []
+    }];
+  });
+  const knownWorkshops = new Map(input.workshops.map((row) => [row.id, row]));
+  const workshops = input.workshopIds.flatMap((id) => {
+    const row = knownWorkshops.get(id);
+    return row ? [row] : [];
+  });
+  const workshopLabel = workshops.map((row) => row.code || row.name).join(", ");
+  const title = `План ${archiveDateLabel(input.from)}–${archiveDateLabel(input.to)}${workshopLabel ? ` · ${workshopLabel}` : ""}`;
+  const payload = {
+    from: input.from,
+    to: input.to,
+    weekStart: input.weekStart,
+    workshopIds: input.workshopIds,
+    aircraftTypeIds: input.aircraftTypeIds,
+    workshops,
+    aircraftTypes: input.data.aircraftTypes ?? [],
+    departments: input.data.demandDepartments ?? [],
+    events,
+    calculation: (input.data.calculation ?? []).map((day) => ({
+      date: String(day.date).slice(0, 10),
+      normHours: Number(day.normHours ?? 0),
+      demand: day.demand ?? {},
+      authorizedSupply: day.authorizedSupply ?? {},
+      strictBalance: day.strictBalance ?? {},
+      eventDemand: day.eventDemand ?? []
+    })),
+    resourceSlices: input.data.resourceSlices ?? []
+  };
+  return {
+    title,
+    workshopLabel,
+    eventCount: events.length,
+    payload: JSON.parse(JSON.stringify(payload))
+  };
+}

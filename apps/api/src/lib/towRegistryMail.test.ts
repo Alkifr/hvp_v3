@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildTowRegistryLetter } from "./towRegistryMail.js";
+import { buildTowRegistryLetter, describeTowSendDiff } from "./towRegistryMail.js";
 import type { TowReportRow } from "./towReport.js";
 
 function row(partial: Partial<TowReportRow>): TowReportRow {
@@ -58,10 +58,22 @@ test("registry letter uses the dispatcher columns and the period", () => {
   });
   assert.equal(letter.subject, "Реестр буксировок 01.11.2026–30.11.2026");
   assert.match(letter.text, /Смена А/);
-  assert.match(letter.text, /закаток: 1, выкаток: 1/);
-  assert.match(letter.text, /Ангар/);
+  assert.match(letter.text, /Строк: 2/);
+  assert.match(letter.text, /Тип ВС/);
   assert.match(letter.text, /RA-100/);
+  assert.match(letter.html, /Ангар 1/);
+  assert.match(letter.html, /ffd966/);
   assert.match(letter.html, /RA-200/);
   assert.match(letter.html, /Бортовой номер/);
   assert.doesNotMatch(letter.html, /<script/);
+});
+
+test("send diff lists added, removed and start time changes", () => {
+  const lines = describeTowSendDiff(
+    [{ id: "keep", tailNumber: "RA-1", plannedStartMsk: "17.11.2026 10:00", fromStand: "МС", toStand: "A1" }, { id: "gone", tailNumber: "RA-2", plannedStartMsk: "17.11.2026 12:00" }],
+    [{ id: "keep", tailNumber: "RA-1", plannedStartMsk: "17.11.2026 11:00", fromStand: "МС", toStand: "A1" }, { id: "new", tailNumber: "RA-3", plannedStartMsk: "17.11.2026 15:00", fromStand: "B1", toStand: "МС" }]
+  );
+  assert.match(lines.join("\n"), /\+ RA-3/);
+  assert.match(lines.join("\n"), /- RA-2/);
+  assert.match(lines.join("\n"), /RA-1: 17\.11\.2026 10:00 → 17\.11\.2026 11:00/);
 });

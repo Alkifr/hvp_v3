@@ -215,7 +215,8 @@ test("buildTowReportRow prefers stored labels and customer slot", () => {
   assert.equal(row.aircraftId, "ac1");
   assert.equal(row.plannedStartMsk, "18.09.2026 12:30");
   assert.equal(row.occupancyEndMsk, "18.09.2026 21:00");
-  assert.equal(row.standOccupancy, "8 ч 30 мин");
+  assert.equal(row.standOccupancy, "18.09.2026 12:30 - 18.09.2026 21:00");
+  assert.equal(row.toSlotDuration, "Слот до 18.09.2026 21:00 мск");
   assert.equal(row.toSlotEndMsk, "18.09.2026 21:00");
   assert.equal(row.notes, "ночь");
   assert.equal(row.directionLabel, "Закатка");

@@ -1,6 +1,9 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 import type { PrismaClient } from "@prisma/client";
 import dayjs from "dayjs";
 
+import { resolveJwtSecret } from "./bootEnv.js";
 import { eventStatusLabel } from "./eventStatusCatalog.js";
 import { mskCalendarDate } from "./localDate.js";
 import { isSmtpReady, sendMail, smtpConfigFromSettings } from "./mailer.js";
@@ -110,12 +113,24 @@ export type WatchLabels = {
   operators: Map<string, string>;
 };
 
+export type WatchChangeRow = {
+  field: string;
+  previous: string;
+  current: string;
+};
+
+export type WatchChangeBlock = {
+  actor: string;
+  action: string;
+  rows: WatchChangeRow[];
+};
+
 export type WatchEventSection = {
   title: string;
   aircraft: string;
-  contour: string;
-  lines: string[];
+  blocks: WatchChangeBlock[];
   link: string | null;
+  unsubscribeLink: string | null;
 };
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -254,19 +269,62 @@ function formatObject(value: Record<string, unknown>, key: string | undefined, l
   return parts.join(", ") || "—";
 }
 
-export function summarizeChanges(changes: unknown, labels?: WatchLabels): string[] {
+/** Строки как в истории карточки: реквизит, предыдущая версия, текущая. */
+export function changeRows(changes: unknown, labels?: WatchLabels): WatchChangeRow[] {
   if (!isObj(changes)) return [];
-  const lines: string[] = [];
+  const rows: WatchChangeRow[] = [];
   for (const [key, raw] of Object.entries(changes)) {
-    const label = FIELD_LABEL[key] ?? key;
+    const field = FIELD_LABEL[key] ?? key;
     if (isObj(raw) && ("from" in raw || "to" in raw) && Object.keys(raw).every((child) => child === "from" || child === "to")) {
-      lines.push(`${label}: ${formatVal(raw.from, key, labels)} → ${formatVal(raw.to, key, labels)}`);
+      rows.push({ field, previous: formatVal(raw.from, key, labels), current: formatVal(raw.to, key, labels) });
     } else {
-      lines.push(`${label}: ${formatVal(raw, key, labels)}`);
+      rows.push({ field, previous: "—", current: formatVal(raw, key, labels) });
     }
-    if (lines.length >= 12) break;
+    if (rows.length >= 12) break;
   }
-  return lines;
+  return rows;
+}
+
+export function summarizeChanges(changes: unknown, labels?: WatchLabels): string[] {
+  return changeRows(changes, labels).map((row) => `${row.field}: ${row.previous} → ${row.current}`);
+}
+
+export function formatWatchActor(actor: string, names?: Map<string, string>): string {
+  const raw = actor.trim();
+  if (!raw || raw === "system") return "Система";
+  if (raw === "browser") return "Браузер";
+  return names?.get(raw.toLowerCase())?.trim() || raw;
+}
+
+export function watchBlocks(notes: AuditNote[], labels?: WatchLabels, actorNames?: Map<string, string>): WatchChangeBlock[] {
+  const blocks: WatchChangeBlock[] = [];
+  for (const note of notes) {
+    const rows = changeRows(note.changes, labels);
+    const reason = note.reason?.trim();
+    if (reason) rows.push({ field: "Комментарий", previous: "", current: clip(reason) });
+    blocks.push({
+      actor: formatWatchActor(note.actor, actorNames),
+      action: ACTION_LABEL[note.action] ?? note.action,
+      rows
+    });
+    if (blocks.length >= 8) break;
+  }
+  return blocks;
+}
+
+export async function loadActorNames(prisma: PrismaClient, actors: string[]): Promise<Map<string, string>> {
+  const emails = [...new Set(actors.map((actor) => actor.trim()).filter((actor) => actor.includes("@")))];
+  if (!emails.length) return new Map();
+  const users = await prisma.user.findMany({
+    where: { email: { in: emails } },
+    select: { email: true, displayName: true }
+  });
+  const names = new Map<string, string>();
+  for (const user of users) {
+    const name = user.displayName?.trim();
+    if (name) names.set(user.email.trim().toLowerCase(), name);
+  }
+  return names;
 }
 
 export function describeAudit(note: AuditNote, labels?: WatchLabels): string[] {
@@ -441,8 +499,48 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export function eventWatchLink(eventId: string, sandboxId: string | null): string | null {
+function publicBase(): string | null {
   const base = process.env.HVP_PUBLIC_URL?.trim().replace(/\/$/, "");
+  return base || null;
+}
+
+function unsubscribeSecret(): string {
+  return resolveJwtSecret(process.env.JWT_SECRET, process.env.NODE_ENV ?? "development");
+}
+
+const UNSUB_PURPOSE = "event-watch-unsub:v1";
+
+export function signEventUnsubscribe(userId: string, eventId: string, secret: string): string {
+  const payload = `${userId}.${eventId}`;
+  const sig = createHmac("sha256", secret).update(`${UNSUB_PURPOSE}:${payload}`).digest("base64url");
+  return `${Buffer.from(payload, "utf8").toString("base64url")}.${sig}`;
+}
+
+export function readEventUnsubscribe(token: string, secret: string): { userId: string; eventId: string } | null {
+  const raw = token.trim();
+  const dot = raw.lastIndexOf(".");
+  if (dot <= 0) return null;
+  let payload = "";
+  try {
+    payload = Buffer.from(raw.slice(0, dot), "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+  const expected = createHmac("sha256", secret).update(`${UNSUB_PURPOSE}:${payload}`).digest("base64url");
+  const sig = raw.slice(dot + 1);
+  const left = Buffer.from(sig);
+  const right = Buffer.from(expected);
+  if (left.length !== right.length || !timingSafeEqual(left, right)) return null;
+  const sep = payload.indexOf(".");
+  if (sep <= 0) return null;
+  const userId = payload.slice(0, sep);
+  const eventId = payload.slice(sep + 1);
+  if (!UUID_RE.test(userId) || !UUID_RE.test(eventId)) return null;
+  return { userId, eventId };
+}
+
+export function eventWatchLink(eventId: string, sandboxId: string | null): string | null {
+  const base = publicBase();
   if (!base) return null;
   const q = new URLSearchParams();
   q.set("event", eventId);
@@ -450,29 +548,93 @@ export function eventWatchLink(eventId: string, sandboxId: string | null): strin
   return `${base}#gantt?${q.toString()}`;
 }
 
+export function eventUnsubscribeLink(userId: string, eventId: string): string | null {
+  const base = publicBase();
+  if (!base) return null;
+  const token = signEventUnsubscribe(userId, eventId, unsubscribeSecret());
+  return `${base}/api/unsubscribe/event?token=${encodeURIComponent(token)}`;
+}
+
+function cellText(value: string): string {
+  return value.trim() ? value : "—";
+}
+
+const TH_STYLE = "text-align:left;padding:6px 8px;border:1px solid #e2e8f0;color:#64748b;font-weight:600";
+const TD_STYLE = "padding:6px 8px;border:1px solid #e2e8f0;vertical-align:top";
+
+function blockText(block: WatchChangeBlock): string {
+  const head = `Изменил: ${block.actor}\n${block.action}`;
+  if (!block.rows.length) return head;
+  const table = [
+    "Реквизит | Предыдущая версия | Текущая версия",
+    ...block.rows.map((row) => `${row.field} | ${cellText(row.previous)} | ${cellText(row.current)}`)
+  ].join("\n");
+  return `${head}\n${table}`;
+}
+
+function blockHtml(block: WatchChangeBlock): string {
+  const rows = block.rows
+    .map(
+      (row) =>
+        `<tr><td style="${TD_STYLE}">${escapeHtml(row.field)}</td><td style="${TD_STYLE}">${escapeHtml(cellText(row.previous))}</td><td style="${TD_STYLE}">${escapeHtml(cellText(row.current))}</td></tr>`
+    )
+    .join("");
+  const table = rows
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin-top:8px;font-size:13px"><thead><tr><th style="${TH_STYLE}">Реквизит</th><th style="${TH_STYLE}">Предыдущая версия</th><th style="${TH_STYLE}">Текущая версия</th></tr></thead><tbody>${rows}</tbody></table>`
+    : "";
+  return `<div style="margin-top:10px"><div>Изменил: <strong>${escapeHtml(block.actor)}</strong></div><div style="color:#475569">${escapeHtml(block.action)}</div>${table}</div>`;
+}
+
 export function formatWatchLetter(sections: WatchEventSection[]): { subject: string; text: string; html: string } {
   const subject =
     sections.length === 1
       ? `HVP: изменение «${sections[0]!.title}»`
       : `HVP: изменения ${sections.length} событий`;
+  const profileHint = "Отписаться можно в профиле, вкладка «Подписки».";
   const textParts = sections.map((section) => {
-    const head = [section.aircraft, section.title, section.contour].filter(Boolean).join(" · ");
-    const body = section.lines.map((line) => `• ${line}`).join("\n");
-    const link = section.link ? `\n${section.link}` : "";
-    return `${head}\n${body}${link}`;
+    const head = [section.aircraft, section.title].filter(Boolean).join(" · ");
+    const body = section.blocks.map(blockText).join("\n\n");
+    const link = section.link ? `\nОткрыть событие: ${section.link}` : "";
+    const unsub = section.unsubscribeLink
+      ? `\nОтписаться от изменений этого события: ${section.unsubscribeLink}`
+      : "";
+    return `${head}\n${body}${link}${unsub}`;
   });
-  const text = `${textParts.join("\n\n")}\n\nОтписаться можно в профиле, вкладка «Подписки».`;
+  const needsProfileHint = sections.every((section) => !section.unsubscribeLink);
+  const text = `${textParts.join("\n\n")}${needsProfileHint ? `\n\n${profileHint}` : ""}`;
   const html = `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.45;color:#0f172a">${sections
     .map((section) => {
-      const head = escapeHtml([section.aircraft, section.title, section.contour].filter(Boolean).join(" · "));
-      const items = section.lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("");
+      const head = escapeHtml([section.aircraft, section.title].filter(Boolean).join(" · "));
       const link = section.link
-        ? `<div style="margin-top:6px"><a href="${escapeHtml(section.link)}">Открыть событие</a></div>`
+        ? `<div style="margin-top:8px"><a href="${escapeHtml(section.link)}">Открыть событие</a></div>`
         : "";
-      return `<div style="margin:0 0 16px"><strong>${head}</strong><ul style="margin:6px 0 0;padding-left:18px">${items}</ul>${link}</div>`;
+      const unsub = section.unsubscribeLink
+        ? `<div style="margin-top:12px;font-size:12px"><a href="${escapeHtml(section.unsubscribeLink)}">Отписаться от изменений этого события</a></div>`
+        : "";
+      return `<div style="margin:0 0 18px"><strong>${head}</strong>${section.blocks.map(blockHtml).join("")}${link}${unsub}</div>`;
     })
-    .join("")}<div style="color:#64748b;font-size:12px">Отписаться можно в профиле, вкладка «Подписки».</div></div>`;
+    .join("")}${needsProfileHint ? `<div style="color:#64748b;font-size:12px">${profileHint}</div>` : ""}</div>`;
   return { subject, text, html };
+}
+
+export function unsubscribeNoticeHtml(input: { title: string; text: string }): string {
+  const base = publicBase();
+  const profile = base ? `${base}/#profile` : "/#profile";
+  return `<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(input.title)}</title>
+</head>
+<body style="margin:0;background:#f8fafc;color:#0f172a;font-family:Segoe UI,Arial,sans-serif">
+<main style="max-width:520px;margin:12vh auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:28px">
+<h1 style="font-size:20px;margin:0 0 8px">${escapeHtml(input.title)}</h1>
+<p style="line-height:1.5;margin:0 0 16px">${escapeHtml(input.text)}</p>
+<p style="margin:0"><a href="${escapeHtml(profile)}">Открыть подписки</a></p>
+</main>
+</body>
+</html>`;
 }
 
 type Bound = {
@@ -515,6 +677,7 @@ export async function flushEventWatchMails(client: Bound, batch: Map<string, Aud
   const subs = await client.prisma.eventChangeSubscription.findMany({
     where: { eventId: { in: eventIds } },
     select: {
+      userId: true,
       eventId: true,
       user: { select: { email: true, isActive: true } }
     }
@@ -528,18 +691,21 @@ export async function flushEventWatchMails(client: Bound, batch: Map<string, Aud
   if (!smtp) return;
 
   const batchNotes = [...batch.values()].flat();
-  const [events, labels] = await Promise.all([
+  const [events, labels, actorNames] = await Promise.all([
     client.prisma.maintenanceEvent.findMany({
       where: { id: { in: eventIds } },
       select: {
         id: true,
         title: true,
         sandboxId: true,
-        aircraft: { select: { tailNumber: true } },
-        sandbox: { select: { name: true } }
+        aircraft: { select: { tailNumber: true } }
       }
     }),
-    loadWatchLabels(client.prisma, batchNotes)
+    loadWatchLabels(client.prisma, batchNotes),
+    loadActorNames(
+      client.prisma,
+      batchNotes.map((note) => note.actor)
+    )
   ]);
   const byId = new Map(events.map((ev) => [ev.id, ev]));
 
@@ -549,14 +715,14 @@ export async function flushEventWatchMails(client: Bound, batch: Map<string, Aud
     const notes = auditsForRecipient(batch.get(sub.eventId) ?? [], email);
     if (!notes.length) continue;
     const ev = byId.get(sub.eventId);
-    const lines = notes.flatMap((note) => describeAudit(note, labels)).slice(0, 20);
-    if (!lines.length) continue;
+    const blocks = watchBlocks(notes, labels, actorNames);
+    if (!blocks.length) continue;
     const section: WatchEventSection = {
       title: ev?.title?.trim() || "Событие",
       aircraft: ev?.aircraft?.tailNumber?.trim() || "",
-      contour: ev?.sandboxId ? `Песочница${ev.sandbox?.name ? `: ${ev.sandbox.name}` : ""}` : "Рабочий контур",
-      lines,
-      link: eventWatchLink(sub.eventId, ev?.sandboxId ?? null)
+      blocks,
+      link: eventWatchLink(sub.eventId, ev?.sandboxId ?? null),
+      unsubscribeLink: eventUnsubscribeLink(sub.userId, sub.eventId)
     };
     const list = byRecipient.get(email) ?? [];
     list.push(section);

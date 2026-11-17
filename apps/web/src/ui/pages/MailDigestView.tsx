@@ -7,12 +7,14 @@ import { composeOutgoingLetter } from "../../lib/mailLetter";
 import { resolveFieldPick, suggestFieldPick } from "../../lib/reportFieldPick";
 import { authMe } from "../auth/authApi";
 import { DraftNumberInput } from "../components/DraftNumberInput";
+import { TowRegistryMailPanel } from "./TowRegistryMailPanel";
 import { SwitchToggle } from "../components/SwitchToggle";
 
 type PeriodMode = "last1" | "last7" | "last30" | "custom";
-type ScheduleMode = "manual" | "daily" | "weekly" | "monthly";
+type ScheduleMode = "manual" | "daily" | "weekly" | "monthly" | "trigger";
+type MailSource = "plan" | "tows";
 type WizardTab = "what" | "when" | "who";
-type PageTab = "variants" | "history";
+type PageTab = "variants" | "history" | "registry";
 type SendStatus = "SENT" | "FAILED" | "EMPTY";
 
 type DigestColumnDef = { key: string; label: string; hint: string };
@@ -27,6 +29,7 @@ type MailVariant = {
   periodCustomFrom: string | null;
   periodCustomTo: string | null;
   scheduleMode: ScheduleMode;
+  source?: MailSource;
   scheduleTime: string;
   scheduleWeekdays: number[];
   scheduleMonthDay: number;
@@ -72,7 +75,7 @@ type HistoryItem = {
   recipients: string[];
   subject: string;
   error: string | null;
-  stats: MailPreview["stats"] | null;
+  stats: (MailPreview["stats"] & { rows?: number }) | { rows?: number } | null;
   periodFrom: string | null;
   periodTo: string | null;
 };
@@ -153,11 +156,13 @@ function statusLabel(status: string): string {
 function targetLabel(target: string): string {
   if (target === "self") return "Себе";
   if (target === "schedule") return "По расписанию";
+  if (target === "trigger") return "По триггеру";
   return "Вручную всем";
 }
 
 function scheduleLabel(v: Pick<MailVariant, "scheduleMode" | "scheduleTime" | "scheduleWeekdays" | "scheduleMonthDay">): string {
   if (v.scheduleMode === "manual") return "Вручную";
+  if (v.scheduleMode === "trigger") return "По триггеру";
   if (v.scheduleMode === "daily") return `Каждый день · ${v.scheduleTime}`;
   if (v.scheduleMode === "weekly") {
     const days = v.scheduleWeekdays.map((id) => WEEKDAYS.find((d) => d.id === id)?.label ?? id).join(", ");
@@ -190,7 +195,10 @@ function copyName(name: string): string {
 export function MailDigestView() {
   const qc = useQueryClient();
   const customDefaults = useMemo(() => defaultCustomDates(), []);
-  const [pageTab, setPageTab] = useState<PageTab>(() => (readLs(LS_TAB) === "history" ? "history" : "variants"));
+  const [pageTab, setPageTab] = useState<PageTab>(() => {
+    const saved = readLs(LS_TAB);
+    return saved === "history" || saved === "registry" ? saved : "variants";
+  });
   const [wizardTab, setWizardTab] = useState<WizardTab>("what");
   const [selectedId, setSelectedId] = useState<string | null>(() => readLs(LS_VARIANT));
   const [hydratedId, setHydratedId] = useState<string | null>(null);
@@ -200,6 +208,7 @@ export function MailDigestView() {
   const [fromDate, setFromDate] = useState(customDefaults.from);
   const [toDate, setToDate] = useState(customDefaults.to);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("manual");
+  const [source, setSource] = useState<MailSource>("plan");
   const [scheduleTime, setScheduleTime] = useState("09:00");
   const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
   const [monthDay, setMonthDay] = useState(1);
@@ -219,7 +228,7 @@ export function MailDigestView() {
   const [previewStats, setPreviewStats] = useState<MailPreview["stats"] | null>(null);
   const [sendMenu, setSendMenu] = useState(false);
   const [histStatus, setHistStatus] = useState<SendStatus | "all">("all");
-  const [histChannel, setHistChannel] = useState<"all" | "manual" | "schedule">("all");
+  const [histChannel, setHistChannel] = useState<"all" | "manual" | "schedule" | "trigger">("all");
   const [histVariantId, setHistVariantId] = useState<string>("all");
 
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0, staleTime: 60_000 });
@@ -265,6 +274,7 @@ export function MailDigestView() {
     setFromDate(selected.periodCustomFrom || customDefaults.from);
     setToDate(selected.periodCustomTo || customDefaults.to);
     setScheduleMode(selected.scheduleMode || "manual");
+    setSource(selected.source || "plan");
     setScheduleTime(selected.scheduleTime || "09:00");
     setWeekdays(selected.scheduleWeekdays?.length ? selected.scheduleWeekdays : [1, 2, 3, 4, 5]);
     setMonthDay(selected.scheduleMonthDay || 1);
@@ -305,6 +315,7 @@ export function MailDigestView() {
       periodCustomFrom: fromDate || null,
       periodCustomTo: toDate || null,
       scheduleMode,
+      source,
       scheduleTime,
       scheduleWeekdays: weekdays,
       scheduleMonthDay: monthDay,
@@ -580,6 +591,15 @@ export function MailDigestView() {
         >
           История отправок
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pageTab === "registry"}
+          className={pageTab === "registry" ? "sandboxesTab active" : "sandboxesTab"}
+          onClick={() => switchPageTab("registry")}
+        >
+          Реестр буксировок
+        </button>
       </div>
 
       {!smtpReady && listQ.data ? (
@@ -588,7 +608,9 @@ export function MailDigestView() {
       {listQ.error ? <div className="error">{String((listQ.error as Error).message || listQ.error)}</div> : null}
       {createM.error ? <div className="error">{String(createM.error.message || createM.error)}</div> : null}
 
-      {pageTab === "history" ? (
+      {pageTab === "registry" ? (
+        <TowRegistryMailPanel />
+      ) : pageTab === "history" ? (
         <section className="card mailWizardCard">
           <div className="mailWizardBody">
             <div>
@@ -622,7 +644,8 @@ export function MailDigestView() {
                   [
                     ["all", "Все способы"],
                     ["manual", "Вручную"],
-                    ["schedule", "Расписание"]
+                    ["schedule", "Расписание"],
+                    ["trigger", "Триггер"]
                   ] as const
                 ).map(([id, label]) => (
                   <button
@@ -652,7 +675,7 @@ export function MailDigestView() {
               ) : null}
             </div>
             <div className="muted adminHint">
-              «Вручную» — отправка себе или всем из раздела. «Расписание» — автоматическая отправка.
+              «Вручную» — отправка себе или всем. «Расписание» — по времени. «Триггер» — сразу после фиксации плана буксировок. Отправленный реестр тоже попадает в этот список.
             </div>
             {historyQ.isLoading ? <div className="muted">Загрузка…</div> : null}
             {historyQ.error ? <div className="error">{String((historyQ.error as Error).message || historyQ.error)}</div> : null}
@@ -678,11 +701,14 @@ export function MailDigestView() {
                           <td>
                             <span className={`mailHistStatus mailHistStatus_${row.status}`}>{statusLabel(row.status)}</span>
                             {row.error ? <div className="muted">{row.error}</div> : null}
-                            {row.stats ? (
+                            {row.stats && "audits" in row.stats && row.stats.audits != null ? (
                               <div className="muted">
                                 аудит {row.stats.audits}; +{row.stats.added} / переносов {row.stats.prolonged} / отмен{" "}
                                 {row.stats.cancelled}
                               </div>
+                            ) : null}
+                            {row.stats && "rows" in row.stats && row.stats.rows != null ? (
+                              <div className="muted">строк реестра {row.stats.rows}</div>
                             ) : null}
                             {row.periodFrom && row.periodTo ? (
                               <div className="muted">
@@ -691,7 +717,7 @@ export function MailDigestView() {
                             ) : null}
                           </td>
                           <td>{targetLabel(row.target)}</td>
-                          <td>{row.target === "schedule" ? "Система" : row.actorEmail || "—"}</td>
+                          <td>{row.target === "schedule" || row.target === "trigger" ? "Система" : row.actorEmail || "—"}</td>
                           <td>
                             {row.recipients.length ? (
                               <div className="muted">{row.recipients.join(", ")}</div>
@@ -736,6 +762,7 @@ export function MailDigestView() {
                   </div>
                   {v.description ? <div className="mailVariantCardDesc">{v.description}</div> : null}
                   <div className="mailVariantCardMeta">
+                    <span>{v.source === "tows" ? "Буксировки" : "План ТО"}</span>
                     <span>{scheduleLabel(v)}</span>
                     <span>{v.recipients.length ? `${v.recipients.length} получ.` : "без получателей"}</span>
                     <span>
@@ -797,6 +824,21 @@ export function MailDigestView() {
                       />
                     </label>
 
+                    <div>
+                      <strong>Источник</strong>
+                      <div className="muted adminHint">От него зависит, что попадает в письмо. Позже сюда можно добавить другие источники.</div>
+                    </div>
+                    <div className="mailPeriodGrid">
+                      <button type="button" className={`mailChoiceCard ${source === "plan" ? "mailChoiceCardOn" : ""}`} onClick={() => setSource("plan")}>
+                        <span className="mailChoiceTitle">Изменения плана ТО</span>
+                        <span className="muted">События, переносы и отмены</span>
+                      </button>
+                      <button type="button" className={`mailChoiceCard ${source === "tows" ? "mailChoiceCardOn" : ""}`} onClick={() => setSource("tows")}>
+                        <span className="mailChoiceTitle">Буксировки</span>
+                        <span className="muted">Зафиксированный реестр и Excel</span>
+                      </button>
+                    </div>
+
                     <div className="mailPeriodGrid">
                       {PERIODS.map((p) => {
                         const disabled = scheduleMode !== "manual" && p.id === "custom";
@@ -833,6 +875,11 @@ export function MailDigestView() {
                       <div className="muted adminHint">Для расписания произвольный период недоступен — берём последние 7 дней.</div>
                     ) : null}
 
+                    {source === "tows" ? (
+                      <div className="muted adminHint">Письмо строится из зафиксированного реестра: группы по ангарам и вложение Excel. Поля изменений плана для этого источника не используются.</div>
+                    ) : null}
+                    {source === "plan" ? (
+                    <>
                     <div>
                       <strong>Поля письма</strong>
                       <div className="muted adminHint">
@@ -935,7 +982,10 @@ export function MailDigestView() {
                         </div>
                       ) : null}
                     </div>
+                    </>
+                    ) : null}
 
+                    {source === "plan" ? (
                     <label className="adminField adminFieldGrow">
                       <span className="muted">Комментарий в начале письма</span>
                       <textarea
@@ -946,6 +996,7 @@ export function MailDigestView() {
                         style={{ width: "100%", resize: "vertical" }}
                       />
                     </label>
+                    ) : null}
 
                     <div className="adminFormRow">
                       <button className="btn" disabled={previewM.isPending} onClick={() => previewM.mutate()}>
@@ -969,12 +1020,20 @@ export function MailDigestView() {
                         <div className="adminMailPreviewFrame" dangerouslySetInnerHTML={{ __html: outgoing.html }} />
                       </div>
                     ) : previewReady ? (
-                      <div className="muted">За период нет строк для таблицы. Напишите текст ниже — уйдёт он.</div>
+                      <div className="muted">
+                        {source === "tows"
+                          ? previewText || "Нет зафиксированного реестра за выбранный период."
+                          : "За период нет строк для таблицы. Напишите текст ниже — уйдёт он."}
+                      </div>
                     ) : (
-                      <div className="muted">Нажмите «Предпросмотр», чтобы собрать изменения. Комментарий можно написать и до этого.</div>
+                      <div className="muted">
+                        {source === "tows"
+                          ? "Нажмите «Предпросмотр», чтобы проверить, есть ли зафиксированный реестр за период."
+                          : "Нажмите «Предпросмотр», чтобы собрать изменения. Комментарий можно написать и до этого."}
+                      </div>
                     )}
 
-                    {previewReady || textDirty ? (
+                    {source === "plan" && (previewReady || textDirty) ? (
                       <label className="adminField adminFieldGrow">
                         <span className="muted">Текст письма — можно изменить перед отправкой</span>
                         <textarea
@@ -1029,15 +1088,31 @@ export function MailDigestView() {
                       </button>
                       <button
                         type="button"
-                        className={`mailChoiceCard ${scheduleMode !== "manual" ? "mailChoiceCardOn" : ""}`}
-                        onClick={() => setScheduleMode(scheduleMode === "manual" ? "daily" : scheduleMode)}
+                        className={`mailChoiceCard ${scheduleMode === "daily" || scheduleMode === "weekly" || scheduleMode === "monthly" ? "mailChoiceCardOn" : ""}`}
+                        onClick={() => setScheduleMode(scheduleMode === "daily" || scheduleMode === "weekly" || scheduleMode === "monthly" ? scheduleMode : "daily")}
                       >
                         <span className="mailChoiceTitle">По расписанию</span>
                         <span className="muted">День, неделя или месяц</span>
                       </button>
+                      <button
+                        type="button"
+                        className={`mailChoiceCard ${scheduleMode === "trigger" ? "mailChoiceCardOn" : ""}`}
+                        onClick={() => setScheduleMode("trigger")}
+                      >
+                        <span className="mailChoiceTitle">По триггеру</span>
+                        <span className="muted">Для буксировок — сразу после фиксации плана</span>
+                      </button>
                     </div>
 
-                    {scheduleMode !== "manual" ? (
+                    {scheduleMode === "trigger" ? (
+                      <div className="muted adminHint">
+                        {source === "tows"
+                          ? "Письмо уйдёт само, когда в РМ «Буксировки» зафиксируют план. Получатели берутся из шага «Кому»."
+                          : "Триггер для изменений плана ТО пока не подключён. Для этого источника используйте расписание."}
+                      </div>
+                    ) : null}
+
+                    {scheduleMode === "daily" || scheduleMode === "weekly" || scheduleMode === "monthly" ? (
                       <>
                         <div className="mailSeg" role="tablist" aria-label="Периодичность">
                           {(

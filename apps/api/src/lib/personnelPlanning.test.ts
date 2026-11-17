@@ -18,7 +18,7 @@ import {
   resourceQualifications,
   weekDateKeys
 } from "./personnelPlanning.js";
-import { personnelBaselineDelta } from "./personnelPlanningData.js";
+import { buildPersonnelPlanArchive, personnelBaselineDelta } from "./personnelPlanningData.js";
 
 function close(actual: number, expected: number) {
   assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} is not close to ${expected}`);
@@ -423,4 +423,44 @@ test("workshop without aircraft type keeps one headcount outside type filters", 
   assert.equal(availabilityIncluded(row, untyped, new Set(["a320"]), "a320"), false);
   assert.equal(sliceAircraftTypeId("paint", "a320", untyped), "");
   assert.equal(sliceAircraftTypeId("cpto", "a320", untyped), "a320");
+});
+
+test("plan archive keeps the selected type and drops later gantt edits", () => {
+  const archive = buildPersonnelPlanArchive({
+    from: "2026-11-23",
+    to: "2026-11-29",
+    weekStart: "2026-11-23",
+    workshopIds: ["cpto3"],
+    aircraftTypeIds: ["a320"],
+    workshops: [{ id: "cpto3", code: "ЦПТО3", name: "Цех 3" }],
+    data: {
+      aircraftTypes: [{ id: "a320", name: "A320", icaoType: "A320" }],
+      demandDepartments: ["ME"],
+      events: [
+        {
+          id: "keep",
+          title: "C-check",
+          aircraftLabel: "RA-1",
+          status: "PLANNED",
+          startAt: new Date("2026-11-23T21:00:00Z"),
+          endAt: new Date("2026-11-25T21:00:00Z"),
+          workshopId: "cpto3",
+          aircraftType: { id: "a320", name: "A320", icaoType: "A320" },
+          operator: { id: "afl", code: "AFL", name: "Aeroflot" },
+          placements: [{ id: "p1", startAt: new Date("2026-11-23T21:00:00Z"), endAt: new Date("2026-11-25T21:00:00Z"), hangar: { code: "1", name: "Ангар 1" }, stand: { code: "A", name: "A" } }],
+          towSegments: [],
+          reportMetrics: [{ department: "ME", manHours: 10 }]
+        },
+        { id: "drop", title: "737", aircraftType: { id: "b737" }, workshopId: "cpto3", placements: [], towSegments: [] }
+      ],
+      calculation: [{ date: "2026-11-23", normHours: 8, demand: { ME: 4 }, authorizedSupply: { ME: 6 }, strictBalance: { ME: 2 }, eventDemand: [{ id: "keep", byDepartment: { ME: 4 } }] }],
+      resourceSlices: [{ workshopId: "cpto3", aircraftTypeId: "a320", planned: 4, available: 6, difference: 2 }]
+    }
+  });
+  assert.equal(archive.title, "План 23.11.2026–29.11.2026 · ЦПТО3");
+  assert.equal(archive.eventCount, 1);
+  assert.equal(archive.payload.events[0].id, "keep");
+  assert.equal(archive.payload.events[0].startAt, "2026-11-23T21:00:00.000Z");
+  assert.equal(archive.payload.calculation[0].eventDemand[0].id, "keep");
+  assert.equal(archive.payload.resourceSlices[0].difference, 2);
 });

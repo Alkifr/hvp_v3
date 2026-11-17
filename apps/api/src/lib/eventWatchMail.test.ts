@@ -8,7 +8,10 @@ import {
   loadWatchLabels,
   isCleanupAuditNote,
   notesFromAuditWrite,
+  readEventUnsubscribe,
+  signEventUnsubscribe,
   summarizeChanges,
+  watchBlocks,
   type WatchLabels
 } from "./eventWatchMail.js";
 
@@ -213,16 +216,73 @@ test("свои правки автору не дублируются письм�
 
 test("тема письма одно событие или несколько", () => {
   const one = formatWatchLetter([
-    { title: "C-Check", aircraft: "RA-1", contour: "Рабочий контур", lines: ["Данные изменены"], link: null }
+    {
+      title: "C-Check",
+      aircraft: "RA-1",
+      blocks: [{ actor: "Иван Петров", action: "Данные изменены", rows: [] }],
+      link: null,
+      unsubscribeLink: null
+    }
   ]);
   assert.equal(one.subject, "HVP: изменение «C-Check»");
   assert.match(one.text, /RA-1/);
+  assert.match(one.text, /Изменил: Иван Петров/);
+  assert.equal(one.text.includes("Рабочий контур"), false);
   assert.match(one.html, /Подписки/);
 
   const many = formatWatchLetter([
-    { title: "A", aircraft: "", contour: "Рабочий контур", lines: ["x"], link: null },
-    { title: "B", aircraft: "", contour: "Песочница", lines: ["y"], link: "https://hvp.example/#gantt?event=1" }
+    {
+      title: "A",
+      aircraft: "",
+      blocks: [{ actor: "Система", action: "Данные изменены", rows: [{ field: "Статус", previous: "В работе", current: "Отложено" }] }],
+      link: null,
+      unsubscribeLink: "https://hvp.example/api/unsubscribe/event?token=a"
+    },
+    {
+      title: "B",
+      aircraft: "",
+      blocks: [{ actor: "Система", action: "Данные изменены", rows: [] }],
+      link: "https://hvp.example/#gantt?event=1",
+      unsubscribeLink: "https://hvp.example/api/unsubscribe/event?token=b"
+    }
   ]);
   assert.equal(many.subject, "HVP: изменения 2 событий");
   assert.match(many.html, /Открыть событие/);
+  assert.match(many.html, /Предыдущая версия/);
+  assert.match(many.html, /Текущая версия/);
+  assert.match(many.html, /Отписаться от изменений этого события/);
+  assert.equal(many.html.includes("Рабочий контур"), false);
+  assert.equal(many.html.includes("Подписки"), false);
+});
+
+test("письмо показывает кто изменил и таблицу реквизитов", () => {
+  const blocks = watchBlocks(
+    [
+      {
+        eventId: "e1",
+        sandboxId: null,
+        action: "UPDATE",
+        actor: "editor@example.com",
+        reason: "перенос",
+        changes: { title: { from: "Старое", to: "Новое" } }
+      }
+    ],
+    undefined,
+    new Map([["editor@example.com", "Иван Петров"]])
+  );
+  assert.equal(blocks[0]?.actor, "Иван Петров");
+  assert.equal(blocks[0]?.rows[0]?.field, "Название");
+  assert.equal(blocks[0]?.rows[0]?.previous, "Старое");
+  assert.equal(blocks[0]?.rows[0]?.current, "Новое");
+  assert.equal(blocks[0]?.rows[1]?.field, "Комментарий");
+  assert.equal(blocks[0]?.rows[1]?.current, "перенос");
+});
+
+test("ссылка отписки подписывается и читается обратно", () => {
+  const userId = "11111111-1111-4111-8111-111111111111";
+  const eventId = "22222222-2222-4222-8222-222222222222";
+  const token = signEventUnsubscribe(userId, eventId, "secret");
+  assert.deepEqual(readEventUnsubscribe(token, "secret"), { userId, eventId });
+  assert.equal(readEventUnsubscribe(token, "other"), null);
+  assert.equal(readEventUnsubscribe(`${token}x`, "secret"), null);
 });

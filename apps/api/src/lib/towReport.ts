@@ -278,12 +278,12 @@ export function buildTowReportRow(src: TowReportSource): TowReportRow {
     occupancyEndAt: src.occupancyEndAt ? src.occupancyEndAt.toISOString() : "",
     occupancyEndMsk: formatMskDateTime(occupancyEnd),
     inferredOccupancyEndAt: slotEnd.toISOString(),
-    standOccupancy: formatDurationLabel(occupancyMs),
+    standOccupancy: `${formatMskDateTime(src.startAt)} - ${formatMskDateTime(occupancyEnd)}`,
     standOccupancyMinutes: occupancyMs == null ? null : Math.round(occupancyMs / 60_000),
     notes: text(src.notes) || text(src.eventNotes),
     toSlotEndAt: slotEnd.toISOString(),
     toSlotEndMsk: formatMskDateTime(slotEnd),
-    toSlotDuration: formatDurationLabel(slotMs),
+    toSlotDuration: `Слот до ${formatMskDateTime(slotEnd)} мск`,
     toSlotMinutes: slotMs == null ? null : Math.round(slotMs / 60_000),
     positionComment: text(src.positionComment),
     startChangeReason: text(src.startChangeReason),
@@ -294,18 +294,16 @@ export function buildTowReportRow(src: TowReportSource): TowReportRow {
 }
 
 export const TOW_EXPORT_COLUMNS: Array<{ key: keyof TowReportRow; title: string }> = [
-  { key: "seq", title: "Строка" },
-  { key: "hangarNumber", title: "Ангар" },
+  { key: "seq", title: "№" },
   { key: "aircraftType", title: "Тип ВС" },
   { key: "tailNumber", title: "Бортовой номер" },
   { key: "operator", title: "Оператор" },
   { key: "fromStand", title: "Откуда (с МС)" },
   { key: "toStand", title: "Куда (на МС)" },
   { key: "plannedStartMsk", title: "Плановое время начала буксировки (мск)" },
-  { key: "occupancyEndMsk", title: "Конец (мск)" },
-  { key: "standOccupancy", title: "Продолжительность занятия МС" },
+  { key: "standOccupancy", title: "Требуемая продолжительность занятия МС" },
   { key: "notes", title: "Примечание" },
-  { key: "toSlotEndMsk", title: "Слот ТО" },
+  { key: "toSlotDuration", title: "Продолжительность слотов ТО" },
   { key: "positionComment", title: "Позиция" },
-  { key: "startChangeReason", title: "Причина изменения времени начала буксировки" }
+  { key: "startChangeReason", title: "Причина изменения времени начала буксировки (<60 мин)" }
 ];

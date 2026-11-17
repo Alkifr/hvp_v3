@@ -188,7 +188,7 @@ function formatApiErrorBody(text: string, status?: number): string {
 
 async function apiFetch(path: string, init: RequestInit): Promise<Response> {
   try {
-    return await fetch(path, init);
+    return await fetch(path, { ...init, cache: "no-store" });
   } catch (err: unknown) {
     throw new Error(humanizeFetchFailure(err));
   }

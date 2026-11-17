@@ -17,6 +17,9 @@ import {
   resolveDigestPeriod
 } from "../lib/mailDigestPeriod.js";
 import { dispatchChangeDigest } from "../lib/mailDigestSend.js";
+import { readTowMailTemplate, writeTowMailTemplate } from "../lib/towMailTemplate.js";
+import { MAIL_SOURCES, parseMailSource, readMailSources, writeMailSource } from "../lib/mailVariantSource.js";
+import { dispatchTowVariant } from "../lib/towRegistryDispatch.js";
 import {
   DEFAULT_DIGEST_COLUMNS,
   DIGEST_COLUMN_CATALOG,
@@ -117,7 +120,8 @@ const zVariantWrite = z.object({
   scheduleWeekdays: z.array(z.number().int().min(1).max(7)).max(7).optional(),
   scheduleMonthDay: z.number().int().min(1).max(28).optional(),
   isActive: z.boolean().optional(),
-  columns: z.array(z.enum(DIGEST_COLUMN_KEYS)).min(1).max(DIGEST_COLUMN_KEYS.length).optional()
+  columns: z.array(z.enum(DIGEST_COLUMN_KEYS)).min(1).max(DIGEST_COLUMN_KEYS.length).optional(),
+  source: z.enum(["plan", "tows"]).optional()
 });
 
 function periodFromBody(
@@ -200,15 +204,20 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
       mailFrom: settings.mailFrom,
       columnCatalog: DIGEST_COLUMN_CATALOG,
       sentCount,
-      variants: variants.map((row) => {
-        const last = row.sendLogs[0];
-        return {
-          ...serializeVariant(row),
-          lastSendAt: last?.createdAt.toISOString() ?? null,
-          lastSendStatus: last?.status ?? null,
-          lastSendTarget: last?.target ?? null
-        };
-      })
+      sources: MAIL_SOURCES,
+      variants: await (async () => {
+        const sources = await readMailSources(app.prisma, variants.map((row) => row.id));
+        return variants.map((row) => {
+          const last = row.sendLogs[0];
+          return {
+            ...serializeVariant(row),
+            source: sources.get(row.id) ?? "plan",
+            lastSendAt: last?.createdAt.toISOString() ?? null,
+            lastSendStatus: last?.status ?? null,
+            lastSendTarget: last?.target ?? null
+          };
+        });
+      })()
     };
   });
 
@@ -239,7 +248,8 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
         columns: parseDigestColumns(body.columns ?? DEFAULT_DIGEST_COLUMNS)
       }
     });
-    return serializeVariant(created);
+    await writeMailSource(app.prisma, created.id, parseMailSource(body.source));
+    return { ...serializeVariant(created), source: parseMailSource(body.source) };
   });
 
   app.get("/history", async (req) => {
@@ -249,7 +259,7 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
         limit: z.coerce.number().int().min(1).max(200).optional(),
         variantId: zUuid.optional(),
         status: z.enum(["SENT", "FAILED", "EMPTY"]).optional(),
-        target: z.enum(["self", "all", "schedule", "manual"]).optional()
+        target: z.enum(["self", "all", "schedule", "manual", "trigger"]).optional()
       })
       .parse(req.query ?? {});
     const rows = await app.prisma.mailDigestSendLog.findMany({
@@ -265,7 +275,42 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
       orderBy: { createdAt: "desc" },
       take: q.limit ?? 80
     });
-    return { items: rows.map(serializeLog) };
+    const loggedTowIds = new Set(
+      rows.flatMap((row) => {
+        const stats = row.stats as { towSendId?: string } | null;
+        return stats?.towSendId ? [stats.towSendId] : [];
+      })
+    );
+    const includeTowHistory = !q.variantId && (!q.status || q.status === "SENT") && (!q.target || q.target === "all");
+    const towExtra = includeTowHistory
+      ? (
+          await app.prisma.towRegistrySend.findMany({
+            where: { messageId: { not: null } },
+            orderBy: { createdAt: "desc" },
+            take: q.limit ?? 80
+          })
+        )
+          .filter((send) => !loggedTowIds.has(send.id))
+          .map((send) => ({
+            id: `tow:${send.id}`,
+            createdAt: send.createdAt.toISOString(),
+            variantId: null,
+            variantName: "Буксировки",
+            status: "SENT",
+            target: "all",
+            actorEmail: send.actor,
+            recipients: Array.isArray(send.recipients) ? send.recipients.map(String) : [],
+            subject: send.subject,
+            error: null,
+            stats: { rows: Array.isArray(send.rows) ? send.rows.length : 0 },
+            periodFrom: send.fromAt.toISOString(),
+            periodTo: send.toAt.toISOString()
+          }))
+      : [];
+    const items = [...rows.map(serializeLog), ...towExtra]
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, q.limit ?? 80);
+    return { items };
   });
 
   app.get("/:id", async (req) => {
@@ -273,8 +318,10 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
     const { id } = z.object({ id: zUuid }).parse(req.params);
     const row = await getVariantOrThrow(app, id);
     const settings = await ensureSettings(app.prisma);
+    const sources = await readMailSources(app.prisma, [row.id]);
     return {
       ...serializeVariant(row),
+      source: sources.get(row.id) ?? "plan",
       columnCatalog: DIGEST_COLUMN_CATALOG,
       mailFrom: settings.mailFrom,
       smtpReady: smtpReadyOf(settings)
@@ -311,7 +358,9 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
     if (body.columns !== undefined) data.columns = parseDigestColumns(body.columns);
 
     const updated = await app.prisma.mailDigestVariant.update({ where: { id: existing.id }, data });
-    return serializeVariant(updated);
+    if (body.source !== undefined) await writeMailSource(app.prisma, updated.id, parseMailSource(body.source));
+    const sources = await readMailSources(app.prisma, [updated.id]);
+    return { ...serializeVariant(updated), source: sources.get(updated.id) ?? "plan" };
   });
 
   app.delete("/:id", async (req) => {
@@ -332,6 +381,18 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
       period = periodFromBody(body, variant);
     } catch (e: any) {
       throw app.httpErrors.badRequest(e?.message || UserMsg.VALIDATION);
+    }
+    const sources = await readMailSources(app.prisma, [variant.id]);
+    if ((sources.get(variant.id) ?? "plan") === "tows") {
+      const found = await app.prisma.towRegistrySend.findFirst({
+        where: { fromAt: { lt: period.to }, toAt: { gt: period.from } },
+        orderBy: { createdAt: "desc" }
+      });
+      const count = Array.isArray(found?.rows) ? found.rows.length : 0;
+      const text = found
+        ? `Реестр буксировок за выбранный период. Строк: ${count}. К письму приложится Excel, таблица сгруппирована по ангарам.`
+        : "Нет зафиксированного реестра за выбранный период.";
+      return { text, html: "", stats: null };
     }
     return await buildChangeDigest(app.prisma, {
       ...period,
@@ -370,7 +431,18 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
           : []
         : (body.recipients?.length ? body.recipients : parseRecipients(variant.recipients)).map((e) => e.trim().toLowerCase());
 
-    const result = await dispatchChangeDigest(app.prisma, {
+    const sources = await readMailSources(app.prisma, [variant.id]);
+    const result = (sources.get(variant.id) ?? "plan") === "tows"
+      ? await dispatchTowVariant(app.prisma, {
+          variant,
+          smtp: settings,
+          from: period.from,
+          to: period.to,
+          recipients,
+          target,
+          actorEmail: req.auth?.email ?? null
+        })
+      : await dispatchChangeDigest(app.prisma, {
       smtp: settings,
       variant,
       from: period.from,
@@ -389,5 +461,22 @@ export const mailDigestComposeRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(result.error || "Не удалось отправить письмо");
     }
     return { ok: true as const, messageId: result.messageId, recipients: result.recipients, subject: result.subject };
+  });
+
+  app.get("/tow-template", async (req) => {
+    assertCanCompose(req);
+    return readTowMailTemplate(app.prisma);
+  });
+
+  app.put("/tow-template", async (req) => {
+    assertCanCompose(req);
+    const body = z
+      .object({
+        subjectTemplate: z.string().trim().max(300),
+        bodyTemplate: z.string().trim().max(4000)
+      })
+      .parse(req.body ?? {});
+    await writeTowMailTemplate(app.prisma, body);
+    return readTowMailTemplate(app.prisma);
   });
 };

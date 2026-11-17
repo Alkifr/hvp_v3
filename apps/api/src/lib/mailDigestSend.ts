@@ -4,6 +4,8 @@ import { buildChangeDigest, type ChangeDigestStats } from "./changeDigest.js";
 import { isScheduledDigestDue, parseDigestPeriodMode, resolveDigestPeriod } from "./mailDigestPeriod.js";
 import { isSmtpReady, parseRecipients, sendMail, smtpConfigFromSettings } from "./mailer.js";
 import { claimScheduledDigestSlot } from "./digestClaim.js";
+import { readMailSources } from "./mailVariantSource.js";
+import { dispatchTowVariant } from "./towRegistryDispatch.js";
 
 export type DigestSendTarget = "self" | "all" | "schedule";
 export type DigestSendStatus = "SENT" | "FAILED" | "EMPTY";
@@ -174,9 +176,13 @@ export async function runScheduledMailDigest(app: {
   }
 
   const variants = await app.prisma.mailDigestVariant.findMany({
-    where: { isActive: true, NOT: { scheduleMode: "manual" } }
+    where: { isActive: true, NOT: { scheduleMode: { in: ["manual", "trigger"] } } }
   });
   if (!variants.length) return { sent: 0, empty: 0, failed: 0, skipped: true };
+  const sources = await readMailSources(
+    app.prisma,
+    variants.map((variant) => variant.id)
+  );
 
   let sent = 0;
   let empty = 0;
@@ -196,16 +202,27 @@ export async function runScheduledMailDigest(app: {
       customTo: variant.periodCustomTo
     });
     const recipients = parseRecipients(variant.recipients);
-    const result = await dispatchChangeDigest(app.prisma, {
-      smtp,
-      variant,
-      from: period.from,
-      to: period.to,
-      recipients,
-      subject: variant.subjectTemplate || variant.name,
-      target: "schedule",
-      actorEmail: null
-    });
+    const result =
+      (sources.get(variant.id) ?? "plan") === "tows"
+        ? await dispatchTowVariant(app.prisma, {
+            variant,
+            smtp,
+            from: period.from,
+            to: period.to,
+            recipients,
+            target: "schedule",
+            actorEmail: null
+          })
+        : await dispatchChangeDigest(app.prisma, {
+            smtp,
+            variant,
+            from: period.from,
+            to: period.to,
+            recipients,
+            subject: variant.subjectTemplate || variant.name,
+            target: "schedule",
+            actorEmail: null
+          });
 
     if (result.status === "SENT") {
       sent += 1;

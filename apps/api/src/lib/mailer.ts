@@ -81,7 +81,13 @@ export function formatSmtpError(e: unknown, cfg: SmtpConfig): string {
 
 export async function sendMail(
   cfg: SmtpConfig,
-  params: { to: string[]; subject: string; text: string; html?: string }
+  params: {
+    to: string[];
+    subject: string;
+    text: string;
+    html?: string;
+    attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  }
 ): Promise<{ messageId: string }> {
   if (!params.to.length) throw new Error("Нет получателей");
   // Yandex app passwords часто копируют с пробелами (xxxx xxxx xxxx xxxx).
@@ -108,7 +114,16 @@ export async function sendMail(
       to: params.to.join(", "),
       subject: params.subject,
       text: params.text,
-      ...(params.html ? { html: params.html } : {})
+      ...(params.html ? { html: params.html } : {}),
+      ...(params.attachments?.length
+        ? {
+            attachments: params.attachments.map((file) => ({
+              filename: file.filename,
+              content: file.content,
+              contentType: file.contentType
+            }))
+          }
+        : {})
     });
     return { messageId: String(info.messageId ?? "") };
   } catch (e) {

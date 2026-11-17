@@ -3,7 +3,7 @@ import { MSK_OFFSET_MINUTES } from "./localDate.js";
 export const DIGEST_PERIOD_MODES = ["last1", "last7", "last30", "custom"] as const;
 export type DigestPeriodMode = (typeof DIGEST_PERIOD_MODES)[number];
 
-export const DIGEST_SCHEDULE_MODES = ["manual", "daily", "weekly", "monthly"] as const;
+export const DIGEST_SCHEDULE_MODES = ["manual", "daily", "weekly", "monthly", "trigger"] as const;
 export type DigestScheduleMode = (typeof DIGEST_SCHEDULE_MODES)[number];
 
 export const SCHEDULE_WINDOW_MINUTES = 15;
@@ -138,7 +138,7 @@ export type ScheduleDueInput = {
 export function isScheduledDigestDue(settings: ScheduleDueInput, now = new Date()): boolean {
   if (!settings.isActive) return false;
   const mode = parseDigestScheduleMode(settings.scheduleMode);
-  if (mode === "manual") return false;
+  if (mode === "manual" || mode === "trigger") return false;
 
   const time = parseScheduleTime(settings.scheduleTime);
   const match = TIME_RE.exec(time);

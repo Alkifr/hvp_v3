@@ -1,4 +1,4 @@
-import { isValidDateInput } from "./dateInput";
+import { isValidDateInput, isValidDateTimeLocal } from "./dateInput";
 import { parseHashPage, writePageHashQuery } from "./eventDeepLink";
 import { parseHangarStandSort, type HangarStandSort } from "./hangarStandSort";
 
@@ -128,6 +128,16 @@ function setFlag(query: URLSearchParams, key: string, on: boolean) {
 function readDate(query: URLSearchParams, key: string): string | null {
   const raw = query.get(key)?.trim() ?? "";
   return isValidDateInput(raw) ? raw : null;
+}
+
+function readTowBoundary(query: URLSearchParams, key: string): string | null {
+  const raw = query.get(key)?.trim() ?? "";
+  if (isValidDateTimeLocal(raw)) return raw;
+  return isValidDateInput(raw) ? raw : null;
+}
+
+function isTowBoundary(value: string): boolean {
+  return isValidDateTimeLocal(value) || isValidDateInput(value);
 }
 
 function putSandbox(query: URLSearchParams, sandboxId: string | null | undefined) {
@@ -366,8 +376,8 @@ export function syncAnalyticsViewHash(state: AnalyticsViewShare & { sandboxId?: 
 
 export function parseTowsViewShare(query: URLSearchParams): TowsViewShare | null {
   if (!queryHasViewShare(query)) return null;
-  const from = readDate(query, "from");
-  const to = readDate(query, "to");
+  const from = readTowBoundary(query, "from");
+  const to = readTowBoundary(query, "to");
   const tab = query.get("tab");
   return {
     fromDate: from ?? "",
@@ -382,8 +392,8 @@ export function parseTowsViewShare(query: URLSearchParams): TowsViewShare | null
 
 export function serializeTowsViewShare(state: TowsViewShare & { sandboxId?: string | null }): URLSearchParams {
   const q = new URLSearchParams();
-  if (isValidDateInput(state.fromDate)) q.set("from", state.fromDate);
-  if (isValidDateInput(state.toDate)) q.set("to", state.toDate);
+  if (isTowBoundary(state.fromDate)) q.set("from", state.fromDate);
+  if (isTowBoundary(state.toDate)) q.set("to", state.toDate);
   setCsv(q, "hangar", state.filterHangarIds);
   setCsv(q, "op", state.filterOperatorIds);
   setCsv(q, "type", state.filterAircraftTypeIds);

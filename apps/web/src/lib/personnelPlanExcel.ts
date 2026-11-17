@@ -11,6 +11,7 @@ const CATEGORY_ROW_HEIGHT = 10.5;
 const LABEL_COLUMNS = 5;
 const MONTH_HOUR_WIDTH = 0.3;
 const WEEK_HOUR_WIDTH = 1.08;
+const DAY_HOUR_WIDTH = 3.2;
 const CLOCK_FONT = 12;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -25,7 +26,7 @@ const TOW_RED = "FFEF4444";
 export type PersonnelPlanExcelInput = {
   from: string;
   to: string;
-  scale?: "week" | "month";
+  scale?: "week" | "month" | "day";
   dates: string[];
   shifts: Array<{ id: string; code: string; name: string; startMin: number }>;
   sheets: Array<{
@@ -648,8 +649,8 @@ function buildPlanSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, de
 function buildChartSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, departments: string[], resource: ResourceRefs, plan: PlanRefs) {
   const ws = wb.addWorksheet(SHEET_CHART);
   const dates = input.dates;
-  const scale = input.scale === "week" ? "week" : "month";
-  const hourWidth = scale === "week" ? WEEK_HOUR_WIDTH : MONTH_HOUR_WIDTH;
+  const scale = input.scale === "day" ? "day" : input.scale === "week" ? "week" : "month";
+  const hourWidth = scale === "day" ? DAY_HOUR_WIDTH : scale === "week" ? WEEK_HOUR_WIDTH : MONTH_HOUR_WIDTH;
   const dayCount = Math.max(dates.length, 1);
   const lastCol = LABEL_COLUMNS + dayCount * HOURS_PER_DAY;
   const dayColumn = (dateIndex: number, hour = 0) => LABEL_COLUMNS + 1 + dateIndex * HOURS_PER_DAY + hour;
@@ -667,14 +668,16 @@ function buildChartSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, d
   };
   let row = titleBlock(
     ws,
-    `Chart/Plan · ${scale === "week" ? "Week" : "Month"} · ${fmtShort(input.from)} – ${fmtShort(input.to)}`,
-    scale === "week"
+    `Chart/Plan · ${scale === "day" ? "Day" : scale === "week" ? "Week" : "Month"} · ${fmtShort(input.from)} – ${fmtShort(input.to)}`,
+    scale === "day"
+      ? "Day view: weekday above the date. Under the date each calendar day is split into ночь 00–08, день 08–20 and ночь 20–24. The event fill still follows the hours. Each tail is its own row. Status stands after Category. The orange band separates hangars."
+      : scale === "week"
       ? "Week view: weekday above the date. Each tail is its own row. Status stands after Category. Hour columns are about 8 pixels. Hour cells are not merged: the fill stays, and each border uses the fill color. Empty hours have white borders. The orange band separates hangars."
       : "Month view: each day is 24 columns of about 2 pixels. Each tail is its own row. Status stands after Category. Hour cells are not merged: the fill stays, and each border uses the fill color. Empty hours have white borders. The orange band separates hangars.",
     lastCol
   );
   const labelTop = row;
-  if (scale === "week") {
+  if (scale === "week" || scale === "day") {
     dates.forEach((date, index) => paintDay(row, index, weekdayName(date)));
     row += 1;
   }
@@ -692,10 +695,24 @@ function buildChartSheet(wb: ExcelJS.Workbook, input: PersonnelPlanExcelInput, d
     }
     ws.mergeCells(labelTop, col, hourRow, col);
   }
+  const paintHours = (index: number, fromHour: number, toHour: number, label: string | number) => {
+    const start = dayColumn(index, fromHour);
+    const end = dayColumn(index, toHour - 1);
+    put(ws.getCell(hourRow, start), label, { align: "center", size: typeof label === "number" ? 5 : 9, fill: "FFF8FAFC" });
+    if (end > start) ws.mergeCells(hourRow, start, hourRow, end);
+    for (let col = start; col <= end; col += 1) {
+      box(ws.getCell(hourRow, col));
+      ws.getCell(hourRow, col).fill = solid("FFF8FAFC");
+    }
+  };
   for (let index = 0; index < dayCount; index += 1) {
     if (!dates[index]) continue;
-    for (let hour = 0; hour < HOURS_PER_DAY; hour += 1) {
-      put(ws.getCell(hourRow, dayColumn(index, hour)), hour, { align: "center", size: 5, fill: "FFF8FAFC" });
+    if (scale === "day") {
+      paintHours(index, 0, 8, "ночь");
+      paintHours(index, 8, 20, "день");
+      paintHours(index, 20, 24, "ночь");
+    } else {
+      for (let hour = 0; hour < HOURS_PER_DAY; hour += 1) paintHours(index, hour, hour + 1, hour);
     }
   }
   row += 1;

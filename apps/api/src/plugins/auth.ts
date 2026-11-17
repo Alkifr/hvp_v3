@@ -84,6 +84,8 @@ export const authPlugin = fp(async (app) => {
   app.addHook("preHandler", async (req, reply) => {
     if (!req.url.startsWith("/api")) return;
     if (req.url.startsWith("/api/auth/")) return;
+    // Ссылка из письма снимает подписку без входа: адрес подписан, сессии нет.
+    if (req.url.startsWith("/api/unsubscribe")) return;
 
     try {
       const decoded = await req.jwtVerify<{ sub: string; ver?: number }>();

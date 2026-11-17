@@ -12,7 +12,7 @@ import {
   qualificationsForWorkshopSkills,
   weekDateKeys
 } from "../lib/personnelPlanning.js";
-import { loadPersonnelResourceSheets, loadPersonnelWeekData, personnelBaselineDelta } from "../lib/personnelPlanningData.js";
+import { buildPersonnelPlanArchive, loadPersonnelResourceSheets, loadPersonnelWeekData, personnelBaselineDelta } from "../lib/personnelPlanningData.js";
 import { zUuid } from "../lib/zod.js";
 
 const zDateKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -703,6 +703,110 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
     assertCurrentOrFutureDate(existing.effectiveFrom.toISOString().slice(0, 10));
     await app.prisma.personnelAircraftTypeMpsFactor.delete({ where: { id } });
     return { ok: true };
+  });
+
+  app.get("/plan-archives", async (req) => {
+    assertPermission(req, "personnel:read");
+    const rows = await app.prisma.personnelPlanArchive.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: {
+        id: true,
+        weekStart: true,
+        periodFrom: true,
+        periodTo: true,
+        title: true,
+        workshopLabel: true,
+        eventCount: true,
+        createdAt: true,
+        createdBy: { select: { displayName: true, email: true } }
+      }
+    });
+    return {
+      ok: true,
+      items: rows.map((row) => ({
+        ...row,
+        weekStart: row.weekStart.toISOString().slice(0, 10),
+        periodFrom: row.periodFrom.toISOString().slice(0, 10),
+        periodTo: row.periodTo.toISOString().slice(0, 10)
+      }))
+    };
+  });
+
+  app.get("/plan-archives/:id", async (req) => {
+    assertPermission(req, "personnel:read");
+    const id = zUuid.parse((req.params as { id: string }).id);
+    const row = await app.prisma.personnelPlanArchive.findUnique({
+      where: { id },
+      include: { createdBy: { select: { displayName: true, email: true } } }
+    });
+    if (!row) throw app.httpErrors.notFound("Архивный план не найден");
+    return {
+      ok: true,
+      item: {
+        id: row.id,
+        title: row.title,
+        weekStart: row.weekStart.toISOString().slice(0, 10),
+        periodFrom: row.periodFrom.toISOString().slice(0, 10),
+        periodTo: row.periodTo.toISOString().slice(0, 10),
+        workshopLabel: row.workshopLabel,
+        eventCount: row.eventCount,
+        createdAt: row.createdAt,
+        createdBy: row.createdBy,
+        payload: row.payload
+      }
+    };
+  });
+
+  app.post("/plan-archives", async (req) => {
+    assertAnyPermission(req, ["personnel:write", "personnel:lock"]);
+    const body = z.object({
+      workshopIds: z.array(zUuid).min(1).max(30),
+      aircraftTypeIds: z.array(zUuid).max(80).default([]),
+      from: zDateKey,
+      to: zDateKey
+    }).parse(req.body);
+    const workshopIds = [...new Set(body.workshopIds)];
+    const aircraftTypeIds = [...new Set(body.aircraftTypeIds)];
+    if (body.to < body.from) throw app.httpErrors.badRequest("Дата окончания раньше даты начала");
+    const dates = periodDateKeys(body.from, body.to);
+    if (dates.length > 31 || dates[dates.length - 1] !== body.to) throw app.httpErrors.badRequest("Период не длиннее 31 дня");
+    const workshops = await app.prisma.workshop.findMany({
+      where: { id: { in: workshopIds } },
+      select: { id: true, code: true, name: true }
+    });
+    if (workshops.length !== workshopIds.length) throw app.httpErrors.badRequest("Неизвестный цех");
+    const data = await loadPersonnelWeekData(app.prisma, {
+      workshopId: workshopIds[0]!,
+      workshopIds,
+      weekStart: mondayOfLocalWeek(body.from),
+      dates,
+      aircraftTypeIds,
+      includeEventDemand: true
+    });
+    const archive = buildPersonnelPlanArchive({
+      from: body.from,
+      to: body.to,
+      weekStart: mondayOfLocalWeek(body.from),
+      workshopIds,
+      aircraftTypeIds,
+      workshops,
+      data
+    });
+    const saved = await app.prisma.personnelPlanArchive.create({
+      data: {
+        weekStart: dateFromKey(mondayOfLocalWeek(body.from)),
+        periodFrom: dateFromKey(body.from),
+        periodTo: dateFromKey(body.to),
+        title: archive.title,
+        workshopLabel: archive.workshopLabel,
+        eventCount: archive.eventCount,
+        payload: archive.payload,
+        createdById: req.auth!.id
+      },
+      select: { id: true, title: true, createdAt: true }
+    });
+    return { ok: true, item: saved };
   });
 
   app.post("/weeks/:workshopId/:weekStart/lock", async (req) => {
