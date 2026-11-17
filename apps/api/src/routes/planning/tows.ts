@@ -1004,4 +1004,66 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     const virtualNames = await resolveVirtualNames(app.prisma, [updated]);
     return serializeTowReportRow(updated, virtualNames.get(updated.id));
   });
+
+  app.get("/archives", async (req) => {
+    assertPermission(req, "tows:read");
+    const rows = await app.prisma.towWorkArchive.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: {
+        id: true,
+        title: true,
+        fromAt: true,
+        toAt: true,
+        planCount: true,
+        reportCount: true,
+        createdAt: true,
+        createdBy: { select: { displayName: true, email: true } }
+      }
+    });
+    return { items: rows };
+  });
+
+  app.get("/archives/:id", async (req) => {
+    assertPermission(req, "tows:read");
+    const id = zUuid.parse((req.params as { id: string }).id);
+    const row = await app.prisma.towWorkArchive.findUnique({
+      where: { id },
+      include: { createdBy: { select: { displayName: true, email: true } } }
+    });
+    if (!row) throw app.httpErrors.notFound("Архив буксировок не найден");
+    return { item: row };
+  });
+
+  app.post("/archives", async (req) => {
+    assertCanWriteTow(req);
+    const body = z.object({ from: zDateTime, to: zDateTime }).refine((value) => value.to > value.from, { message: UserMsg.END_AFTER_START }).parse(req.body);
+    const [plan, report] = await Promise.all([
+      loadTowPlan(app.prisma, req, body.from, body.to),
+      loadTowReportItems(app.prisma, req, body.from, body.to)
+    ]);
+    const title = `Буксировки ${formatMskDateTime(body.from)}–${formatMskDateTime(body.to)}`;
+    const saved = await app.prisma.towWorkArchive.create({
+      data: {
+        title,
+        fromAt: body.from,
+        toAt: body.to,
+        planCount: plan.length,
+        reportCount: report.length,
+        payload: JSON.parse(JSON.stringify({ from: body.from.toISOString(), to: body.to.toISOString(), plan, report })),
+        createdById: (req as { auth?: { id?: string } }).auth?.id ?? null
+      },
+      select: { id: true, title: true, createdAt: true }
+    });
+    return { ok: true, item: saved };
+  });
+
+  app.delete("/archives/:id", async (req) => {
+    assertCanWriteTow(req);
+    const id = zUuid.parse((req.params as { id: string }).id);
+    const existing = await app.prisma.towWorkArchive.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) throw app.httpErrors.notFound("Архив буксировок не найден");
+    await app.prisma.towWorkArchive.delete({ where: { id } });
+    return { ok: true };
+  });
 };

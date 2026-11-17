@@ -758,6 +758,15 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  app.delete("/plan-archives/:id", async (req) => {
+    assertAnyPermission(req, ["personnel:write", "personnel:lock"]);
+    const id = zUuid.parse((req.params as { id: string }).id);
+    const existing = await app.prisma.personnelPlanArchive.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) throw app.httpErrors.notFound("Архивный план не найден");
+    await app.prisma.personnelPlanArchive.delete({ where: { id } });
+    return { ok: true };
+  });
+
   app.post("/plan-archives", async (req) => {
     assertAnyPermission(req, ["personnel:write", "personnel:lock"]);
     const body = z.object({
@@ -776,14 +785,43 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
       select: { id: true, code: true, name: true }
     });
     if (workshops.length !== workshopIds.length) throw app.httpErrors.badRequest("Неизвестный цех");
-    const data = await loadPersonnelWeekData(app.prisma, {
-      workshopId: workshopIds[0]!,
-      workshopIds,
-      weekStart: mondayOfLocalWeek(body.from),
-      dates,
-      aircraftTypeIds,
-      includeEventDemand: true
-    });
+    const mondays: string[] = [];
+    for (const day of dates) {
+      const monday = mondayOfLocalWeek(day);
+      if (!mondays.includes(monday)) mondays.push(monday);
+    }
+    const [data, rawSheets, shifts, storedWeeks] = await Promise.all([
+      loadPersonnelWeekData(app.prisma, {
+        workshopId: workshopIds[0]!,
+        workshopIds,
+        weekStart: mondayOfLocalWeek(body.from),
+        dates,
+        aircraftTypeIds,
+        includeEventDemand: true
+      }),
+      loadPersonnelResourceSheets(app.prisma, { workshopIds, from: body.from, to: body.to }),
+      app.prisma.shift.findMany({
+        where: { isActive: true },
+        orderBy: { startMin: "asc" },
+        select: { id: true, code: true, name: true, startMin: true }
+      }),
+      app.prisma.personnelPlanningWeek.findMany({
+        where: { workshopId: { in: workshopIds }, weekStart: { in: mondays.map(dateFromKey) } },
+        select: { workshopId: true, weekStart: true, version: true, isLocked: true }
+      })
+    ]);
+    const weeksFor = (workshopId: string) => {
+      const stored = new Map(
+        storedWeeks
+          .filter((row) => row.workshopId === workshopId)
+          .map((row) => [row.weekStart.toISOString().slice(0, 10), row])
+      );
+      return mondays.map((weekStart) => ({
+        weekStart,
+        version: stored.get(weekStart)?.version ?? 0,
+        isLocked: stored.get(weekStart)?.isLocked ?? false
+      }));
+    };
     const archive = buildPersonnelPlanArchive({
       from: body.from,
       to: body.to,
@@ -791,7 +829,11 @@ export const personnelPlanningRoutes: FastifyPluginAsync = async (app) => {
       workshopIds,
       aircraftTypeIds,
       workshops,
-      data
+      data: {
+        ...data,
+        shifts,
+        sheets: rawSheets.map((sheet) => ({ ...sheet, weeks: weeksFor(sheet.workshopId) }))
+      }
     });
     const saved = await app.prisma.personnelPlanArchive.create({
       data: {

@@ -3,10 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
-import { apiGet, apiPost } from "../../lib/api";
+import { apiDelete, apiGet, apiPost } from "../../lib/api";
 import { isValidDateInput, isValidDateTimeLocal } from "../../lib/dateInput";
 import { parseHashPage } from "../../lib/eventDeepLink";
-import { fromInputMskOptional, MSK_OFFSET_MINUTES } from "../../lib/localDate";
+import { fromInputMskOptional, MSK_OFFSET_MINUTES, toInputMsk } from "../../lib/localDate";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { downloadTowReportXlsx } from "../../lib/towReportExcel";
 import { parseTowsViewShare, syncTowsViewHash } from "../../lib/viewShareUrl";
@@ -20,6 +20,21 @@ dayjs.extend(utc);
 
 type PlanResponse = {
   items: TowPlanRow[];
+};
+
+type TowArchiveItem = {
+  id: string;
+  title: string;
+  fromAt: string;
+  toAt: string;
+  planCount: number;
+  reportCount: number;
+  createdAt: string;
+  createdBy: { displayName?: string | null; email: string } | null;
+};
+
+type TowArchiveDetail = TowArchiveItem & {
+  payload: { from: string; to: string; plan: TowPlanRow[]; report: TowReportRow[] };
 };
 
 type FacetRow = {
@@ -156,7 +171,8 @@ export function RmTowsView() {
   const [operatorIds, setOperatorIds] = useState<string[]>(() => readStringArray(savedUi?.filterOperatorIds));
   const [aircraftTypeIds, setAircraftTypeIds] = useState<string[]>(() => readStringArray(savedUi?.filterAircraftTypeIds));
   const [aircraftIds, setAircraftIds] = useState<string[]>(() => readStringArray(savedUi?.filterAircraftIds));
-  const [pane, setPane] = useState<"plan" | "registry">(() => (savedUi?.tab === "registry" ? "registry" : "plan"));
+  const [pane, setPane] = useState<"plan" | "registry" | "archive">(() => (savedUi?.tab === "registry" ? "registry" : "plan"));
+  const [archiveId, setArchiveId] = useState<string | null>(null);
   const [fixOpen, setFixOpen] = useState(false);
   const [fixMessage, setFixMessage] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -196,8 +212,21 @@ export function RmTowsView() {
       return apiGet<{ items: TowReportRow[] }>(`/api/tows?${params.toString()}`);
     }
   });
-  const loaded = planQ.data?.items ?? [];
-  const reportLoaded = reportQ.data?.items ?? [];
+  const archivesQ = useQuery({
+    queryKey: ["tows-archives"],
+    enabled: true,
+    queryFn: () => apiGet<{ items: TowArchiveItem[] }>("/api/tows/archives")
+  });
+  const archiveQ = useQuery({
+    queryKey: ["tows-archive", archiveId],
+    enabled: Boolean(archiveId),
+    queryFn: () => apiGet<{ item: TowArchiveDetail }>(`/api/tows/archives/${archiveId}`)
+  });
+  const openedTow = archiveId ? archiveQ.data?.item ?? null : null;
+  const shownFrom = openedTow ? toInputMsk(openedTow.payload.from) : rangeFrom;
+  const shownTo = openedTow ? toInputMsk(openedTow.payload.to) : rangeTo;
+  const loaded = openedTow?.payload.plan ?? (archiveId ? [] : planQ.data?.items ?? []);
+  const reportLoaded = openedTow?.payload.report ?? (archiveId ? [] : reportQ.data?.items ?? []);
   const filters = useMemo<TowFilters>(
     () => ({ hangarIds, operatorIds, aircraftTypeIds, aircraftIds }),
     [hangarIds, operatorIds, aircraftTypeIds, aircraftIds]
@@ -225,7 +254,7 @@ export function RmTowsView() {
     syncTowsViewHash({
       fromDate: rangeFrom,
       toDate: rangeTo,
-      tab: pane,
+      tab: pane === "registry" ? "registry" : "plan",
       filterHangarIds: hangarIds,
       filterOperatorIds: operatorIds,
       filterAircraftTypeIds: aircraftTypeIds,
@@ -260,7 +289,7 @@ export function RmTowsView() {
   }, [facetRows, filters]);
 
   useEffect(() => {
-    if (facetRows.length === 0) return;
+    if (archiveId || facetRows.length === 0) return;
     const prune = (selected: string[], available: Set<string>) => selected.filter((id) => available.has(id));
     const nextHangars = prune(hangarIds, new Set(smartFilterOptions.hangars.map((item) => item.id)));
     if (nextHangars.length !== hangarIds.length) setHangarIds(nextHangars);
@@ -270,7 +299,7 @@ export function RmTowsView() {
     if (nextTypes.length !== aircraftTypeIds.length) setAircraftTypeIds(nextTypes);
     const nextAircraft = prune(aircraftIds, new Set(smartFilterOptions.aircraft.map((item) => item.id)));
     if (nextAircraft.length !== aircraftIds.length) setAircraftIds(nextAircraft);
-  }, [facetRows.length, smartFilterOptions, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
+  }, [archiveId, facetRows.length, smartFilterOptions, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
 
   const items = useMemo(() => loaded.filter((row) => facetMatches(rowFacet(row), filters)), [loaded, filters]);
   const reportItems = useMemo(
@@ -278,6 +307,23 @@ export function RmTowsView() {
     [reportLoaded, filters]
   );
   const waiting = useMemo(() => items.filter((row) => !row.towId).length, [items]);
+
+  const saveArchiveM = useMutation({
+    mutationFn: () => apiPost<{ item: { id: string } }>("/api/tows/archives", { from: fromIso, to: toIso }),
+    onSuccess: async (res) => {
+      setArchiveId(res.item.id);
+      setPane("plan");
+      await qc.invalidateQueries({ queryKey: ["tows-archives"] });
+    }
+  });
+  const deleteArchiveM = useMutation({
+    mutationFn: (id: string) => apiDelete<{ ok: true }>(`/api/tows/archives/${id}`),
+    onSuccess: async (_result, id) => {
+      if (archiveId === id) setArchiveId(null);
+      await qc.invalidateQueries({ queryKey: ["tows-archives"] });
+      await qc.removeQueries({ queryKey: ["tows-archive", id] });
+    }
+  });
 
   const fixM = useMutation({
     mutationFn: async () => {
@@ -353,18 +399,18 @@ export function RmTowsView() {
         <div className="ganttToolbar">
           <div className="ganttToolbarRow">
             <div className="ganttToolbarGroup">
-              <button className="btn towsDayStep" type="button" aria-label="Предыдущие сутки" title="Предыдущие сутки, 08:00–08:00" onClick={() => shiftDay(-1)}>
+              <button className="btn towsDayStep" type="button" aria-label="Предыдущие сутки" title="Предыдущие сутки, 08:00–08:00" disabled={Boolean(openedTow)} onClick={() => shiftDay(-1)}>
                 ‹
               </button>
               <label className="tgField">
                 <span className="tgFieldLabel">с</span>
-                <input type="datetime-local" value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)} />
+                <input type="datetime-local" value={shownFrom} disabled={Boolean(openedTow)} onChange={(e) => setRangeFrom(e.target.value)} />
               </label>
               <label className="tgField">
                 <span className="tgFieldLabel">по</span>
-                <input type="datetime-local" value={rangeTo} onChange={(e) => setRangeTo(e.target.value)} />
+                <input type="datetime-local" value={shownTo} disabled={Boolean(openedTow)} onChange={(e) => setRangeTo(e.target.value)} />
               </label>
-              <button className="btn towsDayStep" type="button" aria-label="Следующие сутки" title="Следующие сутки, 08:00–08:00" onClick={() => shiftDay(1)}>
+              <button className="btn towsDayStep" type="button" aria-label="Следующие сутки" title="Следующие сутки, 08:00–08:00" disabled={Boolean(openedTow)} onClick={() => shiftDay(1)}>
                 ›
               </button>
               <label className={`tgField${hangarIds.length ? " tgFieldActive" : ""}`}>
@@ -425,7 +471,12 @@ export function RmTowsView() {
               </label>
             </div>
             <div className="ganttToolbarGroup towsToolbarExport">
-              {pane === "registry" ? (
+              {canWrite && !openedTow ? (
+                <button className="btn" type="button" disabled={!rangeReady || !fromIso || saveArchiveM.isPending} title="Сохранить план и реестр этого окна. Потом архив можно открыть целиком." onClick={() => saveArchiveM.mutate()}>
+                  {saveArchiveM.isPending ? "Сохранение…" : "Сохранить архив"}
+                </button>
+              ) : null}
+              {pane === "registry" && !openedTow ? (
                 <button className="btn" type="button" onClick={() => setFixOpen((open) => !open)} disabled={!canWrite}>
                   Зафиксировать план
                 </button>
@@ -479,6 +530,16 @@ export function RmTowsView() {
         </section>
       ) : null}
 
+      {openedTow ? (
+        <div className="personnelArchiveBanner">
+          <span>Открыт архив · {openedTow.title}. Снимок от {new Date(openedTow.createdAt).toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{openedTow.createdBy ? `, ${openedTow.createdBy.displayName || openedTow.createdBy.email}` : ""}. План и реестр показывают сохранённые строки. Текущие буксировки не меняются.</span>
+          <button type="button" className="btn" onClick={() => setArchiveId(null)}>К текущим буксировкам</button>
+        </div>
+      ) : null}
+      {archiveId && archiveQ.isLoading ? <section className="card">Загрузка архива…</section> : null}
+      {archiveQ.error ? <div className="error">{String((archiveQ.error as Error).message ?? archiveQ.error)}</div> : null}
+      {saveArchiveM.error ? <div className="error">{String((saveArchiveM.error as Error).message ?? saveArchiveM.error)}</div> : null}
+
       <div className="sandboxesTabs" role="tablist" aria-label="Окна РМ Буксировки">
         <button
           type="button"
@@ -498,17 +559,49 @@ export function RmTowsView() {
         >
           Реестр <span className="sandboxesTabCount">{reportItems.length}</span>
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === "archive"}
+          className={pane === "archive" ? "sandboxesTab active" : "sandboxesTab"}
+          onClick={() => setPane("archive")}
+        >
+          Архив <span className="sandboxesTabCount">{archivesQ.data?.items.length ?? 0}</span>
+        </button>
       </div>
 
-      {pane === "plan" ? (
+      {pane === "archive" ? (
+        <section className="card">
+          <h2 className="personnelResourceTitle">Архив буксировок</h2>
+          <p className="muted">«Сохранить архив» записывает план и реестр выбранного окна. Строка открывает этот снимок на вкладках «План» и «Реестр». «Удалить» убирает сохранённое окно.</p>
+          {deleteArchiveM.error ? <div className="error">{String((deleteArchiveM.error as Error).message ?? deleteArchiveM.error)}</div> : null}
+          {archivesQ.isLoading ? <p className="muted">Загрузка…</p> : archivesQ.data?.items.length ? (
+            <table className="personnelSimpleTable">
+              <thead><tr><th>Сохранён</th><th>Окно</th><th>План</th><th>Реестр</th><th>Кто</th>{canWrite ? <th></th> : null}</tr></thead>
+              <tbody>
+                {archivesQ.data.items.map((item) => (
+                  <tr key={item.id} className={`personnelArchiveRow${archiveId === item.id ? " personnelArchiveActive" : ""}`} onClick={() => { setArchiveId(item.id); setPane("plan"); }}>
+                    <td>{new Date(item.createdAt).toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td>{item.title}</td>
+                    <td>{item.planCount}</td>
+                    <td>{item.reportCount}</td>
+                    <td>{item.createdBy?.displayName || item.createdBy?.email || "—"}</td>
+                    {canWrite ? <td><button type="button" className="btn btnDanger" disabled={deleteArchiveM.isPending && deleteArchiveM.variables === item.id} onClick={(event) => { event.stopPropagation(); if (!confirm(`Удалить сохранённое окно «${item.title}»?`)) return; deleteArchiveM.mutate(item.id); }}>Удалить</button></td> : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p className="muted">Сохранённых окон ещё нет.</p>}
+        </section>
+      ) : pane === "plan" ? (
         <section className="card towsTableCard">
-          <TowPlanGrid items={items} canWrite={canWrite} dataUpdatedAt={planQ.dataUpdatedAt} onDirtyChange={onPlanDirty} />
+          <TowPlanGrid items={items} canWrite={canWrite && !openedTow} dataUpdatedAt={openedTow ? 0 : planQ.dataUpdatedAt} onDirtyChange={onPlanDirty} />
         </section>
       ) : (
         <section className="card towsTableCard">
           <TowReportTable
             items={reportItems}
-            canWrite={canWrite}
+            canWrite={canWrite && !openedTow}
             canGantt={canGantt}
             onOpenEvent={openEvent}
             onDirtyChange={onReportDirty}

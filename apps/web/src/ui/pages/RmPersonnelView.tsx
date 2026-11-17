@@ -2,7 +2,7 @@ import { Fragment, startTransition, useEffect, useMemo, useRef, useState, type M
 import { createPortal } from "react-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiGet, apiPost } from "../../lib/api";
+import { apiDelete, apiGet, apiPost } from "../../lib/api";
 import {
   balanceClass,
   clampResourcePeriod,
@@ -183,6 +183,9 @@ type PlanArchiveDetail = PlanArchiveItem & {
     events: PersonnelEvent[];
     calculation: DayCalculation[];
     resourceSlices: Array<{ workshopId: string; aircraftTypeId: string; planned: number; available: number; difference: number }>;
+    balanceLines?: BalanceLine[];
+    shifts?: Array<{ id: string; code: string; name: string; startMin: number }>;
+    sheets?: ResourceSheet[];
   };
 };
 const API = "/api/personnel-planning";
@@ -402,7 +405,7 @@ export function RmPersonnelView() {
   const paletteQ = useQuery({
     queryKey: ["ref", "aircraft-type-palette"],
     queryFn: () => apiGet<Array<{ operatorId: string; aircraftTypeId: string; color: string; isActive?: boolean }>>("/api/ref/aircraft-type-palette"),
-    enabled: production && (tab === "week" || tab === "archive"),
+    enabled: production && (tab === "week" || Boolean(viewingArchiveId)),
     staleTime: 60_000
   });
   const palette = useMemo(() => {
@@ -488,8 +491,10 @@ export function RmPersonnelView() {
   const archiveQ = useQuery({
     queryKey: ["personnel", "plan-archive", viewingArchiveId],
     queryFn: () => apiGet<{ item: PlanArchiveDetail }>(`${API}/plan-archives/${viewingArchiveId}`),
-    enabled: production && tab === "archive" && Boolean(viewingArchiveId)
+    enabled: production && Boolean(viewingArchiveId)
   });
+  const openedArchive = viewingArchiveId ? archiveQ.data?.item ?? null : null;
+  const snap = openedArchive?.payload ?? null;
   const saveArchiveM = useMutation({
     mutationFn: () => apiPost<{ item: { id: string } }>(`${API}/plan-archives`, {
       workshopIds,
@@ -500,8 +505,16 @@ export function RmPersonnelView() {
     onSuccess: async (result) => {
       setArchiveNotice("План сохранён в архив. Текущий график и дальше следует за Ганттом.");
       setViewingArchiveId(result.item.id);
-      setTab("archive");
+      setTab("resources");
       await qc.invalidateQueries({ queryKey: ["personnel", "plan-archives"] });
+    }
+  });
+  const deleteArchiveM = useMutation({
+    mutationFn: (id: string) => apiDelete<{ ok: true }>(`${API}/plan-archives/${id}`),
+    onSuccess: async (_result, id) => {
+      if (viewingArchiveId === id) setViewingArchiveId(null);
+      await qc.invalidateQueries({ queryKey: ["personnel", "plan-archives"] });
+      await qc.removeQueries({ queryKey: ["personnel", "plan-archive", id] });
     }
   });
   const workshopLabel = workshopIds.map((id) => meta?.workshops.find((row) => row.id === id)?.code || meta?.workshops.find((row) => row.id === id)?.name || "").filter(Boolean).join(", ");
@@ -539,6 +552,69 @@ export function RmPersonnelView() {
     setPlanExportError("");
     setPlanExporting(true);
     try {
+      if (snap) {
+        const snapDates = periodDates(snap.from, snap.to);
+        const workshopCode = new Map(snap.workshops.map((row) => [row.id, row.code || row.name]));
+        const typeCode = new Map(snap.aircraftTypes.map((row) => [row.id, row.icaoType || row.name]));
+        await exportPersonnelPlanExcel({
+          from: snap.from,
+          to: snap.to,
+          scale: planScale,
+          dates: snapDates,
+          shifts: snap.shifts ?? [],
+          sheets: (snap.sheets ?? []).map((sheet) => ({
+            workshopId: sheet.workshopId,
+            code: sheet.code,
+            name: sheet.name,
+            aircraftTypes: sheet.aircraftTypes,
+            categories: sheet.mappedCategories.map((row) => ({
+              code: row.categoryCode,
+              department: row.department,
+              countsInPlannedResource: row.countsInPlannedResource !== false
+            })),
+            items: sheet.items.flatMap((item) => {
+              const headcount = Number(item.headcount);
+              if (!item.categoryCode || !Number.isFinite(headcount) || headcount === 0) return [];
+              return [{ date: dateKey(item.date), shiftId: item.shiftId, aircraftTypeId: item.aircraftTypeId || "", categoryCode: item.categoryCode, headcount }];
+            })
+          })),
+          days: snap.calculation.map((day) => ({
+            date: dateKey(day.date),
+            normHours: Number(day.normHours ?? 0),
+            eventDemand: (day.eventDemand ?? []).map((event) => ({ id: event.id, byDepartment: event.byDepartment }))
+          })),
+          events: snap.events.map((event) => {
+            const place = planPlace(event, snap.from, snap.to);
+            const typeId = event.aircraftType?.id ?? "";
+            const ownerId = event.workshopId ?? event.workshop?.id ?? "";
+            return {
+              id: event.id,
+              title: event.title,
+              tail: event.aircraftLabel || event.aircraft?.tailNumber || "—",
+              hangarLabel: place.hangarLabel,
+              workshopId: ownerId,
+              workshop: workshopCode.get(ownerId) || event.workshop?.code || event.workshop?.name || "—",
+              operator: event.operator?.code || event.operator?.name || "—",
+              aircraftTypeId: typeId,
+              aircraftType: typeCode.get(typeId) || event.aircraftType?.icaoType || event.aircraftType?.name || "—",
+              stand: place.stand,
+              status: event.statusLabel || event.status || "—",
+              startAt: event.startAt,
+              endAt: event.endAt,
+              color: barColor(event, palette),
+              towSegments: (event.towSegments ?? []).map((tow) => ({ startAt: tow.startAt, endAt: tow.endAt }))
+            };
+          }),
+          departments: snap.departments,
+          slices: snap.resourceSlices.map((row) => ({
+            workshopId: row.workshopId,
+            workshop: workshopCode.get(row.workshopId) || "—",
+            aircraftTypeId: row.aircraftTypeId,
+            aircraftType: row.aircraftTypeId ? (typeCode.get(row.aircraftTypeId) || "—") : "Без типа"
+          }))
+        });
+        return;
+      }
       const data = await apiGet<AvailabilityResponse>(`${API}/availability?${new URLSearchParams({ workshopIds: workshopIds.join(","), from: periodFrom, to: periodTo })}`);
       const allowed = new Set(balanceTypeIds);
       const byId = new Map((data.sheets ?? []).map((sheet) => [sheet.workshopId, sheet]));
@@ -653,20 +729,20 @@ export function RmPersonnelView() {
 
       <section className="card personnelToolbar">
         <div className="personnelFilters">
-          <button type="button" className="btn" onClick={() => startTransition(() => { const next = shiftPeriod(periodFrom, periodTo, -1); setPeriodFrom(next.from); setPeriodTo(next.to); })}>←</button>
-          <label>С<input type="date" name="personnelPeriodFrom" autoComplete="off" value={periodFrom} onChange={(e) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return; const next = clampResourcePeriod(e.target.value, periodTo); if (!next.from) return; startTransition(() => { setPeriodFrom(next.from); setPeriodTo(next.to); }); }} /></label>
-          <label>По<input type="date" name="personnelPeriodTo" autoComplete="off" value={periodTo} max={clampResourcePeriod(periodFrom, "2999-12-31").to} onChange={(e) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return; const next = clampResourcePeriod(periodFrom, e.target.value); if (!next.from) return; startTransition(() => { setPeriodFrom(next.from); setPeriodTo(next.to); }); }} /></label>
-          <button type="button" className="btn" onClick={() => startTransition(() => { const next = shiftPeriod(periodFrom, periodTo, 1); setPeriodFrom(next.from); setPeriodTo(next.to); })}>→</button>
+          <button type="button" className="btn" disabled={Boolean(snap)} onClick={() => startTransition(() => { const next = shiftPeriod(periodFrom, periodTo, -1); setPeriodFrom(next.from); setPeriodTo(next.to); })}>←</button>
+          <label>С<input type="date" name="personnelPeriodFrom" autoComplete="off" value={snap?.from ?? periodFrom} disabled={Boolean(snap)} onChange={(e) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return; const next = clampResourcePeriod(e.target.value, periodTo); if (!next.from) return; startTransition(() => { setPeriodFrom(next.from); setPeriodTo(next.to); }); }} /></label>
+          <label>По<input type="date" name="personnelPeriodTo" autoComplete="off" value={snap?.to ?? periodTo} disabled={Boolean(snap)} max={clampResourcePeriod(periodFrom, "2999-12-31").to} onChange={(e) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) return; const next = clampResourcePeriod(periodFrom, e.target.value); if (!next.from) return; startTransition(() => { setPeriodFrom(next.from); setPeriodTo(next.to); }); }} /></label>
+          <button type="button" className="btn" disabled={Boolean(snap)} onClick={() => startTransition(() => { const next = shiftPeriod(periodFrom, periodTo, 1); setPeriodFrom(next.from); setPeriodTo(next.to); })}>→</button>
           {tab === "resources" ? null : (
             <>
-              <label>Цех<MultiSelectDropdown options={workshopFilterOptions} value={workshopIds} onChange={(ids) => startTransition(() => setWorkshopIds(ids))} placeholder="Цех" selectedLabelMode="labels" collapseAllLabel="Все цеха" compact portal /></label>
-              <label>Тип ВС<MultiSelectDropdown options={typeFilterOptions} value={aircraftTypeIds} onChange={(ids) => startTransition(() => setAircraftTypeIds(ids))} placeholder="Все типы цеха" selectedLabelMode="labels" collapseAllLabel="Все типы" compact portal /></label>
+              <label>Цех<MultiSelectDropdown options={workshopFilterOptions} value={snap ? snap.workshops.map((row) => row.id) : workshopIds} disabled={Boolean(snap)} onChange={(ids) => startTransition(() => setWorkshopIds(ids))} placeholder="Цех" selectedLabelMode="labels" collapseAllLabel="Все цеха" compact portal /></label>
+              <label>Тип ВС<MultiSelectDropdown options={typeFilterOptions} value={aircraftTypeIds} disabled={Boolean(snap)} onChange={(ids) => startTransition(() => setAircraftTypeIds(ids))} placeholder="Все типы цеха" selectedLabelMode="labels" collapseAllLabel="Все типы" compact portal /></label>
             </>
           )}
           {tab === "resources" ? (
             <label>Цех<MultiSelectDropdown options={(meta?.workshops ?? []).map((row) => ({ id: row.id, label: row.code }))} value={resourceWorkshopIds} onChange={(ids) => startTransition(() => setResourceWorkshopIds(ids))} placeholder="Цех" selectedLabelMode="labels" collapseAllLabel="Все цеха" compact portal /></label>
           ) : null}
-          {tab === "week" || (tab === "archive" && viewingArchiveId) ? (
+          {tab === "week" ? (
             <div className="personnelScale" role="group" aria-label="Масштаб">
               <button type="button" className={!timeline.customZoom && !timeline.fitWidth && timeline.preset === "day" ? "active" : ""} onClick={() => setTimeline({ major: "day", minor: "hour", fitWidth: false, timeMode: timeline.timeMode, customZoom: false, preset: "day" })}>Сутки</button>
               <button type="button" className={!timeline.customZoom && !timeline.fitWidth && timeline.preset !== "day" ? "active" : ""} onClick={() => setTimeline({ major: "day", minor: "hour", fitWidth: false, timeMode: timeline.timeMode, customZoom: false, preset: "week" })}>Неделя</button>
@@ -675,11 +751,20 @@ export function RmPersonnelView() {
           ) : null}
         </div>
         <div className="personnelLockActions">
-          {(tab === "week" || tab === "archive") && canSavePlan ? <button type="button" className="btn" disabled={saveArchiveM.isPending || !balanceReady} title="Сохранить проект плана выбранного периода. Дальнейшие правки на Гантте изменят текущий график, этот снимок останется в архиве." onClick={() => { setArchiveNotice(""); saveArchiveM.mutate(); }}>{saveArchiveM.isPending ? "Сохранение…" : "Сохранить план"}</button> : null}
-          {tab === "week" && planWorkshopId && planLocked && canUnlock ? <button className="btn" disabled={lockM.isPending || planMonday < mondayOfWeek(today)} onClick={() => lockM.mutate("unlock")}>Снять фиксацию {fmtDayMonth(planMonday)}</button> : null}
-          {tab === "week" && planWorkshopId && !planLocked && canLock ? <button className="btn btnPrimary" disabled={lockM.isPending || planMonday < mondayOfWeek(today)} onClick={() => lockM.mutate("lock")}>Зафиксировать неделю {fmtDayMonth(planMonday)}</button> : null}
+          {tab === "archive" && canSavePlan ? <button type="button" className="btn" disabled={saveArchiveM.isPending || !balanceReady || Boolean(snap)} title={snap ? "Закройте архив, чтобы сохранить текущий план" : "Сохранить весь расчёт выбранного периода: численность, потребность, доступный ресурс и график."} onClick={() => { setArchiveNotice(""); saveArchiveM.mutate(); }}>{saveArchiveM.isPending ? "Сохранение…" : "Сохранить план"}</button> : null}
+          {tab === "week" && !snap && planWorkshopId && planLocked && canUnlock ? <button className="btn" disabled={lockM.isPending || planMonday < mondayOfWeek(today)} onClick={() => lockM.mutate("unlock")}>Снять фиксацию {fmtDayMonth(planMonday)}</button> : null}
+          {tab === "week" && !snap && planWorkshopId && !planLocked && canLock ? <button className="btn btnPrimary" disabled={lockM.isPending || planMonday < mondayOfWeek(today)} onClick={() => lockM.mutate("lock")}>Зафиксировать неделю {fmtDayMonth(planMonday)}</button> : null}
         </div>
       </section>
+
+      {snap && openedArchive ? (
+        <div className="personnelArchiveBanner">
+          <span>Открыт архив · {openedArchive.title}. Снимок от {fmtDate(openedArchive.createdAt, true)}{openedArchive.createdBy ? `, ${openedArchive.createdBy.displayName || openedArchive.createdBy.email}` : ""}. На всех вкладках расчёт того момента: численность, потребность, доступный ресурс и график. Текущий план не меняется.</span>
+          <button type="button" className="btn" onClick={() => setViewingArchiveId(null)}>К текущему плану</button>
+        </div>
+      ) : null}
+      {viewingArchiveId && archiveQ.isLoading ? <section className="card">Загрузка архива…</section> : null}
+      {viewingArchiveId && archiveQ.error ? <div className="error">{errorText(archiveQ.error)}</div> : null}
 
       <div className="personnelTabs" role="tablist">
         {([
@@ -687,14 +772,26 @@ export function RmPersonnelView() {
         ] as Array<[Tab, string]>).map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}
       </div>
 
-      {metaQ.isLoading || ((tab === "balance" || tab === "week") && weekQ.isLoading) || (tab === "resources" && orderedResourceIds.length > 0 && !resourceSheets.length && (availabilityQ.isLoading || availabilityQ.isFetching)) || ((tab === "balance" || tab === "week" || tab === "capacity") && balanceQ.isLoading) ? <section className="card">Загрузка…</section> : null}
-      {metaQ.error || weekQ.error || availabilityQ.error || balanceQ.error ? <div className="error">{errorText(metaQ.error || weekQ.error || availabilityQ.error || balanceQ.error)}</div> : null}
+      {!snap && (metaQ.isLoading || ((tab === "balance" || tab === "week") && weekQ.isLoading) || (tab === "resources" && orderedResourceIds.length > 0 && !resourceSheets.length && (availabilityQ.isLoading || availabilityQ.isFetching)) || ((tab === "balance" || tab === "week" || tab === "capacity") && balanceQ.isLoading)) ? <section className="card">Загрузка…</section> : null}
+      {!snap && (metaQ.error || weekQ.error || availabilityQ.error || balanceQ.error) ? <div className="error">{errorText(metaQ.error || weekQ.error || availabilityQ.error || balanceQ.error)}</div> : null}
 
-      {tab === "resources" && !orderedResourceIds.length ? (
+      {tab === "resources" && snap ? (
+        snap.sheets?.length ? (
+          <PersonnelResourceGrid
+            store={resourceDraft}
+            sheets={snap.sheets}
+            dates={periodDates(snap.from, snap.to)}
+            shifts={snap.shifts ?? NO_SHIFTS}
+            today="9999-12-31"
+            canWrite={false}
+            fetching={false}
+          />
+        ) : <section className="card personnelEmpty"><h2>В этом архиве нет численности</h2><p className="muted">Снимок сохранён до полного расчёта. Потребность и доступные часы есть на «План/Доступность» и «График/План».</p></section>
+      ) : null}
+      {tab === "resources" && !snap && !orderedResourceIds.length ? (
         <section className="card personnelEmpty"><h2>Выберите цех</h2></section>
       ) : null}
-
-      {tab === "resources" && orderedResourceIds.length > 0 && resourceSheets.length > 0 ? (
+      {tab === "resources" && !snap && orderedResourceIds.length > 0 && resourceSheets.length > 0 ? (
         <PersonnelResourceGrid
           store={resourceDraft}
           sheets={resourceSheets}
@@ -706,13 +803,25 @@ export function RmPersonnelView() {
         />
       ) : null}
 
-      {tab === "balance" && !workshopIds.length ? (
+      {tab === "balance" && snap ? (
+        <BalancePanel
+          days={snap.calculation}
+          lines={snap.balanceLines ?? []}
+          openDates={openDates}
+          onToggleDate={(date) => setOpenDates((old) => old.includes(date) ? old.filter((item) => item !== date) : [...old, date])}
+          events={snap.events}
+          added={new Set()}
+          resourceWorkshop={snap.workshops.map((row) => row.code || row.name).join(", ") || "—"}
+          baselineNote="Цифры взяты из архива и не следят за Ганттом."
+        />
+      ) : null}
+      {tab === "balance" && !snap && !workshopIds.length ? (
         <section className="card personnelEmpty"><h2>Выберите цех</h2></section>
       ) : null}
-      {tab === "balance" && workshopIds.length > 0 && !balanceReady ? (
+      {tab === "balance" && !snap && workshopIds.length > 0 && !balanceReady ? (
         <section className="card personnelEmpty"><h2>Для выбранных цехов нет типов ВС</h2></section>
       ) : null}
-      {tab === "balance" && workshopIds.length > 0 && balance ? (
+      {tab === "balance" && !snap && workshopIds.length > 0 && balance ? (
         <BalancePanel
           days={selectedCalculation}
           lines={balance.balanceLines ?? []}
@@ -725,13 +834,22 @@ export function RmPersonnelView() {
         />
       ) : null}
 
-      {tab === "capacity" && !workshopIds.length ? (
+      {tab === "capacity" && snap ? (
+        <PersonnelCapacityPanel
+          days={snap.calculation}
+          lines={snap.balanceLines ?? []}
+          slices={snap.resourceSlices}
+          workshops={snap.workshops}
+          aircraftTypes={snap.aircraftTypes}
+        />
+      ) : null}
+      {tab === "capacity" && !snap && !workshopIds.length ? (
         <section className="card personnelEmpty"><h2>Выберите цех</h2></section>
       ) : null}
-      {tab === "capacity" && workshopIds.length > 0 && !balanceReady ? (
+      {tab === "capacity" && !snap && workshopIds.length > 0 && !balanceReady ? (
         <section className="card personnelEmpty"><h2>Для выбранных цехов нет типов ВС</h2></section>
       ) : null}
-      {tab === "capacity" && balanceReady && balanceQ.data ? (
+      {tab === "capacity" && !snap && balanceReady && balanceQ.data ? (
         <PersonnelCapacityPanel
           days={balanceQ.data.calculation ?? []}
           lines={balanceQ.data.balanceLines ?? []}
@@ -747,7 +865,14 @@ export function RmPersonnelView() {
           loading={archivesQ.isLoading}
           error={archivesQ.error}
           activeId={viewingArchiveId}
-          onOpen={(id) => { setArchiveNotice(""); setViewingArchiveId((old) => old === id ? null : id); }}
+          onOpen={(id) => { setArchiveNotice(""); setViewingArchiveId(id); setTab("resources"); }}
+          canDelete={canSavePlan}
+          deletingId={deleteArchiveM.isPending ? deleteArchiveM.variables ?? null : null}
+          deleteError={deleteArchiveM.error}
+          onDelete={(item) => {
+            if (!confirm(`Удалить сохранённый план «${item.title}»?`)) return;
+            deleteArchiveM.mutate(item.id);
+          }}
           periodFrom={periodFrom}
           periodTo={periodTo}
           workshopLabel={workshopLabel}
@@ -758,39 +883,30 @@ export function RmPersonnelView() {
           onExportHistory={() => void exportHistory()}
         />
       ) : null}
-      {tab === "archive" && viewingArchiveId && archiveQ.isLoading ? <section className="card">Загрузка архива…</section> : null}
-      {tab === "archive" && viewingArchiveId && archiveQ.error ? <div className="error">{errorText(archiveQ.error)}</div> : null}
-      {tab === "archive" && viewingArchiveId && archiveQ.data ? (
-        <>
-          <div className="personnelArchiveBanner">
-            <span>Архив · {archiveQ.data.item.title}. Снимок от {fmtDate(archiveQ.data.item.createdAt, true)}{archiveQ.data.item.createdBy ? `, ${archiveQ.data.item.createdBy.displayName || archiveQ.data.item.createdBy.email}` : ""}. Правки на Гантте этот план не меняют.</span>
-            <button type="button" className="btn" onClick={() => { setViewingArchiveId(null); setTab("week"); }}>К текущему плану</button>
-          </div>
-          <WeeklyTimeline
-            events={archiveQ.data.item.payload.events}
-            from={archiveQ.data.item.payload.from}
-            to={archiveQ.data.item.payload.to}
-            palette={palette}
-            slices={archiveQ.data.item.payload.resourceSlices}
-            demandDays={archiveQ.data.item.payload.calculation}
-            workshops={archiveQ.data.item.payload.workshops}
-            aircraftTypes={archiveQ.data.item.payload.aircraftTypes}
-            timeline={timeline}
-            onTimelineChange={setTimeline}
-            departments={archiveQ.data.item.payload.departments}
-            exporting={false}
-            onExport={() => undefined}
-            exportHidden
-          />
-        </>
+      {tab === "week" && snap ? (
+        <WeeklyTimeline
+          events={snap.events}
+          from={snap.from}
+          to={snap.to}
+          palette={palette}
+          slices={snap.resourceSlices}
+          demandDays={snap.calculation}
+          workshops={snap.workshops}
+          aircraftTypes={snap.aircraftTypes}
+          timeline={timeline}
+          onTimelineChange={setTimeline}
+          departments={snap.departments}
+          exporting={planExporting}
+          onExport={() => void exportPlan()}
+        />
       ) : null}
-      {tab === "week" && !workshopIds.length ? (
+      {tab === "week" && !snap && !workshopIds.length ? (
         <section className="card personnelEmpty"><h2>Выберите цех</h2></section>
       ) : null}
-      {tab === "week" && workshopIds.length > 0 && !balanceReady ? (
+      {tab === "week" && !snap && workshopIds.length > 0 && !balanceReady ? (
         <section className="card personnelEmpty"><h2>Для выбранных цехов нет типов ВС</h2></section>
       ) : null}
-      {tab === "week" && balanceReady && balanceQ.data ? (
+      {tab === "week" && !snap && balanceReady && balanceQ.data ? (
         <WeeklyTimeline
           events={selectedEvents}
           from={periodFrom}
@@ -808,7 +924,7 @@ export function RmPersonnelView() {
         />
       ) : null}
       {tab === "archive" && archiveNotice ? <p className="personnelArchiveNotice">{archiveNotice}</p> : null}
-      {(tab === "week" || tab === "archive") && saveArchiveM.error ? <div className="error">{errorText(saveArchiveM.error)}</div> : null}
+      {tab === "archive" && saveArchiveM.error ? <div className="error">{errorText(saveArchiveM.error)}</div> : null}
       {tab === "week" && planExportError ? <div className="error">{planExportError}</div> : null}
       {lockM.error ? <div className="error">{errorText(lockM.error)}</div> : null}
     </div>
@@ -1186,7 +1302,7 @@ function WeeklyTimeline({ events, from, to, palette, slices, demandDays, worksho
   const summaryRows = [...slices].sort((a, b) => (workshopName.get(a.workshopId) || a.workshopId).localeCompare(workshopName.get(b.workshopId) || b.workshopId, "ru", { numeric: true }) || (typeName.get(a.aircraftTypeId) || a.aircraftTypeId).localeCompare(typeName.get(b.aircraftTypeId) || b.aircraftTypeId, "ru", { numeric: true }));
   const summaryTotal = summaryRows.reduce((sum, row) => ({ planned: sum.planned + row.planned, available: sum.available + row.available, difference: sum.difference + row.difference }), { planned: 0, available: 0, difference: 0 });
   const quarterCount = dayCount * 4;
-  return <section className="card personnelTimelineCard"><div className="personnelSectionHead personnelPlanHead"><div><h2 className="personnelResourceTitle">График/План<BlockHelp label="График/План"><p>События выбранного периода на шкале времени, с потребностью по категориям.</p><ul><li>Оранжевая полоса — ангар. Под ней строки бортов, которые стоят в этом ангаре. Событие без ангара собрано в группу «Без ангара».</li><li>Слева — борт, ангар, цех, заказчик, тип ВС, место и статус.</li><li>Цветная полоса — само событие. На ней название. Время начала и окончания стоит снаружи у краёв. Если событие кончается позже периода, на полосе остаётся till с датой окончания.</li><li>Красная заливка на полосе — период буксировки.</li><li>Под полосой — плановые человеко-часы события по категориям на каждый день. Категории только те, что заданы выбранным цехам. Фильтр типа ВС сужает и цеха, и события.</li><li>Правый клик по шкале времени открывает масштаб, как на Гантте: Major, Minor, Local (MSK)/UTC и «По ширине». «Сутки» держит на экране одни сутки и делит их на ночь 00:00–08:00, день 08:00–20:00 и ночь 20:00–24:00. «Неделя» держит около семи суток и на узкой шкале оставляет часы 0, 6, 12 и 18. «Месяц» и «По ширине» сжимают период в ширину панели. Стрелки периода листают окно. Выгрузка Excel повторяет нажатый режим.</li><li>Три нижние строки — итог по всем событиям: потребность, доступный ресурс и разница. Разница окрашена: зелёная, если ресурс больше потребности, красная — если меньше.</li><li>Кнопка с листом выгружает этот график в Excel.</li><li>«Сохранить план» кладёт проект выбранного периода на вкладку «Архив планов». Текущий график и дальше меняется вместе с Ганттом, сохранённый снимок — нет.</li></ul></BlockHelp></h2></div>{exportHidden ? null : <button type="button" className="btn ganttIconBtn" onClick={onExport} disabled={exporting} title="Выгрузить график в Excel" aria-label="Выгрузить график в Excel"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5z" /><path d="M12 2v4h4" /><path d="M7 14l2-4" /><path d="M11 14l-2-4" /><path d="M12.5 14h2.5" /><path d="M12.5 10h2.5" /></svg></button>}</div>
+  return <section className="card personnelTimelineCard"><div className="personnelSectionHead personnelPlanHead"><div><h2 className="personnelResourceTitle">График/План<BlockHelp label="График/План"><p>События выбранного периода на шкале времени, с потребностью по категориям.</p><ul><li>Оранжевая полоса — ангар. Под ней строки бортов, которые стоят в этом ангаре. Событие без ангара собрано в группу «Без ангара».</li><li>Слева — борт, ангар, цех, заказчик, тип ВС, место и статус.</li><li>Цветная полоса — само событие. На ней название. Время начала и окончания стоит снаружи у краёв. Если событие кончается позже периода, на полосе остаётся till с датой окончания.</li><li>Красная заливка на полосе — период буксировки.</li><li>Под полосой — плановые человеко-часы события по категориям на каждый день. Категории только те, что заданы выбранным цехам. Фильтр типа ВС сужает и цеха, и события.</li><li>Правый клик по шкале времени открывает масштаб, как на Гантте: Major, Minor, Local (MSK)/UTC и «По ширине». «Сутки» держит на экране одни сутки и делит их на ночь 00:00–08:00, день 08:00–20:00 и ночь 20:00–24:00. «Неделя» держит около семи суток и на узкой шкале оставляет часы 0, 6, 12 и 18. «Месяц» и «По ширине» сжимают период в ширину панели. Стрелки периода листают окно. Выгрузка Excel повторяет нажатый режим.</li><li>Три нижние строки — итог по всем событиям: потребность, доступный ресурс и разница. Разница окрашена: зелёная, если ресурс больше потребности, красная — если меньше.</li><li>Кнопка с листом выгружает этот график в Excel.</li><li>Сохранённый план открывается с вкладки «Архив планов» и подменяет все вкладки снимком. «К текущему плану» возвращает живой расчёт.</li></ul></BlockHelp></h2></div>{exportHidden ? null : <button type="button" className="btn ganttIconBtn" onClick={onExport} disabled={exporting} title="Выгрузить график в Excel" aria-label="Выгрузить график в Excel"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5z" /><path d="M12 2v4h4" /><path d="M7 14l2-4" /><path d="M11 14l-2-4" /><path d="M12.5 14h2.5" /><path d="M12.5 10h2.5" /></svg></button>}</div>
     <div className="personnelTimelineScroll"><table className={`personnelPlan${cramped ? " personnelPlanMonth" : ""}${dayNight ? " personnelPlanDayNight" : timeline.minor === "hour" ? " personnelPlanHourGrid" : ""}`} onContextMenu={openScaleMenu} style={{ width: "100%", minWidth: zoomMinWidth ?? legacyMinWidth, ["--plan-slot-columns" as string]: slotColumns, ["--plan-days" as string]: dayCount, ["--plan-quarters" as string]: quarterCount }}>
       <thead>
         <tr>
@@ -1333,12 +1449,16 @@ function WeeklyTimeline({ events, from, to, palette, slices, demandDays, worksho
   </section>;
 }
 
-function PlanArchivePanel({ items, loading, error, activeId, onOpen, periodFrom, periodTo, workshopLabel, historyAt, onHistoryAt, historyExporting, historyError, onExportHistory }: {
+function PlanArchivePanel({ items, loading, error, activeId, onOpen, canDelete, deletingId, deleteError, onDelete, periodFrom, periodTo, workshopLabel, historyAt, onHistoryAt, historyExporting, historyError, onExportHistory }: {
   items: PlanArchiveItem[];
   loading: boolean;
   error: unknown;
   activeId: string | null;
   onOpen: (id: string) => void;
+  canDelete: boolean;
+  deletingId: string | null;
+  deleteError: unknown;
+  onDelete: (item: PlanArchiveItem) => void;
   periodFrom: string;
   periodTo: string;
   workshopLabel: string;
@@ -1359,7 +1479,7 @@ function PlanArchivePanel({ items, loading, error, activeId, onOpen, periodFrom,
   return <section className="card personnelArchiveCard">
     <div className="personnelSectionHead">
       <div>
-        <h2 className="personnelResourceTitle">Архив планов<BlockHelp label="Архив планов"><p>Сохранённые проекты плана. Переключение между ними — на этой вкладке.</p><ul><li>«Сохранить план» записывает график выбранных цехов и периода так, как он есть сейчас, и открывает его здесь.</li><li>После этого правки событий на Гантте меняют только вкладку «График/План».</li><li>Строка архива открывает снимок под списком. Повторный щелчок скрывает его. «К текущему плану» возвращает на живой график.</li><li>«Выгрузить на дату» берёт последний снимок этого периода не позже выбранных даты и времени и сравнивает его с самым первым сохранением. В Excel два листа: план на эту дату и «Было/Стало».</li></ul></BlockHelp></h2>
+        <h2 className="personnelResourceTitle">Архив планов<BlockHelp label="Архив планов"><p>Сохранённый расчёт целиком, как раньше хранили Excel.</p><ul><li>«Сохранить план» записывает численность, потребность, доступный ресурс и график выбранного периода.</li><li>«Удалить» убирает сохранённый план из архива. Открытый снимок при этом закрывается.</li><li>Строка открывает этот расчёт: все вкладки показывают снимок, а не живые данные.</li><li>«К текущему плану» возвращает рабочий расчёт. Правки Гантта архив не меняют.</li><li>«Выгрузить на дату» сравнивает снимки одного периода и пишет «Было/Стало».</li></ul></BlockHelp></h2>
       </div>
     </div>
     <>
@@ -1369,15 +1489,17 @@ function PlanArchivePanel({ items, loading, error, activeId, onOpen, periodFrom,
       </div>
       {hint ? <p className="muted">{hint}</p> : null}
       {historyError ? <div className="error">{historyError}</div> : null}
+      {deleteError ? <div className="error">{errorText(deleteError)}</div> : null}
       {loading ? <p className="muted">Загрузка…</p> : error ? <div className="error">{errorText(error)}</div> : items.length ? (
         <table className="personnelSimpleTable">
-          <thead><tr><th>Сохранён</th><th>План</th><th>События</th><th>Кто</th></tr></thead>
+          <thead><tr><th>Сохранён</th><th>План</th><th>События</th><th>Кто</th>{canDelete ? <th></th> : null}</tr></thead>
           <tbody>
             {items.map((item) => <tr key={item.id} className={`personnelArchiveRow${activeId === item.id ? " personnelArchiveActive" : ""}`} onClick={() => onOpen(item.id)}>
               <td>{fmtDate(item.createdAt, true)}</td>
               <td>{item.title}</td>
               <td>{item.eventCount}</td>
               <td>{item.createdBy?.displayName || item.createdBy?.email || "—"}</td>
+              {canDelete ? <td><button type="button" className="btn btnDanger" disabled={deletingId === item.id} onClick={(event) => { event.stopPropagation(); onDelete(item); }}>{deletingId === item.id ? "Удаление…" : "Удалить"}</button></td> : null}
             </tr>)}
           </tbody>
         </table>

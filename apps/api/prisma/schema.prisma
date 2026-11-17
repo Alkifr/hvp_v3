@@ -482,6 +482,7 @@ model User {
   personnelWeekLocks          PersonnelPlanningWeek[]        @relation("PersonnelWeekLockedBy")
   personnelSnapshots          PersonnelPlanningSnapshot[]    @relation("PersonnelSnapshotCreatedBy")
   personnelPlanArchives       PersonnelPlanArchive[]         @relation("PersonnelPlanArchiveCreatedBy")
+  towWorkArchives             TowWorkArchive[]               @relation("TowWorkArchiveCreatedBy")
   personnelAvailabilityChanges PersonnelAvailabilityChange[] @relation("PersonnelAvailabilityChangedBy")
 
   @@index([isActive])
@@ -962,6 +963,23 @@ model PersonnelPlanArchive {
 
   @@index([createdAt])
   @@index([weekStart])
+}
+
+/// Frozen tow plan and registry for one window, like a saved Excel workbook.
+model TowWorkArchive {
+  id          String   @id @default(uuid())
+  title       String
+  fromAt      DateTime
+  toAt        DateTime
+  planCount   Int
+  reportCount Int
+  payload     Json
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  createdBy User? @relation("TowWorkArchiveCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
 }
 
 model Hangar {

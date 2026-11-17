@@ -580,6 +580,35 @@ function archiveDateLabel(value: string) {
   return day && month && year ? `${day}.${month}.${year}` : value;
 }
 
+function slimArchiveSheet(sheet: any) {
+  return {
+    workshopId: String(sheet.workshopId ?? ""),
+    code: String(sheet.code ?? ""),
+    name: String(sheet.name ?? ""),
+    withoutAircraftType: Boolean(sheet.withoutAircraftType),
+    aircraftTypes: sheet.aircraftTypes ?? [],
+    mappedCategories: (sheet.mappedCategories ?? []).map((row: any) => ({
+      categoryCode: row.categoryCode ?? row.code ?? "",
+      skillId: row.skillId ?? null,
+      department: row.department ?? row.category?.department ?? null,
+      countsInPlannedResource: row.countsInPlannedResource !== false && row.category?.countsInPlannedResource !== false
+    })),
+    items: (sheet.items ?? []).map((item: any) => ({
+      date: String(item.date instanceof Date ? item.date.toISOString() : item.date ?? "").slice(0, 10),
+      shiftId: String(item.shiftId ?? ""),
+      aircraftTypeId: item.aircraftTypeId ?? "",
+      categoryCode: item.skill?.code || item.categoryCode || "",
+      skillId: item.skillId ?? item.skill?.id ?? null,
+      headcount: Number(item.headcount ?? 0)
+    })),
+    weeks: (sheet.weeks ?? []).map((week: any) => ({
+      weekStart: String(week.weekStart instanceof Date ? week.weekStart.toISOString() : week.weekStart ?? "").slice(0, 10),
+      version: Number(week.version ?? 0),
+      isLocked: Boolean(week.isLocked)
+    }))
+  };
+}
+
 function archiveTypeId(event: { aircraftType?: { id?: string | null } | null }) {
   return event.aircraftType?.id || "";
 }
@@ -598,6 +627,9 @@ export function buildPersonnelPlanArchive(input: {
     events?: any[];
     calculation?: any[];
     resourceSlices?: any[];
+    balanceLines?: any[];
+    shifts?: any[];
+    sheets?: any[];
   };
 }) {
   const allowed = new Set(input.aircraftTypeIds);
@@ -657,9 +689,21 @@ export function buildPersonnelPlanArchive(input: {
       demand: day.demand ?? {},
       authorizedSupply: day.authorizedSupply ?? {},
       strictBalance: day.strictBalance ?? {},
+      overallDemand: Number(day.overallDemand ?? 0),
+      overallSupply: Number(day.overallSupply ?? 0),
+      overallBalance: Number(day.overallBalance ?? day.overallPtoBalance ?? 0),
+      qualificationSupply: day.qualificationSupply ?? {},
       eventDemand: day.eventDemand ?? []
     })),
-    resourceSlices: input.data.resourceSlices ?? []
+    resourceSlices: input.data.resourceSlices ?? [],
+    balanceLines: input.data.balanceLines ?? [],
+    shifts: (input.data.shifts ?? []).map((shift) => ({
+      id: String(shift.id),
+      code: String(shift.code ?? ""),
+      name: String(shift.name ?? ""),
+      startMin: Number(shift.startMin ?? 0)
+    })),
+    sheets: (input.data.sheets ?? []).map(slimArchiveSheet)
   };
   return {
     title,
