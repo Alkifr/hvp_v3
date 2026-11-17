@@ -566,7 +566,7 @@ export function markRegistryRows(
     const changeMark = changedFields.map(columnTitle).join(", ");
     return paint(row, changedFields.length ? "changed" : "same", changedFields, changeMark);
   });
-  const numbered = items.map((row, index) => paint(row, row.mark, row.changedFields, row.export.changeMark));
+  const numbered = items.map((row) => paint(row, row.mark, row.changedFields, row.export.changeMark));
   numbered.forEach((row, index) => {
     row.seq = index + 1;
     row.export = { ...row.export, seq: String(index + 1) };

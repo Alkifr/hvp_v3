@@ -245,10 +245,6 @@ function registrySnapshot(items: TowReportRow[]): Array<Record<string, string>> 
   });
 }
 
-function rowsFromSnapshot(value: unknown): TowReportRow[] {
-  return readSendRows(value).map((row) => ({ ...(row as unknown as TowReportRow), seq: Number(row.seq) || 0, hangarNumber: row.hangarNumber ?? "" }));
-}
-
 const SEND_HISTORY_LIMIT = 200;
 
 async function loadRegistry(prisma: any, req: any, from: Date, to: Date) {
