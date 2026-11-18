@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import DataGrid, { textEditor, type Column, type RenderEditCellProps } from "react-data-grid";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import DataGrid, { type Column } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 
-import { apiPatch } from "../../lib/api";
-import { formatMskDateTime, fromInputMskOptional, toInputMsk } from "../../lib/localDate";
-import { refreshTowLists } from "./TowPlanGrid";
+import { wrappedBlockSize } from "../../lib/towColumnLayout";
+import { formatMskDateTime } from "../../lib/localDate";
+import { layoutColumn, TowColumnMenu, TowText, towHeaderContextPoint, useTowColumnLayout, type TowColumnMenuPoint, type TowColumnSpec } from "./TowColumnMenu";
 
 export type TowReportRow = {
   id: string;
@@ -40,15 +39,72 @@ export type TowReportRow = {
   startChangeReason: string;
 };
 
-type DataGridRow = TowReportRow & {
-  kind: "data";
-  occupancyStartLocal: string;
-  occupancyEndLocal: string;
-};
+type DataGridRow = TowReportRow & { kind: "data" };
 type HangarGridRow = { kind: "hangar"; id: string; label: string };
 type GridRow = DataGridRow | HangarGridRow;
 
-const REGISTRY_COLUMN_COUNT = 13;
+const REGISTRY_COLUMNS: TowColumnSpec[] = [
+  { key: "seq", label: "№", width: 48 },
+  { key: "aircraftType", label: "Тип ВС", width: 100 },
+  { key: "tailNumber", label: "Бортовой номер", width: 124 },
+  { key: "operator", label: "Оператор", width: 116 },
+  { key: "fromStand", label: "Откуда (с МС)", width: 108 },
+  { key: "toStand", label: "Куда (на МС)", width: 108 },
+  { key: "plannedStartMsk", label: "Плановое время начала буксировки (мск)", width: 176 },
+  { key: "standOccupancy", label: "Требуемая продолжительность занятия МС", width: 210 },
+  { key: "notes", label: "Примечание", width: 160 },
+  { key: "toSlotDuration", label: "Продолжительность слотов ТО", width: 176 },
+  { key: "positionComment", label: "Позиция", width: 140 },
+  { key: "startChangeReason", label: "Причина изменения времени начала буксировки (<60 мин)", width: 200 }
+];
+
+function reportCellText(row: DataGridRow, key: string): string {
+  switch (key) {
+    case "seq":
+      return String(row.seq);
+    case "aircraftType":
+      return row.aircraftType || "—";
+    case "tailNumber":
+      return row.tailNumber || "—";
+    case "operator":
+      return row.operator || "—";
+    case "fromStand":
+      return row.fromStand || "—";
+    case "toStand":
+      return row.toStand || "—";
+    case "plannedStartMsk":
+      return row.plannedStartMsk || "—";
+    case "standOccupancy":
+      return occupancyText(row);
+    case "notes":
+      return row.notes;
+    case "toSlotDuration":
+      return slotLabel(row) || "—";
+    case "positionComment":
+      return row.positionComment;
+    case "startChangeReason":
+      return row.startChangeReason;
+    default:
+      return "";
+  }
+}
+
+function withHangarBand(columns: Column<GridRow>[]): Column<GridRow>[] {
+  if (!columns.length) return columns;
+  const [first, ...rest] = columns;
+  const renderCell = first.renderCell;
+  return [
+    {
+      ...first,
+      colSpan: (args) => (args.type === "ROW" && args.row.kind === "hangar" ? columns.length : undefined),
+      renderCell: (props) => {
+        if (props.row.kind === "hangar") return <TowText>{props.row.label}</TowText>;
+        return renderCell?.(props) ?? null;
+      }
+    },
+    ...rest
+  ];
+}
 
 function hangarBandLabel(name: string): string {
   const trimmed = name.trim();
@@ -84,36 +140,11 @@ function withHangarBands(items: DataGridRow[]): GridRow[] {
   return rows;
 }
 
-function messageRowHeight(text: string): number {
-  if (!text) return 42;
-  return 40 + Math.ceil(text.length / 26) * 18;
-}
-
-function UndoIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 7v6h6" />
-      <path d="M21 17a9 9 0 0 0-15-6.7L3 13" />
-    </svg>
-  );
-}
-
-function occupancyStartLocal(row: TowReportRow): string {
-  return toInputMsk(row.plannedStartAt);
-}
-
-function occupancyEndLocal(row: TowReportRow): string {
-  return toInputMsk(row.occupancyEndAt || row.inferredOccupancyEndAt);
-}
-
-function formatLocalMsk(value: string): string {
-  const iso = fromInputMskOptional(value);
-  return iso ? formatMskDateTime(iso) : "";
-}
-
-function occupancyLabel(row: DataGridRow): string {
-  const start = formatLocalMsk(row.occupancyStartLocal);
-  const end = formatLocalMsk(row.occupancyEndLocal);
+function occupancyText(row: TowReportRow): string {
+  if (!row.plannedStartAt) return "";
+  const start = formatMskDateTime(row.plannedStartAt);
+  const endIso = row.occupancyEndAt || row.inferredOccupancyEndAt;
+  const end = endIso ? formatMskDateTime(endIso) : "";
   if (!start && !end) return "";
   return `${start || "—"} - ${end || "—"}`;
 }
@@ -122,78 +153,8 @@ function slotLabel(row: TowReportRow): string {
   return row.toSlotEndMsk ? `Слот до ${row.toSlotEndMsk} мск` : row.toSlotDuration || "";
 }
 
-function asDataRow(row: TowReportRow, draft?: Partial<DataGridRow>): DataGridRow {
-  return {
-    ...row,
-    kind: "data",
-    occupancyStartLocal: draft?.occupancyStartLocal ?? occupancyStartLocal(row),
-    occupancyEndLocal: draft?.occupancyEndLocal ?? occupancyEndLocal(row),
-    notes: draft?.notes ?? row.notes,
-    positionComment: draft?.positionComment ?? row.positionComment,
-    startChangeReason: draft?.startChangeReason ?? row.startChangeReason
-  };
-}
-
-function isDirty(source: TowReportRow, row: DataGridRow): boolean {
-  return (
-    row.notes !== source.notes ||
-    row.positionComment !== source.positionComment ||
-    row.startChangeReason !== source.startChangeReason ||
-    row.occupancyStartLocal !== occupancyStartLocal(source) ||
-    row.occupancyEndLocal !== occupancyEndLocal(source)
-  );
-}
-
-function reportVisibleSame(local: DataGridRow, item: TowReportRow): boolean {
-  return (
-    local.seq === item.seq &&
-    local.hangarId === item.hangarId &&
-    local.hangarNumber === item.hangarNumber &&
-    local.aircraftType === item.aircraftType &&
-    local.tailNumber === item.tailNumber &&
-    local.operator === item.operator &&
-    local.fromStand === item.fromStand &&
-    local.toStand === item.toStand &&
-    local.plannedStartMsk === item.plannedStartMsk &&
-    local.standOccupancy === item.standOccupancy &&
-    local.toSlotDuration === item.toSlotDuration &&
-    local.toSlotEndMsk === item.toSlotEndMsk &&
-    local.notes === item.notes &&
-    local.positionComment === item.positionComment &&
-    local.startChangeReason === item.startChangeReason &&
-    local.occupancyStartLocal === occupancyStartLocal(item) &&
-    local.occupancyEndLocal === occupancyEndLocal(item)
-  );
-}
-
-function OccupancyEditor({ row, onRowChange, onClose }: RenderEditCellProps<GridRow>) {
-  if (row.kind !== "data") return null;
-  const update = (patch: Partial<DataGridRow>, commit = false) => onRowChange({ ...row, ...patch }, commit);
-  return (
-    <span
-      className="towOccupancyEdit"
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onClose(true);
-      }}
-    >
-      <input
-        autoFocus
-        className="towGridInput"
-        type="datetime-local"
-        aria-label="Начало занятия МС"
-        value={row.occupancyStartLocal}
-        onChange={(event) => update({ occupancyStartLocal: event.target.value })}
-      />
-      <span>-</span>
-      <input
-        className="towGridInput"
-        type="datetime-local"
-        aria-label="Окончание занятия МС"
-        value={row.occupancyEndLocal}
-        onChange={(event) => update({ occupancyEndLocal: event.target.value })}
-      />
-    </span>
-  );
+function asDataRow(row: TowReportRow): DataGridRow {
+  return { ...row, kind: "data" };
 }
 
 export function TowReportTable({
@@ -207,237 +168,114 @@ export function TowReportTable({
   onOpenEvent?: (eventId: string) => void;
   onDirtyChange: (count: number) => void;
 }) {
-  const qc = useQueryClient();
-  const [rows, setRows] = useState<DataGridRow[]>([]);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [committed, setCommitted] = useState<Record<string, TowReportRow>>({});
-  const itemsRef = useRef(items);
-  const errorsRef = useRef(errors);
-  const committedRef = useRef(committed);
-  const pendingRef = useRef<string | null>(null);
-  itemsRef.current = items;
-  errorsRef.current = errors;
-  committedRef.current = committed;
+  const layout = useTowColumnLayout("hangarPlanning:towsRegistryColumns:v2", REGISTRY_COLUMNS);
+  const [columnMenu, setColumnMenu] = useState<TowColumnMenuPoint | null>(null);
+  const closeColumnMenu = useCallback(() => setColumnMenu(null), []);
+  const rows = useMemo(() => items.map(asDataRow), [items]);
 
   useEffect(() => {
-    setRows((prev) => {
-      const byId = new Map(prev.map((row) => [row.id, row]));
-      const next = items.map((item) => {
-        const saved = committed[item.id];
-        const local = byId.get(item.id);
-        const base = saved ?? item;
-        if (!local) return asDataRow(item);
-        if (isDirty(base, local)) return local;
-        if (saved && !reportVisibleSame(local, item)) return local;
-        return reportVisibleSame(local, item) ? local : asDataRow(item);
-      });
-      if (next.length === prev.length && next.every((row, index) => row === prev[index])) return prev;
-      return next;
-    });
-  }, [committed, items]);
-
-  useEffect(() => {
-    setCommitted((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const [id, snap] of Object.entries(prev)) {
-        const item = items.find((row) => row.id === id);
-        const caughtUp =
-          !item ||
-          (item.notes === snap.notes &&
-            item.positionComment === snap.positionComment &&
-            item.startChangeReason === snap.startChangeReason &&
-            occupancyStartLocal(item) === occupancyStartLocal(snap) &&
-            occupancyEndLocal(item) === occupancyEndLocal(snap));
-        if (caughtUp) {
-          delete next[id];
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [items]);
-
-  const dirtyCount = useMemo(() => {
-    const source = new Map(items.map((item) => [item.id, committed[item.id] ?? item]));
-    return rows.filter((row) => {
-      const item = source.get(row.id);
-      return item ? isDirty(item, row) : false;
-    }).length;
-  }, [committed, items, rows]);
-
-  useEffect(() => {
-    onDirtyChange(dirtyCount);
-  }, [dirtyCount, onDirtyChange]);
-
-  const save = useMutation({
-    mutationFn: async (row: DataGridRow) => {
-      const source = items.find((item) => item.id === row.id);
-      if (!source) return;
-      const startIso = fromInputMskOptional(row.occupancyStartLocal);
-      const endIso = fromInputMskOptional(row.occupancyEndLocal);
-      const startChanged = row.occupancyStartLocal !== occupancyStartLocal(source);
-      const endChanged = row.occupancyEndLocal !== occupancyEndLocal(source);
-      if ((startChanged && !startIso) || (endChanged && !endIso)) throw new Error("Укажите начало и окончание занятия МС");
-      if (startChanged && startIso) {
-        const minutes = Math.abs(new Date(startIso).getTime() - new Date(source.plannedStartAt).getTime()) / 60_000;
-        if (minutes > 0 && minutes < 60 && !row.startChangeReason.trim()) {
-          throw new Error("Сдвиг начала меньше 60 минут. Укажите причину");
-        }
-      }
-      return apiPatch(`/api/tows/${row.id}`, {
-        notes: row.notes.trim() || null,
-        positionComment: row.positionComment.trim() || null,
-        startChangeReason: row.startChangeReason.trim() || null,
-        startAt: startChanged ? startIso ?? undefined : undefined,
-        occupancyEndAt: endChanged ? endIso ?? undefined : undefined,
-        changeReason: "Реестр"
-      });
-    },
-    onMutate: (row) => {
-      pendingRef.current = row.id;
-      setRows((current) => current.map((item) => (item.id === row.id ? { ...item } : item)));
-    },
-    onSuccess: (_data, row) => {
-      pendingRef.current = null;
-      const source = itemsRef.current.find((item) => item.id === row.id);
-      if (source) {
-        const startIso = fromInputMskOptional(row.occupancyStartLocal) ?? source.plannedStartAt;
-        const endIso = fromInputMskOptional(row.occupancyEndLocal) ?? source.occupancyEndAt;
-        setCommitted((prev) => ({
-          ...prev,
-          [row.id]: {
-            ...source,
-            notes: row.notes,
-            positionComment: row.positionComment,
-            startChangeReason: row.startChangeReason,
-            plannedStartAt: startIso,
-            occupancyEndAt: endIso
-          }
-        }));
-      }
-      setRows((current) => current.map((item) => (item.id === row.id ? { ...item } : item)));
-      setErrors((prev) => (prev[row.id] ? { ...prev, [row.id]: "" } : prev));
-      void refreshTowLists(qc);
-      void qc.invalidateQueries({ queryKey: ["tows-changes", row.eventId] });
-    },
-    onError: (error, row) => {
-      pendingRef.current = null;
-      setRows((current) => current.map((item) => (item.id === row.id ? { ...item } : item)));
-      setErrors((prev) => ({ ...prev, [row.id]: String((error as Error).message ?? error) }));
-    }
-  });
+    onDirtyChange(0);
+  }, [onDirtyChange]);
 
   const grouped = useMemo(() => withHangarBands(rows), [rows]);
-  const editable = (row: GridRow) => canWrite && row.kind === "data";
   const lockedClass = (row: GridRow) => (row.kind === "hangar" ? "towHangarBand" : canWrite ? undefined : "towGridReadonly");
-  const resetRow = (row: DataGridRow) => {
-    const source = committedRef.current[row.id] ?? itemsRef.current.find((item) => item.id === row.id);
-    if (!source) return;
-    setRows((current) => current.map((item) => (item.id === row.id ? asDataRow(source) : item)));
-    setErrors((prev) => (prev[row.id] ? { ...prev, [row.id]: "" } : prev));
-  };
-  const mutateRef = useRef(save.mutate);
-  mutateRef.current = save.mutate;
-  const columns = useMemo<Column<GridRow>[]>(
-    () => [
+  const columns = useMemo<Column<GridRow>[]>(() => {
+    const text = (row: GridRow, value: string) => (row.kind === "data" ? <TowText>{value}</TowText> : null);
+    const built: Column<GridRow>[] = [
       {
         key: "seq",
         name: "№",
-        width: 60,
+        width: 48,
         cellClass: lockedClass,
-        colSpan: (args) => (args.type === "ROW" && args.row.kind === "hangar" ? REGISTRY_COLUMN_COUNT : undefined),
-        renderCell: ({ row }) => (row.kind === "hangar" ? row.label : row.seq)
+        renderCell: ({ row }) => text(row, String(row.kind === "data" ? row.seq : ""))
       },
-      { key: "aircraftType", name: "Тип ВС", width: 110, cellClass: lockedClass, renderCell: ({ row }) => (row.kind === "data" ? row.aircraftType || "—" : null) },
-      { key: "tailNumber", name: "Бортовой номер", width: 140, cellClass: lockedClass, renderCell: ({ row }) => (row.kind === "data" ? row.tailNumber || "—" : null) },
-      { key: "operator", name: "Оператор", width: 130, cellClass: lockedClass, renderCell: ({ row }) => (row.kind === "data" ? row.operator || "—" : null) },
-      { key: "fromStand", name: "Откуда (с МС)", width: 140, cellClass: lockedClass, renderCell: ({ row }) => (row.kind === "data" ? row.fromStand || "—" : null) },
-      { key: "toStand", name: "Куда (на МС)", width: 140, cellClass: lockedClass, renderCell: ({ row }) => (row.kind === "data" ? row.toStand || "—" : null) },
-      { key: "plannedStartMsk", name: "Плановое время начала буксировки (мск)", width: 220, cellClass: lockedClass, renderCell: ({ row }) => (row.kind === "data" ? row.plannedStartMsk || "—" : null) },
+      { key: "aircraftType", name: "Тип ВС", width: 100, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.aircraftType || "—" : "") },
+      { key: "tailNumber", name: "Бортовой номер", width: 124, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.tailNumber || "—" : "") },
+      { key: "operator", name: "Оператор", width: 116, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.operator || "—" : "") },
+      { key: "fromStand", name: "Откуда (с МС)", width: 108, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.fromStand || "—" : "") },
+      { key: "toStand", name: "Куда (на МС)", width: 108, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.toStand || "—" : "") },
+      { key: "plannedStartMsk", name: "Плановое время начала буксировки (мск)", width: 176, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.plannedStartMsk || "—" : "") },
       {
         key: "standOccupancy",
         name: "Требуемая продолжительность занятия МС",
-        width: 340,
-        editable,
+        width: 210,
         cellClass: lockedClass,
-        renderEditCell: OccupancyEditor,
-        renderCell: ({ row }) => (row.kind === "data" ? occupancyLabel(row) || "—" : null)
+        renderCell: ({ row }) => text(row, row.kind === "data" ? occupancyText(row) : "")
       },
       {
         key: "notes",
         name: "Примечание",
-        width: 200,
-        editable,
+        width: 160,
         cellClass: lockedClass,
-        renderEditCell: textEditor,
-        renderCell: ({ row }) => (row.kind === "data" ? row.notes : null)
+        renderCell: ({ row }) => text(row, row.kind === "data" ? row.notes : "")
       },
-      { key: "toSlotDuration", name: "Продолжительность слотов ТО", width: 240, cellClass: lockedClass, renderCell: ({ row }) => (row.kind === "data" ? slotLabel(row) || "—" : null) },
+      { key: "toSlotDuration", name: "Продолжительность слотов ТО", width: 176, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? slotLabel(row) || "—" : "") },
       {
         key: "positionComment",
         name: "Позиция",
-        width: 160,
-        editable,
+        width: 140,
         cellClass: lockedClass,
-        renderEditCell: textEditor,
-        renderCell: ({ row }) => (row.kind === "data" ? row.positionComment : null)
+        renderCell: ({ row }) => text(row, row.kind === "data" ? row.positionComment : "")
       },
       {
         key: "startChangeReason",
         name: "Причина изменения времени начала буксировки (<60 мин)",
-        width: 260,
-        editable,
+        width: 200,
         cellClass: lockedClass,
-        renderEditCell: textEditor,
-        renderCell: ({ row }) => (row.kind === "data" ? row.startChangeReason : null)
-      },
-      {
-        key: "actions",
-        name: "",
-        width: 280,
-        cellClass: lockedClass,
-        renderCell: ({ row }) => {
-          if (row.kind !== "data") return null;
-          const source = committedRef.current[row.id] ?? itemsRef.current.find((item) => item.id === row.id);
-          const changed = source ? isDirty(source, row) : false;
-          const pending = pendingRef.current === row.id;
-          return (
-            <div className="towGridActions">
-              {canWrite && changed ? (
-                <>
-                  <button className="btn btnPrimary" type="button" disabled={pending} onClick={() => mutateRef.current(row)}>
-                    Сохранить
-                  </button>
-                  <button className="btn towIconBtn" type="button" disabled={pending} aria-label="Отменить" title="Отменить" onClick={() => resetRow(row)}>
-                    <UndoIcon />
-                  </button>
-                </>
-              ) : null}
-              {errorsRef.current[row.id] ? <span className="error towGridMessage">{errorsRef.current[row.id]}</span> : null}
-            </div>
-          );
-        }
+        renderCell: ({ row }) => text(row, row.kind === "data" ? row.startChangeReason : "")
       }
-    ],
-    [canWrite]
+    ];
+    const visible = new Set(layout.visibleKeys);
+    return withHangarBand(
+      built
+        .filter((column) => visible.has(column.key))
+        .map((column) => layoutColumn(column, layout.widthOf(column.key, typeof column.width === "number" ? column.width : 120)))
+    );
+  }, [canWrite, layout.visibleKeys, layout.widthOf]);
+  const headerRowHeight = useMemo(
+    () =>
+      wrappedBlockSize(
+        columns
+          .filter((column) => typeof column.name === "string" && column.name)
+          .map((column) => ({ text: String(column.name), width: typeof column.width === "number" ? column.width : 120 })),
+        44,
+        132
+      ),
+    [columns]
   );
-  const rowHeight = useCallback((row: GridRow) => (row.kind === "hangar" ? 36 : messageRowHeight(row.kind === "data" ? errorsRef.current[row.id] || "" : "")), []);
+  const rowHeight = useCallback(
+    (row: GridRow) => {
+      if (row.kind === "hangar") return 36;
+      return wrappedBlockSize(
+        columns.map((column) => ({ text: row.kind === "data" ? reportCellText(row, column.key) : "", width: typeof column.width === "number" ? column.width : 120 }))
+      );
+    },
+    [columns]
+  );
 
   return (
     <>
-      <DataGrid
-        className="rdg-light towGrid"
-        columns={columns}
-        rows={grouped}
-        rowKeyGetter={(row) => row.id}
-        onRowsChange={(next) => setRows(next.filter((row): row is DataGridRow => row.kind === "data"))}
-        rowClass={(row) => (row.kind === "hangar" ? "towHangarBand" : undefined)}
-        headerRowHeight={64}
-        rowHeight={rowHeight}
-        style={{ blockSize: "min(70vh, 760px)" }}
-      />
-      {rows.length === 0 ? <div className="muted towGridEmpty">Нет назначенных буксировок в выбранном периоде. Время задаётся на вкладке «План».</div> : null}
+      <div onContextMenu={(event) => {
+        const point = towHeaderContextPoint(event);
+        if (point) setColumnMenu(point);
+      }}>
+        <DataGrid
+          className="rdg-light towGrid"
+          columns={columns}
+          rows={grouped}
+          rowKeyGetter={(row) => row.id}
+          onColumnResize={(idx, width) => {
+            const key = columns[idx]?.key;
+            if (key) layout.resize(key, width);
+          }}
+          rowClass={(row) => (row.kind === "hangar" ? "towHangarBand" : undefined)}
+          headerRowHeight={headerRowHeight}
+          rowHeight={rowHeight}
+          style={{ blockSize: "max(360px, calc(100vh - 340px))" }}
+        />
+      </div>
+      <TowColumnMenu specs={REGISTRY_COLUMNS} hidden={layout.hidden} onShown={layout.setShown} point={columnMenu} onClose={closeColumnMenu} />
+      {rows.length === 0 ? <div className="muted towGridEmpty">В этом периоде нет событий. Отмеченные «Не требуется» скрыты.</div> : null}
     </>
   );
 }

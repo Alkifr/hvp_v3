@@ -43,6 +43,7 @@ export type TowPlanEvent = {
   eventType: string;
   placements: TowPlanPlacement[];
   tows: TowPlanTow[];
+  skipped: boolean;
 };
 
 export type TowPlanRow = {
@@ -76,6 +77,7 @@ export type TowPlanRow = {
   createdAt: string;
   isNew: boolean;
   standOptions: string[];
+  skipped: boolean;
 };
 
 function text(value: string | null | undefined): string {
@@ -168,7 +170,8 @@ export function buildTowPlanRows(events: TowPlanEvent[], from: Date, to: Date): 
       eventEndMsk: formatMskDateTime(span.end),
       createdAt: event.createdAt.toISOString(),
       isNew: false,
-      standOptions
+      standOptions,
+      skipped: event.skipped === true
     };
     if (!visible.length) {
       rows.push({

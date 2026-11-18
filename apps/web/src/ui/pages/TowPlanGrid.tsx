@@ -4,7 +4,10 @@ import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-q
 import "react-data-grid/lib/styles.css";
 
 import { apiDelete, apiPatch, apiPost } from "../../lib/api";
+import { wrappedBlockSize } from "../../lib/towColumnLayout";
 import { formatMskDateTime, fromInputMskOptional, toInputMsk } from "../../lib/localDate";
+import { TowActionBar, TowCreateDialog } from "./TowActionBar";
+import { layoutColumn, TowColumnMenu, TowText, towHeaderContextPoint, useTowColumnLayout, type TowColumnMenuPoint, type TowColumnSpec } from "./TowColumnMenu";
 import type { TowReportRow } from "./TowReportTable";
 
 export type TowPlanRow = {
@@ -38,6 +41,7 @@ export type TowPlanRow = {
   createdAt: string;
   isNew: boolean;
   standOptions: string[];
+  skipped?: boolean;
 };
 
 type GridRow = TowPlanRow & {
@@ -54,7 +58,8 @@ function toGrid(row: TowPlanRow): GridRow {
     standOptions: row.standOptions?.length ? row.standOptions : ["МС"],
     startLocal: row.towStartAt ? toInputMsk(row.towStartAt) : "",
     endLocal: row.towEndAt ? toInputMsk(row.towEndAt) : "",
-    reason: ""
+    reason: "",
+    skipped: row.skipped === true
   };
 }
 
@@ -180,6 +185,7 @@ function visibleSame(local: GridRow, item: TowPlanRow): boolean {
     local.startLocal === (item.towStartAt ? toInputMsk(item.towStartAt) : "") &&
     local.endLocal === (item.towEndAt ? toInputMsk(item.towEndAt) : "") &&
     local.reason === "" &&
+    local.skipped === (item.skipped === true) &&
     local.standOptions.join("|") === options.join("|")
   );
 }
@@ -192,26 +198,6 @@ function shortShift(row: GridRow): boolean {
   return minutes > 0 && minutes < 60;
 }
 
-function UndoIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 7v6h6" />
-      <path d="M21 17a9 9 0 0 0-15-6.7L3 13" />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 6h18" />
-      <path d="M8 6V4h8v2" />
-      <path d="M19 6l-1 14H6L5 6" />
-      <path d="M10 11v6M14 11v6" />
-    </svg>
-  );
-}
-
 function messageRowHeight(text: string, extra = 0): number {
   if (!text && !extra) return 42;
   const lines = text ? Math.ceil(text.length / 26) : 0;
@@ -221,6 +207,65 @@ function messageRowHeight(text: string, extra = 0): number {
 function formatLocalMsk(value: string): string {
   const iso = fromInputMskOptional(value);
   return iso ? formatMskDateTime(iso) : "";
+}
+
+const PLAN_COLUMNS: TowColumnSpec[] = [
+  { key: "select", label: "Выбор", width: 44, locked: true },
+  { key: "isNew", label: "Статус", width: 100 },
+  { key: "aircraftType", label: "Тип ВС", width: 110 },
+  { key: "tailNumber", label: "Борт", width: 120 },
+  { key: "eventTitle", label: "Название события", width: 180 },
+  { key: "eventType", label: "Тип события", width: 150 },
+  { key: "operator", label: "Оператор", width: 130 },
+  { key: "hangarNumber", label: "Номер ангара", width: 120 },
+  { key: "layoutName", label: "Вариант расстановки", width: 170 },
+  { key: "parkedStand", label: "Номер стоянки", width: 140 },
+  { key: "fromStand", label: "Откуда (с МС)", width: 150 },
+  { key: "toStand", label: "Куда (на МС)", width: 150 },
+  { key: "eventStartMsk", label: "Начало события", width: 160 },
+  { key: "eventEndMsk", label: "Окончание события", width: 170 },
+  { key: "startLocal", label: "Начало буксировки", width: 170 },
+  { key: "endLocal", label: "Окончание буксировки", width: 180 },
+  { key: "standOccupancy", label: "Продолжительность занятия МС", width: 180 }
+];
+
+function planCellText(row: GridRow, key: string): string {
+  switch (key) {
+    case "isNew":
+      return row.skipped ? "Не требуется" : row.isNew ? "Новое" : "—";
+    case "aircraftType":
+      return row.aircraftType;
+    case "tailNumber":
+      return row.tailNumber;
+    case "eventTitle":
+      return row.eventTitle || "—";
+    case "eventType":
+      return row.eventType || "—";
+    case "operator":
+      return row.operator;
+    case "hangarNumber":
+      return row.hangarNumber || "—";
+    case "layoutName":
+      return row.layoutName || "—";
+    case "parkedStand":
+      return row.parkedStand || "—";
+    case "fromStand":
+      return row.fromStand || "—";
+    case "toStand":
+      return row.toStand || "—";
+    case "eventStartMsk":
+      return row.eventStartMsk || "—";
+    case "eventEndMsk":
+      return row.eventEndMsk || "—";
+    case "startLocal":
+      return formatLocalMsk(row.startLocal) || "—";
+    case "endLocal":
+      return formatLocalMsk(row.endLocal) || "—";
+    case "standOccupancy":
+      return occupancyOf(row) || "—";
+    default:
+      return "";
+  }
 }
 
 function DateTimeEditor({ row, column, onRowChange, onClose }: RenderEditCellProps<GridRow>) {
@@ -249,6 +294,12 @@ export function TowPlanGrid({
   onDirtyChange: (count: number) => void;
 }) {
   const qc = useQueryClient();
+  const layout = useTowColumnLayout("hangarPlanning:towsPlanColumns:v1", PLAN_COLUMNS);
+  const [columnMenu, setColumnMenu] = useState<TowColumnMenuPoint | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [createOpen, setCreateOpen] = useState(false);
+  const [bulkError, setBulkError] = useState("");
+  const closeColumnMenu = useCallback(() => setColumnMenu(null), []);
   const [rows, setRows] = useState<GridRow[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notices, setNotices] = useState<Record<string, string>>({});
@@ -299,6 +350,7 @@ export function TowPlanGrid({
             return outside[item.id] && grid === local ? { ...grid } : grid;
           }
         const base = saved ?? item;
+        if (item.skipped) return toGrid(item);
         if (!local) return toGrid(item);
         if (isDirty(base, local)) {
           if (
@@ -456,8 +508,9 @@ export function TowPlanGrid({
 
   const mutateRef = useRef(run.mutate);
   mutateRef.current = run.mutate;
-  const editable = (row: GridRow) => canWrite && !row.locked;
+  const editable = (row: GridRow) => canWrite && !row.locked && !row.skipped;
   const fieldClass = (row: GridRow, field: "from" | "to" | "start" | "end") => {
+    if (row.skipped) return "towGridSkipped";
     const required = missingFields(row).includes(field) ? "towGridRequired" : "";
     const locked = editable(row) ? "" : READONLY;
     return [required, locked].filter(Boolean).join(" ") || undefined;
@@ -490,23 +543,58 @@ export function TowPlanGrid({
     setErrors((prev) => (prev[row.id] ? { ...prev, [row.id]: "" } : prev));
     setNotices((prev) => (prev[row.id] ? { ...prev, [row.id]: "" } : prev));
   };
-  const columns = useMemo<Column<GridRow>[]>(
-    () => [
+  const columns = useMemo<Column<GridRow>[]>(() => {
+    const rowIds = rows.map((row) => row.id);
+    const allSelected = rowIds.length > 0 && rowIds.every((id) => selected.has(id));
+    const built: Column<GridRow>[] = [
+      {
+        key: "select",
+        name: "",
+        width: 44,
+        cellClass: (row) => (row.skipped ? "towGridSkipped" : undefined),
+        renderHeaderCell: () => (
+          <input
+            type="checkbox"
+            aria-label="Выбрать все строки"
+            checked={allSelected}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onChange={() => setSelected(allSelected ? new Set() : new Set(rowIds))}
+          />
+        ),
+        renderCell: ({ row }) => (
+          <input
+            type="checkbox"
+            aria-label="Выбрать строку"
+            checked={selected.has(row.id)}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onChange={() =>
+              setSelected((current) => {
+                const next = new Set(current);
+                if (next.has(row.id)) next.delete(row.id);
+                else next.add(row.id);
+                return next;
+              })
+            }
+          />
+        )
+      },
       {
         key: "isNew",
         name: "Статус",
-        width: 100,
-        cellClass: READONLY,
-        renderCell: ({ row }) => (row.isNew ? <span className="towGridNew">Новое</span> : "—")
+        width: 120,
+        cellClass: (row) => (row.skipped ? "towGridSkipped" : READONLY),
+        renderCell: ({ row }) => (row.skipped ? <TowText>Не требуется</TowText> : row.isNew ? <span className="towGridNew">Новое</span> : <TowText>—</TowText>)
       },
-      { key: "aircraftType", name: "Тип ВС", width: 110, cellClass: READONLY },
-      { key: "tailNumber", name: "Борт", width: 120, cellClass: READONLY },
-      { key: "eventTitle", name: "Название события", width: 180, cellClass: READONLY, renderCell: ({ row }) => row.eventTitle || "—" },
-      { key: "eventType", name: "Тип события", width: 150, cellClass: READONLY, renderCell: ({ row }) => row.eventType || "—" },
-      { key: "operator", name: "Оператор", width: 130, cellClass: READONLY },
-      { key: "hangarNumber", name: "Номер ангара", width: 120, cellClass: READONLY, renderCell: ({ row }) => row.hangarNumber || "—" },
-      { key: "layoutName", name: "Вариант расстановки", width: 170, cellClass: READONLY, renderCell: ({ row }) => row.layoutName || "—" },
-      { key: "parkedStand", name: "Номер стоянки", width: 140, cellClass: READONLY, renderCell: ({ row }) => row.parkedStand || "—" },
+      { key: "aircraftType", name: "Тип ВС", width: 110, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.aircraftType || "—"}</TowText> },
+      { key: "tailNumber", name: "Борт", width: 120, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.tailNumber || "—"}</TowText> },
+      { key: "eventTitle", name: "Название события", width: 180, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.eventTitle || "—"}</TowText> },
+      { key: "eventType", name: "Тип события", width: 150, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.eventType || "—"}</TowText> },
+      { key: "operator", name: "Оператор", width: 130, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.operator || "—"}</TowText> },
+      { key: "hangarNumber", name: "Номер ангара", width: 120, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.hangarNumber || "—"}</TowText> },
+      { key: "layoutName", name: "Вариант расстановки", width: 170, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.layoutName || "—"}</TowText> },
+      { key: "parkedStand", name: "Номер стоянки", width: 140, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.parkedStand || "—"}</TowText> },
       {
         key: "fromStand",
         name: "Откуда (с МС)",
@@ -521,15 +609,28 @@ export function TowPlanGrid({
         cellClass: (row) => fieldClass(row, "to"),
         renderCell: ({ row }) => standSelect(row, "toStand")
       },
-      { key: "eventStartMsk", name: "Начало события", width: 160, cellClass: READONLY, renderCell: ({ row }) => row.eventStartMsk || "—" },
-      { key: "eventEndMsk", name: "Окончание события", width: 170, cellClass: READONLY, renderCell: ({ row }) => row.eventEndMsk || "—" },
+      { key: "eventStartMsk", name: "Начало события", width: 160, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.eventStartMsk || "—"}</TowText> },
+      { key: "eventEndMsk", name: "Окончание события", width: 170, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.eventEndMsk || "—"}</TowText> },
       {
         key: "startLocal",
         name: "Начало буксировки",
         width: 170,
         editable,
         cellClass: (row) => fieldClass(row, "start"),
-        renderCell: ({ row }) => formatLocalMsk(row.startLocal) || "—",
+        renderCell: ({ row }) => (
+          <span className="towGridCellStack">
+            <TowText>{formatLocalMsk(row.startLocal) || "—"}</TowText>
+            {shortShift(row) ? (
+              <input
+                className="towGridInput"
+                value={row.reason}
+                placeholder="причина <60 мин"
+                aria-label="Причина сдвига начала"
+                onChange={(event) => setRows((current) => current.map((item) => (item.id === row.id ? { ...item, reason: event.target.value } : item)))}
+              />
+            ) : null}
+          </span>
+        ),
         renderEditCell: DateTimeEditor
       },
       {
@@ -538,7 +639,7 @@ export function TowPlanGrid({
         width: 180,
         editable,
         cellClass: (row) => fieldClass(row, "end"),
-        renderCell: ({ row }) => formatLocalMsk(row.endLocal) || "—",
+        renderCell: ({ row }) => <TowText>{formatLocalMsk(row.endLocal) || "—"}</TowText>,
         renderEditCell: DateTimeEditor
       },
       {
@@ -546,84 +647,146 @@ export function TowPlanGrid({
         name: "Продолжительность занятия МС",
         width: 180,
         cellClass: READONLY,
-        renderCell: ({ row }) => occupancyOf(row) || "—"
-      },
-      {
-        key: "actions",
-        name: "",
-        width: 280,
-        renderCell: ({ row }) => {
-          const source = committedRef.current[row.id] ?? itemsRef.current.find((item) => item.id === row.id);
-          const changed = source ? isDirty(source, row) : false;
-          const pending = pendingRef.current === row.id;
-          return (
-            <div className="towGridActions">
-              {canWrite && !row.locked && changed ? (
-                <>
-                  <button
-                    className="btn btnPrimary"
-                    type="button"
-                    disabled={pending || missingFields(row).length > 0}
-                    onClick={() => mutateRef.current({ kind: "save", row })}
-                  >
-                    Сохранить
-                  </button>
-                  <button className="btn towIconBtn" type="button" disabled={pending} aria-label="Отменить" title="Отменить" onClick={() => resetRow(row)}>
-                    <UndoIcon />
-                  </button>
-                </>
-              ) : null}
-              {canWrite && !row.locked && row.towId ? (
-                <button
-                  className="btn towIconBtn towIconBtnDanger"
-                  type="button"
-                  disabled={pending}
-                  aria-label="Удалить"
-                  title="Удалить"
-                  onClick={() => {
-                    if (window.confirm("Удалить эту буксировку?")) mutateRef.current({ kind: "delete", row });
-                  }}
-                >
-                  <TrashIcon />
-                </button>
-              ) : null}
-              {shortShift(row) ? (
-                <input
-                  className="towGridInput"
-                  value={row.reason}
-                  placeholder="причина <60 мин"
-                  aria-label="Причина сдвига начала"
-                  onChange={(event) =>
-                    setRows((current) => current.map((item) => (item.id === row.id ? { ...item, reason: event.target.value } : item)))
-                  }
-                />
-              ) : null}
-              {errorsRef.current[row.id] ? <span className="error towGridMessage">{errorsRef.current[row.id]}</span> : null}
-              {noticesRef.current[row.id] ? <span className="muted towGridMessage">{noticesRef.current[row.id]}</span> : null}
-            </div>
-          );
-        }
+        renderCell: ({ row }) => <TowText>{occupancyOf(row) || "—"}</TowText>
       }
-    ],
-    [canWrite]
+    ];
+    const visible = new Set(layout.visibleKeys);
+    return built
+      .filter((column) => visible.has(column.key))
+      .map((column) => layoutColumn(column, layout.widthOf(column.key, typeof column.width === "number" ? column.width : 120)));
+  }, [canWrite, layout.visibleKeys, layout.widthOf, rows, selected]);
+  const headerRowHeight = useMemo(
+    () =>
+      wrappedBlockSize(
+        columns
+          .filter((column) => typeof column.name === "string" && column.name)
+          .map((column) => ({ text: String(column.name), width: typeof column.width === "number" ? column.width : 120 })),
+        44,
+        132
+      ),
+    [columns]
   );
   const rowHeight = useCallback(
-    (row: GridRow) => messageRowHeight(errorsRef.current[row.id] || noticesRef.current[row.id] || "", shortShift(row) ? 34 : 0),
-    []
+    (row: GridRow) => {
+      const message = messageRowHeight(errorsRef.current[row.id] || noticesRef.current[row.id] || "", shortShift(row) ? 34 : 0);
+      const wrapped = wrappedBlockSize(
+        columns
+          .filter((column) => column.key !== "actions")
+          .map((column) => ({ text: planCellText(row, column.key), width: typeof column.width === "number" ? column.width : 120 }))
+      );
+      return Math.max(message, wrapped);
+    },
+    [columns]
   );
+
+  const sourceOf = (row: GridRow) => committedRef.current[row.id] ?? itemsRef.current.find((item) => item.id === row.id);
+  const dirtyRows = rows.filter((row) => {
+    const source = sourceOf(row);
+    return source ? isDirty(source, row) : false;
+  });
+  const chosen = rows.filter((row) => selected.has(row.id));
+  const deleteTargets = chosen.filter((row) => row.towId && !row.locked && !row.skipped);
+  const skipIds = [...new Set(chosen.filter((row) => !row.locked).map((row) => row.eventId))];
+  const skipClears = skipIds.length > 0 && skipIds.every((id) => chosen.some((row) => row.eventId === id && row.skipped));
+  const messages = [
+    ...Object.entries(errors).filter(([, text]) => text),
+    ...Object.entries(notices).filter(([, text]) => text)
+  ];
+  const saveDirty = async () => {
+    setBulkError("");
+    for (const row of dirtyRows) {
+      if (missingFields(row).length || (shortShift(row) && !row.reason.trim())) {
+        setBulkError(shortShift(row) && !row.reason.trim() ? "Сдвиг начала меньше 60 минут. Укажите причину в строке" : "Заполните откуда, куда, начало и окончание");
+        return;
+      }
+      try {
+        await run.mutateAsync({ kind: "save", row });
+      } catch (reason) {
+        setBulkError(String((reason as Error).message ?? reason));
+        return;
+      }
+    }
+  };
+  const deleteChosen = async () => {
+    if (!deleteTargets.length) return;
+    if (!window.confirm(deleteTargets.length === 1 ? "Удалить эту буксировку?" : `Удалить буксировки: ${deleteTargets.length}?`)) return;
+    setBulkError("");
+    for (const row of deleteTargets) {
+      try {
+        await run.mutateAsync({ kind: "delete", row });
+      } catch (reason) {
+        setBulkError(String((reason as Error).message ?? reason));
+        return;
+      }
+    }
+    setSelected(new Set());
+  };
+  const skipChosen = async () => {
+    if (!skipIds.length) return;
+    setBulkError("");
+    try {
+      await apiPost("/api/tows/skip", { eventIds: skipIds, skipped: !skipClears });
+      setSelected(new Set());
+      await refreshTowLists(qc);
+    } catch (reason) {
+      setBulkError(String((reason as Error).message ?? reason));
+    }
+  };
 
   return (
     <>
-      <DataGrid
-        className="rdg-light towGrid"
-        columns={columns}
-        rows={rows}
-        rowKeyGetter={(row) => row.id}
-        onRowsChange={setRows}
-        headerRowHeight={58}
+      <TowActionBar
+        canWrite={canWrite}
+        dirty={dirtyRows.length}
+        selected={chosen.length}
+        canDelete={deleteTargets.length > 0}
+        canSkip={skipIds.length > 0}
+        skipClears={skipClears}
+        pending={run.isPending}
+        onCreate={() => setCreateOpen(true)}
+        onSave={() => void saveDirty()}
+        onUndo={() => {
+          for (const row of dirtyRows) resetRow(row);
+        }}
+        onDelete={() => void deleteChosen()}
+        onSkip={() => void skipChosen()}
+      />
+      {bulkError ? <div className="error">{bulkError}</div> : null}
+      {messages.map(([id, text]) => (
+        <div key={id} className={errors[id] ? "error" : "muted"}>
+          {text}
+        </div>
+      ))}
+      <div onContextMenu={(event) => {
+        const point = towHeaderContextPoint(event);
+        if (point) setColumnMenu(point);
+      }}>
+        <DataGrid
+          className="rdg-light towGrid"
+          columns={columns}
+          rows={rows}
+          rowKeyGetter={(row) => row.id}
+          onRowsChange={setRows}
+          onColumnResize={(idx, width) => {
+            const key = columns[idx]?.key;
+            if (key) layout.resize(key, width);
+          }}
+        headerRowHeight={headerRowHeight}
         rowHeight={rowHeight}
+        rowClass={(row) => (row.skipped ? "towGridSkipped" : undefined)}
         style={{ blockSize: "min(70vh, 760px)" }}
       />
+      </div>
+      {createOpen ? (
+        <TowCreateDialog
+          events={items}
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => {
+            void refreshTowLists(qc);
+          }}
+        />
+      ) : null}
+      <TowColumnMenu specs={PLAN_COLUMNS} hidden={layout.hidden} onShown={layout.setShown} point={columnMenu} onClose={closeColumnMenu} />
       {rows.length === 0 ? <div className="muted towGridEmpty">В этом периоде нет событий</div> : null}
     </>
   );

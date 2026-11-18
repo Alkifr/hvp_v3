@@ -7579,6 +7579,94 @@ input[type="number"]::-webkit-inner-spin-button {
   z-index: 5;
 }
 
+.ganttScaleGuides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ganttScaleGuide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  pointer-events: none;
+}
+
+.ganttScaleGuideMinor {
+  background: rgba(100, 116, 139, 0.42);
+}
+
+.ganttScaleGuideMajor {
+  background: rgba(15, 23, 42, 0.72);
+  z-index: 1;
+}
+
+.ganttMarkerLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #2563eb;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.ganttMarkerLineHead::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid #2563eb;
+}
+
+.ganttCursorReadout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 22rem;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: #f8fafc;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ganttCursorReadoutLive {
+  background: #eff6ff;
+  color: #1e3a8a;
+  border-color: rgba(37, 99, 235, 0.45);
+}
+
+.ganttCursorMarkBtn {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.45);
+  background: #2563eb;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ganttCursorMarkBtn:hover {
+  background: #1d4ed8;
+}
+
 .ganttRightScroll.ganttPanReady {
   cursor: grab;
 }
@@ -7669,13 +7757,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .ganttSlotHistogramCanvas .ganttVirtPane {
-  background: repeating-linear-gradient(
-    90deg,
-    rgba(148, 163, 184, 0.16) 0,
-    rgba(148, 163, 184, 0.16) 1px,
-    transparent 1px,
-    transparent 24px
-  );
+  background: transparent;
 }
 
 .slotBucket {
@@ -7687,6 +7769,7 @@ input[type="number"]::-webkit-inner-spin-button {
   overflow: visible;
   background: transparent;
   box-shadow: none;
+  z-index: 2;
 }
 
 .slotBucketOccupied {
@@ -17029,6 +17112,60 @@ textarea.refInput.refMemo {
   }
 }
 
+.towGridActionBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 8px;
+}
+
+.towGridActionBar .btn {
+  padding: 6px 10px;
+}
+
+.towCreateFields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.towCreateInput {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  background: #fff;
+}
+
+.towGridCellStack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.towGrid .rdg-row.towGridSkipped .rdg-cell,
+.towGrid .rdg-cell.towGridSkipped {
+  background: #e5e7eb;
+  color: #6b7280;
+}
+
+.towsTableCard {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.towsTableCard .rdg.towGrid {
+  width: 100%;
+  max-width: 100%;
+}
+
 .towGrid {
   --rdg-color: #0f172a;
   --rdg-border-color: #e2e8f0;
@@ -17039,9 +17176,81 @@ textarea.refInput.refMemo {
   font-size: 13px;
 }
 
-.towGrid .rdg-cell {
+.towColumnMenuPanel {
+  position: fixed;
+  z-index: 10000;
+  width: 320px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+  padding: 8px 10px;
+}
+
+.towColumnMenuHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.towColumnMenuHead button {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.towColumnMenuHead button:disabled {
+  color: #94a3b8;
+  cursor: default;
+}
+
+.towColumnMenuPanel label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+  line-height: 1.3;
+  color: #0f172a;
+}
+
+.rdg.towGrid .rdg-cell {
   border-inline-end: 1px solid #e2e8f0;
   border-block-end: 1px solid #e2e8f0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.3;
+  text-align: left;
+  align-content: center;
+  padding-block: 4px;
+}
+
+.rdg.towGrid .rdg-header-row .rdg-cell {
+  font-weight: 600;
+  align-content: center;
+  text-align: left;
+  padding-inline-end: 14px;
+}
+
+.towGridHeaderLabel,
+.towGridCellText {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: left;
+  line-height: 1.3;
 }
 
 .towGrid .rdg-cell.towGridReadonly {
@@ -17073,7 +17282,9 @@ textarea.refInput.refMemo {
 
 .towGridInput {
   width: 100%;
-  height: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 28px;
   box-sizing: border-box;
   border: 0;
   background: transparent;
@@ -17084,9 +17295,10 @@ textarea.refInput.refMemo {
 .towOccupancyEdit {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   width: 100%;
-  height: 100%;
+  height: auto;
 }
 
 .towOccupancyEdit .towGridInput {

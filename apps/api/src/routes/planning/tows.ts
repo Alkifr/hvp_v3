@@ -399,7 +399,8 @@ async function loadTowPlan(prisma: any, req: any, from: Date, to: Date) {
       eventType: true,
       hangar: true,
       placements: { include: { hangar: true, layout: true, stand: true }, orderBy: [{ sortOrder: "asc" }, { startAt: "asc" }] },
-      towSegments: { orderBy: [{ startAt: "asc" }] }
+      towSegments: { orderBy: [{ startAt: "asc" }] },
+      towWaivers: { select: { role: true } }
     },
     orderBy: [{ startAt: "asc" }, { id: "asc" }]
   });
@@ -455,6 +456,7 @@ async function loadTowPlan(prisma: any, req: any, from: Date, to: Date) {
         (virtual?.operatorId ? (operatorById.get(virtual.operatorId) ?? "") : ""),
       eventTitle: event.title ?? "",
       eventType: event.eventType?.name || event.eventType?.code || "",
+      skipped: (event.towWaivers as Array<{ role: string }>).some((waiver) => waiver.role === "skip"),
       placements: event.placements.map((placement: any) => ({
         id: placement.id,
         origin: placement.origin === "AUTO_GAP" ? "AUTO_GAP" : "MANUAL",
@@ -794,6 +796,37 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
         ]
       })
     );
+    return { ok: true as const };
+  });
+
+  app.post("/skip", async (req) => {
+    assertCanWriteTow(req);
+    const body = z
+      .object({
+        eventIds: z.array(zUuid).min(1).max(200),
+        skipped: z.boolean()
+      })
+      .parse(req.body ?? {});
+    const events = await app.prisma.maintenanceEvent.findMany({
+      where: { id: { in: body.eventIds }, ...sandboxFilter(req) },
+      select: { id: true, status: true }
+    });
+    if (events.length !== body.eventIds.length) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+    if (events.some((event) => isDoneScheduleLocked(event.status))) throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
+    const sbId = sandboxIdFor(req);
+    if (body.skipped) {
+      await app.prisma.$transaction(
+        events.map((event) =>
+          app.prisma.eventTowWaiver.upsert({
+            where: { eventId_role: { eventId: event.id, role: "skip" } },
+            create: { eventId: event.id, sandboxId: sbId, role: "skip", actor: getActor(req) },
+            update: { actor: getActor(req) }
+          })
+        )
+      );
+    } else {
+      await app.prisma.eventTowWaiver.deleteMany({ where: { eventId: { in: body.eventIds }, role: "skip" } });
+    }
     return { ok: true as const };
   });
 

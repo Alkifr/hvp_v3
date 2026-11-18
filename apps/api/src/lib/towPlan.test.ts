@@ -37,6 +37,7 @@ function event(partial: Partial<TowPlanEvent> & Pick<TowPlanEvent, "id">): TowPl
       }
     ],
     tows: [],
+    skipped: false,
     ...partial
   };
 }
@@ -85,6 +86,14 @@ test("plan keeps an event without a tow in the window and keys an intersecting t
   assert.ok(assigned?.standOccupancy);
   assert.equal(assigned?.eventStartMsk.includes("17.11.2026"), true);
   assert.deepEqual(assigned?.standOptions, ["МС", "A1"]);
+  assert.equal(assigned?.skipped, false);
+});
+
+test("skipped event stays on the plan and keeps the mark", () => {
+  const rows = buildTowPlanRows([event({ id: "skip", skipped: true })], from, to);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.skipped, true);
+  assert.equal(rows[0]?.towId, "");
 });
 
 test("stand list is МС plus parking stands that overlap the period", () => {

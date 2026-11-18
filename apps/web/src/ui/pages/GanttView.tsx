@@ -808,6 +808,25 @@ function formatTimelineDate(value: string | Date | null | undefined, mode: Timel
   return d.isValid() ? d.format("DD.MM.YYYY HH:mm") : "—";
 }
 
+/** Точка курсора на шкале: 18.Nov.2026 20:47:13 Wednesday */
+function formatGanttCursor(d: dayjs.Dayjs): string {
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.date())}.${months[d.month()] ?? d.format("MMM")}.${d.year()} ${pad(d.hour())}:${pad(d.minute())}:${pad(d.second())} ${weekdays[d.day()] ?? ""}`;
+}
+
+function timelineInstant(ms: number, mode: TimelineTimeMode): dayjs.Dayjs {
+  return mode === "UTC" ? dayjs.utc(ms) : dayjs(ms).utcOffset(MSK_OFFSET_MINUTES);
+}
+
+const GANTT_MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Пиксель шкалы → абсолютное время. dayjs.add(дробное, "day") округляет до целых суток. */
+function timelineMsAtX(from: dayjs.Dayjs, x: number, dayWidth: number): number {
+  return from.valueOf() + (x / Math.max(dayWidth, 1e-6)) * GANTT_MS_PER_DAY;
+}
+
 function calcBarXW(params: {
   startAt: string;
   endAt: string;
@@ -1782,6 +1801,42 @@ function TodayLine(props: {
   );
 }
 
+function spacedGuideLefts(xs: number[], minGap: number) {
+  const out: number[] = [];
+  let last = -1e9;
+  for (const x of xs) {
+    if (x - last < minGap) continue;
+    out.push(x);
+    last = x;
+  }
+  return out;
+}
+
+function GanttScaleGuides(props: { minorLefts: number[]; majorLefts: number[] }) {
+  if (props.minorLefts.length === 0 && props.majorLefts.length === 0) return null;
+  return (
+    <div className="ganttScaleGuides" aria-hidden="true">
+      {props.minorLefts.map((left, i) => (
+        <div key={`n${i}`} className="ganttScaleGuide ganttScaleGuideMinor" style={{ left }} />
+      ))}
+      {props.majorLefts.map((left, i) => (
+        <div key={`j${i}`} className="ganttScaleGuide ganttScaleGuideMajor" style={{ left }} />
+      ))}
+    </div>
+  );
+}
+
+function GanttMarkerLine(props: { left: number | null; title: string; head?: boolean }) {
+  if (props.left == null) return null;
+  return (
+    <div
+      className={`ganttMarkerLine${props.head ? " ganttMarkerLineHead" : ""}`}
+      style={{ left: props.left }}
+      title={props.title}
+    />
+  );
+}
+
 /** Модальный drawer (легенда, подтверждения) — portal на body, всегда поверх карточки события. */
 function Drawer(props: {
   open: boolean;
@@ -2213,6 +2268,10 @@ export function GanttView() {
   const ganttRowOffsetsRef = useRef<number[]>([0]);
   const autoScrollRafRef = useRef<number | null>(null);
   const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
+  const ganttHoverClientXRef = useRef<number | null>(null);
+  const ganttHoverClientYRef = useRef<number | null>(null);
+  const ganttHoverXRef = useRef<number | null>(null);
+  const publishGanttHoverRef = useRef<(clientX: number, clientY: number) => void>(() => {});
   const initialFrom = useMemo(() => dayjs().add(-20, "day").format("YYYY-MM-DD"), []);
   const initialTo = useMemo(() => dayjs().add(30, "day").format("YYYY-MM-DD"), []);
   const savedUi = useMemo(() => {
@@ -2309,6 +2368,8 @@ export function GanttView() {
   const timelineScaleMenuRef = useRef<HTMLDivElement | null>(null);
   const [axisSortMenu, setAxisSortMenu] = useState<null | { x: number; y: number }>(null);
   const axisSortMenuRef = useRef<HTMLDivElement | null>(null);
+  const [hoverCursorLabel, setHoverCursorLabel] = useState("");
+  const [markerAtMs, setMarkerAtMs] = useState<number | null>(null);
 
   useEffect(() => {
     const minorIdx = ZOOM_ORDER.indexOf(minorScale);
@@ -2906,6 +2967,84 @@ export function GanttView() {
   }, [fitWidth, timelineViewportWidth, days, fixedDayWidth]);
   // Всегда через dayWidth: при выходе из «по ширине» ширина гарантированно возвращается к зуму.
   const canvasWidth = useMemo(() => Math.max(1, Math.round(days * dayWidth)), [days, dayWidth]);
+
+  publishGanttHoverRef.current = (clientX, clientY) => {
+    const ports = [headerViewportRef.current, bodyScrollRef.current, histogramViewportRef.current];
+    let x: number | null = null;
+    for (const port of ports) {
+      if (!port) continue;
+      const rect = port.getBoundingClientRect();
+      if (clientY < rect.top || clientY > rect.bottom) continue;
+      if (clientX < rect.left || clientX > rect.right) continue;
+      const next = clientX - rect.left + port.scrollLeft;
+      if (!Number.isFinite(next) || next < -0.5 || next > canvasWidth + 0.5) break;
+      x = next;
+      break;
+    }
+    if (x == null) return;
+    ganttHoverXRef.current = x;
+    const label = formatGanttCursor(timelineInstant(timelineMsAtX(from, x, dayWidth), timelineTimeMode));
+    setHoverCursorLabel((prev) => (prev === label ? prev : label));
+  };
+
+  const onGanttTimelinePointerMove = (e: React.PointerEvent<HTMLElement>) => {
+    ganttHoverClientXRef.current = e.clientX;
+    ganttHoverClientYRef.current = e.clientY;
+    publishGanttHoverRef.current(e.clientX, e.clientY);
+  };
+
+  const clearGanttHover = () => {
+    ganttHoverXRef.current = null;
+    ganttHoverClientXRef.current = null;
+    ganttHoverClientYRef.current = null;
+    setHoverCursorLabel((prev) => (prev ? "" : prev));
+  };
+
+  const onGanttTimelinePointerLeave = (e: React.PointerEvent<HTMLElement>) => {
+    const next = e.relatedTarget;
+    if (next instanceof Element && next.closest(".ganttHeaderRightViewport, .ganttRightCol, .ganttSlotHistogramViewport")) return;
+    clearGanttHover();
+  };
+
+  useEffect(() => {
+    if (panelView === "DIAGRAM") return;
+    ganttHoverXRef.current = null;
+    ganttHoverClientXRef.current = null;
+    ganttHoverClientYRef.current = null;
+    setHoverCursorLabel("");
+  }, [panelView]);
+
+  useEffect(() => {
+    const isTypingTarget = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      return Boolean(el.isContentEditable);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "KeyR") return;
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (isTypingTarget(e.target)) return;
+      if (panelView !== "DIAGRAM") return;
+      const clientX = ganttHoverClientXRef.current;
+      const clientY = ganttHoverClientYRef.current;
+      if (clientX == null || clientY == null) return;
+      publishGanttHoverRef.current(clientX, clientY);
+      const x = ganttHoverXRef.current;
+      if (x == null) return;
+      e.preventDefault();
+      const nextMs = timelineMsAtX(from, x, dayWidth);
+      setMarkerAtMs((prev) => {
+        if (prev == null) return nextMs;
+        const prevX = timelineInstant(prev, timelineTimeMode).diff(from, "day", true) * dayWidth;
+        if (Math.abs(prevX - x) <= 8) return null;
+        return nextMs;
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [panelView, from, dayWidth, canvasWidth, timelineTimeMode]);
   // Эпоха только при смене fit — remount внутренних слоёв скролла (Chromium иначе
   // не обновляет scrollWidth), без remount на каждый canvasWidth (это дёргало скролл).
   const [fitLayoutEpoch, setFitLayoutEpoch] = useState(0);
@@ -3099,6 +3238,9 @@ export function GanttView() {
     if (b && source !== "body" && b.scrollLeft !== scrollLeft) b.scrollLeft = scrollLeft;
     if (g && g.scrollLeft !== scrollLeft) g.scrollLeft = scrollLeft;
     if (s && source !== "bottom" && s.scrollLeft !== scrollLeft) s.scrollLeft = scrollLeft;
+    if (ganttHoverClientXRef.current != null && ganttHoverClientYRef.current != null) {
+      publishGanttHoverRef.current(ganttHoverClientXRef.current, ganttHoverClientYRef.current);
+    }
     requestAnimationFrame(() => {
       scrollSyncLockRef.current = false;
     });
@@ -6510,6 +6652,29 @@ export function GanttView() {
     if (!clipped) return [];
     return [{ ...b, paneLeft: clipped.left, paneWidth: clipped.width }];
   });
+  const scaleMajorLefts: number[] = [];
+  for (const segment of majorSegments) {
+    const start = timelineInstant(dayjs(segment.key).valueOf(), timelineTimeMode);
+    const raw = start.diff(from, "day", true) * dayWidth;
+    if (raw < paneLeft - 1 || raw > paneRight + 1) continue;
+    scaleMajorLefts.push(raw - paneLeft);
+  }
+  const scaleMinorLefts: number[] = [];
+  for (const cell of visibleTickCells) {
+    const x = cell.t.at.diff(from, "day", true) * dayWidth - paneLeft;
+    if (x < -1 || x > paneWidth + 1) continue;
+    if (scaleMajorLefts.some((majorX) => Math.abs(majorX - x) < 0.8)) continue;
+    scaleMinorLefts.push(x);
+  }
+  const scaleGuideMajorLefts = spacedGuideLefts(scaleMajorLefts, 8);
+  const scaleGuideMinorLefts = spacedGuideLefts(scaleMinorLefts, 8);
+  const markerAt = markerAtMs == null ? null : timelineInstant(markerAtMs, timelineTimeMode);
+  const markerLabel = markerAt?.isValid() ? formatGanttCursor(markerAt) : "";
+  let markerPaneX: number | null = null;
+  if (markerAt?.isValid() && markerAt.valueOf() >= from.valueOf() && markerAt.valueOf() < to.valueOf()) {
+    const markerX = markerAt.diff(from, "day", true) * dayWidth;
+    if (markerX >= paneLeft - 2 && markerX <= paneRight + 2) markerPaneX = markerX - paneLeft;
+  }
   const visiblePaneLinks = visiblePlacementLinks.filter(
     (l) =>
       rangesOverlap(Math.min(l.x1, l.x2), Math.max(l.x1, l.x2), paneLeft - 24, paneRight + 24) &&
@@ -7069,6 +7234,28 @@ export function GanttView() {
                 />
               </label>
             </div>
+            {panelView === "DIAGRAM" ? (
+              <div
+                className="ganttToolbarGroup ganttCursorReadoutGroup"
+                title="Точка курсора на диаграмме. Клавиша R ставит синюю линию в эту точку; повторное R рядом с линией убирает её."
+              >
+                <span className="tgLabel">Курсор</span>
+                <output className={`ganttCursorReadout${hoverCursorLabel ? " ganttCursorReadoutLive" : ""}`}>
+                  {hoverCursorLabel || "—"}
+                </output>
+                {markerLabel ? (
+                  <button
+                    type="button"
+                    className="ganttCursorMarkBtn"
+                    title={`Убрать синюю линию (${markerLabel}). Либо нажмите R рядом с ней.`}
+                    aria-label="Убрать синюю линию"
+                    onClick={() => setMarkerAtMs(null)}
+                  >
+                    R ×
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
         ) : null}
@@ -7331,9 +7518,12 @@ export function GanttView() {
                 setAxisSortMenu(null);
                 setTimelineScaleMenu({ x: e.clientX, y: e.clientY });
               }}
-              title="ПКМ — шкала времени (Major / Minor / по ширине)"
+              onPointerMove={onGanttTimelinePointerMove}
+              onPointerLeave={onGanttTimelinePointerLeave}
+              title="ПКМ — шкала времени (Major / Minor / по ширине). R — синяя линия в точке курсора."
             >
               <div className="ganttVirtPane" style={{ left: paneLeft, width: paneWidth, top: 0, height: 44 }}>
+              <GanttMarkerLine head left={markerPaneX} title={markerLabel ? `Метка R: ${markerLabel}` : ""} />
               <TodayLine
                 from={from}
                 to={to}
@@ -7551,6 +7741,8 @@ export function GanttView() {
                 className={`ganttRightInner${showGanttNotes ? " ganttNotesUnderBars" : ""}${ganttDisplayMode === "PLAN_FACT" ? " ganttNotesPlanFact" : ""}`}
                 style={{ width: canvasWidth, minWidth: canvasWidth, height: ganttBodyHeight }}
                 onPointerDown={onGanttPanPointerDown}
+                onPointerMove={onGanttTimelinePointerMove}
+                onPointerLeave={onGanttTimelinePointerLeave}
                 onDragStart={(e) => e.preventDefault()}
                 onAuxClick={(e) => {
                   if (e.button === 1) e.preventDefault();
@@ -7576,6 +7768,8 @@ export function GanttView() {
                   </svg>
                 ) : null}
                 <div className="ganttVirtPane" style={{ left: paneLeft, top: virtPaneTop, width: paneWidth, height: virtPaneHeight }}>
+                <GanttScaleGuides minorLefts={scaleGuideMinorLefts} majorLefts={scaleGuideMajorLefts} />
+                <GanttMarkerLine left={markerPaneX} title={markerLabel ? `Метка R: ${markerLabel}` : ""} />
                 <TodayLine
                   from={from}
                   to={to}
@@ -7938,8 +8132,16 @@ export function GanttView() {
                 <span>кол-во в периоде</span>
               </div>
               <div className="ganttSlotHistogramViewport" ref={histogramViewportRef}>
-                <div key={`gantt-hist-${fitLayoutEpoch}`} className="ganttSlotHistogramCanvas" style={{ width: canvasWidth, minWidth: canvasWidth }}>
+                <div
+                  key={`gantt-hist-${fitLayoutEpoch}`}
+                  className="ganttSlotHistogramCanvas"
+                  style={{ width: canvasWidth, minWidth: canvasWidth }}
+                  onPointerMove={onGanttTimelinePointerMove}
+                  onPointerLeave={onGanttTimelinePointerLeave}
+                >
                   <div className="ganttVirtPane" style={{ left: paneLeft, width: paneWidth, top: 0, height: 76 }}>
+                  <GanttScaleGuides minorLefts={scaleGuideMinorLefts} majorLefts={scaleGuideMajorLefts} />
+                  <GanttMarkerLine left={markerPaneX} title={markerLabel ? `Метка R: ${markerLabel}` : ""} />
                   {slotHistogram.length > 0 ? (
                     visibleHistogramBuckets.map((b) => {
                       const occupiedPct = b.occupied > 0 ? (b.occupied / slotHistogramMaxOccupied) * 100 : 0;

@@ -6,7 +6,7 @@ import utc from "dayjs/plugin/utc";
 import { apiDelete, apiGet, apiPost } from "../../lib/api";
 import { isValidDateInput, isValidDateTimeLocal } from "../../lib/dateInput";
 import { parseHashPage } from "../../lib/eventDeepLink";
-import { fromInputMskOptional, MSK_OFFSET_MINUTES, toInputMsk } from "../../lib/localDate";
+import { formatMskDateTime, fromInputMskOptional, MSK_OFFSET_MINUTES, toInputMsk } from "../../lib/localDate";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { downloadTowReportXlsx } from "../../lib/towReportExcel";
 import { parseTowsViewShare, syncTowsViewHash } from "../../lib/viewShareUrl";
@@ -131,6 +131,61 @@ function reportFacet(row: TowReportRow): FacetRow {
     aircraftId: row.aircraftId,
     tailNumber: row.tailNumber
   };
+}
+
+function placeholderReport(row: TowPlanRow): TowReportRow {
+  return {
+    id: `plan:${row.eventId}`,
+    eventId: row.eventId,
+    eventTitle: row.eventTitle,
+    eventStatus: "",
+    seq: 0,
+    direction: "",
+    directionLabel: "",
+    hangarId: row.hangarId,
+    hangarNumber: row.hangarNumber,
+    aircraftTypeId: row.aircraftTypeId,
+    aircraftType: row.aircraftType,
+    aircraftId: row.aircraftId,
+    tailNumber: row.tailNumber,
+    operatorId: row.operatorId,
+    operator: row.operator,
+    fromStand: row.fromStand,
+    toStand: row.toStand,
+    plannedStartAt: row.towStartAt,
+    plannedStartMsk: row.towStartAt ? formatMskDateTime(row.towStartAt) : "",
+    plannedEndAt: row.towEndAt,
+    plannedEndMsk: row.towEndAt ? formatMskDateTime(row.towEndAt) : "",
+    occupancyEndAt: "",
+    occupancyEndMsk: "",
+    inferredOccupancyEndAt: row.towId ? row.eventEndAt : "",
+    standOccupancy: row.towId ? row.standOccupancy : "",
+    notes: "",
+    toSlotEndMsk: row.eventEndMsk || (row.eventEndAt ? formatMskDateTime(row.eventEndAt) : ""),
+    toSlotDuration: (row.eventEndMsk || row.eventEndAt) ? `Слот до ${row.eventEndMsk || formatMskDateTime(row.eventEndAt)} мск` : "",
+    positionComment: "",
+    startChangeReason: ""
+  };
+}
+
+function registryFromPlan(plan: TowPlanRow[], report: TowReportRow[]): TowReportRow[] {
+  const skipped = new Set(plan.filter((row) => row.skipped).map((row) => row.eventId));
+  const visibleReport = report.filter((row) => !skipped.has(row.eventId));
+  const byTow = new Map(visibleReport.map((row) => [row.id, row]));
+  const eventsWithReport = new Set(visibleReport.map((row) => row.eventId));
+  const out: TowReportRow[] = [];
+  const blankSeen = new Set<string>();
+  for (const row of plan) {
+    if (skipped.has(row.eventId)) continue;
+    if (row.towId) {
+      out.push(byTow.get(row.towId) ?? placeholderReport(row));
+      continue;
+    }
+    if (eventsWithReport.has(row.eventId) || blankSeen.has(row.eventId)) continue;
+    blankSeen.add(row.eventId);
+    out.push(placeholderReport(row));
+  }
+  return out.map((row, index) => ({ ...row, seq: index + 1 }));
 }
 
 function rowFacet(row: TowPlanRow): FacetRow {
@@ -302,10 +357,8 @@ export function RmTowsView() {
   }, [archiveId, facetRows.length, smartFilterOptions, hangarIds, operatorIds, aircraftTypeIds, aircraftIds]);
 
   const items = useMemo(() => loaded.filter((row) => facetMatches(rowFacet(row), filters)), [loaded, filters]);
-  const reportItems = useMemo(
-    () => reportLoaded.filter((row) => facetMatches(reportFacet(row), filters)).map((row, index) => ({ ...row, seq: index + 1 })),
-    [reportLoaded, filters]
-  );
+  const reportItems = useMemo(() => registryFromPlan(items, reportLoaded), [items, reportLoaded]);
+  const assignedReportCount = reportItems.filter((row) => !row.id.startsWith("plan:")).length;
   const waiting = useMemo(() => items.filter((row) => !row.towId).length, [items]);
 
   const saveArchiveM = useMutation({
@@ -328,7 +381,7 @@ export function RmTowsView() {
   const fixM = useMutation({
     mutationFn: async () => {
       if (!fromIso || !toIso) throw new Error("Укажите период");
-      if (reportItems.length === 0) throw new Error("В выбранном периоде нет назначенных буксировок");
+      if (assignedReportCount === 0) throw new Error("В выбранном периоде нет назначенных буксировок");
       return apiPost<{ ok: true; subject: string; rows: number }>("/api/tows/fix", {
         from: fromIso,
         to: toIso,
@@ -377,12 +430,12 @@ export function RmTowsView() {
           <p className="muted towsPaneHint">
             {pane === "plan"
               ? "План — все события выбранного периода. Откуда, куда и время буксировки заполняются вместе. Буксировка видна в строке, только если её время попадает в период."
-              : "Реестр — только буксировки, заполненные на плане. Занятие МС, примечание, позиция и причина правятся здесь. Слот ТО показан датой окончания."}
+              : "Реестр показывает те же события, что и план. «Не требуется» прячет событие отсюда. Занятие МС пустое, пока нет буксировки. Слот ТО заполнен."}
           </p>
         </div>
         <div className="massHeroStats" aria-label="Сводка буксировок">
           <span>
-            <b>{pane === "plan" ? items.length : reportItems.length}</b> {pane === "plan" ? "строк" : "буксировок"}
+            <b>{pane === "plan" ? items.length : reportItems.length}</b> строк
           </span>
           {pane === "plan" ? (
             <span>
@@ -519,7 +572,7 @@ export function RmTowsView() {
             <button
               className="btn btnPrimary"
               type="button"
-              disabled={!canWrite || fixM.isPending || reportItems.length === 0 || reportDirty > 0}
+              disabled={!canWrite || fixM.isPending || assignedReportCount === 0 || reportDirty > 0}
               onClick={() => fixM.mutate()}
             >
               Зафиксировать
