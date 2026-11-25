@@ -173,6 +173,29 @@ export function fromInputMskOptional(value: string): string | null {
   return cellToIsoLocal(value.replace("T", " "));
 }
 
+/** `datetime-local` MSK → та же строка через `minutes`. Пустой или неразобранный вход даёт пустую строку. */
+export function addInputMskMinutes(value: string, minutes: number): string {
+  const iso = fromInputMskOptional(value);
+  if (!iso || !Number.isFinite(minutes)) return "";
+  return toInputMsk(new Date(Date.parse(iso) + minutes * 60_000).toISOString());
+}
+
+/**
+ * Окончание буксировки. Пустой конец и конец, который всё ещё равен прошлому началу плюс `minutes`,
+ * едут за новым началом. Свой конец сохраняется, пока он позже нового начала.
+ */
+export function nextTowEndLocal(previousStart: string, previousEnd: string, nextStart: string, minutes = 30): string {
+  const previousDefault = previousStart ? addInputMskMinutes(previousStart, minutes) : "";
+  const custom = Boolean(previousEnd) && previousEnd !== previousDefault;
+  if (!nextStart) return custom ? previousEnd : "";
+  const nextDefault = addInputMskMinutes(nextStart, minutes);
+  if (!custom) return nextDefault;
+  const startIso = fromInputMskOptional(nextStart);
+  const endIso = fromInputMskOptional(previousEnd);
+  if (startIso && endIso && Date.parse(endIso) > Date.parse(startIso)) return previousEnd;
+  return nextDefault;
+}
+
 /** Absolute instant → `datetime-local` wall clock in MSK. */
 export function toInputMsk(value: string | Date | null | undefined): string {
   if (value == null || value === "") return "";

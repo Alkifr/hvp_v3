@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -8,6 +8,7 @@ import { isValidDateInput, isValidDateTimeLocal } from "../../lib/dateInput";
 import { parseHashPage } from "../../lib/eventDeepLink";
 import { formatMskDateTime, fromInputMskOptional, MSK_OFFSET_MINUTES, toInputMsk } from "../../lib/localDate";
 import { hasPermission } from "../../lib/permissionCatalog";
+import { registryNoteText, registryPositionText } from "../../lib/towRegistryNote";
 import { downloadTowReportXlsx } from "../../lib/towReportExcel";
 import { parseTowsViewShare, syncTowsViewHash } from "../../lib/viewShareUrl";
 import { authMe } from "../auth/authApi";
@@ -160,11 +161,25 @@ function placeholderReport(row: TowPlanRow): TowReportRow {
     occupancyEndMsk: "",
     inferredOccupancyEndAt: row.towId ? row.eventEndAt : "",
     standOccupancy: row.towId ? row.standOccupancy : "",
-    notes: "",
-    toSlotEndMsk: row.eventEndMsk || (row.eventEndAt ? formatMskDateTime(row.eventEndAt) : ""),
-    toSlotDuration: (row.eventEndMsk || row.eventEndAt) ? `Слот до ${row.eventEndMsk || formatMskDateTime(row.eventEndAt)} мск` : "",
+    notes: row.registryNotes ?? "",
+    registryPosition: row.registryPosition ?? "",
     positionComment: "",
-    startChangeReason: ""
+    startChangeReason: row.registryStartReason ?? "",
+    eventType: row.eventType,
+    parkedStand: row.parkedStand,
+    toSlotEndMsk: row.eventEndMsk || (row.eventEndAt ? formatMskDateTime(row.eventEndAt) : ""),
+    toSlotDuration: (row.eventEndMsk || row.eventEndAt) ? `Слот до ${row.eventEndMsk || formatMskDateTime(row.eventEndAt)} мск` : ""
+  };
+}
+
+function withRegistryPosition(base: TowReportRow, plan: TowPlanRow): TowReportRow {
+  const registryPosition = plan.registryPosition ?? "";
+  return {
+    ...base,
+    parkedStand: plan.parkedStand,
+    eventType: base.eventType || plan.eventType,
+    registryPosition,
+    positionComment: registryPositionText(registryPosition, base.positionComment)
   };
 }
 
@@ -178,12 +193,13 @@ function registryFromPlan(plan: TowPlanRow[], report: TowReportRow[]): TowReport
   for (const row of plan) {
     if (skipped.has(row.eventId)) continue;
     if (row.towId) {
-      out.push(byTow.get(row.towId) ?? placeholderReport(row));
+      const found = byTow.get(row.towId);
+      out.push(withRegistryPosition(found ?? placeholderReport(row), row));
       continue;
     }
     if (eventsWithReport.has(row.eventId) || blankSeen.has(row.eventId)) continue;
     blankSeen.add(row.eventId);
-    out.push(placeholderReport(row));
+    out.push(withRegistryPosition(placeholderReport(row), row));
   }
   return out.map((row, index) => ({ ...row, seq: index + 1 }));
 }
@@ -230,6 +246,8 @@ export function RmTowsView() {
   const [archiveId, setArchiveId] = useState<string | null>(null);
   const [fixOpen, setFixOpen] = useState(false);
   const [fixMessage, setFixMessage] = useState("");
+  const [fixRun, setFixRun] = useState<"compare" | "send" | null>(null);
+  const fixLock = useRef(false);
   const [exporting, setExporting] = useState(false);
   const [planDirty, setPlanDirty] = useState(0);
   const [reportDirty, setReportDirty] = useState(0);
@@ -358,7 +376,6 @@ export function RmTowsView() {
 
   const items = useMemo(() => loaded.filter((row) => facetMatches(rowFacet(row), filters)), [loaded, filters]);
   const reportItems = useMemo(() => registryFromPlan(items, reportLoaded), [items, reportLoaded]);
-  const assignedReportCount = reportItems.filter((row) => !row.id.startsWith("plan:")).length;
   const waiting = useMemo(() => items.filter((row) => !row.towId).length, [items]);
 
   const saveArchiveM = useMutation({
@@ -378,10 +395,24 @@ export function RmTowsView() {
     }
   });
 
+  const fixPreviewQ = useQuery({
+    queryKey: ["tows-fix-preview", fromIso, toIso, hangarIds, operatorIds, aircraftTypeIds, aircraftIds, activeSandbox?.id ?? null],
+    enabled: fixOpen && pane === "registry" && rangeReady && Boolean(fromIso && toIso),
+    queryFn: () =>
+      apiPost<{ lines: string[] }>("/api/tows/fix-preview", {
+        from: fromIso,
+        to: toIso,
+        hangarIds,
+        operatorIds,
+        aircraftTypeIds,
+        aircraftIds
+      })
+  });
+
   const fixM = useMutation({
     mutationFn: async () => {
       if (!fromIso || !toIso) throw new Error("Укажите период");
-      if (assignedReportCount === 0) throw new Error("В выбранном периоде нет назначенных буксировок");
+      if (reportItems.length === 0) throw new Error("В выбранном периоде нет строк реестра");
       return apiPost<{ ok: true; subject: string; rows: number }>("/api/tows/fix", {
         from: fromIso,
         to: toIso,
@@ -391,18 +422,41 @@ export function RmTowsView() {
         aircraftIds
       });
     },
-    onSuccess: async (res) => {
-      setFixMessage(`План зафиксирован: ${res.rows} строк. Письмо отправляется из раздела «Рассылка».`);
+  });
+
+  const fixPlan = async () => {
+    if (fixLock.current) return;
+    fixLock.current = true;
+    setFixMessage("");
+    setFixRun("compare");
+    let stepTimer = 0;
+    try {
+      const request = fixM.mutateAsync();
+      stepTimer = window.setTimeout(() => setFixRun("send"), 700);
+      const res = await request;
+      window.clearTimeout(stepTimer);
+      setFixRun("send");
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
+      setFixMessage(`План зафиксирован: ${res.rows} строк. Письмо уходит, если в «Рассылке» есть вариант «Буксировки» с режимом «По триггеру».`);
       await qc.invalidateQueries({ queryKey: ["tows-report"] });
       await qc.invalidateQueries({ queryKey: ["tows-sends"] });
+      await qc.invalidateQueries({ queryKey: ["tows-fix-preview"] });
+    } catch {
+      window.clearTimeout(stepTimer);
+    } finally {
+      fixLock.current = false;
+      setFixRun(null);
     }
-  });
+  };
 
   const exportXlsx = async () => {
     setExporting(true);
     try {
       const stamp = mskNow().format("YYYYMMDD-HHmm");
-      await downloadTowReportXlsx(reportItems, `buksirovki-${stamp}.xlsx`);
+      await downloadTowReportXlsx(
+        reportItems.map((row) => ({ ...row, notes: registryNoteText(row) })),
+        `buksirovki-${stamp}.xlsx`
+      );
     } finally {
       setExporting(false);
     }
@@ -427,11 +481,6 @@ export function RmTowsView() {
         <div className="massHeroText">
           <div className="massEyebrow">Рабочее место буксировок</div>
           <h1>РМ Буксировки</h1>
-          <p className="muted towsPaneHint">
-            {pane === "plan"
-              ? "План — все события выбранного периода. Откуда, куда и время буксировки заполняются вместе. Буксировка видна в строке, только если её время попадает в период."
-              : "Реестр показывает те же события, что и план. «Не требуется» прячет событие отсюда. Занятие МС пустое, пока нет буксировки. Слот ТО заполнен."}
-          </p>
         </div>
         <div className="massHeroStats" aria-label="Сводка буксировок">
           <span>
@@ -524,16 +573,6 @@ export function RmTowsView() {
               </label>
             </div>
             <div className="ganttToolbarGroup towsToolbarExport">
-              {canWrite && !openedTow ? (
-                <button className="btn" type="button" disabled={!rangeReady || !fromIso || saveArchiveM.isPending} title="Сохранить план и реестр этого окна. Потом архив можно открыть целиком." onClick={() => saveArchiveM.mutate()}>
-                  {saveArchiveM.isPending ? "Сохранение…" : "Сохранить архив"}
-                </button>
-              ) : null}
-              {pane === "registry" && !openedTow ? (
-                <button className="btn" type="button" onClick={() => setFixOpen((open) => !open)} disabled={!canWrite}>
-                  Зафиксировать план
-                </button>
-              ) : null}
               {pane === "registry" ? (
               <button
                 className="btn ganttIconBtn"
@@ -564,24 +603,6 @@ export function RmTowsView() {
           </div>
         </div>
       </section>
-
-      {pane === "registry" && fixOpen ? (
-        <section className="card towsSendPanel">
-          <div className="muted">Сохраняется снимок видимых строк. Шаблон письма, Excel и журнал отправок — в разделе «Рассылка».</div>
-          <div className="row">
-            <button
-              className="btn btnPrimary"
-              type="button"
-              disabled={!canWrite || fixM.isPending || assignedReportCount === 0 || reportDirty > 0}
-              onClick={() => fixM.mutate()}
-            >
-              Зафиксировать
-            </button>
-          </div>
-          {fixM.isError ? <div className="error">{String((fixM.error as Error).message ?? fixM.error)}</div> : null}
-          {fixMessage ? <div className="muted">{fixMessage}</div> : null}
-        </section>
-      ) : null}
 
       {openedTow ? (
         <div className="personnelArchiveBanner">
@@ -625,7 +646,14 @@ export function RmTowsView() {
 
       {pane === "archive" ? (
         <section className="card">
-          <h2 className="personnelResourceTitle">Архив буксировок</h2>
+          <div className="towPlanHead">
+            <h2 className="personnelResourceTitle">Архив буксировок</h2>
+            {canWrite && !openedTow ? (
+              <button className="btn" type="button" disabled={!rangeReady || !fromIso || saveArchiveM.isPending} title="Сохранить план и реестр этого окна. Потом архив можно открыть целиком." onClick={() => saveArchiveM.mutate()}>
+                {saveArchiveM.isPending ? "Сохранение…" : "Сохранить архив"}
+              </button>
+            ) : null}
+          </div>
           <p className="muted">«Сохранить архив» записывает план и реестр выбранного окна. Строка открывает этот снимок на вкладках «План» и «Реестр». «Удалить» убирает сохранённое окно.</p>
           {deleteArchiveM.error ? <div className="error">{String((deleteArchiveM.error as Error).message ?? deleteArchiveM.error)}</div> : null}
           {archivesQ.isLoading ? <p className="muted">Загрузка…</p> : archivesQ.data?.items.length ? (
@@ -658,6 +686,62 @@ export function RmTowsView() {
             canGantt={canGantt}
             onOpenEvent={openEvent}
             onDirtyChange={onReportDirty}
+            barExtra={openedTow ? null : (
+              <button className="btn" type="button" onClick={() => setFixOpen((open) => !open)} disabled={!canWrite}>
+                Зафиксировать план
+              </button>
+            )}
+            belowBar={fixOpen && !openedTow ? (
+              <section className="card towsSendPanel">
+                <div className="towsSendChanges">
+                  {fixPreviewQ.isFetching && !fixPreviewQ.data ? (
+                    <div className="towsFixRun" role="status" aria-live="polite">
+                      <div className="massProgressTrack" aria-hidden="true">
+                        <div className="massProgressBar" />
+                      </div>
+                      <div className="towsFixStep isActive">
+                        <span className="towsFixSpinner" aria-hidden="true" />
+                        Сравнение изменений
+                      </div>
+                    </div>
+                  ) : null}
+                  {fixPreviewQ.isError ? <div className="error">{String((fixPreviewQ.error as Error).message ?? fixPreviewQ.error)}</div> : null}
+                  {fixPreviewQ.data?.lines.map((line, index) => (
+                    <div key={`${index}-${line}`} className={/^[+~-] /.test(line) ? "towsSendChangeItem" : "towsSendChangeHead"}>
+                      {line}
+                    </div>
+                  ))}
+                </div>
+                {fixRun ? (
+                  <div className="towsFixRun" role="status" aria-live="polite">
+                    <div className="massProgressTrack" aria-hidden="true">
+                      <div className="massProgressBar" />
+                    </div>
+                    <div className={fixRun === "compare" ? "towsFixStep isActive" : "towsFixStep isDone"}>
+                      {fixRun === "compare" ? <span className="towsFixSpinner" aria-hidden="true" /> : <span className="towsFixMark" aria-hidden="true">✓</span>}
+                      Сравнение изменений
+                    </div>
+                    <div className={fixRun === "send" ? "towsFixStep isActive" : "towsFixStep"}>
+                      {fixRun === "send" ? <span className="towsFixSpinner" aria-hidden="true" /> : <span className="towsFixMark" aria-hidden="true" />}
+                      Отправка реестра
+                    </div>
+                  </div>
+                ) : null}
+                <div className="row">
+                  <button
+                    className="btn btnPrimary"
+                    type="button"
+                    disabled={!canWrite || fixRun !== null || reportItems.length === 0 || reportDirty > 0}
+                    aria-busy={fixRun !== null}
+                    onClick={() => void fixPlan()}
+                  >
+                    {fixRun === "compare" ? "Сравнение…" : fixRun === "send" ? "Отправка…" : "Зафиксировать"}
+                  </button>
+                </div>
+                {fixM.isError ? <div className="error">{String((fixM.error as Error).message ?? fixM.error)}</div> : null}
+                {fixMessage ? <div className="muted">{fixMessage}</div> : null}
+              </section>
+            ) : null}
           />
         </section>
       )}

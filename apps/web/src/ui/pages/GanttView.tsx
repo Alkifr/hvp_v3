@@ -1,11 +1,14 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import * as XLSX from "xlsx";
 
-import { apiDelete, apiGet, apiPatch, apiPost } from "../../lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, getActiveSandboxId } from "../../lib/api";
+import { ColleagueStrip } from "../components/ColleagueStrip";
+import { LIVE_EVENT, draftTouchedBySignal, type LiveSignal } from "../../lib/liveSync";
+import { reportPresenceAction } from "../../lib/presence";
 import { ChangeReasonFields, useChangeReasons } from "../components/ChangeReasonFields";
 import { isValidDateInput, isValidDateTimeLocal } from "../../lib/dateInput";
 import {
@@ -24,7 +27,7 @@ import {
   isChangeReasonError,
   moveNeedsChangeReason
 } from "../../lib/eventChangeReason";
-import { towOverlayRect } from "../../lib/towOverlay";
+import { clippedBarTime, towOverlayRect } from "../../lib/towOverlay";
 import {
   newTowDraftKey,
   resolveTowPlacementId,
@@ -37,7 +40,7 @@ import {
   type TowServerRow
 } from "../../lib/towDraft";
 import { DEADLINE_SLOT_HINT, slotStartAfterDeadline } from "../../lib/deadline";
-import { formatEventTooltip, type LaborPresence } from "../../lib/eventTooltip";
+import { barPlannerWarnings, eventWarningLines, formatEventTooltip, type EventWarning, type LaborPresence } from "../../lib/eventTooltip";
 import { planDndDisplace, planDndLayoutLock, type DndDisplacePlan, type DndStandOccupant } from "../../lib/dndDisplace";
 import { planEdgeTows, type EdgePlacement } from "../../lib/edgeTowPlan";
 import { parseGanttViewShare, syncGanttViewHash } from "../../lib/viewShareUrl";
@@ -48,7 +51,7 @@ import {
   parseHangarStandSort,
   type HangarStandSort
 } from "../../lib/hangarStandSort";
-import { eventAllowsOverlap } from "../../lib/eventSlotOverlap";
+import { eventAllowsOverlap, eventHasSlotOverlap } from "../../lib/eventSlotOverlap";
 import { ganttBarNotesText, rowHasGanttBarNotes } from "../../lib/ganttBarNotes";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { lineBaseAfterWorkshopChange, parseLineBase, LINE_BASE_LABEL, type LineBase } from "../../lib/lineBase";
@@ -209,6 +212,7 @@ type EventRow = {
   planningKind?: "PLANNED" | "UNPLANNED" | string;
   notes?: string | null;
   comment?: string | null;
+  towRegistryPosition?: string | null;
   aircraft?: {
     id?: string;
     tailNumber: string;
@@ -234,6 +238,7 @@ type EventRow = {
   eventEndAt?: string | null;
   eventActualStartAt?: string | null;
   eventActualEndAt?: string | null;
+  updatedAt?: string;
 };
 
 const EMPTY_EVENTS: EventRow[] = [];
@@ -628,6 +633,7 @@ type TowSegment = {
   eventId: string;
   startAt: string;
   endAt: string;
+  updatedAt?: string;
   fromLabel?: string | null;
   toLabel?: string | null;
   placementId?: string | null;
@@ -747,6 +753,51 @@ type DndPtrTarget = {
   layoutBlockedReason?: string;
 };
 
+type EditorSection = "warnings" | "main" | "periods" | "place" | "tows" | "notes" | "labor" | "history";
+
+const EVENT_CARD_SECTION_IDS: EditorSection[] = ["warnings", "main", "periods", "place", "tows", "notes", "labor", "history"];
+const DEFAULT_OPEN_SECTIONS: EditorSection[] = ["warnings", "main", "periods", "place", "tows", "notes", "labor"];
+const EVENT_CARD_SECTIONS_PREFIX = "hangarPlanning:eventCardSections:";
+
+function readCardSections(userId: string | undefined): EditorSection[] {
+  if (!userId || typeof window === "undefined") return [...DEFAULT_OPEN_SECTIONS];
+  try {
+    const raw = window.localStorage.getItem(EVENT_CARD_SECTIONS_PREFIX + userId);
+    if (raw == null) return [...DEFAULT_OPEN_SECTIONS];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [...DEFAULT_OPEN_SECTIONS];
+    const allowed = new Set<string>(EVENT_CARD_SECTION_IDS);
+    return parsed.filter((id): id is EditorSection => typeof id === "string" && allowed.has(id));
+  } catch {
+    return [...DEFAULT_OPEN_SECTIONS];
+  }
+}
+
+function writeCardSections(userId: string | undefined, sections: EditorSection[]) {
+  if (!userId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(EVENT_CARD_SECTIONS_PREFIX + userId, JSON.stringify(sections));
+  } catch {
+    // ignore
+  }
+}
+
+function SectionDigit(props: { index: number; label: string; warn?: boolean; open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`evSectionNavBtn${props.open ? " evSectionNavBtnActive" : ""}${props.warn && !props.open ? " evSectionNavBtnWarn" : ""}`}
+      title={props.label}
+      aria-expanded={props.open}
+      aria-controls={`ev-section-${EVENT_CARD_SECTION_IDS[props.index]}`}
+      aria-label={`${props.index + 1}. ${props.label}`}
+      onClick={props.onToggle}
+    >
+      {props.index + 1}
+    </button>
+  );
+}
+
 type EditorDraft = {
   id?: string;
   title: string;
@@ -763,6 +814,7 @@ type EditorDraft = {
   actualEndAtLocal: string;
   notes: string;
   comment: string;
+  towInfo: string;
   hangarId: string; // optional, "" means null
   workshopId: string; // optional, "" means null
   layoutId: string; // optional, "" means null
@@ -773,6 +825,7 @@ type EditorDraft = {
   multiPlacement: boolean;
   autoFillGapPlacements: boolean;
   placements: PlacementDraft[];
+  baseUpdatedAt?: string;
 };
 
 type EventAudit = {
@@ -932,6 +985,9 @@ function renderTowBreaks(params: {
   barW: number;
   barStartAt: string;
   barEndAt: string;
+  barLeftPx: number;
+  barRightPx: number;
+  canvasWidth: number;
   dayWidth: number;
   timeMode: TimelineTimeMode;
 }) {
@@ -940,6 +996,13 @@ function renderTowBreaks(params: {
   const barStartMs = timelineDate(params.barStartAt, params.timeMode).valueOf();
   const barEndMs = timelineDate(params.barEndAt, params.timeMode).valueOf();
   if (!Number.isFinite(barStartMs) || !Number.isFinite(barEndMs)) return null;
+  const visible = clippedBarTime({
+    barStartMs,
+    barEndMs,
+    barLeftPx: params.barLeftPx,
+    barRightPx: params.barRightPx,
+    canvasWidth: params.canvasWidth
+  });
 
   const out: React.ReactNode[] = [];
   for (const s of segs) {
@@ -951,7 +1014,9 @@ function renderTowBreaks(params: {
       barW: params.barW,
       towStartMs,
       towEndMs,
-      minPx: Math.min(params.barW, params.dayWidth < 2 ? 2 : 5)
+      minPx: Math.min(params.barW, params.dayWidth < 2 ? 2 : 5),
+      visibleStartMs: visible.startMs,
+      visibleEndMs: visible.endMs
     });
     if (!rect) continue;
     out.push(
@@ -1340,27 +1405,57 @@ function hangarBarText(ev: EventRow, width: number, mode: GanttDisplayMode = "CU
   return { tat, parts: [eventAircraftLabel(ev), shortEventName(ev), fullName].filter(Boolean) };
 }
 
-function BarLabel(props: { tat: { label: string; source: string }; parts: string[] }) {
+function BarWarnMark(props: { warnings: string[]; onClick?: (event: ReactMouseEvent<HTMLSpanElement>) => void }) {
+  if (!props.warnings.length) return null;
+  return (
+    <span
+      className="barWarnMark"
+      title={props.warnings.join("\n")}
+      aria-label={`Предупреждения: ${props.warnings.length}`}
+      onClick={props.onClick}
+    >
+      !
+    </span>
+  );
+}
+
+function BarLabel(props: {
+  tat: { label: string; source: string };
+  parts: string[];
+  warnings?: string[];
+  onWarnClick?: (event: ReactMouseEvent<HTMLSpanElement>) => void;
+}) {
   return (
     <span className="barLabel">
+      <BarWarnMark warnings={props.warnings ?? []} onClick={props.onWarnClick} />
       <strong className="barTat" title={props.tat.source}>{props.tat.label}</strong>
       {props.parts.length ? <span className="barText">{props.parts.join(" • ")}</span> : null}
     </span>
   );
 }
 
-function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "LOCAL", catalog?: EventStatusCatalogItem[]) {
+function draftPlacedInHangar(draft: EditorDraft): boolean {
+  if (draft.multiPlacement) {
+    return draft.placements.some((p) => (p.origin ?? "MANUAL") !== "AUTO_GAP" && Boolean(p.hangarId));
+  }
+  return Boolean(draft.hangarId);
+}
+
+function eventPlacedInHangar(ev: EventRow): boolean {
+  if (ev.placementOrigin === "AUTO_GAP") return false;
+  if (ev.segmentKey) return Boolean(ev.hangar?.id || ev.hangar?.name);
+  const placements = (ev.placements ?? []).filter((p) => (p.origin ?? "MANUAL") !== "AUTO_GAP");
+  if (placements.length) {
+    return placements.some((p) => Boolean(p.hangar?.id || p.hangar?.name || p.hangarId));
+  }
+  return Boolean(ev.hangar?.id || ev.hangar?.name);
+}
+
+function eventWarningInput(ev: EventRow, catalog: EventStatusCatalogItem[] | undefined, allowOverlap: boolean) {
   const startAt = ev.segmentKey ? ev.eventStartAt ?? ev.startAt : ev.startAt;
-  const endAt = ev.segmentKey ? ev.eventEndAt ?? ev.endAt : ev.endAt;
-  const hours = tatHours(startAt, endAt);
   const actualStart = ev.segmentKey ? ev.eventActualStartAt : ev.actualStartAt;
   const actualEnd = ev.segmentKey ? ev.eventActualEndAt : ev.actualEndAt;
-  return formatEventTooltip({
-    tat: hours == null ? "—" : formatHoursDaysCompact(hours),
-    tailNumber: eventAircraftLabel(ev),
-    title: ev.title?.trim() || "—",
-    stage: stageLabel(ev),
-    operationalPeriod: `${formatTimelineDate(startAt, mode)} – ${formatTimelineDate(endAt, mode)}`,
+  return {
     workshop: ev.workshop?.name?.trim() || null,
     maintenanceType: ev.eventType?.name?.trim() || null,
     deadlineFilled: Boolean(ev.deadlineAt),
@@ -1369,7 +1464,28 @@ function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "LOCAL", catalog?: 
     actualPeriodFilled: Boolean(actualStart && actualEnd),
     labor: ev.laborPresence ?? null,
     statusSortOrder: catalog?.find((item) => item.code === ev.status)?.sortOrder,
-    inProgressSortOrder: catalog?.find((item) => item.code === "IN_PROGRESS")?.sortOrder
+    inProgressSortOrder: catalog?.find((item) => item.code === "IN_PROGRESS")?.sortOrder,
+    inHangar: eventPlacedInHangar(ev),
+    allowOverlap,
+    slotAfterDeadline: slotStartAfterDeadline(toInputMsk(startAt), ev.deadlineAt ? toInputMskDate(ev.deadlineAt) : "")
+  };
+}
+
+function barWarningTexts(ev: EventRow, catalog: EventStatusCatalogItem[] | undefined, allowOverlap: boolean): string[] {
+  return barPlannerWarnings(eventWarningInput(ev, catalog, allowOverlap)).map((item) => item.text);
+}
+
+function eventTooltip(ev: EventRow, mode: TimelineTimeMode = "LOCAL", catalog?: EventStatusCatalogItem[], allowOverlap = false) {
+  const startAt = ev.segmentKey ? ev.eventStartAt ?? ev.startAt : ev.startAt;
+  const endAt = ev.segmentKey ? ev.eventEndAt ?? ev.endAt : ev.endAt;
+  const hours = tatHours(startAt, endAt);
+  return formatEventTooltip({
+    tat: hours == null ? "—" : formatHoursDaysCompact(hours),
+    tailNumber: eventAircraftLabel(ev),
+    title: ev.title?.trim() || "—",
+    stage: stageLabel(ev),
+    operationalPeriod: `${formatTimelineDate(startAt, mode)} – ${formatTimelineDate(endAt, mode)}`,
+    ...eventWarningInput(ev, catalog, allowOverlap)
   });
 }
 
@@ -1901,13 +2017,44 @@ function FloatingEditorPanel(props: {
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<null | { pointerId: number; offsetX: number; offsetY: number }>(null);
+  const boxRef = useRef<{ h: number; top: number; left: number } | null>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!props.open) {
       setPos(null);
+      boxRef.current = null;
     }
   }, [props.open]);
+
+  useLayoutEffect(() => {
+    const el = panelRef.current;
+    if (!props.open || props.collapsed || !el) return;
+    const remember = () => {
+      const rect = el.getBoundingClientRect();
+      boxRef.current = { h: rect.height, top: rect.top, left: rect.left };
+    };
+    remember();
+    const observer = new ResizeObserver(() => {
+      const prev = boxRef.current;
+      const rect = el.getBoundingClientRect();
+      if (!prev) {
+        remember();
+        return;
+      }
+      const heightChanged = Math.abs(rect.height - prev.h) > 1;
+      const topMoved = Math.abs(rect.top - prev.top) > 1;
+      if (heightChanged && topMoved) {
+        const y = Math.max(8, prev.top);
+        setPos({ x: prev.left, y });
+        boxRef.current = { h: rect.height, top: y, left: prev.left };
+        return;
+      }
+      boxRef.current = { h: rect.height, top: rect.top, left: rect.left };
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [props.open, props.collapsed]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -2023,7 +2170,14 @@ function FloatingEditorPanel(props: {
       aria-modal="false"
       aria-label={props.title}
       style={{
-        ...(pos ? { left: pos.x, top: pos.y, transform: "none" } : null),
+        ...(pos
+          ? {
+              left: pos.x,
+              top: pos.y,
+              transform: "none",
+              maxHeight: `calc(100vh - ${pos.y + 16}px)`
+            }
+          : null),
         ...(props.beneathModal ? { zIndex: 40 } : null)
       }}
     >
@@ -2360,6 +2514,7 @@ export function GanttView() {
   const [showAllPlacementLinks, setShowAllPlacementLinks] = useState<boolean>(() =>
     Boolean(savedUi?.showAllPlacementLinks ?? false)
   );
+  const [showGanttGrid, setShowGanttGrid] = useState<boolean>(() => savedUi?.showGanttGrid !== false);
   const [ganttToolbarOpen, setGanttToolbarOpen] = useState<boolean>(
     () => savedUi?.ganttToolbarOpen !== false && savedUi?.ganttFiltersOpen !== false
   );
@@ -2694,6 +2849,7 @@ export function GanttView() {
       ganttLabelWidth,
       fitWidth,
       showAllPlacementLinks,
+      showGanttGrid,
       ganttToolbarOpen: isMobile && prev ? (prev.ganttToolbarOpen ?? ganttToolbarOpen) : ganttToolbarOpen,
       dndEnabled: isMobile && prev ? (prev.dndEnabled ?? dndEnabled) : dndEnabled,
       dndHangarIds,
@@ -2727,6 +2883,7 @@ export function GanttView() {
     ganttLabelWidth,
     fitWidth,
     showAllPlacementLinks,
+    showGanttGrid,
     ganttToolbarOpen,
     dndEnabled,
     dndHangarIds,
@@ -2759,6 +2916,7 @@ export function GanttView() {
       filterLineBases,
       fitWidth,
       showAllPlacementLinks,
+      showGanttGrid,
       showCancelledOnGantt,
       showGanttNotes,
       sandboxId: activeSandboxId
@@ -2784,6 +2942,7 @@ export function GanttView() {
     filterLineBases,
     fitWidth,
     showAllPlacementLinks,
+    showGanttGrid,
     showCancelledOnGantt,
     showGanttNotes,
     isMobile,
@@ -2791,6 +2950,13 @@ export function GanttView() {
   ]);
 
   const events = q.data ?? EMPTY_EVENTS
+  const overlapEventIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const ev of events) {
+      if (eventAllowsOverlap(ev, events)) ids.add(ev.id);
+    }
+    return ids;
+  }, [events]);
 
   const ganttFilters = useMemo<GanttFilters>(
     () => ({
@@ -3572,6 +3738,7 @@ export function GanttView() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorCollapsed, setEditorCollapsed] = useState(false);
   const [draft, setDraft] = useState<EditorDraft | null>(null);
+  const [remoteHint, setRemoteHint] = useState(false);
   const [original, setOriginal] = useState<EditorDraft | null>(null);
   // режим копирования: когда включён, клик по событию открывает редактор с предзаполненной
   // копией, а сохранение создаёт НОВОЕ событие (draft.id остаётся пустым)
@@ -3675,6 +3842,34 @@ export function GanttView() {
   // подтверждение изменения
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
+  const pendingEditorSectionRef = useRef<EditorSection | null>(null);
+  const cardSectionsUserRef = useRef<string | null>(null);
+  const [openSections, setOpenSections] = useState<EditorSection[]>(() => readCardSections(typeof me?.id === "string" ? me.id : undefined));
+  useEffect(() => {
+    const userId = typeof me?.id === "string" ? me.id : "";
+    if (!userId || cardSectionsUserRef.current === userId) return;
+    cardSectionsUserRef.current = userId;
+    setOpenSections(readCardSections(userId));
+  }, [me?.id]);
+  const rememberSections = (next: EditorSection[]) => {
+    writeCardSections(typeof me?.id === "string" ? me.id : undefined, next);
+    return next;
+  };
+  const toggleSection = (id: EditorSection) => {
+    setOpenSections((prev) => rememberSections(prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+  const revealSection = (id: EditorSection) => {
+    setOpenSections((prev) => (prev.includes(id) ? prev : rememberSections([...prev, id])));
+    window.setTimeout(() => {
+      document.getElementById(`ev-section-${id}`)?.scrollIntoView({ block: "nearest" });
+    }, 0);
+  };
+  const takeEditorSection = () => {
+    const extra = pendingEditorSectionRef.current;
+    pendingEditorSectionRef.current = null;
+    if (!extra) return;
+    revealSection(extra);
+  };
   const [pendingSave, setPendingSave] = useState<"event" | "dndMove" | "bulkStatus" | null>(null);
   const [changeReason, setChangeReason] = useState("");
   const [changeReasonIds, setChangeReasonIds] = useState<string[]>([]);
@@ -3693,6 +3888,21 @@ export function GanttView() {
   towBaselineRef.current = towBaseline;
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  useEffect(() => {
+    if (!editorOpen) return;
+    reportPresenceAction(draft?.id ? `event:${draft.id}` : "event:", "gantt");
+  }, [editorOpen, draft?.id]);
+  useEffect(() => {
+    const onLive = (event: Event) => {
+      const signal = (event as CustomEvent<LiveSignal>).detail;
+      const id = draftRef.current?.id;
+      const userId = me?.id as string | undefined;
+      if (!signal || !id || !userId) return;
+      if (draftTouchedBySignal(signal, id, { sandboxId: getActiveSandboxId(), userId })) setRemoteHint(true);
+    };
+    window.addEventListener(LIVE_EVENT, onLive);
+    return () => window.removeEventListener(LIVE_EVENT, onLive);
+  }, [me?.id]);
   const [towStartLocal, setTowStartLocal] = useState(() =>
     dayjs().utcOffset(MSK_OFFSET_MINUTES).minute(0).second(0).millisecond(0).format("YYYY-MM-DDTHH:mm")
   );
@@ -3738,6 +3948,7 @@ export function GanttView() {
   const openEditorForNew = () => {
     if (!canEditEventsEffective) return;
     if (editorOpen && editorCollapsed) return;
+    takeEditorSection();
     towLockRef.current = null;
     seenTowEventRef.current = null;
     bumpEditorFeedbackReset();
@@ -3761,6 +3972,7 @@ export function GanttView() {
       actualEndAtLocal: "",
       notes: "",
       comment: "",
+      towInfo: "",
       hangarId: "",
       workshopId: "",
       layoutId: "",
@@ -3792,10 +4004,12 @@ export function GanttView() {
     setCopyFromTitle(null);
     setEditorCollapsed(false);
     setEditorOpen(true);
+    setRemoteHint(false);
   };
 
   const openEditorForExisting = (ev: EventRow) => {
     if (editorOpen && editorCollapsed) return;
+    takeEditorSection();
     towLockRef.current = null;
     seenTowEventRef.current = null;
     bumpEditorFeedbackReset();
@@ -3818,6 +4032,7 @@ export function GanttView() {
       actualEndAtLocal: toInputLocal(ev.actualEndAt),
       notes: ev.notes ?? "",
       comment: ev.comment ?? "",
+      towInfo: ev.towRegistryPosition ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       workshopId: (ev.workshop as any)?.id ?? (ev as any).workshopId ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
@@ -3833,7 +4048,8 @@ export function GanttView() {
       deadlineAtLocal: toInputMskDate(ev.deadlineAt),
       multiPlacement: placements.length > 1,
       autoFillGapPlacements: true,
-      placements
+      placements,
+      baseUpdatedAt: ev.updatedAt
     };
     setDraft(d);
     setOriginal(d);
@@ -3842,6 +4058,7 @@ export function GanttView() {
     setCopyFromTitle(null);
     setEditorCollapsed(false);
     setEditorOpen(true);
+    setRemoteHint(false);
   };
 
   // Открыть редактор в режиме копирования выбранного события:
@@ -3849,6 +4066,7 @@ export function GanttView() {
   // статус сбрасывается в PLANNED, к названию добавляется « (копия)»
   const openEditorForCopy = (ev: EventRow) => {
     if (editorOpen && editorCollapsed) return;
+    takeEditorSection();
     towLockRef.current = null;
     seenTowEventRef.current = null;
     bumpEditorFeedbackReset();
@@ -3872,6 +4090,7 @@ export function GanttView() {
       actualEndAtLocal: "",
       notes: ev.notes ?? "",
       comment: ev.comment ?? "",
+      towInfo: ev.towRegistryPosition ?? "",
       hangarId: (ev.hangar as any)?.id ?? "",
       workshopId: (ev.workshop as any)?.id ?? (ev as any).workshopId ?? "",
       layoutId: (ev.layout as any)?.id ?? "",
@@ -3895,6 +4114,7 @@ export function GanttView() {
       setChangeReasonIds([]);
     setCopyFromTitle(ev.title);
     setCopySelectMode(false);
+    setRemoteHint(false);
     setEditorCollapsed(false);
     setEditorOpen(true);
   };
@@ -3906,6 +4126,16 @@ export function GanttView() {
     const fullEvent = events.find((candidate) => candidate.id === ev.id) ?? ev;
     if (copySelectMode) openEditorForCopy(fullEvent);
     else openEditorForExisting(fullEvent);
+  };
+
+  const openEventOnSection = (ev: EventRow, section: EditorSection) => {
+    if (editorOpen && editorCollapsed) return;
+    if (editorOpen && draft?.id === ev.id) {
+      revealSection(section);
+      return;
+    }
+    pendingEditorSectionRef.current = section;
+    pickEvent(ev);
   };
 
   // Открытие карточки из уведомления / shared-ссылки — без смены периода на Гантте
@@ -4110,6 +4340,51 @@ export function GanttView() {
     return groups;
   }, [historyQ.data]);
 
+  const cardWarnings = useMemo(() => {
+    if (!draft) return [] as EventWarning[];
+    const liveTows = towRows.filter((row) => !row.deleted);
+    const hasTows = !draft.id
+      ? liveTows.length > 0
+        ? true
+        : null
+      : towsQ.isSuccess || towDirty
+        ? liveTows.length > 0
+        : null;
+    const lines = eventWarningLines({
+      workshop: draft.workshopId ? "цех" : null,
+      maintenanceType: draft.eventTypeId ? "тип" : null,
+      deadlineFilled: Boolean(draft.deadlineAtLocal),
+      hasTows,
+      status: draft.status,
+      actualPeriodFilled: Boolean(draft.actualStartAtLocal && draft.actualEndAtLocal),
+      labor: selectedDraftEvent?.laborPresence ?? null,
+      statusSortOrder: statusCatalog.find((item) => item.code === draft.status)?.sortOrder,
+      inProgressSortOrder: statusCatalog.find((item) => item.code === "IN_PROGRESS")?.sortOrder,
+      inHangar: draftPlacedInHangar(draft),
+      allowOverlap: Boolean(draft.allowOverlap) || (selectedDraftEvent ? eventHasSlotOverlap(selectedDraftEvent, events) : false),
+      slotAfterDeadline: slotStartAfterDeadline(draft.startAtLocal, draft.deadlineAtLocal)
+    });
+    if (!draft.multiPlacement) return lines;
+    const stage = placementWarnings({
+      placements: draft.placements,
+      eventStartAtLocal: draft.startAtLocal,
+      eventEndAtLocal: draft.endAtLocal,
+      autoFillGapPlacements: draft.autoFillGapPlacements
+    }).map((text, index): EventWarning => ({ id: `stage-${index}`, text, section: "place" }));
+    return [...lines, ...stage];
+  }, [draft, towRows, towDirty, towsQ.isSuccess, selectedDraftEvent, statusCatalog, events]);
+
+  const editorNav: Array<{ id: EditorSection; label: string; count: number }> = [
+    { id: "warnings", label: "Замечания", count: cardWarnings.length },
+    { id: "main", label: "Основное", count: 0 },
+    { id: "periods", label: "Периоды", count: 0 },
+    { id: "place", label: "Этапы", count: 0 },
+    { id: "tows", label: "Буксировки", count: 0 },
+    { id: "notes", label: "Примечание", count: 0 },
+    { id: "labor", label: "Трудоёмкость", count: 0 },
+    { id: "history", label: "История", count: draft?.id ? (historyQ.data ?? []).length : 0 }
+  ];
+
   const computeDraftDiff = (a: EditorDraft | null, b: EditorDraft | null) => {
     if (!a || !b) return [];
     const normalizePlacementsForDiff = (items: PlacementDraft[]) =>
@@ -4140,6 +4415,7 @@ export function GanttView() {
       "actualEndAtLocal",
       "notes",
       "comment",
+      "towInfo",
       "hangarId",
       "workshopId",
       "lineBase",
@@ -4388,16 +4664,17 @@ export function GanttView() {
         const prev = baseline.find((item) => item.serverId === row.serverId);
         const startChanged = !prev || new Date(prev.startAt).getTime() !== new Date(row.startAt).getTime();
         const placementId = mapPlacement(row.placementId);
-        await apiPatch(`/api/events/${eventId}/tows/${row.serverId}`, {
+        const savedTow = await apiPatch<TowServerRow>(`/api/events/${eventId}/tows/${row.serverId}`, {
           startAt: row.startAt,
           endAt: row.endAt,
           placementId,
           fromLabel: row.fromLabel || null,
           toLabel: row.toLabel || null,
+          ...(row.updatedAt ? { baseUpdatedAt: row.updatedAt } : {}),
           ...(reason ? { changeReason: reason } : {}),
           ...(startChanged ? { startChangeReason: reason || "Буксировка" } : {})
         });
-        const saved = { ...row, placementId };
+        const saved = { ...row, placementId, ...(savedTow.updatedAt ? { updatedAt: savedTow.updatedAt } : {}) };
         rows = rows.map((item) => (item.key === row.key ? saved : item));
         baseline = baseline.map((item) => (item.serverId === row.serverId ? { ...saved, deleted: false } : item));
         remember();
@@ -4555,9 +4832,11 @@ export function GanttView() {
         placements: placementsPayload,
         notes: draft.notes?.trim() ? draft.notes : null,
         comment: draft.comment?.trim() ? draft.comment : null,
+        towRegistryPosition: draft.towInfo.trim() ? draft.towInfo : null,
         ...(canAllowOverlap ? { allowOverlap: draft.allowOverlap } : {}),
         autoFillGapPlacements: draft.multiPlacement && draft.autoFillGapPlacements,
-        ...changeReasonRequest(changeReasonIds, changeReason)
+        ...changeReasonRequest(changeReasonIds, changeReason),
+        ...(draft.id && draft.baseUpdatedAt ? { baseUpdatedAt: draft.baseUpdatedAt } : {})
       };
 
       if (!draft.id) {
@@ -4578,6 +4857,7 @@ export function GanttView() {
           ? {
               ...draft,
               id: savedId,
+              ...(savedEvent?.updatedAt ? { baseUpdatedAt: savedEvent.updatedAt } : {}),
               ...(savedEvent?.placements?.length ? { placements: placementDraftFromEvent(savedEvent) } : {})
             }
           : draft;
@@ -4590,6 +4870,8 @@ export function GanttView() {
       setCopyFromTitle(null);
       void qc.invalidateQueries({ queryKey: ["events", from.toISOString(), to.toISOString()] });
       void qc.invalidateQueries({ queryKey: ["analytics", "primary-table"] });
+      void qc.invalidateQueries({ queryKey: ["tows-plan"] });
+      void qc.invalidateQueries({ queryKey: ["tows-report"] });
       const histId = nextDraft?.id;
       if (histId) {
         void qc.invalidateQueries({ queryKey: ["event-history", histId] });
@@ -4597,7 +4879,12 @@ export function GanttView() {
       }
     },
     onError: (err) => {
-      const message = String((err as { message?: string })?.message ?? "");
+      const coded = err as { message?: string; code?: string };
+      if (coded.code === "STALE_WRITE") {
+        setRemoteHint(true);
+        return;
+      }
+      const message = String(coded.message ?? "");
       if (isChangeReasonError(message)) {
         setPendingSave("event");
         setConfirmOpen(true);
@@ -6255,7 +6542,10 @@ export function GanttView() {
       .filter((_t, idx) => idx % tickStep === 0)
       .map((t) => {
         const x = labelW + ((t.at.valueOf() - from.valueOf()) / rangeMs) * chartW;
-        return `<line x1="${x.toFixed(1)}" y1="36" x2="${x.toFixed(1)}" y2="${height - 14}" stroke="#e2e8f0" />
+        const line = showGanttGrid
+          ? `<line x1="${x.toFixed(1)}" y1="36" x2="${x.toFixed(1)}" y2="${height - 14}" stroke="#e2e8f0" />`
+          : "";
+        return `${line}
           <text x="${(x + 3).toFixed(1)}" y="28" font-size="9" fill="#64748b">${htmlEscape(t.minorLabel)}</text>`;
       })
       .join("");
@@ -6691,8 +6981,17 @@ export function GanttView() {
   const dndDisplaceConfirm = dndDisplaceLabels.length > 0;
   const confirmReasonOptional = Boolean(activeSandbox && dndDisplaceConfirm);
 
+  const pullRemoteDraft = async () => {
+    const id = draft?.id;
+    if (!id) return;
+    const ev = await apiGet<EventRow>(`/api/events/${encodeURIComponent(id)}`);
+    openEditorForExisting(ev);
+    setRemoteHint(false);
+  };
+
   return (
     <div className="ganttPage">
+      <ColleagueStrip page="gantt" selfId={me?.id ?? ""} />
       <div className="card ganttPanel" ref={ganttFiltersStickyRef}>
         <div className="ganttPanelHeader">
           <div className="ganttPanelTitle">
@@ -7520,7 +7819,7 @@ export function GanttView() {
               }}
               onPointerMove={onGanttTimelinePointerMove}
               onPointerLeave={onGanttTimelinePointerLeave}
-              title="ПКМ — шкала времени (Major / Minor / по ширине). R — синяя линия в точке курсора."
+              title="ПКМ — шкала времени (Major / Minor / сетка / по ширине). R — синяя линия в точке курсора."
             >
               <div className="ganttVirtPane" style={{ left: paneLeft, width: paneWidth, top: 0, height: 44 }}>
               <GanttMarkerLine head left={markerPaneX} title={markerLabel ? `Метка R: ${markerLabel}` : ""} />
@@ -7633,6 +7932,20 @@ export function GanttView() {
                       <option value="UTC">UTC</option>
                     </select>
                   </label>
+                  <div
+                    className="tgField"
+                    style={{ gridColumn: "1 / -1" }}
+                    title="Вертикальные линии Major и Minor на диаграмме и гистограмме"
+                  >
+                    <span className="tgFieldLabel">Сетка</span>
+                    <SwitchToggle
+                      compact
+                      checked={showGanttGrid}
+                      onChange={setShowGanttGrid}
+                      label="Показать сетку"
+                      hint="Линии Major и Minor"
+                    />
+                  </div>
                   <div
                     className="tgField"
                     style={{ gridColumn: "1 / -1" }}
@@ -7768,7 +8081,7 @@ export function GanttView() {
                   </svg>
                 ) : null}
                 <div className="ganttVirtPane" style={{ left: paneLeft, top: virtPaneTop, width: paneWidth, height: virtPaneHeight }}>
-                <GanttScaleGuides minorLefts={scaleGuideMinorLefts} majorLefts={scaleGuideMajorLefts} />
+                {showGanttGrid ? <GanttScaleGuides minorLefts={scaleGuideMinorLefts} majorLefts={scaleGuideMajorLefts} /> : null}
                 <GanttMarkerLine left={markerPaneX} title={markerLabel ? `Метка R: ${markerLabel}` : ""} />
                 <TodayLine
                   from={from}
@@ -7804,6 +8117,11 @@ export function GanttView() {
                           const exitTargetStartAt = exitTargetIsFact && ev.actualStartAt ? ev.actualStartAt : displayPeriod.startAt;
                           const exitTargetEndAt = exitTargetIsFact && ev.actualEndAt ? ev.actualEndAt : displayPeriod.endAt;
                           const isEditorFocused = editorOpen && Boolean(draft?.id) && draft!.id === ev.id;
+                          const warnTexts = barWarningTexts(ev, statusCatalog, overlapEventIds.has(ev.id));
+                          const openWarnings = (event: ReactMouseEvent<HTMLSpanElement>) => {
+                            event.stopPropagation();
+                            openEventOnSection(ev, "warnings");
+                          };
 
                           return (
                             <Fragment key={ev.segmentKey ?? ev.id}>
@@ -7817,7 +8135,7 @@ export function GanttView() {
                                   ...barPaddingStyle(w)
                                 }}
                                 onClick={() => pickEvent(ev)}
-                                title={`${eventTooltip(ev, timelineTimeMode, statusCatalog)}\n${
+                                title={`${eventTooltip(ev, timelineTimeMode, statusCatalog, overlapEventIds.has(ev.id))}\n${
                                   copySelectMode
                                     ? "Нажмите, чтобы создать копию"
                                     : canEditEventsEffective
@@ -7831,6 +8149,9 @@ export function GanttView() {
                                       barW: w,
                                       barStartAt: displayPeriod.startAt,
                                       barEndAt: displayPeriod.endAt,
+                                      barLeftPx: g.leftRaw,
+                                      barRightPx: g.rightRaw,
+                                      canvasWidth,
                                       dayWidth,
                                       timeMode: timelineTimeMode
                                     })
@@ -7838,9 +8159,11 @@ export function GanttView() {
                                 {displayPeriod.source === "Опер." ? renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
                                 {canShowBarTitle(w) ? (
                                   <span style={{ position: "relative", zIndex: 5, pointerEvents: "none" }}>
-                                    <BarLabel {...aircraftBarText(ev, w, ganttDisplayMode)} />
+                                    <BarLabel {...aircraftBarText(ev, w, ganttDisplayMode)} warnings={warnTexts} onWarnClick={openWarnings} />
                                   </span>
-                                ) : null}
+                                ) : (
+                                  <BarWarnMark warnings={warnTexts} onClick={openWarnings} />
+                                )}
                                 <BarStatusStripe status={ev.status} catalog={statusCatalog} />
                               </div>
                               {actualSeg ? (
@@ -7945,6 +8268,12 @@ export function GanttView() {
                           ]
                             .filter(Boolean)
                             .join("\n");
+                          const warnTexts = barWarningTexts(ev, statusCatalog, overlapEventIds.has(ev.id));
+                          const openWarnings = (event: ReactMouseEvent<HTMLSpanElement>) => {
+                            event.stopPropagation();
+                            if (dndActive) return;
+                            openEventOnSection(ev, "warnings");
+                          };
 
                           return (
                             <Fragment key={ev.segmentKey ?? ev.id}>
@@ -8032,7 +8361,7 @@ export function GanttView() {
                                 if (dndActive) return;
                                 pickEvent(ev);
                               }}
-                              title={`${eventTooltip(ev, timelineTimeMode, statusCatalog)}${bridgeTitleBits ? `\n${bridgeTitleBits}` : ""}\n${
+                              title={`${eventTooltip(ev, timelineTimeMode, statusCatalog, overlapEventIds.has(ev.id))}${bridgeTitleBits ? `\n${bridgeTitleBits}` : ""}\n${
                                 dndActive && isMultiPlacementDndBlocked
                                   ? "Многоэтапное событие изменяется только в карточке"
                                   : dndActive
@@ -8048,15 +8377,20 @@ export function GanttView() {
                                     barW: w,
                                     barStartAt: displayPeriod.startAt,
                                     barEndAt: displayPeriod.endAt,
+                                    barLeftPx: g.leftRaw,
+                                    barRightPx: g.rightRaw,
+                                    canvasWidth,
                                     dayWidth,
                                     timeMode: timelineTimeMode
                                   })
                                 : null}
                               {canShowBarTitle(w) ? (
                                 <span style={{ position: "relative", zIndex: 5, pointerEvents: "none" }}>
-                                  <BarLabel {...hangarBarText(ev, w, ganttDisplayMode)} />
+                                  <BarLabel {...hangarBarText(ev, w, ganttDisplayMode)} warnings={warnTexts} onWarnClick={openWarnings} />
                                 </span>
-                              ) : null}
+                              ) : (
+                                <BarWarnMark warnings={warnTexts} onClick={openWarnings} />
+                              )}
                               <BarStatusStripe status={ev.status} catalog={statusCatalog} />
                               </div>
                             {bridge?.prevLabel ? (
@@ -8140,7 +8474,7 @@ export function GanttView() {
                   onPointerLeave={onGanttTimelinePointerLeave}
                 >
                   <div className="ganttVirtPane" style={{ left: paneLeft, width: paneWidth, top: 0, height: 76 }}>
-                  <GanttScaleGuides minorLefts={scaleGuideMinorLefts} majorLefts={scaleGuideMajorLefts} />
+                  {showGanttGrid ? <GanttScaleGuides minorLefts={scaleGuideMinorLefts} majorLefts={scaleGuideMajorLefts} /> : null}
                   <GanttMarkerLine left={markerPaneX} title={markerLabel ? `Метка R: ${markerLabel}` : ""} />
                   {slotHistogram.length > 0 ? (
                     visibleHistogramBuckets.map((b) => {
@@ -8235,6 +8569,14 @@ export function GanttView() {
           <div className="muted">Нет данных формы.</div>
         ) : (
           <div className="evEditor">
+            {remoteHint && draft.id ? (
+              <div className="liveStaleBanner" role="status">
+                <span>Событие изменилось. Поля карточки оставлены как есть.</span>
+                <button type="button" className="btn" onClick={() => void pullRemoteDraft()}>
+                  Подтянуть серверную версию
+                </button>
+              </div>
+            ) : null}
             {copyFromTitle ? (
               <div className="copyNotice" role="alert">
                 <span className="copyNoticeDot" aria-hidden="true" />
@@ -8254,8 +8596,57 @@ export function GanttView() {
               </div>
             ) : null}
 
+            <div className="evEditorStack">
+              <nav className="evSectionNav" aria-label="Разделы карточки">
+                {editorNav.map((item, index) => (
+                  <SectionDigit
+                    key={item.id}
+                    index={index}
+                    label={item.label}
+                    warn={item.id === "warnings" && item.count > 0}
+                    open={openSections.includes(item.id)}
+                    onToggle={() => toggleSection(item.id)}
+                  />
+                ))}
+              </nav>
+              <div className="evEditorPane">
+            <section id="ev-section-warnings" className="evCard" hidden={!openSections.includes("warnings")}>
+              <header className="evCardHeader">
+                <EvCardTitle
+                  helpLabel="Замечания"
+                  help={
+                    <>
+                      <p>То, на что планировщику стоит посмотреть в этом событии. Сохранение из-за замечания не блокируется.</p>
+                      <ul>
+                        <li>На диаграмме «!» перед TAT стоит за буксировку, пустую трудоёмкость MPS, нахлёст, слот позже DeadLine и пустой факт у завершённого. Наведите на знак, чтобы прочитать список.</li>
+                        <li>Строка открывает соответствующий раздел карточки.</li>
+                        <li>Здесь же видны пустые цех, вид ТО, дедлайн и трудоёмкость бюджета. Они на бар не выносятся.</li>
+                      </ul>
+                    </>
+                  }
+                >
+                  Замечания
+                </EvCardTitle>
+              </header>
+              <div className="evCardBody">
+                {cardWarnings.length === 0 ? (
+                  <div className="muted">Замечаний нет.</div>
+                ) : (
+                  <ul className="evWarningList">
+                    {cardWarnings.map((warning) => (
+                      <li key={warning.id}>
+                        <button type="button" className="evWarningJump" onClick={() => revealSection(warning.section)}>
+                          <span className="barWarnMark" aria-hidden="true">!</span>
+                          <span>{warning.text}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
             <fieldset className="evReadonlyFieldset" disabled={!canEditEventsEffective}>
-            <section className="evCard">
+            <section id="ev-section-main" className="evCard" hidden={!openSections.includes("main")}>
               <header className="evCardHeader">
                 <EvCardTitle
                   helpLabel="Основная информация"
@@ -8470,8 +8861,9 @@ export function GanttView() {
                 </div>
               </div>
             </section>
-
-            <section className="evCard">
+            </fieldset>
+            <fieldset className="evReadonlyFieldset" disabled={!canEditEventsEffective}>
+            <section id="ev-section-periods" className="evCard" hidden={!openSections.includes("periods")}>
               <header className="evCardHeader">
                 <EvCardTitle
                   helpLabel="Периоды и TAT"
@@ -8578,8 +8970,9 @@ export function GanttView() {
                 </fieldset>
               </div>
             </section>
-
-            <section className="evCard">
+            </fieldset>
+            <fieldset className="evReadonlyFieldset" disabled={!canEditEventsEffective}>
+            <section id="ev-section-place" className="evCard" hidden={!openSections.includes("place")}>
               <header className="evCardHeader">
                 <EvCardTitle
                   helpLabel="Ангар и место"
@@ -8709,8 +9102,9 @@ export function GanttView() {
                 </fieldset>
               </div>
             </section>
-
-            <section className="evCard">
+            </fieldset>
+            <fieldset className="evReadonlyFieldset" disabled={!canEditEventsEffective}>
+            <section id="ev-section-tows" className="evCard" hidden={!openSections.includes("tows")}>
               <header className="evCardHeader">
                 <EvCardTitle
                   helpLabel="Буксировки"
@@ -8724,6 +9118,7 @@ export function GanttView() {
                         <li>Закатка в начале ТО: «откуда» — МС, «куда» — место из карточки (или выбранного этапа).</li>
                         <li>На разделённом событии привяжите буксировку к этапу размещения.</li>
                         <li>Созданный интервал можно изменить — те же ограничения, что у расписания события (в статусе «Завершено» правки недоступны).</li>
+                        <li>«Информация для буксировки ВС» хранится на событии и попадает в столбец «Позиция» реестра на каждые сутки этой стоянки. Правка в реестре меняет это же поле.</li>
                       </ul>
                     </>
                   }
@@ -8732,6 +9127,17 @@ export function GanttView() {
                 </EvCardTitle>
               </header>
               <div className="evCardBody">
+                  <label className="evField" htmlFor="event-tow-info">
+                    <span className="evFieldLabel">Информация для буксировки ВС</span>
+                    <textarea
+                      id="event-tow-info"
+                      className="evInput evTextarea"
+                      rows={4}
+                      value={draft.towInfo}
+                      onChange={(e) => setDraft({ ...draft, towInfo: e.target.value })}
+                      placeholder="Конфигурация, комментарий и условия буксировки. Текст виден в реестре на все сутки этого события."
+                    />
+                  </label>
                   <fieldset
                     className={`evReadonlyFieldset${scheduleLockedByDone ? " evLockedReadonly" : ""}`}
                     disabled={scheduleLockedByDone}
@@ -8961,8 +9367,9 @@ export function GanttView() {
                   </fieldset>
               </div>
             </section>
-
-            <section className="evCard">
+            </fieldset>
+            <fieldset className="evReadonlyFieldset" disabled={!canEditEventsEffective}>
+            <section id="ev-section-notes" className="evCard" hidden={!openSections.includes("notes")}>
               <header className="evCardHeader">
                 <EvCardTitle
                   helpLabel="Примечание"
@@ -9002,29 +9409,27 @@ export function GanttView() {
               </div>
             </section>
             </fieldset>
-
-            {draft.id ? (
-              <details className="evCard evCardDetails">
-                <summary className="evCardHeader evCardSummary">
-                  <EvCardTitle
-                    helpLabel="Трудоёмкость"
-                    help={
-                      <>
-                        <p>Таблица routine / ADD / NRC по квалификациям: бюджет, MPS и факт.</p>
-                        <ul>
+            <section id="ev-section-labor" className="evCard" hidden={!openSections.includes("labor")}>
+              <header className="evCardHeader">
+                <EvCardTitle
+                  helpLabel="Трудоёмкость"
+                  help={
+                    <>
+                      <p>Таблица routine / ADD / NRC по квалификациям: бюджет, MPS и факт.</p>
+                      <ul>
                         <li>Блок доступен после сохранения события и пишется общей кнопкой «Сохранить изменения».</li>
                         <li>Бюджет и MPS можно менять, пока статус не позже «В работе». После «Завершено» открыт только факт.</li>
                         <li>Значения пишутся в EventReportMetric и попадают в первичную таблицу.</li>
-                          <li>SUM — по колонкам routine/ADD/NRC. TOTAL — сумма трёх колонок периода. TOTAL/TAT — TOTAL периода на TAT бюджета / MPS / факта.</li>
-                        </ul>
-                      </>
-                    }
-                  >
-                    Трудоёмкость
-                  </EvCardTitle>
-                  <span className="evCardChevron" aria-hidden="true" />
-                </summary>
-                <div className="evCardBody">
+                        <li>SUM — по колонкам routine/ADD/NRC. TOTAL — сумма трёх колонок периода. TOTAL/TAT — TOTAL периода на TAT бюджета / MPS / факта.</li>
+                      </ul>
+                    </>
+                  }
+                >
+                  Трудоёмкость
+                </EvCardTitle>
+              </header>
+              <div className="evCardBody">
+                {draft.id ? (
                   <EventResourcesPanel
                     ref={laborRef}
                     eventId={draft.id}
@@ -9034,12 +9439,13 @@ export function GanttView() {
                     readOnly={!canPlanLabor}
                     onDirtyChange={onLaborDirtyChange}
                   />
-                </div>
-              </details>
-            ) : null}
-
-            <details className="evCard evCardDetails">
-              <summary className="evCardHeader evCardSummary">
+                ) : (
+                  <div className="muted">Трудоёмкость появится после сохранения события.</div>
+                )}
+              </div>
+            </section>
+            <section id="ev-section-history" className="evCard" hidden={!openSections.includes("history")}>
+              <header className="evCardHeader">
                 <EvCardTitle
                   helpLabel="История изменений"
                   help={
@@ -9061,8 +9467,7 @@ export function GanttView() {
                 >
                   История изменений
                 </EvCardTitle>
-                <span className="evCardChevron" aria-hidden="true" />
-              </summary>
+              </header>
               <div className="evCardBody">
                 {!draft.id ? (
                   <div className="muted">История появится после сохранения события.</div>
@@ -9125,7 +9530,9 @@ export function GanttView() {
                   </div>
                 )}
               </div>
-            </details>
+            </section>
+              </div>
+            </div>
 
             <footer className="evFooter">
               <div className="evFooterInfo">

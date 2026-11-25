@@ -161,6 +161,7 @@ test("inside-stage tow with apron label is inbound", () => {
   assert.equal(row.directionLabel, "Закатка");
   assert.equal(row.fromStand, APRON_STAND_LABEL);
   assert.equal(row.toStand, "A1");
+  assert.equal(row.notes, "Требуется буксировочная бригада");
 });
 
 test("buildTowReportRow prefers stored labels and customer slot", () => {

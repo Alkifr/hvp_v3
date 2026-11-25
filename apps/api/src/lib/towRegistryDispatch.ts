@@ -3,10 +3,34 @@ import type { PrismaClient } from "@prisma/client";
 import { isSmtpReady, parseRecipients, sendMail, smtpConfigFromSettings } from "./mailer.js";
 import { readMailSources } from "./mailVariantSource.js";
 import { registryPeriodLabel, readSendRows } from "./towRegistry.js";
-import { buildTowRegistryLetter, describeTowSendDiff } from "./towRegistryMail.js";
+import { buildTowRegistryLetter } from "./towRegistryMail.js";
+import { markRegistryChanges, REGISTRY_REMOVED, registryChangeLines, removedMailRows, type RegistryMailRow } from "./towRegistrySheet.js";
 import { buildTowRegistryXlsx } from "./towReportXlsx.js";
 import { formatMskDateTime, type TowReportRow } from "./towReport.js";
 import { readTowMailTemplate } from "./towMailTemplate.js";
+
+const TOW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Буксировка ещё есть, но её интервал не пересекает окно фиксации. */
+export async function towIdsOutsidePeriod(
+  prisma: PrismaClient,
+  ids: string[],
+  from: Date,
+  to: Date,
+  sandboxId: string | null
+): Promise<Set<string>> {
+  const towIds = [...new Set(ids.filter((id) => TOW_ID.test(id)))];
+  if (!towIds.length) return new Set();
+  const found = await prisma.eventTow.findMany({
+    where: { id: { in: towIds }, sandboxId },
+    select: { id: true, startAt: true, endAt: true }
+  });
+  const kept = new Set<string>();
+  for (const tow of found) {
+    if (!(tow.startAt < to && tow.endAt > from)) kept.add(tow.id);
+  }
+  return kept;
+}
 
 type SmtpRow = {
   smtpHost: string | null;
@@ -109,22 +133,33 @@ export async function deliverTowRegistrySend(
       sandboxId: existing.sandboxId,
       fromAt: existing.fromAt,
       toAt: existing.toAt,
-      messageId: { not: null }
+      createdAt: { lt: existing.createdAt }
     },
     orderBy: { createdAt: "desc" }
   });
+  const previousRows = previous ? readSendRows(previous.rows) : null;
+  const currentIds = new Set(items.map((row) => row.id));
+  const missingIds = (previousRows ?? []).map((row) => row.id).filter((id) => id && !currentIds.has(id));
+  const outsideTowIds = await towIdsOutsidePeriod(prisma, missingIds, existing.fromAt, existing.toAt, existing.sandboxId);
+  const storedStatus = items.every((row) => Object.prototype.hasOwnProperty.call(row, "changeStatus"));
+  const marked = storedStatus ? null : markRegistryChanges(previousRows, items, outsideTowIds);
+  const current = storedStatus ? (items as RegistryMailRow[]) : marked!.rows.filter((row) => row.changeStatus !== REGISTRY_REMOVED);
+  const view = {
+    rows: [...current, ...removedMailRows(previousRows, current, outsideTowIds)],
+    lines: storedStatus ? registryChangeLines(previousRows, current, outsideTowIds) : marked!.lines
+  };
   const template = await readTowMailTemplate(prisma).catch(() => ({ subjectTemplate: "", bodyTemplate: "" }));
   const letter = buildTowRegistryLetter({
-    rows: items,
+    rows: view.rows,
     periodLabel: registryPeriodLabel(existing.fromAt, existing.toAt),
     contour: "Рабочий контур",
     subjectTemplate: params.subjectTemplate || template.subjectTemplate,
     bodyTemplate: params.bodyTemplate ?? template.bodyTemplate,
-    diffLines: describeTowSendDiff(previous ? readSendRows(previous.rows) : null, items)
+    diffLines: view.lines
   });
   const fileStamp = formatMskDateTime(existing.fromAt).slice(0, 10).split(".").reverse().join("") || "registry";
   try {
-    const xlsx = await buildTowRegistryXlsx(items);
+    const xlsx = await buildTowRegistryXlsx(current);
     const sent = await sendMail(smtp, {
       to: recipients,
       subject: letter.subject,

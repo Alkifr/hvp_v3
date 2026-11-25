@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { MSK_OFFSET_MINUTES } from "./localDate.js";
+import { publishLive, scopeForSandbox } from "./liveBus.js";
 
 export const PRESENCE_PAGES = [
   "gantt",
@@ -96,18 +97,48 @@ export async function recordLogin(prisma: PrismaClient, userId: string, now = ne
   ]);
 }
 
+function emitPresence(
+  params: { userId: string; detail?: unknown; sandboxId?: string | null; displayName?: string | null },
+  page: string | null
+) {
+  const detail = sanitizeDetail(params.detail);
+  const eventMatch = detail ? /^event:(.*)$/.exec(detail) : null;
+  publishLive({
+    topic: "presence",
+    scope: scopeForSandbox(params.sandboxId),
+    actorId: params.userId,
+    presence: {
+      userId: params.userId,
+      displayName: String(params.displayName ?? "").trim() || "Пользователь",
+      page: page ?? "",
+      eventId: eventMatch && eventMatch[1] ? eventMatch[1] : null
+    }
+  });
+}
+
 export async function recordPresence(
   prisma: PrismaClient,
-  params: { userId: string; kind: PresenceKind; page?: unknown; detail?: unknown },
+  params: {
+    userId: string;
+    kind: PresenceKind;
+    page?: unknown;
+    detail?: unknown;
+    sandboxId?: string | null;
+    displayName?: string | null;
+  },
   now = new Date()
 ): Promise<{ recorded: boolean }> {
   if (params.kind === "PING") {
     await touchLastSeen(prisma, params.userId, now);
+    emitPresence(params, sanitizePage(params.page));
     return { recorded: false };
   }
 
   const page = params.kind === "PAGE" ? sanitizePage(params.page) : sanitizePage(params.page);
-  if (params.kind === "PAGE" && !page) return { recorded: false };
+  if (params.kind === "PAGE" && !page) {
+    emitPresence(params, null);
+    return { recorded: false };
+  }
 
   const detail = sanitizeDetail(params.detail);
   const dedupeMs = params.kind === "ACTION" ? ACTION_DEDUPE_MS : PAGE_DEDUPE_MS;
@@ -125,6 +156,7 @@ export async function recordPresence(
   });
   if (dup) {
     await touchLastSeen(prisma, params.userId, now);
+    emitPresence(params, page);
     return { recorded: false };
   }
 
@@ -143,6 +175,7 @@ export async function recordPresence(
       data: { lastSeenAt: now }
     })
   ]);
+  emitPresence(params, page);
   return { recorded: true };
 }
 

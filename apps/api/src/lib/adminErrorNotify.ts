@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 
 import type { SerializedUserError } from "./userErrors.js";
+import { publishBell } from "./liveNotify.js";
 
 export const KIND_USER_ERROR = "USER_ERROR";
 
@@ -64,6 +65,7 @@ export async function notifyAdminsOfUserError(
         dedupeKey
       }
     });
+    await publishBell(app.prisma, { adminOnly: true });
   } catch (err: unknown) {
     const code = (err as { code?: string })?.code;
     if (code === "P2002") return;

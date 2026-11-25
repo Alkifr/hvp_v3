@@ -41,6 +41,9 @@ export type TowPlanEvent = {
   operator: string;
   eventTitle: string;
   eventType: string;
+  registryNotes?: string | null;
+  registryPosition?: string | null;
+  registryStartReason?: string | null;
   placements: TowPlanPlacement[];
   tows: TowPlanTow[];
   skipped: boolean;
@@ -78,6 +81,9 @@ export type TowPlanRow = {
   isNew: boolean;
   standOptions: string[];
   skipped: boolean;
+  registryNotes: string;
+  registryPosition: string;
+  registryStartReason: string;
 };
 
 function text(value: string | null | undefined): string {
@@ -171,7 +177,10 @@ export function buildTowPlanRows(events: TowPlanEvent[], from: Date, to: Date): 
       createdAt: event.createdAt.toISOString(),
       isNew: false,
       standOptions,
-      skipped: event.skipped === true
+      skipped: event.skipped === true,
+      registryNotes: text(event.registryNotes),
+      registryPosition: text(event.registryPosition),
+      registryStartReason: text(event.registryStartReason)
     };
     if (!visible.length) {
       rows.push({

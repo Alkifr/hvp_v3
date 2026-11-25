@@ -80,7 +80,6 @@ export function NotificationBell(props: {
     queryKey: ["notifications"],
     queryFn: () => apiGet<NotificationsResponse>("/api/notifications?limit=40"),
     enabled: props.enabled,
-    refetchInterval: 60_000,
     refetchOnWindowFocus: true
   });
 

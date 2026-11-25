@@ -1,15 +1,18 @@
 export type TowColumnPref = {
   hidden: string[];
   widths: Record<string, number>;
+  /** Колонки, для которых скрытие по умолчанию уже применено. Повторно их не прячем. */
+  appliedHidden: string[];
 };
 
 const MIN_WIDTH = 56;
 const MAX_WIDTH = 1200;
 
 export function readTowColumnPref(raw: unknown): TowColumnPref {
-  if (!raw || typeof raw !== "object") return { hidden: [], widths: {} };
-  const value = raw as { hidden?: unknown; widths?: unknown };
+  if (!raw || typeof raw !== "object") return { hidden: [], widths: {}, appliedHidden: [] };
+  const value = raw as { hidden?: unknown; widths?: unknown; appliedHidden?: unknown };
   const hidden = Array.isArray(value.hidden) ? value.hidden.map(String).filter(Boolean) : [];
+  const appliedHidden = Array.isArray(value.appliedHidden) ? value.appliedHidden.map(String).filter(Boolean) : [];
   const widths: Record<string, number> = {};
   if (value.widths && typeof value.widths === "object") {
     for (const [key, width] of Object.entries(value.widths as Record<string, unknown>)) {
@@ -17,7 +20,22 @@ export function readTowColumnPref(raw: unknown): TowColumnPref {
       if (Number.isFinite(n) && n >= MIN_WIDTH && n <= MAX_WIDTH) widths[key] = Math.round(n);
     }
   }
-  return { hidden, widths };
+  return { hidden, widths, appliedHidden };
+}
+
+/** Один раз прячет колонки из `defaultHidden`. Если пользователь потом включил колонку, она остаётся видимой. */
+export function applyDefaultHidden(pref: TowColumnPref, defaultHidden: readonly string[]): TowColumnPref {
+  const applied = new Set(pref.appliedHidden);
+  let hidden = pref.hidden;
+  let changed = false;
+  for (const key of defaultHidden) {
+    if (!key || applied.has(key)) continue;
+    applied.add(key);
+    changed = true;
+    if (!hidden.includes(key)) hidden = [...hidden, key];
+  }
+  if (!changed) return pref;
+  return { ...pref, hidden, appliedHidden: [...applied] };
 }
 
 export function columnWidth(saved: number | undefined, fallback: number): number {

@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import DataGrid, { type Column } from "react-data-grid";
+import { useQueryClient } from "@tanstack/react-query";
 import "react-data-grid/lib/styles.css";
 
+import { apiPatch } from "../../lib/api";
 import { wrappedBlockSize } from "../../lib/towColumnLayout";
 import { formatMskDateTime } from "../../lib/localDate";
+import { registryAutoNote, registryNoteText } from "../../lib/towRegistryNote";
 import { layoutColumn, TowColumnMenu, TowText, towHeaderContextPoint, useTowColumnLayout, type TowColumnMenuPoint, type TowColumnSpec } from "./TowColumnMenu";
 
 export type TowReportRow = {
@@ -33,6 +36,10 @@ export type TowReportRow = {
   inferredOccupancyEndAt: string;
   standOccupancy: string;
   notes: string;
+  /** Текст «Информация для буксировки ВС» на событии, без подстановки старого комментария буксировки. */
+  registryPosition?: string;
+  eventType?: string;
+  parkedStand?: string;
   toSlotEndMsk: string;
   toSlotDuration: string;
   positionComment: string;
@@ -43,6 +50,42 @@ type DataGridRow = TowReportRow & { kind: "data" };
 type HangarGridRow = { kind: "hangar"; id: string; label: string };
 type GridRow = DataGridRow | HangarGridRow;
 
+const EDITABLE = new Set(["notes", "positionComment", "startChangeReason"]);
+
+type NoteDraft = { notes: string; positionComment: string; startChangeReason: string };
+
+function ActionIcon({ children }: { children: ReactNode }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {children}
+    </svg>
+  );
+}
+
+function rowHasTow(row: TowReportRow): boolean {
+  return Boolean(row.plannedStartAt) && !row.id.startsWith("plan:");
+}
+
+function shownDraft(row: TowReportRow, drafts: Record<string, NoteDraft>): NoteDraft {
+  return drafts[row.id] ?? {
+    notes: registryNoteText(row),
+    positionComment: row.positionComment,
+    startChangeReason: row.startChangeReason
+  };
+}
+
+function notesToSave(row: TowReportRow, notes: string): string {
+  const next = notes.trim();
+  if (!row.notes.trim() && next === registryAutoNote(row)) return "";
+  return next;
+}
+
+function draftDirty(row: TowReportRow, draft: NoteDraft): boolean {
+  return notesToSave(row, draft.notes) !== row.notes.trim()
+    || draft.positionComment.trim() !== row.positionComment.trim()
+    || draft.startChangeReason.trim() !== row.startChangeReason.trim();
+}
+
 const REGISTRY_COLUMNS: TowColumnSpec[] = [
   { key: "seq", label: "№", width: 48 },
   { key: "aircraftType", label: "Тип ВС", width: 100 },
@@ -52,13 +95,14 @@ const REGISTRY_COLUMNS: TowColumnSpec[] = [
   { key: "toStand", label: "Куда (на МС)", width: 108 },
   { key: "plannedStartMsk", label: "Плановое время начала буксировки (мск)", width: 176 },
   { key: "standOccupancy", label: "Требуемая продолжительность занятия МС", width: 210 },
-  { key: "notes", label: "Примечание", width: 160 },
+  { key: "notes", label: "Примечание", width: 280 },
   { key: "toSlotDuration", label: "Продолжительность слотов ТО", width: 176 },
-  { key: "positionComment", label: "Позиция", width: 140 },
-  { key: "startChangeReason", label: "Причина изменения времени начала буксировки (<60 мин)", width: 200 }
+  { key: "positionComment", label: "Позиция", width: 160 },
+  { key: "startChangeReason", label: "Причина изменения времени начала буксировки (<60 мин)", width: 220 }
 ];
 
-function reportCellText(row: DataGridRow, key: string): string {
+function reportCellText(row: DataGridRow, key: string, drafts: Record<string, NoteDraft>): string {
+  const draft = shownDraft(row, drafts);
   switch (key) {
     case "seq":
       return String(row.seq);
@@ -77,13 +121,13 @@ function reportCellText(row: DataGridRow, key: string): string {
     case "standOccupancy":
       return occupancyText(row);
     case "notes":
-      return row.notes;
+      return draft.notes;
     case "toSlotDuration":
       return slotLabel(row) || "—";
     case "positionComment":
-      return row.positionComment;
+      return draft.positionComment;
     case "startChangeReason":
-      return row.startChangeReason;
+      return draft.startChangeReason;
     default:
       return "";
   }
@@ -160,69 +204,174 @@ function asDataRow(row: TowReportRow): DataGridRow {
 export function TowReportTable({
   items,
   canWrite,
-  onDirtyChange
+  onDirtyChange,
+  barExtra,
+  belowBar
 }: {
   items: TowReportRow[];
   canWrite: boolean;
   canGantt?: boolean;
   onOpenEvent?: (eventId: string) => void;
   onDirtyChange: (count: number) => void;
+  barExtra?: ReactNode;
+  belowBar?: ReactNode;
 }) {
+  const qc = useQueryClient();
   const layout = useTowColumnLayout("hangarPlanning:towsRegistryColumns:v2", REGISTRY_COLUMNS);
   const [columnMenu, setColumnMenu] = useState<TowColumnMenuPoint | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, NoteDraft>>({});
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
   const closeColumnMenu = useCallback(() => setColumnMenu(null), []);
   const rows = useMemo(() => items.map(asDataRow), [items]);
+  const dirtyCount = useMemo(
+    () => items.reduce((count, row) => count + (drafts[row.id] && draftDirty(row, drafts[row.id]) ? 1 : 0), 0),
+    [items, drafts]
+  );
 
   useEffect(() => {
-    onDirtyChange(0);
-  }, [onDirtyChange]);
+    onDirtyChange(dirtyCount);
+  }, [dirtyCount, onDirtyChange]);
 
-  const grouped = useMemo(() => withHangarBands(rows), [rows]);
-  const lockedClass = (row: GridRow) => (row.kind === "hangar" ? "towHangarBand" : canWrite ? undefined : "towGridReadonly");
+  const setField = useCallback((row: TowReportRow, field: keyof NoteDraft, value: string) => {
+    setDrafts((prev) => {
+      const next = { ...shownDraft(row, prev), [field]: value };
+      if (!draftDirty(row, next)) {
+        if (!prev[row.id]) return prev;
+        const rest = { ...prev };
+        delete rest[row.id];
+        return rest;
+      }
+      return { ...prev, [row.id]: next };
+    });
+  }, []);
+
+  const undo = () => {
+    if (pending) return;
+    setDrafts({});
+    setError("");
+  };
+
+  const save = async () => {
+    const dirty = items.filter((row) => drafts[row.id] && draftDirty(row, drafts[row.id]));
+    if (!dirty.length || pending) return;
+    setPending(true);
+    setError("");
+    const saved: string[] = [];
+    try {
+      for (const row of dirty) {
+        const draft = drafts[row.id];
+        if (!draft) continue;
+        const notes = notesToSave(row, draft.notes);
+        const reason = draft.startChangeReason.trim();
+        const position = draft.positionComment.trim();
+        const notesDirty = notes !== row.notes.trim() || reason !== row.startChangeReason.trim();
+        const positionDirty = position !== (row.registryPosition ?? "").trim() || position !== row.positionComment.trim();
+        if (notesDirty && rowHasTow(row)) {
+          await apiPatch(`/api/tows/${row.id}`, { notes, startChangeReason: reason, changeReason: "Реестр" });
+        }
+        const eventBody: { notes?: string; positionComment?: string; startChangeReason?: string; changeReason: string } = {
+          changeReason: "Реестр"
+        };
+        if (!rowHasTow(row) && notesDirty) {
+          eventBody.notes = notes;
+          eventBody.startChangeReason = reason;
+        }
+        if (positionDirty) eventBody.positionComment = position;
+        if (eventBody.notes !== undefined || eventBody.positionComment !== undefined || eventBody.startChangeReason !== undefined) {
+          await apiPatch(`/api/tows/events/${row.eventId}/registry`, eventBody);
+        }
+        saved.push(row.id);
+      }
+    } catch (saveError) {
+      setError(String((saveError as Error).message ?? saveError));
+    } finally {
+      if (saved.length) {
+        await Promise.all([
+          qc.refetchQueries({ queryKey: ["tows-plan"] }, { cancelRefetch: true }),
+          qc.refetchQueries({ queryKey: ["tows-report"] }, { cancelRefetch: true })
+        ]);
+        setDrafts((prev) => {
+          const next = { ...prev };
+          for (const id of saved) delete next[id];
+          return next;
+        });
+      }
+      setPending(false);
+    }
+  };
+
+  const grouped = useMemo(() => withHangarBands(rows), [rows, drafts]);
+  const cellClass = (key: string) => (row: GridRow) => {
+    if (row.kind === "hangar") return "towHangarBand";
+    if (!canWrite || !EDITABLE.has(key)) return "towGridReadonly";
+    return undefined;
+  };
   const columns = useMemo<Column<GridRow>[]>(() => {
     const text = (row: GridRow, value: string) => (row.kind === "data" ? <TowText>{value}</TowText> : null);
+    const editor = (row: GridRow, field: keyof NoteDraft, label: string) => {
+      if (row.kind !== "data") return null;
+      const value = shownDraft(row, draftsRef.current)[field];
+      if (!canWrite) return <TowText>{value}</TowText>;
+      return (
+        <textarea
+          className="towGridInput"
+          value={value}
+          disabled={pending}
+          aria-label={label}
+          rows={1}
+          onChange={(event) => setField(row, field, event.target.value)}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        />
+      );
+    };
     const built: Column<GridRow>[] = [
       {
         key: "seq",
         name: "№",
         width: 48,
-        cellClass: lockedClass,
+        cellClass: cellClass("seq"),
         renderCell: ({ row }) => text(row, String(row.kind === "data" ? row.seq : ""))
       },
-      { key: "aircraftType", name: "Тип ВС", width: 100, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.aircraftType || "—" : "") },
-      { key: "tailNumber", name: "Бортовой номер", width: 124, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.tailNumber || "—" : "") },
-      { key: "operator", name: "Оператор", width: 116, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.operator || "—" : "") },
-      { key: "fromStand", name: "Откуда (с МС)", width: 108, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.fromStand || "—" : "") },
-      { key: "toStand", name: "Куда (на МС)", width: 108, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.toStand || "—" : "") },
-      { key: "plannedStartMsk", name: "Плановое время начала буксировки (мск)", width: 176, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? row.plannedStartMsk || "—" : "") },
+      { key: "aircraftType", name: "Тип ВС", width: 100, cellClass: cellClass("aircraftType"), renderCell: ({ row }) => text(row, row.kind === "data" ? row.aircraftType || "—" : "") },
+      { key: "tailNumber", name: "Бортовой номер", width: 124, cellClass: cellClass("tailNumber"), renderCell: ({ row }) => text(row, row.kind === "data" ? row.tailNumber || "—" : "") },
+      { key: "operator", name: "Оператор", width: 116, cellClass: cellClass("operator"), renderCell: ({ row }) => text(row, row.kind === "data" ? row.operator || "—" : "") },
+      { key: "fromStand", name: "Откуда (с МС)", width: 108, cellClass: cellClass("fromStand"), renderCell: ({ row }) => text(row, row.kind === "data" ? row.fromStand || "—" : "") },
+      { key: "toStand", name: "Куда (на МС)", width: 108, cellClass: cellClass("toStand"), renderCell: ({ row }) => text(row, row.kind === "data" ? row.toStand || "—" : "") },
+      { key: "plannedStartMsk", name: "Плановое время начала буксировки (мск)", width: 176, cellClass: cellClass("plannedStartMsk"), renderCell: ({ row }) => text(row, row.kind === "data" ? row.plannedStartMsk || "—" : "") },
       {
         key: "standOccupancy",
         name: "Требуемая продолжительность занятия МС",
         width: 210,
-        cellClass: lockedClass,
+        cellClass: cellClass("standOccupancy"),
         renderCell: ({ row }) => text(row, row.kind === "data" ? occupancyText(row) : "")
       },
       {
         key: "notes",
         name: "Примечание",
-        width: 160,
-        cellClass: lockedClass,
-        renderCell: ({ row }) => text(row, row.kind === "data" ? row.notes : "")
+        width: 280,
+        cellClass: cellClass("notes"),
+        renderCell: ({ row }) => editor(row, "notes", "Примечание")
       },
-      { key: "toSlotDuration", name: "Продолжительность слотов ТО", width: 176, cellClass: lockedClass, renderCell: ({ row }) => text(row, row.kind === "data" ? slotLabel(row) || "—" : "") },
+      { key: "toSlotDuration", name: "Продолжительность слотов ТО", width: 176, cellClass: cellClass("toSlotDuration"), renderCell: ({ row }) => text(row, row.kind === "data" ? slotLabel(row) || "—" : "") },
       {
         key: "positionComment",
         name: "Позиция",
-        width: 140,
-        cellClass: lockedClass,
-        renderCell: ({ row }) => text(row, row.kind === "data" ? row.positionComment : "")
+        width: 160,
+        cellClass: cellClass("positionComment"),
+        renderCell: ({ row }) => editor(row, "positionComment", "Позиция")
       },
       {
         key: "startChangeReason",
         name: "Причина изменения времени начала буксировки (<60 мин)",
-        width: 200,
-        cellClass: lockedClass,
-        renderCell: ({ row }) => text(row, row.kind === "data" ? row.startChangeReason : "")
+        width: 220,
+        cellClass: cellClass("startChangeReason"),
+        renderCell: ({ row }) => editor(row, "startChangeReason", "Причина изменения")
       }
     ];
     const visible = new Set(layout.visibleKeys);
@@ -231,7 +380,7 @@ export function TowReportTable({
         .filter((column) => visible.has(column.key))
         .map((column) => layoutColumn(column, layout.widthOf(column.key, typeof column.width === "number" ? column.width : 120)))
     );
-  }, [canWrite, layout.visibleKeys, layout.widthOf]);
+  }, [canWrite, layout.visibleKeys, layout.widthOf, pending, setField]);
   const headerRowHeight = useMemo(
     () =>
       wrappedBlockSize(
@@ -247,14 +396,35 @@ export function TowReportTable({
     (row: GridRow) => {
       if (row.kind === "hangar") return 36;
       return wrappedBlockSize(
-        columns.map((column) => ({ text: row.kind === "data" ? reportCellText(row, column.key) : "", width: typeof column.width === "number" ? column.width : 120 }))
+        columns.map((column) => ({ text: row.kind === "data" ? reportCellText(row, column.key, draftsRef.current) : "", width: typeof column.width === "number" ? column.width : 120 }))
       );
     },
-    [columns]
+    [columns, drafts]
   );
 
   return (
     <>
+      {canWrite || barExtra ? (
+        <div className="towGridActionBar">
+          {canWrite ? (
+            <>
+              <button className="btn btnPrimary towGridIconBtn" type="button" disabled={pending || dirtyCount === 0} onClick={() => void save()} aria-label="Сохранить" title="Сохранить">
+                <ActionIcon><path d="M5 12.5 10 17l9-10" /></ActionIcon>
+              </button>
+              <button className="btn towGridIconBtn" type="button" disabled={pending || dirtyCount === 0} onClick={undo} aria-label="Отменить" title="Отменить">
+                <ActionIcon>
+                  <path d="M8 7H4v4" />
+                  <path d="M4 11a8 8 0 1 0 2.2-5.5L4 8" />
+                </ActionIcon>
+              </button>
+            </>
+          ) : null}
+          {barExtra ? <span className="towsFixBeside">{barExtra}</span> : null}
+          {canWrite && dirtyCount > 0 ? <span className="muted">Несохранённых строк: {dirtyCount}</span> : null}
+        </div>
+      ) : null}
+      {belowBar}
+      {error ? <div className="error">{error}</div> : null}
       <div onContextMenu={(event) => {
         const point = towHeaderContextPoint(event);
         if (point) setColumnMenu(point);

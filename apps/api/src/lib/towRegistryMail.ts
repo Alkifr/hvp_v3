@@ -1,4 +1,6 @@
 import { TOW_REGISTRY_COLUMNS, type TowRegistrySnapshotRow } from "./towRegistry.js";
+import type { RegistryMailRow } from "./towRegistrySheet.js";
+import { REGISTRY_ADDED, REGISTRY_REMOVED, REGISTRY_UPDATED } from "./towRegistrySheet.js";
 import { TOW_EXPORT_COLUMNS, type TowReportRow } from "./towReport.js";
 
 export type TowRegistryLetter = {
@@ -57,6 +59,23 @@ function cell(row: TowReportRow, key: (typeof TOW_EXPORT_COLUMNS)[number]["key"]
   return String(value);
 }
 
+function mailColumns(rows: RegistryMailRow[]) {
+  const withStatus = rows.some((row) => typeof row.changeStatus === "string");
+  return withStatus ? [...TOW_EXPORT_COLUMNS, { key: "changeStatus" as const, title: "Статус" }] : TOW_EXPORT_COLUMNS;
+}
+
+function mailCell(row: RegistryMailRow, key: string): string {
+  if (key === "changeStatus") return row.changeStatus ?? "";
+  return cell(row, key as (typeof TOW_EXPORT_COLUMNS)[number]["key"]);
+}
+
+function rowFill(status: string | undefined): string {
+  if (status === REGISTRY_ADDED) return "background:#dcfce7;";
+  if (status === REGISTRY_UPDATED) return "background:#fef3c7;";
+  if (status === REGISTRY_REMOVED) return "background:#fee2e2;";
+  return "";
+}
+
 export type TowSendSnap = {
   id?: string;
   tailNumber?: string;
@@ -101,8 +120,16 @@ export function describeTowSendDiff(previous: TowSendSnap[] | null, next: TowSen
   return lines;
 }
 
+function letterRows(rows: RegistryMailRow[]): RegistryMailRow[] {
+  const tracked = rows.some((row) => typeof row.changeStatus === "string");
+  if (!tracked) return rows;
+  return rows.filter(
+    (row) => row.changeStatus === REGISTRY_ADDED || row.changeStatus === REGISTRY_UPDATED || row.changeStatus === REGISTRY_REMOVED
+  );
+}
+
 export function buildTowRegistryLetter(params: {
-  rows: TowReportRow[];
+  rows: RegistryMailRow[];
   periodLabel: string;
   contour: string;
   note?: string | null;
@@ -110,8 +137,10 @@ export function buildTowRegistryLetter(params: {
   subjectTemplate?: string | null;
   bodyTemplate?: string | null;
 }): TowRegistryLetter {
-  const groups = groupTowReportRows(params.rows);
+  const source = letterRows(params.rows);
+  const groups = groupTowReportRows(source);
   const rows = groups.flatMap((group) => group.rows);
+  const columns = mailColumns(params.rows);
   const note = String(params.note ?? "").trim();
   const bodyTemplate = fillTowMailTemplate(String(params.bodyTemplate ?? "").trim(), {
     period: params.periodLabel,
@@ -131,28 +160,36 @@ export function buildTowRegistryLetter(params: {
     `Строк: ${rows.length}`,
     ...diffLines
   ];
-  const header = TOW_EXPORT_COLUMNS.map((column) => column.title).join("\t");
+  const header = columns.map((column) => column.title).join("\t");
   const lines: string[] = [];
-  for (const group of groups) {
-    lines.push("", group.label);
-    for (const row of group.rows) lines.push(TOW_EXPORT_COLUMNS.map((column) => cell(row, column.key)).join("\t"));
+  if (rows.length) {
+    lines.push("", header);
+    for (const group of groups) {
+      lines.push("", group.label);
+      for (const row of group.rows) lines.push(columns.map((column) => mailCell(row, column.key)).join("\t"));
+    }
   }
-  const text = [...(bodyTemplate ? [bodyTemplate, ""] : []), ...(note ? [note, ""] : []), ...intro, "", header, ...lines].join("\n");
+  const text = [...(bodyTemplate ? [bodyTemplate, ""] : []), ...(note ? [note, ""] : []), ...intro, ...lines].join("\n");
 
-  const head = TOW_EXPORT_COLUMNS.map(
-    (column) =>
-      `<th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">${escapeHtml(column.title)}</th>`
-  ).join("");
-  const span = TOW_EXPORT_COLUMNS.length;
+  const head = columns
+    .map(
+      (column) =>
+        `<th style="padding:8px 10px;text-align:left;background:#f3f4f6;border:1px solid #e5e7eb;">${escapeHtml(column.title)}</th>`
+    )
+    .join("");
+  const span = columns.length;
   const body = groups
     .map((group) => {
       const band = `<tr><td colspan="${span}" style="padding:8px 10px;background:#ffd966;color:#0f172a;font-weight:600;border:1px solid #e5e7eb;">${escapeHtml(group.label)}</td></tr>`;
       const data = group.rows
         .map((row) => {
-          const cells = TOW_EXPORT_COLUMNS.map((column) => {
-            const value = cell(row, column.key) || "—";
-            return `<td style="padding:8px 10px;border:1px solid #e5e7eb;">${escapeHtml(value)}</td>`;
-          }).join("");
+          const fill = rowFill(row.changeStatus);
+          const cells = columns
+            .map((column) => {
+              const value = mailCell(row, column.key) || "—";
+              return `<td style="padding:8px 10px;border:1px solid #e5e7eb;${fill}">${escapeHtml(value)}</td>`;
+            })
+            .join("");
           return `<tr>${cells}</tr>`;
         })
         .join("");
@@ -169,7 +206,10 @@ export function buildTowRegistryLetter(params: {
         `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.45;color:#0f172a;">${escapeHtml(line)}</div>`
     )
     .join("");
-  const html = `${noteHtml}${summary}<div style="height:12px"></div><table style="border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;font-size:13px;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  const table = rows.length
+    ? `<div style="height:12px"></div><table style="border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;font-size:13px;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+    : "";
+  const html = `${noteHtml}${summary}${table}`;
   return { subject, text, html };
 }
 

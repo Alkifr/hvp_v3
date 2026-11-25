@@ -65,6 +65,7 @@ export const UserMsg = {
   BODY_TOO_LARGE: "Слишком большой запрос. Уменьшите объём данных и повторите.",
   RECORD_NOT_FOUND: "Запись не найдена",
   RECORD_CONFLICT: "Такая запись уже существует",
+  STALE_WRITE: "Запись уже изменил другой пользователь. Подтяните серверную версию, карточка останется открытой.",
   RECORD_IN_USE: "Нельзя изменить запись: она связана с другими данными",
   VALIDATION: "Проверьте заполненные поля",
   INTERNAL: "Не удалось выполнить операцию. Если ошибка повторяется, обратитесь к администратору."
@@ -134,6 +135,7 @@ const CODE_STATUS: Partial<Record<UserErrorCode, number>> = {
   BODY_TOO_LARGE: 413,
   RECORD_NOT_FOUND: 404,
   RECORD_CONFLICT: 409,
+  STALE_WRITE: 409,
   RECORD_IN_USE: 409,
   VALIDATION: 400,
   INTERNAL: 500

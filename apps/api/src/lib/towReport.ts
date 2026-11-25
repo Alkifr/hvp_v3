@@ -152,6 +152,8 @@ export type TowReportSource = {
   toLabel: string | null;
   notes: string | null;
   positionComment: string | null;
+  /** Информация для буксировки с карточки события. Важнее комментария интервала. */
+  eventTowInfo?: string | null;
   startChangeReason: string | null;
   occupancyEndAt: Date | null;
   fromStandCode: string | null;
@@ -280,12 +282,12 @@ export function buildTowReportRow(src: TowReportSource): TowReportRow {
     inferredOccupancyEndAt: slotEnd.toISOString(),
     standOccupancy: `${formatMskDateTime(src.startAt)} - ${formatMskDateTime(occupancyEnd)}`,
     standOccupancyMinutes: occupancyMs == null ? null : Math.round(occupancyMs / 60_000),
-    notes: text(src.notes) || text(src.eventNotes),
+    notes: text(src.notes) || (direction === "IN" || direction === "OUT" ? "Требуется буксировочная бригада" : ""),
     toSlotEndAt: slotEnd.toISOString(),
     toSlotEndMsk: formatMskDateTime(slotEnd),
     toSlotDuration: `Слот до ${formatMskDateTime(slotEnd)} мск`,
     toSlotMinutes: slotMs == null ? null : Math.round(slotMs / 60_000),
-    positionComment: text(src.positionComment),
+    positionComment: text(src.eventTowInfo) || text(src.positionComment),
     startChangeReason: text(src.startChangeReason),
     fromLabel: text(src.fromLabel),
     toLabel: text(src.toLabel),

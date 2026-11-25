@@ -7,6 +7,7 @@ import {
 } from "../../lib/announcements.js";
 import { assertPermission } from "../../lib/rbac.js";
 import { UserMsg } from "../../lib/userErrors.js";
+import { noteLive } from "../../lib/liveBus.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 
 const zKind = z.enum(ANNOUNCEMENT_KINDS);
@@ -76,6 +77,7 @@ export const announcementAdminRoutes: FastifyPluginAsync = async (app) => {
       },
       include: includeAdmin
     });
+    noteLive(req, { topic: "announcements", scope: "global", actorId: req.auth?.id });
     return serializeAnnouncement(row);
   });
 
@@ -120,6 +122,7 @@ export const announcementAdminRoutes: FastifyPluginAsync = async (app) => {
       });
     });
 
+    noteLive(req, { topic: "announcements", scope: "global", actorId: req.auth?.id });
     return serializeAnnouncement(row);
   });
 
@@ -135,6 +138,7 @@ export const announcementAdminRoutes: FastifyPluginAsync = async (app) => {
       }
       throw err;
     }
+    noteLive(req, { topic: "announcements", scope: "global", actorId: req.auth?.id });
     return { ok: true as const };
   });
 };

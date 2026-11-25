@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
 
 import { EventStatus } from "./eventStatusCatalog.js";
+import { publishBell } from "./liveNotify.js";
 
 import { VIRTUAL_AIRCRAFT_LABEL } from "./virtualAircraft.js";
 
@@ -75,5 +76,6 @@ export async function emitStatusChangeNotifications(
     data: rows,
     skipDuplicates: true
   });
+  if (created.count > 0) await publishBell(prisma);
   return created.count;
 }

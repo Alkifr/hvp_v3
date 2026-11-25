@@ -8,6 +8,7 @@ import { zDateTime, zId, zUuid } from "../../lib/zod.js";
 import { assertAnyPermission, assertPermission } from "../../lib/rbac.js";
 import { logUserActivity } from "../../lib/userActivity.js";
 import { queryActivityFeed } from "../../lib/activityFeed.js";
+import { noteBulk } from "../../lib/liveBus.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { CLEANUP_TX, CLEANUP_WRITE_BATCH, chunkList } from "../../lib/cleanupBatch.js";
@@ -620,6 +621,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    if (updated > 0) noteBulk(req, sandboxId, ["events", "placements", "tows"]);
     return { ok: true, updated };
   });
 };

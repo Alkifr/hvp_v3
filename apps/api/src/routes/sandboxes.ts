@@ -7,6 +7,7 @@ import { zDateTime, zUuid } from "../lib/zod.js";
 import { isSystemAdmin, assertPermission, requirePermission } from "../lib/rbac.js";
 import { UserMsg } from "../lib/userErrors.js";
 import { EventStatus } from "../lib/eventStatusCatalog.js";
+import { noteBulk } from "../lib/liveBus.js";
 import { copyPlanToSandbox, eventFingerprint, resolveOriginEventId } from "../lib/sandboxCopy.js";
 import { logUserActivity } from "../lib/userActivity.js";
 
@@ -216,6 +217,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       { timeout: 120_000, maxWait: 15_000 }
     );
 
+    if (result.copiedCounts) noteBulk(req, result.sandbox.id);
     return { ok: true, sandbox: result.sandbox, copied: result.copiedCounts };
   });
 
@@ -491,6 +493,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       { timeout: 180_000, maxWait: 20_000 }
     );
 
+    if (result.totals.events > 0) noteBulk(req, result.sandbox.id);
     return { ok: true, sandbox: result.sandbox, totals: result.totals, perSource: result.perSource };
   });
 
@@ -925,6 +928,7 @@ export const sandboxRoutes: FastifyPluginAsync = async (app) => {
       { timeout: 120_000, maxWait: 15_000 }
     );
 
+    if (result.promoted > 0) noteBulk(req, null);
     return { ok: true, ...result };
   });
 

@@ -15,10 +15,12 @@ export const errorHandlerPlugin = fp(async (app) => {
     }
 
     if (reply.sent) return;
+    const updatedAt = (error as { updatedAt?: unknown }).updatedAt;
     reply.code(payload.statusCode).send({
       ok: false,
       error: payload.code,
-      message: payload.message
+      message: payload.message,
+      ...(typeof updatedAt === "string" ? { updatedAt } : {})
     });
   });
 });

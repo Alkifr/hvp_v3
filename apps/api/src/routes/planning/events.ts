@@ -55,6 +55,8 @@ import {
   virtualAircraftDisplayLabel
 } from "../../lib/virtualAircraft.js";
 import { fileDuplicateWarnings, planDuplicateWarnings, type ImportDuplicateRow } from "../../lib/importDuplicates.js";
+import { noteBulk, noteIds } from "../../lib/liveBus.js";
+import { assertFreshUpdatedAt } from "../../lib/staleWrite.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertAnyPermission, assertPermission, requirePermission } from "../../lib/rbac.js";
 import {
@@ -216,6 +218,7 @@ function diffEvent(before: any, after: any) {
     "layoutId",
     "notes",
     "comment",
+    "towRegistryPosition",
     "virtualAircraft",
     "allowOverlap",
     "workshopId",
@@ -865,6 +868,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       )
     );
 
+    if (created.length > 0) noteIds(req, sbId, ["tows", "events"], [eventId]);
     return {
       minutes: norm.minutes,
       created: created.map((row) => ({
@@ -1008,6 +1012,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     });
 
+    noteIds(req, sbId, ["tows", "events"], [eventId]);
     return created;
   });
 
@@ -1025,7 +1030,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         notes: z.string().trim().max(2000).nullable().optional(),
         startChangeReason: z.string().trim().max(1000).nullable().optional(),
         changeReason: z.string().trim().min(1).max(1000).optional(),
-        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional(),
+        baseUpdatedAt: zDateTime.optional()
       })
       .parse(req.body);
 
@@ -1047,6 +1053,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       include: { placement: { include: { hangar: true, stand: true } } }
     });
     if (!existing) throw app.httpErrors.notFound(UserMsg.RECORD_NOT_FOUND);
+    assertFreshUpdatedAt(existing.updatedAt, body.baseUpdatedAt);
 
     const nextStart = body.startAt ?? existing.startAt;
     const nextEnd = body.endAt ?? existing.endAt;
@@ -1140,6 +1147,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    noteIds(req, sandboxIdFor(req), ["tows", "events"], [eventId]);
     return updated;
   });
 
@@ -1205,6 +1213,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         }
       }
     });
+    noteIds(req, sandboxIdFor(req), ["tows", "events"], [eventId]);
     return { ok: true, deleted: 1 };
   });
 
@@ -1232,7 +1241,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         changeReason: z.string().trim().min(1).max(1000).optional(),
         changeReasonIds: z.array(z.string().uuid()).max(20).optional(),
         allowOverlap: z.boolean().optional(),
-        autoFillGapPlacements: z.boolean().optional().default(true)
+        autoFillGapPlacements: z.boolean().optional().default(true),
+        baseUpdatedAt: zDateTime.optional()
       })
       .parse(req.body);
 
@@ -1241,6 +1251,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       include: { placements: true }
     });
     if (!event) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+    assertFreshUpdatedAt(event.updatedAt, body.baseUpdatedAt);
     if (isDoneScheduleLocked(event.status)) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }
@@ -1314,6 +1325,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     });
 
     const reloaded = await app.prisma.maintenanceEvent.findUniqueOrThrow({ where: { id: eventId }, include: eventInclude });
+    noteIds(req, sbId, ["events", "placements"], [eventId]);
     return serializeEvent(reloaded);
   });
 
@@ -2240,6 +2252,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    if (result.createdEvents > 0) noteBulk(req, sandboxIdFor(req));
     return result;
   });
 
@@ -2274,6 +2287,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         comment: z.string().trim().min(1).max(5000).nullable().optional(),
+        towRegistryPosition: z.string().trim().max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional().default(false),
         autoFillGapPlacements: z.boolean().optional().default(true),
         changeReason: z.string().trim().min(1).max(1000).optional(),
@@ -2432,6 +2446,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    noteIds(req, sbId, ["events", "placements", "tows"], [created.id]);
     return serializeEvent(created);
   });
 
@@ -2569,6 +2584,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    if (updated.length > 0) noteIds(req, sbId, ["events"], updated.map((row) => row.eventId));
     return { ok: true as const, requested: body.status, updated, skipped, failed };
   });
 
@@ -2597,10 +2613,12 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
         placements: z.array(zPlacementInput).optional(),
         notes: z.string().trim().min(1).max(5000).nullable().optional(),
         comment: z.string().trim().min(1).max(5000).nullable().optional(),
+        towRegistryPosition: z.string().trim().max(5000).nullable().optional(),
         allowOverlap: z.boolean().optional(),
         autoFillGapPlacements: z.boolean().optional().default(true),
         changeReason: z.string().trim().min(1).max(1000).optional(),
-        changeReasonIds: z.array(z.string().uuid()).max(20).optional()
+        changeReasonIds: z.array(z.string().uuid()).max(20).optional(),
+        baseUpdatedAt: zDateTime.optional()
       })
       .parse(req.body);
     if (body.deadlineAt) body.deadlineAt = startOfMskCalendarDay(body.deadlineAt);
@@ -2615,6 +2633,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     });
     if (!existing) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
+    assertFreshUpdatedAt(existing.updatedAt, body.baseUpdatedAt);
 
     // Поле даты в карточке — до минуты. Повторное сохранение не должно срезать секунды импорта.
     if (body.startAt) body.startAt = keepStoredInstant(existing.startAt, body.startAt);
@@ -2664,7 +2683,8 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    let { changeReason, changeReasonIds, placements, allowOverlap, autoFillGapPlacements, lineBase, ...patch } = body;
+    let { changeReason, changeReasonIds, placements, allowOverlap, autoFillGapPlacements, lineBase, baseUpdatedAt, ...patch } = body;
+    void baseUpdatedAt;
     const nextWorkshopId = body.workshopId !== undefined ? body.workshopId : existing.workshopId;
     const workshopChanged = body.workshopId !== undefined && body.workshopId !== existing.workshopId;
     const resolvedLineBase = resolveEventLineBase({
@@ -2917,6 +2937,13 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
       return event;
     });
 
+    if (body.towRegistryPosition !== undefined) {
+      await app.prisma.eventTow.updateMany({
+        where: { eventId: id, ...sandboxFilter(req), positionComment: { not: null } },
+        data: { positionComment: null }
+      });
+    }
+
     const changes = diffEvent(existing, updated);
     if (placementChanged) {
       const placementFrom = (existing.placements ?? []).map((p: any) => ({
@@ -2987,6 +3014,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const reloaded = await app.prisma.maintenanceEvent.findUniqueOrThrow({ where: { id }, include: eventInclude });
+    noteIds(req, sandboxIdFor(req), placements ? ["events", "placements", "tows"] : ["events"], [id]);
     return serializeEvent(reloaded);
   });
 
@@ -3007,6 +3035,7 @@ export const eventsRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!existing) throw app.httpErrors.notFound(UserMsg.EVENT_NOT_FOUND);
     await app.prisma.maintenanceEvent.delete({ where: { id } });
+    noteIds(req, sandboxIdFor(req), ["events", "placements", "tows"], [id]);
     return { ok: true };
   });
 };

@@ -44,7 +44,6 @@ export function AnnouncementModal() {
   const q = useQuery({
     queryKey: ["announcements", "active"],
     queryFn: () => apiGet<ActiveResponse>("/api/announcements/active"),
-    refetchInterval: 60_000,
     refetchOnWindowFocus: true
   });
 

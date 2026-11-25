@@ -4,8 +4,10 @@ import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-q
 import "react-data-grid/lib/styles.css";
 
 import { apiDelete, apiPatch, apiPost } from "../../lib/api";
+import { formatMskDateTime, fromInputMskOptional, nextTowEndLocal, toInputMsk } from "../../lib/localDate";
+import { safeRandomUuid } from "../../lib/randomId";
 import { wrappedBlockSize } from "../../lib/towColumnLayout";
-import { formatMskDateTime, fromInputMskOptional, toInputMsk } from "../../lib/localDate";
+import { placeAddedRows } from "../../lib/towPlanCopies";
 import { TowActionBar, TowCreateDialog } from "./TowActionBar";
 import { layoutColumn, TowColumnMenu, TowText, towHeaderContextPoint, useTowColumnLayout, type TowColumnMenuPoint, type TowColumnSpec } from "./TowColumnMenu";
 import type { TowReportRow } from "./TowReportTable";
@@ -42,12 +44,17 @@ export type TowPlanRow = {
   isNew: boolean;
   standOptions: string[];
   skipped?: boolean;
+  registryNotes?: string;
+  registryPosition?: string;
+  registryStartReason?: string;
 };
 
 type GridRow = TowPlanRow & {
   startLocal: string;
   endLocal: string;
   reason: string;
+  added?: boolean;
+  copyAnchorId?: string;
 };
 
 const READONLY = "towGridReadonly";
@@ -225,14 +232,14 @@ const PLAN_COLUMNS: TowColumnSpec[] = [
   { key: "eventStartMsk", label: "Начало события", width: 160 },
   { key: "eventEndMsk", label: "Окончание события", width: 170 },
   { key: "startLocal", label: "Начало буксировки", width: 170 },
-  { key: "endLocal", label: "Окончание буксировки", width: 180 },
+  { key: "endLocal", label: "Окончание буксировки", width: 180, defaultHidden: true },
   { key: "standOccupancy", label: "Продолжительность занятия МС", width: 180 }
 ];
 
 function planCellText(row: GridRow, key: string): string {
   switch (key) {
     case "isNew":
-      return row.skipped ? "Не требуется" : row.isNew ? "Новое" : "—";
+      return row.added ? "Добавлено" : row.skipped ? "Не требуется" : row.isNew ? "Новое" : "—";
     case "aircraftType":
       return row.aircraftType;
     case "tailNumber":
@@ -268,6 +275,31 @@ function planCellText(row: GridRow, key: string): string {
   }
 }
 
+function copyPlanRow(source: GridRow): GridRow {
+  return {
+    ...source,
+    id: `copy-${safeRandomUuid()}`,
+    towId: "",
+    towStartAt: "",
+    towEndAt: "",
+    standOccupancy: "",
+    reason: "",
+    isNew: false,
+    added: true,
+    copyAnchorId: source.added ? source.copyAnchorId || source.id : source.id
+  };
+}
+
+function copyIncomplete(row: GridRow): boolean {
+  return Boolean(row.added) && (!row.fromStand.trim() || !row.toStand.trim() || !row.startLocal || !row.endLocal);
+}
+
+function withDefaultEnd(row: GridRow): GridRow {
+  if (row.endLocal || !row.startLocal) return row;
+  const endLocal = nextTowEndLocal("", "", row.startLocal);
+  return endLocal ? { ...row, endLocal } : row;
+}
+
 function DateTimeEditor({ row, column, onRowChange, onClose }: RenderEditCellProps<GridRow>) {
   const key = column.key as "startLocal" | "endLocal";
   return (
@@ -276,7 +308,14 @@ function DateTimeEditor({ row, column, onRowChange, onClose }: RenderEditCellPro
       className="towGridInput"
       type="datetime-local"
       value={row[key]}
-      onChange={(event) => onRowChange({ ...row, [key]: event.target.value })}
+      onChange={(event) => {
+        const value = event.target.value;
+        if (key === "startLocal") {
+          onRowChange({ ...row, startLocal: value, endLocal: nextTowEndLocal(row.startLocal, row.endLocal, value) });
+          return;
+        }
+        onRowChange({ ...row, endLocal: value });
+      }}
       onBlur={() => onClose(true)}
     />
   );
@@ -368,8 +407,12 @@ export function TowPlanGrid({
         if (saved && !visibleSame(local, item)) return local;
         return visibleSame(local, item) ? local : toGrid(item);
       });
-      if (next.length === prev.length && next.every((row, index) => row === prev[index])) return prev;
-      return next;
+      const placed = placeAddedRows(
+        next,
+        prev.filter((row) => row.added)
+      );
+      if (placed.length === prev.length && placed.every((row, index) => row === prev[index])) return prev;
+      return placed;
     });
     if (Object.keys(outside).length) setNotices((prev) => ({ ...prev, ...outside }));
     if (consumed.size) {
@@ -412,6 +455,7 @@ export function TowPlanGrid({
   const dirtyCount = useMemo(() => {
     const source = new Map(items.map((item) => [item.id, committed[item.id] ?? item]));
     return rows.filter((row) => {
+      if (row.added) return true;
       const item = source.get(row.id);
       return item ? isDirty(item, row) : false;
     }).length;
@@ -427,7 +471,8 @@ export function TowPlanGrid({
         const query = new URLSearchParams({ changeReason: "Снятие буксировки" });
         return apiDelete(`/api/events/${action.row.eventId}/tows/${action.row.towId}?${query.toString()}`);
       }
-      const row = action.row;
+      const row = withDefaultEnd(action.row);
+      if (copyIncomplete(row)) throw new Error("Заполните откуда, куда, начало и окончание");
       if (missingFields(row).length) return;
       const startIso = fromInputMskOptional(row.startLocal);
       const endIso = fromInputMskOptional(row.endLocal);
@@ -462,37 +507,40 @@ export function TowPlanGrid({
     },
     onSuccess: (data, action) => {
       pendingRef.current = null;
-      if (action.kind === "save" && missingFields(action.row).length) return;
-      setErrors((prev) => ({ ...prev, [action.row.id]: "" }));
-      setNotices((prev) => ({ ...prev, [action.row.id]: "" }));
-      setAccepted((prev) => ({ ...prev, [action.row.id]: { ...action, after: dataUpdatedAt } }));
+      const row = action.kind === "save" ? withDefaultEnd(action.row) : action.row;
+      if (action.kind === "save" && missingFields(row).length) return;
+      setErrors((prev) => ({ ...prev, [row.id]: "" }));
+      setNotices((prev) => ({ ...prev, [row.id]: "" }));
+      setAccepted((prev) => ({ ...prev, [row.id]: { ...action, row, after: dataUpdatedAt } }));
       if (action.kind === "delete") {
-        putReportRow(qc, action.row.towId, null);
+        putReportRow(qc, row.towId, null);
       } else {
-        const createdId = !action.row.towId && data && typeof data === "object" && "id" in data ? String((data as { id?: string }).id ?? "") : "";
-        const towId = action.row.towId || createdId;
-        const startIso = fromInputMskOptional(action.row.startLocal) ?? "";
-        const endIso = fromInputMskOptional(action.row.endLocal) ?? "";
-        const source = itemsRef.current.find((item) => item.id === action.row.id);
+        const createdId = !row.towId && data && typeof data === "object" && "id" in data ? String((data as { id?: string }).id ?? "") : "";
+        const towId = row.towId || createdId;
+        const startIso = fromInputMskOptional(row.startLocal) ?? "";
+        const endIso = fromInputMskOptional(row.endLocal) ?? "";
+        const source = itemsRef.current.find((item) => item.id === row.id);
         if (source) {
           setCommitted((prev) => ({
             ...prev,
-            [action.row.id]: {
+            [row.id]: {
               ...source,
               towId: towId || source.towId,
-              fromStand: action.row.fromStand,
-              toStand: action.row.toStand,
+              fromStand: row.fromStand,
+              toStand: row.toStand,
               towStartAt: startIso,
               towEndAt: endIso
             }
           }));
         }
         setRows((current) =>
-          current.map((item) =>
-            item.id === action.row.id ? { ...item, towId: towId || item.towId, towStartAt: startIso, towEndAt: endIso, reason: "" } : item
-          )
+          current.flatMap((item) => {
+            if (item.id !== row.id) return [item];
+            if (row.added) return [];
+            return [{ ...item, towId: towId || item.towId, towStartAt: startIso, towEndAt: endIso, endLocal: row.endLocal, reason: "" }];
+          })
         );
-        if (towId) putReportRow(qc, towId, reportRowFromPlan({ ...action.row, towId }, towId));
+        if (towId) putReportRow(qc, towId, reportRowFromPlan({ ...row, towId }, towId));
       }
       void refreshTowLists(qc);
     },
@@ -585,7 +633,16 @@ export function TowPlanGrid({
         name: "Статус",
         width: 120,
         cellClass: (row) => (row.skipped ? "towGridSkipped" : READONLY),
-        renderCell: ({ row }) => (row.skipped ? <TowText>Не требуется</TowText> : row.isNew ? <span className="towGridNew">Новое</span> : <TowText>—</TowText>)
+        renderCell: ({ row }) =>
+          row.added ? (
+            <span className="towGridNew">Добавлено</span>
+          ) : row.skipped ? (
+            <TowText>Не требуется</TowText>
+          ) : row.isNew ? (
+            <span className="towGridNew">Новое</span>
+          ) : (
+            <TowText>—</TowText>
+          )
       },
       { key: "aircraftType", name: "Тип ВС", width: 110, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.aircraftType || "—"}</TowText> },
       { key: "tailNumber", name: "Борт", width: 120, cellClass: READONLY, renderCell: ({ row }) => <TowText>{row.tailNumber || "—"}</TowText> },
@@ -681,10 +738,13 @@ export function TowPlanGrid({
 
   const sourceOf = (row: GridRow) => committedRef.current[row.id] ?? itemsRef.current.find((item) => item.id === row.id);
   const dirtyRows = rows.filter((row) => {
+    if (row.added) return true;
     const source = sourceOf(row);
     return source ? isDirty(source, row) : false;
   });
   const chosen = rows.filter((row) => selected.has(row.id));
+  const copyTargets = chosen.filter((row) => !row.locked);
+  const localCopies = chosen.filter((row) => row.added);
   const deleteTargets = chosen.filter((row) => row.towId && !row.locked && !row.skipped);
   const skipIds = [...new Set(chosen.filter((row) => !row.locked).map((row) => row.eventId))];
   const skipClears = skipIds.length > 0 && skipIds.every((id) => chosen.some((row) => row.eventId === id && row.skipped));
@@ -694,8 +754,9 @@ export function TowPlanGrid({
   ];
   const saveDirty = async () => {
     setBulkError("");
-    for (const row of dirtyRows) {
-      if (missingFields(row).length || (shortShift(row) && !row.reason.trim())) {
+    for (const sourceRow of dirtyRows) {
+      const row = withDefaultEnd(sourceRow);
+      if (copyIncomplete(row) || missingFields(row).length || (shortShift(row) && !row.reason.trim())) {
         setBulkError(shortShift(row) && !row.reason.trim() ? "Сдвиг начала меньше 60 минут. Укажите причину в строке" : "Заполните откуда, куда, начало и окончание");
         return;
       }
@@ -707,10 +768,41 @@ export function TowPlanGrid({
       }
     }
   };
-  const deleteChosen = async () => {
-    if (!deleteTargets.length) return;
-    if (!window.confirm(deleteTargets.length === 1 ? "Удалить эту буксировку?" : `Удалить буксировки: ${deleteTargets.length}?`)) return;
+  const dropCopies = (ids: string[]) => {
+    if (!ids.length) return;
+    const drop = new Set(ids);
+    setRows((current) => current.filter((row) => !drop.has(row.id)));
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const id of drop) next.delete(id);
+      return next;
+    });
+  };
+  const duplicateChosen = () => {
+    if (!copyTargets.length) return;
     setBulkError("");
+    setRows((current) => {
+      const next = [...current];
+      for (const source of copyTargets) {
+        const at = next.findIndex((row) => row.id === source.id);
+        next.splice(at + 1, 0, copyPlanRow(source));
+      }
+      return next;
+    });
+  };
+  const deleteChosen = async () => {
+    if (!deleteTargets.length && !localCopies.length) return;
+    const serverNote = deleteTargets.length === 1 ? "Удалить эту буксировку?" : `Удалить буксировки: ${deleteTargets.length}?`;
+    const copyNote = localCopies.length === 1 ? "Убрать несохранённую копию?" : `Убрать несохранённые копии: ${localCopies.length}?`;
+    const note =
+      deleteTargets.length && localCopies.length
+        ? `${serverNote.slice(0, -1)} и ${copyNote.charAt(0).toLowerCase()}${copyNote.slice(1)}`
+        : deleteTargets.length
+          ? serverNote
+          : copyNote;
+    if (!window.confirm(note)) return;
+    setBulkError("");
+    dropCopies(localCopies.map((row) => row.id));
     for (const row of deleteTargets) {
       try {
         await run.mutateAsync({ kind: "delete", row });
@@ -739,15 +831,18 @@ export function TowPlanGrid({
         canWrite={canWrite}
         dirty={dirtyRows.length}
         selected={chosen.length}
-        canDelete={deleteTargets.length > 0}
+        canDuplicate={copyTargets.length > 0}
+        canDelete={deleteTargets.length > 0 || localCopies.length > 0}
         canSkip={skipIds.length > 0}
         skipClears={skipClears}
         pending={run.isPending}
         onCreate={() => setCreateOpen(true)}
         onSave={() => void saveDirty()}
         onUndo={() => {
-          for (const row of dirtyRows) resetRow(row);
+          dropCopies(dirtyRows.filter((row) => row.added).map((row) => row.id));
+          for (const row of dirtyRows) if (!row.added) resetRow(row);
         }}
+        onDuplicate={duplicateChosen}
         onDelete={() => void deleteChosen()}
         onSkip={() => void skipChosen()}
       />
@@ -773,7 +868,7 @@ export function TowPlanGrid({
           }}
         headerRowHeight={headerRowHeight}
         rowHeight={rowHeight}
-        rowClass={(row) => (row.skipped ? "towGridSkipped" : undefined)}
+        rowClass={(row) => [row.skipped ? "towGridSkipped" : "", row.added ? "towGridAdded" : ""].filter(Boolean).join(" ") || undefined}
         style={{ blockSize: "min(70vh, 760px)" }}
       />
       </div>

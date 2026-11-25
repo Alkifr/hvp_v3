@@ -1,18 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { columnWidth, estimateLines, hiddenColumnKeys, readTowColumnPref, visibleColumnKeys, wrappedBlockSize } from "./towColumnLayout.ts";
+import { applyDefaultHidden, columnWidth, estimateLines, hiddenColumnKeys, readTowColumnPref, visibleColumnKeys, wrappedBlockSize } from "./towColumnLayout.ts";
 
 const ALL = ["status", "tail", "title", "actions"];
 
 test("column prefs ignore junk and keep widths in range", () => {
-  assert.deepEqual(readTowColumnPref(null), { hidden: [], widths: {} });
-  assert.deepEqual(readTowColumnPref({ hidden: ["tail", 1], widths: { tail: 180, title: 10, status: "240" } }), {
+  assert.deepEqual(readTowColumnPref(null), { hidden: [], widths: {}, appliedHidden: [] });
+  assert.deepEqual(readTowColumnPref({ hidden: ["tail", 1], widths: { tail: 180, title: 10, status: "240" }, appliedHidden: ["end", 2] }), {
     hidden: ["tail", "1"],
-    widths: { tail: 180, status: 240 }
+    widths: { tail: 180, status: 240 },
+    appliedHidden: ["end", "2"]
   });
   assert.equal(columnWidth(undefined, 120), 120);
   assert.equal(columnWidth(400, 120), 400);
+});
+
+test("default hidden column is applied once and stays visible after the user shows it", () => {
+  const once = applyDefaultHidden({ hidden: ["tail"], widths: {}, appliedHidden: [] }, ["end"]);
+  assert.deepEqual(once.hidden, ["tail", "end"]);
+  assert.deepEqual(once.appliedHidden, ["end"]);
+  const shown = applyDefaultHidden({ ...once, hidden: ["tail"] }, ["end"]);
+  assert.deepEqual(shown.hidden, ["tail"]);
+  assert.equal(applyDefaultHidden(once, ["end"]), once);
 });
 
 test("hiding keeps at least one data column and never hides a locked one", () => {

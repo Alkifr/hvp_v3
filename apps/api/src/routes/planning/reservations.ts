@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { EventAuditAction, Prisma, type PrismaClient } from "@prisma/client";
 
+import { noteIds } from "../../lib/liveBus.js";
 import { zDateTime, zUuid } from "../../lib/zod.js";
 import { assertPermission, requirePermission } from "../../lib/rbac.js";
 import { DONE_SCHEDULE_LOCK_MESSAGE, isDoneScheduleLocked } from "../../lib/eventStatus.js";
@@ -360,6 +361,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       }
     });
 
+    noteIds(req, sbId, ["placements", "events"], [eventId]);
     return reservation;
   });
 
@@ -571,6 +573,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       return { ok: true, reservation, bumpedEventIds };
     }, DND_TRANSACTION_OPTIONS);
 
+    noteIds(req, sbId, ["placements", "events"], [body.eventId, ...moved.bumpedEventIds]);
     return moved;
   });
 
@@ -785,6 +788,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       return { ok: true, reservation, bumpedEventIds };
     }, DND_TRANSACTION_OPTIONS);
 
+    noteIds(req, sbId, ["placements", "events"], [body.eventId, ...moved.bumpedEventIds]);
     return moved;
   });
 
@@ -982,6 +986,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       };
     }, DND_TRANSACTION_OPTIONS);
 
+    noteIds(req, sbId, ["placements", "events"], [body.eventId]);
     return moved;
   });
 
@@ -1239,6 +1244,12 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
       { timeout: 120_000, maxWait: 15_000 }
     );
 
+    noteIds(
+      req,
+      sbId,
+      ["placements", "events"],
+      result.placements.map((row) => row.eventId)
+    );
     return result;
   });
 
@@ -1286,6 +1297,7 @@ export const reservationsRoutes: FastifyPluginAsync = async (app) => {
         }
       }
     });
+    noteIds(req, sandboxIdFor(req), ["placements", "events"], [eventId]);
     return { ok: true, deleted: del.count };
   });
 };

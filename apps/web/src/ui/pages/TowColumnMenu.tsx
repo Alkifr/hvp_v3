@@ -2,27 +2,37 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import { createPortal } from "react-dom";
 import type { Column } from "react-data-grid";
 
-import { columnWidth, hiddenColumnKeys, readTowColumnPref, visibleColumnKeys, type TowColumnPref } from "../../lib/towColumnLayout";
+import { applyDefaultHidden, columnWidth, hiddenColumnKeys, readTowColumnPref, visibleColumnKeys, type TowColumnPref } from "../../lib/towColumnLayout";
 
 export type TowColumnSpec = {
   key: string;
   label: string;
   width: number;
   locked?: boolean;
+  defaultHidden?: boolean;
 };
 
-function readPref(storageKey: string): TowColumnPref {
+function loadPref(storageKey: string, defaultHidden: readonly string[]): TowColumnPref {
+  const empty: TowColumnPref = { hidden: [], widths: {}, appliedHidden: [] };
   try {
-    if (typeof window === "undefined") return { hidden: [], widths: {} };
+    if (typeof window === "undefined") return applyDefaultHidden(empty, defaultHidden);
     const raw = window.localStorage.getItem(storageKey);
-    return readTowColumnPref(raw ? JSON.parse(raw) : null);
+    const parsed = readTowColumnPref(raw ? JSON.parse(raw) : null);
+    const next = applyDefaultHidden(parsed, defaultHidden);
+    if (JSON.stringify(parsed) !== JSON.stringify(next)) window.localStorage.setItem(storageKey, JSON.stringify(next));
+    return next;
   } catch {
-    return { hidden: [], widths: {} };
+    return applyDefaultHidden(empty, defaultHidden);
   }
 }
 
 export function useTowColumnLayout(storageKey: string, specs: readonly TowColumnSpec[]) {
-  const [pref, setPref] = useState<TowColumnPref>(() => readPref(storageKey));
+  const [pref, setPref] = useState<TowColumnPref>(() =>
+    loadPref(
+      storageKey,
+      specs.filter((spec) => spec.defaultHidden).map((spec) => spec.key)
+    )
+  );
   const prefRef = useRef(pref);
   prefRef.current = pref;
   const all = useMemo(() => specs.map((spec) => spec.key), [specs]);

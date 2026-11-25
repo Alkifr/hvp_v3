@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { towOverlayRect } from "./towOverlay.ts";
+import { clippedBarTime, towOverlayRect } from "./towOverlay.ts";
 
 const day = 86_400_000;
 
@@ -37,6 +37,32 @@ test("inbound tow stays on the left edge", () => {
   assert.equal(rect.left, 0);
   assert.equal(rect.width, 6);
   assert.equal(rect.anchor, "start");
+});
+
+test("tow stays on its date when the bar is clipped by the window", () => {
+  const barStart = Date.parse("2026-11-10T00:00:00.000Z");
+  const barEnd = Date.parse("2026-11-22T00:00:00.000Z");
+  const dayPx = 100;
+  const barLeftPx = -6 * dayPx;
+  const barRightPx = 6 * dayPx;
+  const canvasWidth = 6 * dayPx;
+  const visible = clippedBarTime({ barStartMs: barStart, barEndMs: barEnd, barLeftPx, barRightPx, canvasWidth });
+  assert.equal(visible.startMs, Date.parse("2026-11-16T00:00:00.000Z"));
+  assert.equal(visible.endMs, barEnd);
+  const towStart = Date.parse("2026-11-16T00:00:00.000Z");
+  const rect = towOverlayRect({
+    barStartMs: barStart,
+    barEndMs: barEnd,
+    barW: canvasWidth,
+    towStartMs: towStart,
+    towEndMs: towStart + 30 * 60_000,
+    minPx: 6,
+    visibleStartMs: visible.startMs,
+    visibleEndMs: visible.endMs
+  });
+  assert.ok(rect);
+  assert.equal(rect.anchor, "middle");
+  assert.ok(rect.left < dayPx);
 });
 
 test("tow outside the placement bar is not drawn", () => {

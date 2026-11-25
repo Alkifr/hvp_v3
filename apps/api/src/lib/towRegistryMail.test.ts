@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import ExcelJS from "exceljs";
 
 import { buildTowRegistryLetter, describeTowSendDiff } from "./towRegistryMail.js";
 import type { TowReportRow } from "./towReport.js";
+import { buildTowRegistryXlsx } from "./towReportXlsx.js";
 
 function row(partial: Partial<TowReportRow>): TowReportRow {
   return {
@@ -65,7 +67,84 @@ test("registry letter uses the dispatcher columns and the period", () => {
   assert.match(letter.html, /ffd966/);
   assert.match(letter.html, /RA-200/);
   assert.match(letter.html, /Бортовой номер/);
+  assert.doesNotMatch(letter.text, /Статус/);
   assert.doesNotMatch(letter.html, /<script/);
+});
+
+test("registry letter highlights added and updated rows", () => {
+  const letter = buildTowRegistryLetter({
+    rows: [
+      row({ changeStatus: "Добавлено" } as TowReportRow & { changeStatus?: string }),
+      row({ id: "t2", seq: 2, tailNumber: "RA-200", changeStatus: "Обновлено" } as TowReportRow & { changeStatus?: string })
+    ],
+    periodLabel: "01.11.2026–30.11.2026",
+    contour: "Рабочий контур",
+    diffLines: ["Изменения с прошлой фиксации:", "+ RA-100"]
+  });
+  assert.match(letter.text, /Изменения с прошлой фиксации/);
+  assert.match(letter.text, /Статус/);
+  assert.match(letter.text, /Добавлено/);
+  assert.match(letter.html, /dcfce7/);
+  assert.match(letter.html, /fef3c7/);
+  assert.match(letter.html, /Обновлено/);
+});
+
+test("registry letter keeps only added and updated tows", () => {
+  const letter = buildTowRegistryLetter({
+    rows: [
+      row({ changeStatus: "Добавлено" } as TowReportRow & { changeStatus?: string }),
+      row({ id: "t2", seq: 2, tailNumber: "RA-200", changeStatus: "Обновлено" } as TowReportRow & { changeStatus?: string }),
+      row({ id: "t3", seq: 3, tailNumber: "RA-300", changeStatus: "" } as TowReportRow & { changeStatus?: string })
+    ],
+    periodLabel: "01.11.2026–30.11.2026",
+    contour: "Рабочий контур"
+  });
+  assert.match(letter.text, /RA-100/);
+  assert.match(letter.text, /RA-200/);
+  assert.doesNotMatch(letter.text, /RA-300/);
+  assert.doesNotMatch(letter.html, /RA-300/);
+  assert.match(letter.text, /Строк: 2/);
+});
+
+test("registry letter shows a deleted tow row with status Удалено", () => {
+  const letter = buildTowRegistryLetter({
+    rows: [
+      row({ changeStatus: "Добавлено" } as TowReportRow & { changeStatus?: string }),
+      row({
+        id: "t9",
+        seq: 9,
+        tailNumber: "RA-900",
+        fromStand: "МС",
+        toStand: "MC-2",
+        plannedStartMsk: "02.11.2026 12:00",
+        changeStatus: "Удалено"
+      } as TowReportRow & { changeStatus?: string })
+    ],
+    periodLabel: "01.11.2026–30.11.2026",
+    contour: "Рабочий контур"
+  });
+  assert.match(letter.text, /RA-900/);
+  assert.match(letter.text, /Удалено/);
+  assert.match(letter.html, /fee2e2/);
+  assert.match(letter.html, /Удалено/);
+});
+
+test("attachment hangar band spans every column through status", async () => {
+  const buffer = await buildTowRegistryXlsx([
+    row({ changeStatus: "Добавлено" } as TowReportRow & { changeStatus?: string }),
+    row({ id: "t2", seq: 2, tailNumber: "RA-200", changeStatus: "" } as TowReportRow & { changeStatus?: string })
+  ]);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  const sheet = workbook.getWorksheet("Буксировки");
+  assert.ok(sheet);
+  assert.equal(sheet.getRow(1).getCell(13).value, "Статус");
+  const merges = sheet.model.merges ?? [];
+  assert.ok(merges.some((range) => range.endsWith(":M2") || range.endsWith(":M3")));
+  const band = sheet.getRow(2);
+  const fill = band.getCell(13).fill;
+  assert.equal(band.getCell(1).value, "Ангар 1");
+  assert.equal(fill && "fgColor" in fill ? fill.fgColor?.argb : "", "FFFFD966");
 });
 
 test("send diff lists added, removed and start time changes", () => {

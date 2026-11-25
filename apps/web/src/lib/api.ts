@@ -127,6 +127,7 @@ const ERROR_CODE_TEXT: Record<string, string> = {
   RECORD_IN_USE: "Нельзя изменить запись: она связана с другими данными",
   NOT_FOUND: "Запись не найдена",
   CONFLICT: "Конфликт данных. Обновите страницу и повторите.",
+  STALE_WRITE: "Запись уже изменил другой пользователь. Подтяните серверную версию, карточка останется открытой.",
   BAD_REQUEST: "Проверьте заполненные поля"
 };
 
@@ -194,9 +195,21 @@ async function apiFetch(path: string, init: RequestInit): Promise<Response> {
   }
 }
 
+function errorFromResponse(text: string, status: number): Error {
+  const err = new Error(formatApiErrorBody(text, status)) as Error & { code?: string; updatedAt?: string };
+  try {
+    const body = JSON.parse(text) as { error?: unknown; updatedAt?: unknown };
+    if (typeof body.error === "string") err.code = body.error;
+    if (typeof body.updatedAt === "string") err.updatedAt = body.updatedAt;
+  } catch {
+    /* тело не JSON */
+  }
+  return err;
+}
+
 async function readJson<T>(res: Response): Promise<T> {
   const text = await res.text();
-  if (!res.ok) throw new Error(formatApiErrorBody(text, res.status));
+  if (!res.ok) throw errorFromResponse(text, res.status);
   if (!text) return { ok: true } as T;
   try {
     return JSON.parse(text) as T;

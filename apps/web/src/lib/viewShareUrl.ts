@@ -18,6 +18,7 @@ const VIEW_SHARE_KEYS = new Set([
   "links",
   "cx",
   "notes",
+  "grid",
   "hangar",
   "op",
   "type",
@@ -62,6 +63,7 @@ export type GanttViewShare = {
   showAllPlacementLinks: boolean;
   showCancelledOnGantt: boolean;
   showGanttNotes: boolean;
+  showGanttGrid: boolean;
   hangarStandSort: HangarStandSort;
 };
 
@@ -167,6 +169,7 @@ function defaultGanttShare(): GanttViewShare {
     showAllPlacementLinks: false,
     showCancelledOnGantt: true,
     showGanttNotes: false,
+    showGanttGrid: true,
     hangarStandSort: "stand-layout"
   };
 }
@@ -205,6 +208,7 @@ export function parseGanttViewShare(query: URLSearchParams): GanttViewShare | nu
     showAllPlacementLinks: query.get("links") === "1",
     showCancelledOnGantt: query.get("cx") !== "0",
     showGanttNotes: query.get("notes") === "1",
+    showGanttGrid: query.get("grid") !== "0",
     hangarStandSort: parseHangarStandSort(query.get("hsort") === "ly" ? "layout-stand" : undefined)
   };
 }
@@ -223,6 +227,7 @@ export function serializeGanttViewShare(state: GanttViewShare & { sandboxId?: st
   setFlag(q, "links", state.showAllPlacementLinks);
   if (!state.showCancelledOnGantt) q.set("cx", "0");
   setFlag(q, "notes", state.showGanttNotes);
+  if (!state.showGanttGrid) q.set("grid", "0");
   if (state.hangarStandSort === "layout-stand") q.set("hsort", "ly");
   setCsv(q, "hangar", state.selectedHangarIds);
   setCsv(q, "op", state.filterOperatorIds);

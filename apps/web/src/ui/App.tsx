@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HangarView } from "./pages/HangarView";
 import { GanttView } from "./pages/GanttView";
@@ -22,6 +22,7 @@ import { AnnouncementModal } from "./components/AnnouncementModal";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { authMe } from "./auth/authApi";
 import { getActiveSandboxId, setActiveSandboxId } from "../lib/api";
+import { installLiveSync } from "../lib/liveSync";
 import { installPresenceTracker, reportPageView } from "../lib/presence";
 import { installFourDigitDateYearLimit } from "../lib/dateInput";
 import {
@@ -376,6 +377,7 @@ function AppShell(props: {
     canMail,
     canNotify
   } = props;
+  const qc = useQueryClient();
   const isMobile = useIsMobile();
   const { active: activeSandbox } = useActiveSandbox();
   const inSandbox = Boolean(activeSandbox);
@@ -395,6 +397,10 @@ function AppShell(props: {
     reportPageView(page);
   }, [page]);
   useEffect(() => installPresenceTracker(() => pageRef.current), []);
+  useEffect(() => {
+    if (!me?.id) return;
+    return installLiveSync(qc, () => ({ sandboxId: getActiveSandboxId(), userId: me.id }));
+  }, [qc, me?.id]);
 
   useEffect(() => {
     const allowed: Record<Page, boolean> = {

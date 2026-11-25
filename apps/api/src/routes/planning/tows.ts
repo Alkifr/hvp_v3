@@ -2,14 +2,17 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { EventAuditAction, Prisma } from "@prisma/client";
 
+import { noteIds } from "../../lib/liveBus.js";
+import { assertFreshUpdatedAt } from "../../lib/staleWrite.js";
 import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { DONE_SCHEDULE_LOCK_MESSAGE, isDoneScheduleLocked } from "../../lib/eventStatus.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { isVirtualAircraftPlaceholder, virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
 import { buildTowBoardRow, type TowBoardInput } from "../../lib/towBoard.js";
 import { buildTowRegistryLetter } from "../../lib/towRegistryMail.js";
+import { composeRegistrySheet, markRegistryChanges, REGISTRY_REMOVED, type RegistryMailRow } from "../../lib/towRegistrySheet.js";
 import { DEFAULT_TOW_SUBJECT, readTowMailTemplate } from "../../lib/towMailTemplate.js";
-import { deliverTowRegistrySend, dispatchTowTriggers } from "../../lib/towRegistryDispatch.js";
+import { deliverTowRegistrySend, dispatchTowTriggers, towIdsOutsidePeriod } from "../../lib/towRegistryDispatch.js";
 import { buildTowPlanRows, type TowPlanEvent, type TowPlanHangar } from "../../lib/towPlan.js";
 import { recordTowFieldChanges } from "../../lib/towEdgeCreate.js";
 import {
@@ -112,6 +115,7 @@ export function serializeTowReportRow(
     toLabel: tow.toLabel,
     notes: tow.notes,
     positionComment: tow.positionComment,
+    eventTowInfo: event.towRegistryPosition,
     startChangeReason: tow.startChangeReason,
     occupancyEndAt: tow.occupancyEndAt,
     fromStandCode: standCode(tow.fromStand),
@@ -216,26 +220,15 @@ function periodLabel(from: Date, to: Date): string {
   return registryPeriodLabel(from, to);
 }
 
-async function collectRegistryItems(prisma: any, req: any, body: z.infer<typeof zRange>): Promise<TowReportRow[]> {
-  return (await loadTowReportItems(prisma, req, body.from, body.to))
-    .filter((row) => {
-      if (body.hangarIds?.length && !body.hangarIds.includes(row.hangarId)) return false;
-      if (body.operatorIds?.length && !body.operatorIds.includes(row.operatorId)) return false;
-      if (body.aircraftTypeIds?.length && !body.aircraftTypeIds.includes(row.aircraftTypeId)) return false;
-      if (body.aircraftIds?.length && !body.aircraftIds.includes(row.aircraftId)) return false;
-      return true;
-    })
-    .map((row, index) => ({ ...row, seq: index + 1 }));
-}
-
-function registrySnapshot(items: TowReportRow[]): Array<Record<string, string>> {
-  return items.map((row) => {
+function registrySnapshot(items: RegistryMailRow[]): Array<Record<string, string>> {
+  return items.filter((row) => row.changeStatus !== REGISTRY_REMOVED).map((row) => {
     const stored: Record<string, string> = {
       id: row.id,
       eventId: row.eventId,
       tailNumber: row.tailNumber,
       eventTitle: row.eventTitle,
-      hangarNumber: row.hangarNumber
+      hangarNumber: row.hangarNumber,
+      changeStatus: row.changeStatus ?? ""
     };
     for (const column of TOW_EXPORT_COLUMNS) {
       const value = row[column.key];
@@ -243,6 +236,31 @@ function registrySnapshot(items: TowReportRow[]): Array<Record<string, string>> 
     }
     return stored;
   });
+}
+
+async function markedRegistry(prisma: any, req: any, body: z.infer<typeof zRange>) {
+  const [plan, report] = await Promise.all([
+    loadTowPlan(prisma, req, body.from, body.to),
+    loadTowReportItems(prisma, req, body.from, body.to)
+  ]);
+  const sheet = composeRegistrySheet(plan.filter((row) => planInFix(row, body)), report);
+  const previous = await prisma.towRegistrySend.findFirst({
+    where: { sandboxId: sandboxIdFor(req), fromAt: body.from, toAt: body.to },
+    orderBy: { createdAt: "desc" }
+  });
+  const previousRows = previous ? readSendRows(previous.rows) : null;
+  const sheetIds = new Set(sheet.map((row) => row.id));
+  const missingIds = (previousRows ?? []).map((row) => row.id).filter((id) => id && !sheetIds.has(id));
+  const outsideTowIds = await towIdsOutsidePeriod(prisma, missingIds, body.from, body.to, sandboxIdFor(req));
+  return { sheet, marked: markRegistryChanges(previousRows, sheet, outsideTowIds) };
+}
+
+function planInFix(row: { hangars: Array<{ id: string }>; operatorId: string; aircraftTypeId: string; aircraftId: string }, body: z.infer<typeof zRange>): boolean {
+  if (body.hangarIds?.length && !row.hangars.some((hangar) => body.hangarIds?.includes(hangar.id))) return false;
+  if (body.operatorIds?.length && !body.operatorIds.includes(row.operatorId)) return false;
+  if (body.aircraftTypeIds?.length && !body.aircraftTypeIds.includes(row.aircraftTypeId)) return false;
+  if (body.aircraftIds?.length && !body.aircraftIds.includes(row.aircraftId)) return false;
+  return true;
 }
 
 const SEND_HISTORY_LIMIT = 200;
@@ -456,6 +474,9 @@ async function loadTowPlan(prisma: any, req: any, from: Date, to: Date) {
         (virtual?.operatorId ? (operatorById.get(virtual.operatorId) ?? "") : ""),
       eventTitle: event.title ?? "",
       eventType: event.eventType?.name || event.eventType?.code || "",
+      registryNotes: event.towRegistryNotes,
+      registryPosition: event.towRegistryPosition,
+      registryStartReason: event.towRegistryStartReason,
       skipped: (event.towWaivers as Array<{ role: string }>).some((waiver) => waiver.role === "skip"),
       placements: event.placements.map((placement: any) => ({
         id: placement.id,
@@ -796,6 +817,7 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
         ]
       })
     );
+    noteIds(req, sbId, ["tows", "events"], [body.eventId]);
     return { ok: true as const };
   });
 
@@ -827,15 +849,24 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     } else {
       await app.prisma.eventTowWaiver.deleteMany({ where: { eventId: { in: body.eventIds }, role: "skip" } });
     }
+    noteIds(req, sbId, ["tows", "events"], body.eventIds);
     return { ok: true as const };
+  });
+
+  app.post("/fix-preview", async (req) => {
+    assertPermission(req, "tows:read");
+    const body = zRange.parse(req.body ?? {});
+    const { sheet, marked } = await markedRegistry(app.prisma, req, body);
+    if (!sheet.length) return { lines: ["В выбранном периоде нет строк реестра."] };
+    return { lines: marked.lines };
   });
 
   app.post("/fix", async (req) => {
     assertCanWriteTow(req);
     const body = zRange.parse(req.body ?? {});
-    const items = await collectRegistryItems(app.prisma, req, body);
-    if (!items.length) {
-      throw app.httpErrors.badRequest("В выбранном периоде нет назначенных буксировок");
+    const { sheet, marked } = await markedRegistry(app.prisma, req, body);
+    if (!sheet.length) {
+      throw app.httpErrors.badRequest("В выбранном периоде нет строк реестра");
     }
     const template = await readTowMailTemplate(app.prisma).catch(() => ({
       subjectTemplate: DEFAULT_TOW_SUBJECT,
@@ -843,10 +874,11 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     }));
     const contour = (req as any).sandbox?.name ? `Песочница «${(req as any).sandbox.name}»` : "Рабочий контур";
     const letter = buildTowRegistryLetter({
-      rows: items,
+      rows: marked.rows,
       periodLabel: periodLabel(body.from, body.to),
       contour,
-      subjectTemplate: template.subjectTemplate
+      subjectTemplate: template.subjectTemplate,
+      diffLines: marked.lines
     });
     const saved = await app.prisma.towRegistrySend.create({
       data: {
@@ -857,11 +889,12 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
         recipients: [],
         note: null,
         subject: letter.subject,
-        rows: registrySnapshot(items)
+        rows: registrySnapshot(marked.rows)
       }
     });
     await dispatchTowTriggers(app.prisma, saved.id).catch((err) => app.log.warn({ err }, "tow trigger mail failed"));
-    return { ok: true as const, sendId: saved.id, subject: letter.subject, rows: items.length };
+    noteIds(req, sandboxIdFor(req), ["tows"], []);
+    return { ok: true as const, sendId: saved.id, subject: letter.subject, rows: marked.rows.length };
   });
 
   app.post("/dispatch", async (req) => {
@@ -910,6 +943,66 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true as const, recipients: result.recipients, subject: result.subject, rows: result.rows, sendId: existing.id };
   });
 
+  app.patch("/events/:eventId/registry", async (req) => {
+    assertCanWriteTow(req);
+    const eventId = zUuid.parse((req.params as { eventId?: string }).eventId);
+    const body = z
+      .object({
+        notes: z.string().trim().max(2000).optional(),
+        positionComment: z.string().trim().max(5000).optional(),
+        startChangeReason: z.string().trim().max(1000).optional(),
+        changeReason: z.string().trim().min(1).max(1000).optional()
+      })
+      .parse(req.body ?? {});
+    assertChangeReasonIfNeeded(req, true, body.changeReason);
+    const existing = await app.prisma.maintenanceEvent.findFirst({
+      where: { id: eventId, ...sandboxFilter(req) },
+      select: { id: true, towRegistryNotes: true, towRegistryPosition: true, towRegistryStartReason: true }
+    });
+    if (!existing) throw app.httpErrors.notFound(UserMsg.RECORD_NOT_FOUND);
+    const data: {
+      towRegistryNotes?: string | null;
+      towRegistryPosition?: string | null;
+      towRegistryStartReason?: string | null;
+    } = {};
+    const changes: Record<string, { from: string; to: string }> = {};
+    if (body.notes !== undefined) {
+      data.towRegistryNotes = body.notes || null;
+      changes.towRegistryNotes = { from: existing.towRegistryNotes ?? "", to: body.notes };
+    }
+    if (body.positionComment !== undefined) {
+      data.towRegistryPosition = body.positionComment || null;
+      changes.towRegistryPosition = { from: existing.towRegistryPosition ?? "", to: body.positionComment };
+    }
+    if (body.startChangeReason !== undefined) {
+      data.towRegistryStartReason = body.startChangeReason || null;
+      changes.towRegistryStartReason = { from: existing.towRegistryStartReason ?? "", to: body.startChangeReason };
+    }
+    if (Object.keys(data).length) {
+      await app.prisma.maintenanceEvent.update({ where: { id: eventId }, data });
+    }
+    if (body.positionComment !== undefined) {
+      await app.prisma.eventTow.updateMany({
+        where: { eventId, ...sandboxFilter(req), positionComment: { not: null } },
+        data: { positionComment: null }
+      });
+    }
+    if (Object.keys(changes).length) {
+      await app.prisma.maintenanceEventAudit.create({
+        data: {
+          eventId,
+          sandboxId: sandboxIdFor(req),
+          action: EventAuditAction.UPDATE,
+          actor: getActor(req),
+          reason: body.changeReason ?? "Реестр",
+          changes
+        }
+      });
+    }
+    noteIds(req, sandboxIdFor(req), ["tows", "events"], [eventId]);
+    return { ok: true as const };
+  });
+
   app.patch("/:id", async (req) => {
     assertCanWriteTow(req);
     const id = zUuid.parse((req.params as any).id);
@@ -926,7 +1019,8 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
         positionComment: z.string().trim().max(2000).nullable().optional(),
         occupancyEndAt: zDateTime.nullable().optional(),
         startChangeReason: z.string().trim().max(1000).nullable().optional(),
-        changeReason: z.string().trim().min(1).max(1000).optional()
+        changeReason: z.string().trim().min(1).max(1000).optional(),
+        baseUpdatedAt: zDateTime.optional()
       })
       .parse(req.body);
 
@@ -935,7 +1029,17 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
       include: { event: { select: { id: true, status: true, startAt: true, endAt: true } } }
     });
     if (!existing) throw app.httpErrors.notFound(UserMsg.RECORD_NOT_FOUND);
-    if (isDoneScheduleLocked(existing.event.status)) {
+    assertFreshUpdatedAt(existing.updatedAt, body.baseUpdatedAt);
+    const textOnly =
+      body.startAt === undefined &&
+      body.endAt === undefined &&
+      body.fromStandId === undefined &&
+      body.toStandId === undefined &&
+      body.fromLabel === undefined &&
+      body.toLabel === undefined &&
+      body.placementId === undefined &&
+      body.occupancyEndAt === undefined;
+    if (isDoneScheduleLocked(existing.event.status) && !textOnly) {
       throw app.httpErrors.badRequest(DONE_SCHEDULE_LOCK_MESSAGE);
     }
 
@@ -1035,6 +1139,7 @@ export const towsRoutes: FastifyPluginAsync = async (app) => {
     });
 
     const virtualNames = await resolveVirtualNames(app.prisma, [updated]);
+    noteIds(req, sandboxIdFor(req), ["tows", "events"], [existing.eventId]);
     return serializeTowReportRow(updated, virtualNames.get(updated.id));
   });
 

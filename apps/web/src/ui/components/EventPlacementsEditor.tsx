@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
 import { formatDateTimeDisplay } from "../../lib/dateInput";
@@ -41,6 +41,15 @@ export function EventPlacementsEditor(props: {
 }) {
   const [extraOpen, setExtraOpen] = useState<Record<string, boolean>>({});
   const [panelOpen, setPanelOpen] = useState(true);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const reveal = () => node.scrollIntoView({ block: "nearest", inline: "nearest" });
+    reveal();
+    const timer = window.setTimeout(reveal, 60);
+    return () => window.clearTimeout(timer);
+  }, []);
   const displayItems = useMemo(
     () => interleaveAutoGaps(props.placements, props.autoFillGapPlacements),
     [props.placements, props.autoFillGapPlacements]
@@ -63,7 +72,7 @@ export function EventPlacementsEditor(props: {
   }, 0);
 
   return (
-    <div className="evStagesPanel">
+    <div className="evStagesPanel" ref={rootRef}>
       <button
         className="evStagesSummary"
         type="button"

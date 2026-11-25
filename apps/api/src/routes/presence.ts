@@ -16,15 +16,19 @@ export const presenceRoutes: FastifyPluginAsync = async (app) => {
       .object({
         kind: z.enum(["PING", "PAGE", "ACTION"]),
         page: z.string().trim().max(40).optional(),
-        detail: z.string().trim().max(160).optional()
+        detail: z.string().trim().max(160).optional(),
+        sandboxId: z.string().uuid().nullable().optional()
       })
       .parse(req.body ?? {});
 
+    const auth = req.auth;
     const result = await recordPresence(app.prisma, {
       userId,
       kind: body.kind,
       page: body.page,
-      detail: body.detail
+      detail: body.detail,
+      sandboxId: body.sandboxId ?? null,
+      displayName: auth?.displayName || auth?.email || null
     });
     return { ok: true as const, recorded: result.recorded };
   });

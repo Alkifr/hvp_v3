@@ -4,6 +4,8 @@ import { EventAuditAction, Prisma } from "@prisma/client";
 import { isEventOverdueNoFact, reconcileEventStatus } from "./eventStatus.js";
 import { EventStatus, loadStatusAutomation } from "./eventStatusCatalog.js";
 import { emitStatusChangeNotifications } from "./eventStatusNotifications.js";
+import { publishLive, scopeForSandbox } from "./liveBus.js";
+import { publishBell } from "./liveNotify.js";
 import { isVirtualAircraftPlaceholder, statusAllowsVirtualAircraft, VIRTUAL_AIRCRAFT_LABEL } from "./virtualAircraft.js";
 
 const KIND_OVERDUE = "EVENT_OVERDUE_NO_FACT";
@@ -63,6 +65,7 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
 
   let statusUpdated = 0;
   let notificationsCreated = 0;
+  const changedScopes = new Set<ReturnType<typeof scopeForSandbox>>();
   const auditRows: Prisma.MaintenanceEventAuditCreateManyInput[] = [];
 
   for (const ev of events) {
@@ -97,6 +100,7 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
         }
       });
       statusUpdated += 1;
+      changedScopes.add(scopeForSandbox(ev.sandboxId));
 
       const changes: Record<string, { from: string | null; to: string | null }> = {};
       if (statusChanged) {
@@ -168,12 +172,20 @@ export async function runEventStatusMaintenance(app: FastifyInstance): Promise<{
         ],
         skipDuplicates: true
       });
-      if (created.count > 0) notificationsCreated += 1;
+      if (created.count > 0) {
+        notificationsCreated += 1;
+        await publishBell(app.prisma);
+      }
     }
   }
 
   if (auditRows.length > 0) {
     await app.prisma.maintenanceEventAudit.createMany({ data: auditRows });
+  }
+
+  for (const scope of changedScopes) {
+    publishLive({ topic: "events", scope, bulk: true });
+    publishLive({ topic: "placements", scope, bulk: true });
   }
 
   return { statusUpdated, notificationsCreated };

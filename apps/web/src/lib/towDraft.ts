@@ -9,6 +9,7 @@ export type TowDraftRow = {
   fromLabel: string;
   toLabel: string;
   placementId: string | null;
+  updatedAt?: string;
 };
 
 export type TowServerRow = {
@@ -18,6 +19,7 @@ export type TowServerRow = {
   fromLabel?: string | null;
   toLabel?: string | null;
   placementId?: string | null;
+  updatedAt?: string;
 };
 
 export type PlacementLink = {
@@ -58,7 +60,8 @@ export function towRowsFromServer(rows: TowServerRow[]): TowDraftRow[] {
     endAt: iso(row.endAt),
     fromLabel: label(row.fromLabel),
     toLabel: label(row.toLabel),
-    placementId: row.placementId ?? null
+    placementId: row.placementId ?? null,
+    ...(row.updatedAt ? { updatedAt: iso(row.updatedAt) } : {})
   }));
 }
 

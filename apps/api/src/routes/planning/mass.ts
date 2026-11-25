@@ -9,6 +9,7 @@ import { assertPermission } from "../../lib/rbac.js";
 import { UserMsg } from "../../lib/userErrors.js";
 import { EventStatus } from "../../lib/eventStatusCatalog.js";
 import { VIRTUAL_AIRCRAFT_LABEL, virtualAircraftDisplayLabel } from "../../lib/virtualAircraft.js";
+import { noteBulk } from "../../lib/liveBus.js";
 import { canWriteInContext, sandboxFilter, sandboxIdFor } from "../../plugins/sandbox.js";
 import { parseLineBase, resolveEventLineBase, type LineBase } from "../../lib/lineBase.js";
 import { resolveStandLocation } from "../../lib/standLocation.js";
@@ -1604,6 +1605,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       MASS_PLAN_TRANSACTION_OPTIONS
     );
 
+    noteBulk(req, sandboxIdFor(req));
     return {
       ok: true,
       dryRun: false,
@@ -2892,6 +2894,7 @@ export const massPlanningRoutes: FastifyPluginAsync = async (app) => {
       MASS_PLAN_TRANSACTION_OPTIONS
     );
 
+    noteBulk(req, sandboxIdFor(req));
     return {
       ok: true,
       dryRun: false,

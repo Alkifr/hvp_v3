@@ -1202,6 +1202,11 @@ model MaintenanceEvent {
   /// Дополнительный свободный комментарий (не показывается плашкой на Ганте).
   comment String?
 
+  /// Ручные поля реестра буксировок, пока буксировка не назначена.
+  towRegistryNotes        String?
+  towRegistryPosition     String?
+  towRegistryStartReason  String?
+
   /// Событие уже размещалось с нахлёстом: при следующих сохранениях конфликт слота не блокирует запись.
   allowOverlap Boolean @default(false)
 

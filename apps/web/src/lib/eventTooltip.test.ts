@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatEventTooltip, type EventTooltipModel } from "./eventTooltip.ts";
+import { barPlannerWarnings, eventWarningLines, formatEventTooltip, type EventTooltipModel } from "./eventTooltip.ts";
 
 function model(patch: Partial<EventTooltipModel> = {}): EventTooltipModel {
   return {
@@ -119,4 +119,61 @@ test("custom status before in progress uses the same MPS and budget rule", () =>
   );
   assert.match(text, /- Трудоемкость MPS: Отсутствует$/);
   assert.equal(text.includes("Трудоемкость Бюджет"), false);
+});
+
+test("tow while the aircraft is in a hangar, overlap and a late slot are planner warnings", () => {
+  const lines = eventWarningLines(
+    model({
+      inHangar: true,
+      hasTows: true,
+      allowOverlap: true,
+      slotAfterDeadline: true,
+      labor: { budget: true, mps: false, actual: false }
+    })
+  );
+  assert.deepEqual(
+    lines.map((item) => item.text),
+    [
+      "Дата начала слота позже DeadLine.",
+      "Есть буксировка, а борт стоит в ангаре.",
+      "Нахлёст места.",
+      "Трудоемкость MPS: Отсутствует"
+    ]
+  );
+  assert.equal(lines.find((item) => item.id === "tow-in-hangar")?.section, "tows");
+  assert.equal(lines.find((item) => item.id === "overlap")?.section, "place");
+  assert.equal(lines.find((item) => item.id === "labor-mps")?.section, "labor");
+});
+
+test("the bar mark skips an empty deadline and empty budget labor", () => {
+  const lines = barPlannerWarnings(
+    model({
+      deadlineFilled: false,
+      labor: { budget: false, mps: true, actual: false },
+      hasTows: true,
+      inHangar: false
+    })
+  );
+  assert.deepEqual(lines, []);
+});
+
+test("hangar without a tow asks for tows and does not claim the aircraft is being towed", () => {
+  const lines = eventWarningLines(model({ inHangar: true, hasTows: false }));
+  assert.equal(lines.some((item) => item.id === "tows-missing"), true);
+  assert.equal(lines.some((item) => item.id === "tow-in-hangar"), false);
+});
+
+test("cancelled event keeps the missing deadline and skips hangar tow and overlap", () => {
+  const lines = eventWarningLines(
+    model({
+      status: "CANCELLED",
+      inHangar: true,
+      hasTows: true,
+      allowOverlap: true,
+      slotAfterDeadline: true,
+      deadlineFilled: false,
+      labor: { budget: false, mps: false, actual: false }
+    })
+  );
+  assert.deepEqual(lines.map((item) => item.id), ["deadline"]);
 });

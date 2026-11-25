@@ -7,6 +7,7 @@ import { apiGet, apiPost, apiPut } from "../../lib/api";
 import { hasPermission } from "../../lib/permissionCatalog";
 import { isValidDateInput } from "../../lib/dateInput";
 import { authMe } from "../auth/authApi";
+import { ColleagueStrip } from "../components/ColleagueStrip";
 import { FilterIndicator } from "../components/FilterIndicator";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
@@ -1146,6 +1147,7 @@ export function HangarView() {
 
   return (
     <div className="hangarPlanPage">
+      <ColleagueStrip page="hangar" selfId={me?.id ?? ""} />
       <section className="massHero">
         <div className="massHeroText">
           <div className="massEyebrow">Сценарное планирование</div>

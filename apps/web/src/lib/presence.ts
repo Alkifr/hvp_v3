@@ -13,13 +13,14 @@ function postPresence(body: { kind: PresenceKind; page?: string; detail?: string
   if (key === lastSent && now - lastSentAt < 15_000) return;
   lastSent = key;
   lastSentAt = now;
+  const sandboxId = getActiveSandboxId();
   try {
     void fetch("/api/presence", {
       method: "POST",
       credentials: "include",
       keepalive: true,
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify({ ...body, sandboxId })
     }).catch(() => undefined);
   } catch {
     /* ignore */
@@ -37,7 +38,7 @@ export function reportPresenceAction(detail: string, page?: string) {
 export function installPresenceTracker(getPage: () => string): () => void {
   const ping = () => {
     if (document.visibilityState !== "visible") return;
-    postPresence({ kind: "PING" });
+    postPresence({ kind: "PING", page: getPage() });
   };
   const interval = window.setInterval(ping, PING_MS);
   const onVis = () => {

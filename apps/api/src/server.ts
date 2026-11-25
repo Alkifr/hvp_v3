@@ -31,6 +31,9 @@ import { eventUnsubscribeRoutes } from "./routes/eventUnsubscribe.js";
 import { runEventStatusMaintenance } from "./lib/eventMaintenance.js";
 import { runScheduledMailDigest } from "./lib/mailDigestSend.js";
 import { prunePresenceEvents } from "./lib/userPresence.js";
+import { flushRequestLive, noteLive } from "./lib/liveBus.js";
+import { isMutatingHttpMethod } from "./lib/writeBlocked.js";
+import { liveRoutes } from "./routes/live.js";
 
 export async function buildServer() {
   const app = Fastify({
@@ -51,7 +54,21 @@ export async function buildServer() {
   await app.register(sandboxPlugin);
   await app.register(errorHandlerPlugin);
 
+  app.addHook("onResponse", async (req, reply) => {
+    if (reply.statusCode >= 400) return;
+    if (isMutatingHttpMethod(req.method)) {
+      const path = (req.url.split("?")[0] ?? "").replace(/\/+$/, "") || "/";
+      if (path.startsWith("/api/ref")) {
+        noteLive(req, { topic: "ref", scope: "global", actorId: req.auth?.id });
+      } else if (path.startsWith("/api/personnel-planning")) {
+        noteLive(req, { topic: "personnel", scope: "global", actorId: req.auth?.id });
+      }
+    }
+    flushRequestLive(req);
+  });
+
   await app.register(healthRoutes, { prefix: "/health" });
+  await app.register(liveRoutes, { prefix: "/api/live" });
   await app.register(authRoutes, { prefix: "/api/auth" });
   await app.register(referenceRoutes, { prefix: "/api/ref" });
   await app.register(planningRoutes, { prefix: "/api" });
