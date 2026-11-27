@@ -5,10 +5,15 @@ import type { QueryClient } from "@tanstack/react-query";
 import {
   applyPresence,
   draftTouchedBySignal,
+  eventInListWindow,
   invalidateLiveSignal,
+  liveQueryPlan,
+  mergeEventList,
   peersOnPage,
   personnelQueryLive,
+  setLiveOpenEventId,
   signalVisible,
+  type CachedEventRow,
   type LiveSignal
 } from "./liveSync.ts";
 
@@ -36,18 +41,35 @@ test("topic map invalidates plan queries and leaves personnel archives", () => {
       return Promise.resolve();
     }
   } as Pick<QueryClient, "invalidateQueries">;
+  setLiveOpenEventId(null);
   invalidateLiveSignal(qc, signal({ topic: "events", scope: "prod" }));
   assert.deepEqual(
     calls.map((call) => (call as { queryKey: unknown }).queryKey),
     [
       ["events"],
-      ["event-history"],
-      ["event-tows"],
       ["itp-events"],
       ["itp-plan"],
       ["analytics", "primary-table"],
       ["hangar-planning"]
     ]
+  );
+  const patched = liveQueryPlan(signal({ topic: "events", scope: "prod", ids: ["e1", "e2"] }), "e2");
+  assert.deepEqual(patched.patchEventIds, ["e1", "e2"]);
+  assert.equal(
+    patched.invalidate.some((key) => key[0] === "events"),
+    false
+  );
+  assert.deepEqual(
+    patched.invalidate.filter((key) => key[0] === "event-history" || key[0] === "event-tows"),
+    [
+      ["event-history", "e2"],
+      ["event-tows", "e2"]
+    ]
+  );
+  const otherCard = liveQueryPlan(signal({ topic: "tows", scope: "prod", ids: ["e9"] }), "e2");
+  assert.equal(
+    otherCard.invalidate.some((key) => key[0] === "event-tows" && key[1] === "e2"),
+    false
   );
   calls.length = 0;
   invalidateLiveSignal(qc, signal({ topic: "tows", scope: "prod" }));
@@ -59,6 +81,34 @@ test("topic map invalidates plan queries and leaves personnel archives", () => {
   const predicate = (calls.at(-1) as { predicate: (q: { queryKey: readonly unknown[] }) => boolean }).predicate;
   assert.equal(predicate({ queryKey: ["personnel", "balance"] }), true);
   assert.equal(predicate({ queryKey: ["personnel", "plan-archive", "1"] }), false);
+});
+
+test("event list patch keeps the window and drops a deleted row", () => {
+  const from = "2026-11-01T00:00:00.000Z";
+  const to = "2026-12-01T00:00:00.000Z";
+  const keep: CachedEventRow = { id: "a", startAt: "2026-11-10T00:00:00.000Z", endAt: "2026-11-12T00:00:00.000Z" };
+  const gone: CachedEventRow = { id: "b", startAt: "2026-11-10T00:00:00.000Z", endAt: "2026-11-11T00:00:00.000Z" };
+  const moved: CachedEventRow = { id: "c", startAt: "2026-12-10T00:00:00.000Z", endAt: "2026-12-12T00:00:00.000Z" };
+  const added: CachedEventRow = { id: "d", startAt: "2026-11-20T00:00:00.000Z", endAt: "2026-11-21T00:00:00.000Z" };
+  const updates = new Map<string, CachedEventRow | null>([
+    ["b", null],
+    ["c", moved],
+    ["d", added]
+  ]);
+  const merged = mergeEventList([keep, gone, { id: "c", startAt: "2026-11-02T00:00:00.000Z", endAt: "2026-11-03T00:00:00.000Z" }], updates, from, to);
+  assert.deepEqual(
+    merged.map((row) => row.id),
+    ["a", "d"]
+  );
+  assert.equal(eventInListWindow(moved, from, to), false);
+  assert.equal(
+    eventInListWindow(
+      { id: "p", startAt: "2026-10-01T00:00:00.000Z", endAt: "2026-10-02T00:00:00.000Z", placements: [{ startAt: "2026-11-05T00:00:00.000Z", endAt: "2026-11-06T00:00:00.000Z" }] },
+      from,
+      to
+    ),
+    true
+  );
 });
 
 test("open draft hears another user and ignores own save", () => {

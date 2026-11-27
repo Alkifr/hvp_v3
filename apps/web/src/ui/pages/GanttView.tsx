@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 
 import { apiDelete, apiGet, apiPatch, apiPost, getActiveSandboxId } from "../../lib/api";
 import { ColleagueStrip } from "../components/ColleagueStrip";
-import { LIVE_EVENT, draftTouchedBySignal, type LiveSignal } from "../../lib/liveSync";
+import { LIVE_EVENT, draftTouchedBySignal, setLiveOpenEventId, EVENTS_LIST_STALE_MS, type LiveSignal } from "../../lib/liveSync";
 import { reportPresenceAction } from "../../lib/presence";
 import { ChangeReasonFields, useChangeReasons } from "../components/ChangeReasonFields";
 import { isValidDateInput, isValidDateTimeLocal } from "../../lib/dateInput";
@@ -93,7 +93,6 @@ import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
 import { useActiveSandbox } from "../components/SandboxSwitcher";
 import { ToolbarPopover } from "../components/ToolbarPopover";
 import { SwitchToggle } from "../components/SwitchToggle";
-import { useIsMobile } from "../hooks/useIsMobile";
 import {
   clipRange,
   EMPTY_GANTT_VIRT,
@@ -1947,6 +1946,14 @@ function GanttMarkerLine(props: { left: number | null; title: string; head?: boo
 }
 
 /** Модальный drawer (легенда, подтверждения) — portal на body, всегда поверх карточки события. */
+/** Диаграмма не перерисовывается, пока не меняется stamp. Ввод в карточке stamp не трогает. */
+const GanttDiagramSlot = memo(
+  function GanttDiagramSlot(props: { stamp: number; render: () => React.ReactNode }) {
+    return props.render();
+  },
+  (prev, next) => prev.stamp === next.stamp
+);
+
 function Drawer(props: {
   open: boolean;
   title: string;
@@ -2023,30 +2030,46 @@ function FloatingEditorPanel(props: {
   useLayoutEffect(() => {
     const el = panelRef.current;
     if (!props.open || props.collapsed || !el) return;
-    const remember = () => {
-      const rect = el.getBoundingClientRect();
-      boxRef.current = { h: rect.height, top: rect.top, left: rect.left };
+    let frame = 0;
+    const remember = (rect: DOMRect, top = rect.top, left = rect.left) => {
+      boxRef.current = { h: rect.height, top, left };
     };
-    remember();
+    remember(el.getBoundingClientRect());
     const observer = new ResizeObserver(() => {
-      const prev = boxRef.current;
-      const rect = el.getBoundingClientRect();
-      if (!prev) {
-        remember();
-        return;
-      }
-      const heightChanged = Math.abs(rect.height - prev.h) > 1;
-      const topMoved = Math.abs(rect.top - prev.top) > 1;
-      if (heightChanged && topMoved) {
-        const y = Math.max(8, prev.top);
-        setPos({ x: prev.left, y });
-        boxRef.current = { h: rect.height, top: y, left: prev.left };
-        return;
-      }
-      boxRef.current = { h: rect.height, top: rect.top, left: rect.left };
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const prev = boxRef.current;
+        const rect = el.getBoundingClientRect();
+        if (!prev) {
+          remember(rect);
+          return;
+        }
+        const heightChanged = Math.abs(rect.height - prev.h) > 1;
+        const topMoved = Math.abs(rect.top - prev.top) > 1;
+        const leftMoved = Math.abs(rect.left - prev.left) > 1;
+        if (!heightChanged) {
+          remember(rect);
+          return;
+        }
+        if (!topMoved && !leftMoved) {
+          remember(rect);
+          return;
+        }
+        if (topMoved && !leftMoved) {
+          const y = Math.max(8, prev.top);
+          const x = prev.left;
+          setPos((current) => (current && current.x === x && current.y === y ? current : { x, y }));
+          remember(rect, y, x);
+          return;
+        }
+        remember(rect);
+      });
     });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [props.open, props.collapsed]);
 
   useEffect(() => {
@@ -2382,21 +2405,18 @@ function EvCardTitle(props: { children: React.ReactNode; helpLabel: string; help
 
 export function GanttView() {
   const qc = useQueryClient();
-  const isMobile = useIsMobile();
   const meQ = useQuery({ queryKey: ["auth", "me"], queryFn: () => authMe(), retry: 0 });
   const { active: activeSandbox, activeId: activeSandboxId } = useActiveSandbox();
   const me = meQ.data && (meQ.data as any).ok ? (meQ.data as any).user : null;
   const canWriteSandbox = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
   const canEditEvents = Boolean(hasPermission(me?.permissions, "gantt:write") || canWriteSandbox);
   const canAllowOverlap = Boolean(hasPermission(me?.permissions, "gantt:overlap"));
-  const canEditEventsEffective = canEditEvents && !isMobile;
-  const canPlanLabor = !isMobile && Boolean(hasPermission(me?.permissions, "resources:plan") || canWriteSandbox);
+  const canEditEventsEffective = canEditEvents;
+  const canPlanLabor = Boolean(hasPermission(me?.permissions, "resources:plan") || canWriteSandbox);
   const canDnd = Boolean(
-    !isMobile &&
-      (canWriteSandbox ||
-        (hasPermission(me?.permissions, "gantt:write") && (me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER"))))
+    canWriteSandbox ||
+      (hasPermission(me?.permissions, "gantt:write") && (me?.roles?.includes("ADMIN") || me?.roles?.includes("PLANNER")))
   );
-  const mobileUiAppliedRef = useRef(false);
 
   const headerViewportRef = useRef<HTMLDivElement | null>(null);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
@@ -2407,6 +2427,7 @@ export function GanttView() {
   const ganttHeaderRowRef = useRef<HTMLDivElement | null>(null);
   const ganttStickyFooterRef = useRef<HTMLDivElement | null>(null);
   const paneLeftRef = useRef(0);
+  const diagramStampRef = useRef(0);
 
   const ptrPreviewRef = useRef<null | DndPtrPreview>(null);
   const ptrTargetRef = useRef<null | DndPtrTarget>(null);
@@ -2580,7 +2601,8 @@ export function GanttView() {
         `/api/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`
       ),
     // фильтры типа ВС / борта / ангара применяются на клиенте, т.к. поддерживается мультиселект
-    placeholderData: (prev) => prev ?? EMPTY_EVENTS
+    placeholderData: (prev) => prev ?? EMPTY_EVENTS,
+    staleTime: EVENTS_LIST_STALE_MS
   });
 
   const aircraftQ = useQuery({
@@ -2816,7 +2838,6 @@ export function GanttView() {
   }, [dndStandsQ.data]);
 
   useEffect(() => {
-    const prev = isMobile ? safeReadGanttUi() ?? {} : null;
     safeWriteGanttUi({
       rangeFromApplied,
       rangeToApplied,
@@ -2824,7 +2845,7 @@ export function GanttView() {
       rangeToInput,
       groupMode,
       hangarStandSort,
-      panelView: isMobile && prev ? (prev.panelView ?? panelView) : panelView,
+      panelView,
       ganttDisplayMode,
       majorScale,
       minorScale,
@@ -2843,8 +2864,8 @@ export function GanttView() {
       fitWidth,
       showAllPlacementLinks,
       showGanttGrid,
-      ganttToolbarOpen: isMobile && prev ? (prev.ganttToolbarOpen ?? ganttToolbarOpen) : ganttToolbarOpen,
-      dndEnabled: isMobile && prev ? (prev.dndEnabled ?? dndEnabled) : dndEnabled,
+      ganttToolbarOpen,
+      dndEnabled,
       dndHangarIds,
       dndLayoutIds,
       dndZoneOnly,
@@ -2884,7 +2905,6 @@ export function GanttView() {
     dndZoneOnly,
     showCancelledOnGantt,
     showGanttNotes,
-    isMobile,
   ]);
 
   useEffect(() => {
@@ -2893,7 +2913,7 @@ export function GanttView() {
       rangeToApplied,
       groupMode,
       hangarStandSort,
-      panelView: isMobile ? "DIAGRAM" : panelView,
+      panelView,
       ganttDisplayMode,
       majorScale,
       minorScale,
@@ -2938,7 +2958,6 @@ export function GanttView() {
     showGanttGrid,
     showCancelledOnGantt,
     showGanttNotes,
-    isMobile,
     activeSandboxId
   ]);
 
@@ -3737,21 +3756,6 @@ export function GanttView() {
   // копией, а сохранение создаёт НОВОЕ событие (draft.id остаётся пустым)
   const [copySelectMode, setCopySelectMode] = useState(false);
 
-  useEffect(() => {
-    if (isMobile) {
-      if (!mobileUiAppliedRef.current) {
-        mobileUiAppliedRef.current = true;
-        setPanelView("TABLE");
-        setGanttToolbarOpen(false);
-        setDndEnabled(false);
-        setCopySelectMode(false);
-        setSelectedDndEventIds([]);
-      }
-      return;
-    }
-    mobileUiAppliedRef.current = false;
-  }, [isMobile]);
-
   const [copyFromTitle, setCopyFromTitle] = useState<string | null>(null);
   const [shareHint, setShareHint] = useState<string | null>(null);
 
@@ -3872,6 +3876,7 @@ export function GanttView() {
   const activeChangeReasonCount = (changeReasonsQ.data ?? []).filter((row) => row.isActive).length;
   const laborRef = useRef<LaborMetricsHandle | null>(null);
   const [laborDirty, setLaborDirty] = useState(false);
+  const [laborPinnedId, setLaborPinnedId] = useState<string | null>(null);
   const [towRows, setTowRows] = useState<TowDraftRow[]>([]);
   const [towBaseline, setTowBaseline] = useState<TowDraftRow[]>([]);
   const towLockRef = useRef<string | null>(null);
@@ -3884,6 +3889,10 @@ export function GanttView() {
   useEffect(() => {
     if (!editorOpen) return;
     reportPresenceAction(draft?.id ? `event:${draft.id}` : "event:", "gantt");
+  }, [editorOpen, draft?.id]);
+  useEffect(() => {
+    setLiveOpenEventId(editorOpen && draft?.id ? draft.id : null);
+    return () => setLiveOpenEventId(null);
   }, [editorOpen, draft?.id]);
   useEffect(() => {
     const onLive = (event: Event) => {
@@ -3907,33 +3916,23 @@ export function GanttView() {
   const [editingTowId, setEditingTowId] = useState<string | null>(null);
   const [edgeTowNotice, setEdgeTowNotice] = useState("");
   const [towFormError, setTowFormError] = useState("");
-  const towsQ = useQuery({
-    queryKey: ["event-tows", draft?.id ?? ""],
-    queryFn: () => apiGet<TowSegment[]>(`/api/events/${draft!.id}/tows`),
-    enabled: !!draft?.id && editorOpen
-  });
   const towDirty = useMemo(() => towDraftDirty(towRows, towBaseline), [towRows, towBaseline]);
-  const seenTowEventRef = useRef<string | null>(null);
-  useEffect(() => {
-    const eventId = draft?.id ?? "";
-    const switched = seenTowEventRef.current !== eventId;
-    if (switched) {
-      seenTowEventRef.current = eventId;
-      if (towLockRef.current && towLockRef.current !== (eventId || "new")) towLockRef.current = null;
-      setEditingTowId(null);
-      setEdgeTowNotice("");
-      setTowFormError("");
-      if (towLockRef.current !== (eventId || "new")) {
-        setTowRows([]);
-        setTowBaseline([]);
-      }
-    }
-    if (!eventId || towLockRef.current === eventId || !towsQ.isSuccess) return;
-    const next = towRowsFromServer(towsQ.data ?? []);
+  const seedTowRows = (rows: TowServerRow[]) => {
+    const next = towRowsFromServer(rows);
+    setEditingTowId(null);
+    setEdgeTowNotice("");
+    setTowFormError("");
     setTowBaseline(next);
     setTowRows(next);
-  }, [draft?.id, towsQ.data, towsQ.dataUpdatedAt, towsQ.isSuccess]);
+  };
   const onLaborDirtyChange = useCallback((dirty: boolean) => setLaborDirty(dirty), []);
+  useEffect(() => {
+    setLaborPinnedId(null);
+    setLaborDirty(false);
+  }, [draft?.id]);
+  useEffect(() => {
+    if (draft?.id && openSections.includes("labor")) setLaborPinnedId(draft.id);
+  }, [draft?.id, openSections]);
   /** Сброс ошибок/статуса мутаций карточки при открытии другой / закрытии */
   const [editorFeedbackEpoch, setEditorFeedbackEpoch] = useState(0);
   const bumpEditorFeedbackReset = () => setEditorFeedbackEpoch((n) => n + 1);
@@ -3943,7 +3942,7 @@ export function GanttView() {
     if (editorOpen && editorCollapsed) return;
     takeEditorSection();
     towLockRef.current = null;
-    seenTowEventRef.current = null;
+    seedTowRows([]);
     bumpEditorFeedbackReset();
     const defaultAircraft = aircraftQ.data?.[0]?.id ?? "";
     const defaultEventType = eventTypesQ.data?.[0]?.id ?? "";
@@ -4004,7 +4003,7 @@ export function GanttView() {
     if (editorOpen && editorCollapsed) return;
     takeEditorSection();
     towLockRef.current = null;
-    seenTowEventRef.current = null;
+    seedTowRows(ev.towSegments ?? []);
     bumpEditorFeedbackReset();
     const startAtLocal = toInputLocal(ev.startAt);
     const endAtLocal = toInputLocal(ev.endAt);
@@ -4061,7 +4060,7 @@ export function GanttView() {
     if (editorOpen && editorCollapsed) return;
     takeEditorSection();
     towLockRef.current = null;
-    seenTowEventRef.current = null;
+    seedTowRows(ev.towSegments ?? []);
     bumpEditorFeedbackReset();
     const startAtLocal = toInputLocal(ev.startAt);
     const endAtLocal = toInputLocal(ev.endAt);
@@ -4309,7 +4308,7 @@ export function GanttView() {
   const historyQ = useQuery({
     queryKey: ["event-history", draft?.id ?? ""],
     queryFn: () => apiGet<EventAudit[]>(`/api/events/${draft!.id}/history`),
-    enabled: !!draft?.id && editorOpen
+    enabled: !!draft?.id && editorOpen && openSections.includes("history")
   });
 
   const historyByDay = useMemo(() => {
@@ -4340,9 +4339,7 @@ export function GanttView() {
       ? liveTows.length > 0
         ? true
         : null
-      : towsQ.isSuccess || towDirty
-        ? liveTows.length > 0
-        : null;
+      : liveTows.length > 0;
     const lines = eventWarningLines({
       workshop: draft.workshopId ? "цех" : null,
       maintenanceType: draft.eventTypeId ? "тип" : null,
@@ -4365,7 +4362,7 @@ export function GanttView() {
       autoFillGapPlacements: draft.autoFillGapPlacements
     }).map((text, index): EventWarning => ({ id: `stage-${index}`, text, section: "place" }));
     return [...lines, ...stage];
-  }, [draft, towRows, towDirty, towsQ.isSuccess, selectedDraftEvent, statusCatalog, events]);
+  }, [draft, towRows, towDirty, selectedDraftEvent, statusCatalog, events]);
 
   const editorNav: Array<{ id: EditorSection; label: string; count: number }> = [
     { id: "warnings", label: "Замечания", count: cardWarnings.length },
@@ -6746,23 +6743,81 @@ export function GanttView() {
 
   const layoutsByHangar = useMemo(() => {
     const m = new Map<string, Layout[]>();
-    for (const l of allLayoutsQ.data ?? []) {
-      const arr = m.get(l.hangarId) ?? [];
-      arr.push(l);
-      m.set(l.hangarId, arr);
-    }
+    const add = (layout: Layout | null | undefined) => {
+      if (!layout?.id || !layout.hangarId) return;
+      const arr = m.get(layout.hangarId) ?? [];
+      if (arr.some((item) => item.id === layout.id)) return;
+      arr.push(layout);
+      m.set(layout.hangarId, arr);
+    };
+    for (const layout of allLayoutsQ.data ?? []) add(layout);
+    if (selectedDraftEvent?.layout) add(selectedDraftEvent.layout as Layout);
+    for (const placement of selectedDraftEvent?.placements ?? []) add(placement.layout as Layout | undefined);
     return m;
-  }, [allLayoutsQ.data]);
+  }, [allLayoutsQ.data, selectedDraftEvent]);
 
   const standsByLayout = useMemo(() => {
     const m = new Map<string, Stand[]>();
-    for (const s of allStandsQ.data ?? []) {
-      const arr = m.get(s.layoutId) ?? [];
-      arr.push(s);
-      m.set(s.layoutId, arr);
+    const add = (stand: Stand | null | undefined) => {
+      if (!stand?.id || !stand.layoutId) return;
+      const arr = m.get(stand.layoutId) ?? [];
+      if (arr.some((item) => item.id === stand.id)) return;
+      arr.push(stand);
+      m.set(stand.layoutId, arr);
+    };
+    for (const stand of allStandsQ.data ?? []) add(stand);
+    for (const placement of selectedDraftEvent?.placements ?? []) {
+      const stand = placement.stand;
+      if (!stand?.id) continue;
+      add({
+        id: stand.id,
+        layoutId: placement.layoutId || placement.layout?.id || "",
+        code: stand.code,
+        name: stand.name || stand.code
+      });
+    }
+    const reserved = selectedDraftEvent?.reservation?.stand;
+    if (reserved?.id && draft?.layoutId) {
+      add({ id: reserved.id, layoutId: draft.layoutId, code: reserved.code, name: reserved.code });
     }
     return m;
-  }, [allStandsQ.data]);
+  }, [allStandsQ.data, selectedDraftEvent, draft?.layoutId]);
+
+  const layoutSelectOptions = useMemo(() => {
+    if (!draft) return [];
+    const source = layoutsForEditorQ.data ?? (allLayoutsQ.data ?? []).filter((layout) => layout.hangarId === draft.hangarId);
+    const options = source.map((layout) => ({
+      id: layout.id,
+      label: `${layout.name}${layout.isCompatible === false ? " — недоступно для типа ВС" : ""}`,
+      description: layout.standsSummary || undefined,
+      disabled: layout.isCompatible === false
+    }));
+    if (draft.layoutId && !options.some((option) => option.id === draft.layoutId)) {
+      const known =
+        (selectedDraftEvent?.layout?.id === draft.layoutId ? selectedDraftEvent.layout.name : null) ||
+        selectedDraftEvent?.placements?.find((placement) => placement.layout?.id === draft.layoutId)?.layout?.name ||
+        "Схема";
+      options.unshift({ id: draft.layoutId, label: known, description: undefined, disabled: false });
+    }
+    return options;
+  }, [draft, layoutsForEditorQ.data, allLayoutsQ.data, selectedDraftEvent]);
+
+  const standSelectOptions = useMemo(() => {
+    if (!draft) return [];
+    const source = standsForEditorQ.data ?? (allStandsQ.data ?? []).filter((stand) => stand.layoutId === draft.layoutId);
+    const options = source.map((stand) => ({
+      id: stand.id,
+      label: `${stand.name?.trim() || stand.code}${stand.isCompatible === false ? " — недоступно для типа ВС" : ""}`,
+      disabled: stand.isCompatible === false
+    }));
+    if (draft.standId && !options.some((option) => option.id === draft.standId)) {
+      const fromPlacement = selectedDraftEvent?.placements?.find((placement) => placement.stand?.id === draft.standId)?.stand;
+      const reserved = selectedDraftEvent?.reservation?.stand;
+      const known = fromPlacement?.name?.trim() || fromPlacement?.code || (reserved?.id === draft.standId ? reserved.code : "") || "Место";
+      options.unshift({ id: draft.standId, label: known, disabled: false });
+    }
+    return options;
+  }, [draft, standsForEditorQ.data, allStandsQ.data, selectedDraftEvent]);
 
   const setDraftPlacement = (clientKey: string, patch: Partial<PlacementDraft>) => {
     setDraft((d) => {
@@ -6899,70 +6954,52 @@ export function GanttView() {
     });
   };
 
-  const ganttRowCount = ganttDiagramRows.length;
-  const virtRowStart = Math.max(0, Math.min(ganttVirt.rows.startIdx, ganttRowCount));
-  const virtRowEnd = Math.max(virtRowStart, Math.min(ganttVirt.rows.endIdx, ganttRowCount));
-  const visibleDiagramRows = ganttDiagramRows.slice(virtRowStart, virtRowEnd);
-  const paneLeft = ganttVirt.x.left;
-  const paneWidth = Math.max(1, ganttVirt.x.width);
-  const paneRight = paneLeft + paneWidth;
-  paneLeftRef.current = paneLeft;
-  const ganttBodyHeight = ganttRowOffsets[ganttRowCount] ?? 0;
-  const virtPaneTop = ganttRowOffsets[virtRowStart] ?? 0;
-  const virtPaneHeight = Math.max(0, (ganttRowOffsets[virtRowEnd] ?? ganttBodyHeight) - virtPaneTop);
-  const rowHAt = (idx: number) => ganttRowHeights[idx] ?? ganttBarBandHeight;
-  const rowNotesAt = (idx: number) => Boolean(showGanttNotes && (ganttRowHeights[idx] ?? 0) > ganttBarBandHeight);
-  const barInPane = (x: number, w: number) =>
-    rangesOverlap(x, x + w, paneLeft - GANTT_BAR_SLOP_PX, paneRight + GANTT_BAR_SLOP_PX);
-  const toPaneX = (x: number) => x - paneLeft;
-  const visibleTickCells = ticks.flatMap((t, i) => {
-    const nextAt = ticks[i + 1]?.at ?? to;
-    const leftRaw = t.at.diff(from, "day", true) * dayWidth;
-    const rightRaw = nextAt.diff(from, "day", true) * dayWidth;
-    const cellLeft = Math.max(0, leftRaw);
-    const cellWidth = Math.max(1, rightRaw - cellLeft);
-    if (!rangesOverlap(cellLeft, cellLeft + cellWidth, paneLeft, paneRight)) return [];
-    const majorIdx = majorSegments.findIndex((candidate) => candidate.key === t.majorKey);
-    return [{ t, i, left: cellLeft, width: cellWidth, majorIdx }];
-  });
-  const visibleMajorCells = majorSegments.flatMap((m) => {
-    const clipped = clipRange(m.left, m.width, paneLeft, paneWidth);
-    if (!clipped) return [];
-    return [{ ...m, paneLeft: clipped.left, paneWidth: clipped.width }];
-  });
-  const visibleHistogramBuckets = slotHistogram.flatMap((b) => {
-    const clipped = clipRange(b.left, Math.max(2, b.width - 1), paneLeft, paneWidth);
-    if (!clipped) return [];
-    return [{ ...b, paneLeft: clipped.left, paneWidth: clipped.width }];
-  });
-  const scaleMajorLefts: number[] = [];
-  for (const segment of majorSegments) {
-    const start = timelineInstant(dayjs(segment.key).valueOf(), timelineTimeMode);
-    const raw = start.diff(from, "day", true) * dayWidth;
-    if (raw < paneLeft - 1 || raw > paneRight + 1) continue;
-    scaleMajorLefts.push(raw - paneLeft);
-  }
-  const scaleMinorLefts: number[] = [];
-  for (const cell of visibleTickCells) {
-    const x = cell.t.at.diff(from, "day", true) * dayWidth - paneLeft;
-    if (x < -1 || x > paneWidth + 1) continue;
-    if (scaleMajorLefts.some((majorX) => Math.abs(majorX - x) < 0.8)) continue;
-    scaleMinorLefts.push(x);
-  }
-  const scaleGuideMajorLefts = spacedGuideLefts(scaleMajorLefts, 8);
-  const scaleGuideMinorLefts = spacedGuideLefts(scaleMinorLefts, 8);
   const markerAt = markerAtMs == null ? null : timelineInstant(markerAtMs, timelineTimeMode);
   const markerLabel = markerAt?.isValid() ? formatGanttCursor(markerAt) : "";
-  let markerPaneX: number | null = null;
-  if (markerAt?.isValid() && markerAt.valueOf() >= from.valueOf() && markerAt.valueOf() < to.valueOf()) {
-    const markerX = markerAt.diff(from, "day", true) * dayWidth;
-    if (markerX >= paneLeft - 2 && markerX <= paneRight + 2) markerPaneX = markerX - paneLeft;
-  }
-  const visiblePaneLinks = visiblePlacementLinks.filter(
-    (l) =>
-      rangesOverlap(Math.min(l.x1, l.x2), Math.max(l.x1, l.x2), paneLeft - 24, paneRight + 24) &&
-      rangesOverlap(Math.min(l.y1, l.y2), Math.max(l.y1, l.y2), virtPaneTop - 8, virtPaneTop + virtPaneHeight + 8)
-  );
+  const diagramStamp = useMemo(() => {
+    diagramStampRef.current += 1;
+    return diagramStampRef.current;
+  }, [
+    ganttDiagramRows,
+    ganttVirt,
+    ticks,
+    majorSegments,
+    slotHistogram,
+    slotHistogramMaxOccupied,
+    visiblePlacementLinks,
+    dayWidth,
+    canvasWidth,
+    from,
+    to,
+    panelView,
+    groupMode,
+    ganttDisplayMode,
+    showGanttGrid,
+    showGanttNotes,
+    editorOpen,
+    draft?.id,
+    dndActive,
+    dndHoverKey,
+    ptrDrag,
+    markerAtMs,
+    hoverCursorLabel,
+    fitLayoutEpoch,
+    ganttLabelWidth,
+    ganttLabelColStyle,
+    timelineTimeMode,
+    copySelectMode,
+    ganttToolbarOpen,
+    selectedTableEventIds,
+    tableSettingsOpen,
+    aircraftPaletteMap,
+    statusCatalog,
+    exportEvents,
+    bulkStatusPanelOpen,
+    bulkStatusTarget,
+    bulkStatusNotice,
+    rangeError
+  ]);
+
   const dndDisplaceLabels =
     pendingSave === "dndMove" && Array.isArray((pendingDnd as DndPlaceRequest | null)?.bumpedEventLabels)
       ? ((pendingDnd as DndPlaceRequest).bumpedEventLabels ?? [])
@@ -7025,29 +7062,6 @@ export function GanttView() {
               >
                 Настройки
               </button>
-            ) : null}
-            {isMobile ? (
-              <div className="ganttViewToggle ganttViewToggleCompact" role="group" aria-label="Режим отображения плана">
-                <button
-                  type="button"
-                  className={`ganttViewToggleBtn${panelView === "TABLE" ? " ganttViewToggleBtnActive" : ""}`}
-                  aria-pressed={panelView === "TABLE"}
-                  onClick={() => {
-                    setCopySelectMode(false);
-                    setPanelView("TABLE");
-                  }}
-                >
-                  Список
-                </button>
-                <button
-                  type="button"
-                  className={`ganttViewToggleBtn${panelView === "DIAGRAM" ? " ganttViewToggleBtnActive" : ""}`}
-                  aria-pressed={panelView === "DIAGRAM"}
-                  onClick={() => setPanelView("DIAGRAM")}
-                >
-                  Диаграмма
-                </button>
-              </div>
             ) : null}
             <button
               type="button"
@@ -7132,8 +7146,6 @@ export function GanttView() {
                   <path d="M6 18v-4h4" />
                 </svg>
               </button>
-              {!isMobile ? (
-                <>
                   <button
                     type="button"
                     className={`btn ganttIconBtn${copySelectMode ? " btnCopyActive" : ""}`}
@@ -7208,13 +7220,9 @@ export function GanttView() {
                       </svg>
                     )}
                   </button>
-                </>
-              ) : null}
             </div>
 
             <div className="ganttToolbarGroup">
-              {!isMobile ? (
-                <>
               <span className="tgLabel">Вид</span>
               <div className="ganttViewToggle" role="group" aria-label="Режим отображения плана">
                 <button
@@ -7237,10 +7245,6 @@ export function GanttView() {
                   Таблица
                 </button>
               </div>
-                </>
-              ) : (
-                <span className="tgLabel">Настройки диаграммы</span>
-              )}
               <div className="tgIndicatorRow" aria-label="Быстрые фильтры планирования и L/B">
                 <div className="tgIndicatorCluster">
                   <span className="tgIndicatorCaption">План:</span>
@@ -7738,6 +7742,74 @@ export function GanttView() {
 
       </div>
 
+      <GanttDiagramSlot
+        stamp={diagramStamp}
+        render={() => {
+  const ganttRowCount = ganttDiagramRows.length;
+  const virtRowStart = Math.max(0, Math.min(ganttVirt.rows.startIdx, ganttRowCount));
+  const virtRowEnd = Math.max(virtRowStart, Math.min(ganttVirt.rows.endIdx, ganttRowCount));
+  const visibleDiagramRows = ganttDiagramRows.slice(virtRowStart, virtRowEnd);
+  const paneLeft = ganttVirt.x.left;
+  const paneWidth = Math.max(1, ganttVirt.x.width);
+  const paneRight = paneLeft + paneWidth;
+  paneLeftRef.current = paneLeft;
+  const ganttBodyHeight = ganttRowOffsets[ganttRowCount] ?? 0;
+  const virtPaneTop = ganttRowOffsets[virtRowStart] ?? 0;
+  const virtPaneHeight = Math.max(0, (ganttRowOffsets[virtRowEnd] ?? ganttBodyHeight) - virtPaneTop);
+  const rowHAt = (idx: number) => ganttRowHeights[idx] ?? ganttBarBandHeight;
+  const rowNotesAt = (idx: number) => Boolean(showGanttNotes && (ganttRowHeights[idx] ?? 0) > ganttBarBandHeight);
+  const barInPane = (x: number, w: number) =>
+    rangesOverlap(x, x + w, paneLeft - GANTT_BAR_SLOP_PX, paneRight + GANTT_BAR_SLOP_PX);
+  const toPaneX = (x: number) => x - paneLeft;
+  const visibleTickCells = ticks.flatMap((t, i) => {
+    const nextAt = ticks[i + 1]?.at ?? to;
+    const leftRaw = t.at.diff(from, "day", true) * dayWidth;
+    const rightRaw = nextAt.diff(from, "day", true) * dayWidth;
+    const cellLeft = Math.max(0, leftRaw);
+    const cellWidth = Math.max(1, rightRaw - cellLeft);
+    if (!rangesOverlap(cellLeft, cellLeft + cellWidth, paneLeft, paneRight)) return [];
+    const majorIdx = majorSegments.findIndex((candidate) => candidate.key === t.majorKey);
+    return [{ t, i, left: cellLeft, width: cellWidth, majorIdx }];
+  });
+  const visibleMajorCells = majorSegments.flatMap((m) => {
+    const clipped = clipRange(m.left, m.width, paneLeft, paneWidth);
+    if (!clipped) return [];
+    return [{ ...m, paneLeft: clipped.left, paneWidth: clipped.width }];
+  });
+  const visibleHistogramBuckets = slotHistogram.flatMap((b) => {
+    const clipped = clipRange(b.left, Math.max(2, b.width - 1), paneLeft, paneWidth);
+    if (!clipped) return [];
+    return [{ ...b, paneLeft: clipped.left, paneWidth: clipped.width }];
+  });
+  const scaleMajorLefts: number[] = [];
+  for (const segment of majorSegments) {
+    const start = timelineInstant(dayjs(segment.key).valueOf(), timelineTimeMode);
+    const raw = start.diff(from, "day", true) * dayWidth;
+    if (raw < paneLeft - 1 || raw > paneRight + 1) continue;
+    scaleMajorLefts.push(raw - paneLeft);
+  }
+  const scaleMinorLefts: number[] = [];
+  for (const cell of visibleTickCells) {
+    const x = cell.t.at.diff(from, "day", true) * dayWidth - paneLeft;
+    if (x < -1 || x > paneWidth + 1) continue;
+    if (scaleMajorLefts.some((majorX) => Math.abs(majorX - x) < 0.8)) continue;
+    scaleMinorLefts.push(x);
+  }
+  const scaleGuideMajorLefts = spacedGuideLefts(scaleMajorLefts, 8);
+  const scaleGuideMinorLefts = spacedGuideLefts(scaleMinorLefts, 8);
+  const markerAt = markerAtMs == null ? null : timelineInstant(markerAtMs, timelineTimeMode);
+  const markerLabel = markerAt?.isValid() ? formatGanttCursor(markerAt) : "";
+  let markerPaneX: number | null = null;
+  if (markerAt?.isValid() && markerAt.valueOf() >= from.valueOf() && markerAt.valueOf() < to.valueOf()) {
+    const markerX = markerAt.diff(from, "day", true) * dayWidth;
+    if (markerX >= paneLeft - 2 && markerX <= paneRight + 2) markerPaneX = markerX - paneLeft;
+  }
+  const visiblePaneLinks = visiblePlacementLinks.filter(
+    (l) =>
+      rangesOverlap(Math.min(l.x1, l.x2), Math.max(l.x1, l.x2), paneLeft - 24, paneRight + 24) &&
+      rangesOverlap(Math.min(l.y1, l.y2), Math.max(l.y1, l.y2), virtPaneTop - 8, virtPaneTop + virtPaneHeight + 8)
+  );
+        return (
       <div className="ganttPageMain" ref={ganttPageMainRef} onScroll={scheduleGanttVirt}>
       {panelView === "TABLE" ? (
         <div className="card ganttTableCard">
@@ -7745,7 +7817,7 @@ export function GanttView() {
             events={exportEvents}
             canEdit={canEditEventsEffective}
             canAllowOverlap={canAllowOverlap}
-            allowColumnReorder={!isMobile}
+            allowColumnReorder
             settingsOpen={tableSettingsOpen}
             onSettingsOpenChange={setTableSettingsOpen}
             selectedIds={selectedTableEventIds}
@@ -8440,7 +8512,6 @@ export function GanttView() {
             Нет событий в выбранном диапазоне.
           </div>
         ) : null}
-      {!isMobile ? (
         <div className="ganttStickyFooter" ref={ganttStickyFooterRef} aria-label="Нижняя панель диаграммы">
           <div className="ganttBottomScrollRow" aria-hidden="true">
             <div className="ganttBottomScrollSpacer" style={ganttLabelColStyle} />
@@ -8497,10 +8568,12 @@ export function GanttView() {
             </div>
           ) : null}
         </div>
-      ) : null}
       </div>
       )}
       </div>
+        );
+      }}
+      />
 
       <FloatingEditorPanel
         open={editorOpen}
@@ -8517,7 +8590,6 @@ export function GanttView() {
         }
         summary={editorSummary || "Карточка события"}
         beneathModal={confirmOpen || legendOpen}
-        disableDrag={isMobile}
         onClose={() => {
           bumpEditorFeedbackReset();
           setEditorOpen(false);
@@ -8582,10 +8654,8 @@ export function GanttView() {
 
             {!canEditEventsEffective ? (
               <div className="contextNotice" role="status">
-                <strong>Режим просмотра.</strong>{" "}
-                {isMobile
-                  ? "На мобильном устройстве доступен только просмотр. Карточка открыта без редактирования."
-                  : "У вашей роли нет прав на редактирование событий. Карточка доступна только для просмотра."}
+                <strong>Режим просмотра.</strong> У вашей роли нет прав на редактирование событий. Карточка
+                доступна только для просмотра.
               </div>
             ) : null}
 
@@ -9018,12 +9088,7 @@ export function GanttView() {
                       searchPlaceholder="Введите вариант размещения"
                       placeholder="— не задан —"
                       emptyLabel="— не задан —"
-                      options={(layoutsForEditorQ.data ?? []).map((layout) => ({
-                        id: layout.id,
-                        label: `${layout.name}${layout.isCompatible === false ? " — недоступно для типа ВС" : ""}`,
-                        description: layout.standsSummary || undefined,
-                        disabled: layout.isCompatible === false
-                      }))}
+                      options={layoutSelectOptions}
                       value={draft.layoutId}
                       disabled={!draft.hangarId}
                       onChange={(layoutId) => setDraft({ ...draft, layoutId, standId: "" })}
@@ -9038,13 +9103,7 @@ export function GanttView() {
                       searchPlaceholder="Введите название места"
                       placeholder="— не выбрано —"
                       emptyLabel="— не выбрано —"
-                      options={(standsForEditorQ.data ?? []).map((stand) => ({
-                        id: stand.id,
-                        label: `${stand.name?.trim() || stand.code}${
-                          stand.isCompatible === false ? " — недоступно для типа ВС" : ""
-                        }`,
-                        disabled: stand.isCompatible === false
-                      }))}
+                      options={standSelectOptions}
                       value={draft.standId}
                       disabled={!draft.layoutId}
                       onChange={(standId) => setDraft({ ...draft, standId })}
@@ -9207,7 +9266,7 @@ export function GanttView() {
                             setTowFormError(error instanceof Error ? error.message : String(error));
                           }
                         }}
-                        disabled={!edgeTowNorm || (!!draft.id && !towsQ.isSuccess)}
+                        disabled={!edgeTowNorm}
                         title={
                           edgeTowNorm
                             ? `Закатка и выкатка, ${edgeTowNorm.minutes} мин`
@@ -9241,7 +9300,7 @@ export function GanttView() {
                                 setTowFormError(error instanceof Error ? error.message : String(error));
                               }
                             }}
-                            disabled={(!!draft.id && !towsQ.isSuccess) || (draft.multiPlacement && manualPlacements(draft.placements).length > 0 && !towPlacementId)}
+                            disabled={draft.multiPlacement && manualPlacements(draft.placements).length > 0 && !towPlacementId}
                           >
                             <svg viewBox="0 0 24 24" aria-hidden="true">
                               <path d="M5 12.5 10 17.5 19 7" />
@@ -9275,7 +9334,7 @@ export function GanttView() {
                               setTowFormError(error instanceof Error ? error.message : String(error));
                             }
                           }}
-                          disabled={(!!draft.id && !towsQ.isSuccess) || (draft.multiPlacement && manualPlacements(draft.placements).length > 0 && !towPlacementId)}
+                          disabled={draft.multiPlacement && manualPlacements(draft.placements).length > 0 && !towPlacementId}
                         >
                           <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M12 5v14M5 12h14" />
@@ -9351,10 +9410,7 @@ export function GanttView() {
                             </div>
                           );
                         })}
-                      {towsQ.isFetching && towRows.length === 0 ? <div className="muted">обновление…</div> : null}
-                      {towsQ.error ? (
-                        <div className="error">{String((towsQ.error as any)?.message ?? towsQ.error)}</div>
-                      ) : null}
+                      {towRows.filter((row) => !row.deleted).length === 0 ? <div className="muted">Буксировок пока нет.</div> : null}
                     </div>
                   </div>
                   </fieldset>
@@ -9422,7 +9478,7 @@ export function GanttView() {
                 </EvCardTitle>
               </header>
               <div className="evCardBody">
-                {draft.id ? (
+                {draft.id && laborPinnedId === draft.id ? (
                   <EventResourcesPanel
                     ref={laborRef}
                     eventId={draft.id}
@@ -9433,7 +9489,7 @@ export function GanttView() {
                     onDirtyChange={onLaborDirtyChange}
                   />
                 ) : (
-                  <div className="muted">Трудоёмкость появится после сохранения события.</div>
+                  <div className="muted">{draft.id ? "Загрузка…" : "Трудоёмкость появится после сохранения события."}</div>
                 )}
               </div>
             </section>

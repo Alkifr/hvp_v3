@@ -16,22 +16,20 @@ test("parseHomePage accepts known modules and treats auto as empty", () => {
   assert.equal(parseHomePage("profile"), null);
 });
 
-test("isHomePageAllowed hides desktop modules on mobile", () => {
-  assert.equal(isHomePageAllowed("tows", ["tows:read"], true), false);
-  assert.equal(isHomePageAllowed("tows", ["tows:read"], false), true);
-  assert.equal(isHomePageAllowed("personnel", ["personnel:read"], true), false);
-  assert.equal(isHomePageAllowed("personnel", ["personnel:read"], false), true);
-  assert.equal(isHomePageAllowed("gantt", ["gantt:read"], true), true);
-  assert.equal(isHomePageAllowed("gantt", ["hangar:read"], false), false);
+test("isHomePageAllowed follows module permissions", () => {
+  assert.equal(isHomePageAllowed("tows", ["tows:read"]), true);
+  assert.equal(isHomePageAllowed("personnel", ["personnel:read"]), true);
+  assert.equal(isHomePageAllowed("gantt", ["gantt:read"]), true);
+  assert.equal(isHomePageAllowed("gantt", ["hangar:read"]), false);
 });
 
 test("resolveStartPage uses preferred when allowed, otherwise first available", () => {
-  assert.equal(resolveStartPage("hangar", ["hangar:read", "gantt:read"], false), "hangar");
-  assert.equal(resolveStartPage("gantt", ["hangar:read"], false), "hangar");
-  assert.equal(resolveStartPage(null, ["gantt:read"], false), "gantt");
-  assert.equal(firstAllowedPage(["analytics:read"], false), "analytics");
-  assert.equal(firstAllowedPage([], false), "help");
-  assert.notEqual(firstAllowedPage([], false), "sandboxes");
+  assert.equal(resolveStartPage("hangar", ["hangar:read", "gantt:read"]), "hangar");
+  assert.equal(resolveStartPage("gantt", ["hangar:read"]), "hangar");
+  assert.equal(resolveStartPage(null, ["gantt:read"]), "gantt");
+  assert.equal(firstAllowedPage(["analytics:read"]), "analytics");
+  assert.equal(firstAllowedPage([]), "help");
+  assert.notEqual(firstAllowedPage([]), "sandboxes");
 });
 
 test("parseMutedNotificationKinds drops unknown kinds", () => {

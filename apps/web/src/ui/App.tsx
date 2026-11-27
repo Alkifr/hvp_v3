@@ -19,7 +19,6 @@ import { HelpView } from "./pages/HelpView";
 import { NavSandboxMenu, useActiveSandbox } from "./components/SandboxSwitcher";
 import { NotificationBell } from "./components/NotificationBell";
 import { AnnouncementModal } from "./components/AnnouncementModal";
-import { useIsMobile } from "./hooks/useIsMobile";
 import { authMe } from "./auth/authApi";
 import { getActiveSandboxId, setActiveSandboxId } from "../lib/api";
 import { installLiveSync } from "../lib/liveSync";
@@ -220,7 +219,6 @@ const ICONS = {
 } as const;
 
 export function App() {
-  const isMobile = useIsMobile();
   const meQ = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => authMe(),
@@ -231,7 +229,7 @@ export function App() {
   const permissions = me?.permissions ?? [];
 
   const [page, setPage] = useState<Page | null>(() => pageFromHash(location.hash));
-  const resolvedPage: Page | null = page ?? (me ? resolveStartPage(me.homePage, permissions, isMobile) : null);
+  const resolvedPage: Page | null = page ?? (me ? resolveStartPage(me.homePage, permissions) : null);
 
   useEffect(() => {
     if (meQ.isLoading) {
@@ -283,8 +281,8 @@ export function App() {
     }
     if (!apply) return;
     if (parseHashPage(location.hash).query.toString()) return;
-    setPage(resolveStartPage(me.homePage, me.permissions, isMobile));
-  }, [me, isMobile]);
+    setPage(resolveStartPage(me.homePage, me.permissions));
+  }, [me]);
 
   if (meQ.isLoading) {
     return (
@@ -378,7 +376,6 @@ function AppShell(props: {
     canNotify
   } = props;
   const qc = useQueryClient();
-  const isMobile = useIsMobile();
   const { active: activeSandbox } = useActiveSandbox();
   const inSandbox = Boolean(activeSandbox);
   const sandboxCanWrite = activeSandbox?.myRole === "OWNER" || activeSandbox?.myRole === "EDITOR";
@@ -407,24 +404,23 @@ function AppShell(props: {
       gantt: canGantt,
       hangar: canHangar,
       analytics: canAnalytics,
-      itp: canItp && !isMobile,
-      tows: canTows && !isMobile,
-      personnel: canPersonnel && !isMobile,
-      import: canImportInActiveContext && !isMobile,
-      mass: canImportInActiveContext && !isMobile,
-      ref: canRef && !isMobile,
-      mail: canMail && !isMobile,
-      admin: canAdmin && !isMobile,
+      itp: canItp,
+      tows: canTows,
+      personnel: canPersonnel,
+      import: canImportInActiveContext,
+      mass: canImportInActiveContext,
+      ref: canRef,
+      mail: canMail,
+      admin: canAdmin,
       profile: true,
       sandboxes: true,
       help: true
     };
-    if (!allowed[page]) setPage(firstAllowedPage(permissions, isMobile));
+    if (!allowed[page]) setPage(firstAllowedPage(permissions));
   }, [
     page,
     setPage,
     permissions,
-    isMobile,
     canGantt,
     canHangar,
     canAnalytics,
@@ -439,8 +435,7 @@ function AppShell(props: {
 
   const shellClass = [
     "appShell",
-    inSandbox ? "appShellSandbox" : "appShellProd",
-    isMobile ? "appShellMobile" : ""
+    inSandbox ? "appShellSandbox" : "appShellProd"
   ]
     .filter(Boolean)
     .join(" ");
@@ -470,17 +465,17 @@ function AppShell(props: {
             {canAnalytics ? (
               <NavIcon active={page === "analytics"} onClick={() => setPage("analytics")} label="Аналитика" icon={ICONS.analytics} />
             ) : null}
-            {!isMobile && canItp ? (
+            {canItp ? (
               <NavIcon active={page === "itp"} onClick={() => setPage("itp")} label="РМ ИТП" icon={ICONS.itp} />
             ) : null}
-            {!isMobile && canTows ? (
+            {canTows ? (
               <NavIcon active={page === "tows"} onClick={() => setPage("tows")} label="РМ Буксировки" icon={ICONS.tows} />
             ) : null}
-            {!isMobile && canPersonnel ? (
+            {canPersonnel ? (
               <NavIcon active={page === "personnel"} onClick={() => setPage("personnel")} label="РМ Персонал" icon={ICONS.personnel} />
             ) : null}
 
-            {!isMobile && canImportInActiveContext ? (
+            {canImportInActiveContext ? (
               <NavIcon
                 active={page === "import" || page === "mass"}
                 onClick={() => setPage(lastBulkTabRef.current)}
@@ -489,7 +484,7 @@ function AppShell(props: {
               />
             ) : null}
 
-            {!isMobile && canRef ? (
+            {canRef ? (
               <NavIcon active={page === "ref"} onClick={() => setPage("ref")} label="Справочники" icon={ICONS.ref} />
             ) : null}
 
@@ -506,16 +501,16 @@ function AppShell(props: {
                   if ((targetSandbox || null) !== (current || null)) {
                     setActiveSandboxId(targetSandbox);
                   }
-                  setPage(canGantt ? "gantt" : canHangar ? "hangar" : firstAllowedPage(permissions, isMobile));
+                  setPage(canGantt ? "gantt" : canHangar ? "hangar" : firstAllowedPage(permissions));
                 }}
               />
             ) : null}
-            {!isMobile && canMail ? (
+            {canMail ? (
               <NavIcon active={page === "mail"} onClick={() => setPage("mail")} label="Рассылка" icon={ICONS.mail} />
             ) : null}
             <NavIcon active={page === "help"} onClick={() => setPage("help")} label="Инструкция" icon={ICONS.help} />
             <NavIcon active={page === "profile"} onClick={() => setPage("profile")} label="Профиль" icon={ICONS.profile} />
-            {!isMobile && canAdmin ? (
+            {canAdmin ? (
               <NavIcon active={page === "admin"} onClick={() => setPage("admin")} label="Админка" icon={ICONS.admin} />
             ) : null}
           </div>
@@ -530,13 +525,13 @@ function AppShell(props: {
         ) : null}
         {page === "gantt" && canGantt ? <GanttView /> : null}
         {page === "hangar" && canHangar ? <HangarView /> : null}
-        {!isMobile && page === "itp" && canItp ? <RmItpView /> : null}
-        {!isMobile && page === "tows" && canTows ? <RmTowsView /> : null}
-        {!isMobile && page === "personnel" && canPersonnel ? <RmPersonnelView /> : null}
-        {!isMobile && canImportInActiveContext && (page === "import" || page === "mass") ? (
+        {page === "itp" && canItp ? <RmItpView /> : null}
+        {page === "tows" && canTows ? <RmTowsView /> : null}
+        {page === "personnel" && canPersonnel ? <RmPersonnelView /> : null}
+        {canImportInActiveContext && (page === "import" || page === "mass") ? (
           <BulkEventsView tab={page === "mass" ? "mass" : "import"} onTab={(tab) => setPage(tab)} />
         ) : null}
-        {!isMobile && page === "ref" && canRef ? <ReferenceView /> : null}
+        {page === "ref" && canRef ? <ReferenceView /> : null}
         {page === "profile" ? (
           <ProfileView
             me={me}
@@ -545,10 +540,10 @@ function AppShell(props: {
             }}
           />
         ) : null}
-        {!isMobile && page === "admin" && canAdmin ? <AdminView permissions={permissions} me={me} /> : null}
+        {page === "admin" && canAdmin ? <AdminView permissions={permissions} me={me} /> : null}
         {page === "sandboxes" ? <SandboxesView permissions={permissions} /> : null}
         {page === "analytics" && canAnalytics ? <AnalyticsView /> : null}
-        {!isMobile && page === "mail" && canMail ? <MailDigestView /> : null}
+        {page === "mail" && canMail ? <MailDigestView /> : null}
         {page === "help" ? (
           <HelpView
             permissions={permissions}

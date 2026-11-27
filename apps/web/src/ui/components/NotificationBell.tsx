@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 
 import { apiGet, apiPost } from "../../lib/api";
-import { useIsMobile } from "../hooks/useIsMobile";
 
 export type OpenEventFromNotification = {
   eventId: string;
@@ -71,7 +69,6 @@ export function NotificationBell(props: {
   onOpenEvent?: (detail: OpenEventFromNotification) => void;
 }) {
   const qc = useQueryClient();
-  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -130,7 +127,7 @@ export function NotificationBell(props: {
 
   const panel = open ? (
     <div
-      className={isMobile ? "navNotifyPanel mobileBottomSheet" : "navNotifyPanel"}
+      className="navNotifyPanel"
       role="dialog"
       aria-label="Уведомления"
       ref={panelRef}
@@ -213,20 +210,7 @@ export function NotificationBell(props: {
         <span className="navTooltip">Уведомления</span>
       </button>
 
-      {open && isMobile
-        ? createPortal(
-            <>
-              <button
-                type="button"
-                className="mobileBottomSheetBackdrop"
-                aria-label="Закрыть"
-                onClick={() => setOpen(false)}
-              />
-              {panel}
-            </>,
-            document.body
-          )
-        : panel}
+      {panel}
     </div>
   );
 }

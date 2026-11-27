@@ -21,18 +21,17 @@ export const HOME_PAGE_OPTIONS: Array<{
   id: HomePage;
   label: string;
   perm?: string | string[];
-  desktopOnly?: boolean;
 }> = [
   { id: "gantt", label: "План (Гантт)", perm: "gantt:read" },
   { id: "hangar", label: "Ангар (схема)", perm: "hangar:read" },
   { id: "analytics", label: "Аналитика", perm: "analytics:read" },
-  { id: "itp", label: "РМ ИТП", perm: "itp:read", desktopOnly: true },
-  { id: "tows", label: "РМ Буксировки", perm: "tows:read", desktopOnly: true },
-  { id: "personnel", label: "РМ Персонал", perm: "personnel:read", desktopOnly: true },
-  { id: "import", label: "Импорт / план", perm: "import:write", desktopOnly: true },
-  { id: "ref", label: "Справочники", perm: "ref:read", desktopOnly: true },
-  { id: "mail", label: "Рассылка", perm: ["mail:send", "admin:mail"], desktopOnly: true },
-  { id: "admin", label: "Админка", perm: ["admin:users", "admin:roles"], desktopOnly: true },
+  { id: "itp", label: "РМ ИТП", perm: "itp:read" },
+  { id: "tows", label: "РМ Буксировки", perm: "tows:read" },
+  { id: "personnel", label: "РМ Персонал", perm: "personnel:read" },
+  { id: "import", label: "Импорт / план", perm: "import:write" },
+  { id: "ref", label: "Справочники", perm: "ref:read" },
+  { id: "mail", label: "Рассылка", perm: ["mail:send", "admin:mail"] },
+  { id: "admin", label: "Админка", perm: ["admin:users", "admin:roles"] },
   { id: "sandboxes", label: "Песочницы" },
   { id: "help", label: "Инструкция" }
 ];
@@ -122,33 +121,28 @@ export function parseHomePage(raw: unknown): HomePage | null {
   return HOME_SET.has(v) ? (v as HomePage) : null;
 }
 
-export function isHomePageAllowed(page: string, permissions: string[], isMobile: boolean): boolean {
+export function isHomePageAllowed(page: string, permissions: string[]): boolean {
   const opt = HOME_PAGE_OPTIONS.find((o) => o.id === page);
   if (!opt) return false;
-  if (opt.desktopOnly && isMobile) return false;
   return hasAnyPerm(permissions, opt.perm);
 }
 
-export function firstAllowedPage(permissions: string[], isMobile: boolean): HomePage {
+export function firstAllowedPage(permissions: string[]): HomePage {
   for (const opt of HOME_PAGE_OPTIONS) {
     if (opt.id === "sandboxes") continue;
-    if (isHomePageAllowed(opt.id, permissions, isMobile)) return opt.id;
+    if (isHomePageAllowed(opt.id, permissions)) return opt.id;
   }
   return "help";
 }
 
-export function resolveStartPage(
-  preferred: string | null | undefined,
-  permissions: string[],
-  isMobile: boolean
-): HomePage {
+export function resolveStartPage(preferred: string | null | undefined, permissions: string[]): HomePage {
   const home = parseHomePage(preferred);
-  if (home && isHomePageAllowed(home, permissions, isMobile)) return home;
-  return firstAllowedPage(permissions, isMobile);
+  if (home && isHomePageAllowed(home, permissions)) return home;
+  return firstAllowedPage(permissions);
 }
 
-export function allowedHomePageOptions(permissions: string[], isMobile: boolean) {
-  return HOME_PAGE_OPTIONS.filter((opt) => isHomePageAllowed(opt.id, permissions, isMobile));
+export function allowedHomePageOptions(permissions: string[]) {
+  return HOME_PAGE_OPTIONS.filter((opt) => isHomePageAllowed(opt.id, permissions));
 }
 
 export function parseMutedNotificationKinds(raw: unknown): string[] {

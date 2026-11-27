@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { shouldDropActiveSandbox } from "../../lib/activeSandboxGuard";
 import { apiGet, getActiveSandboxChosenAt, getActiveSandboxId, setActiveSandboxId } from "../../lib/api";
-import { useIsMobile } from "../hooks/useIsMobile";
 
 export type SandboxStatus = "ACTIVE" | "ARCHIVED";
 
@@ -85,7 +83,6 @@ export function NavSandboxMenu(props: {
   onManage: () => void;
 }) {
   const qc = useQueryClient();
-  const isMobile = useIsMobile();
   const { activeId, list, loading } = useActiveSandbox();
   const [open, setOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -122,7 +119,7 @@ export function NavSandboxMenu(props: {
 
   const menu = open ? (
     <div
-      className={isMobile ? "navSandboxMenu mobileBottomSheet" : "navSandboxMenu"}
+      className="navSandboxMenu"
       role="menu"
       ref={menuRef}
     >
@@ -229,20 +226,7 @@ export function NavSandboxMenu(props: {
         <span className="navTooltip">Песочницы</span>
       </button>
 
-      {open && isMobile
-        ? createPortal(
-            <>
-              <button
-                type="button"
-                className="mobileBottomSheetBackdrop"
-                aria-label="Закрыть"
-                onClick={() => setOpen(false)}
-              />
-              {menu}
-            </>,
-            document.body
-          )
-        : menu}
+      {menu}
     </div>
   );
 }

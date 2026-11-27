@@ -21,7 +21,6 @@ import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
 import { SwitchToggle } from "../components/SwitchToggle";
 import { formatPresenceWhen } from "../components/UserPresencePanel";
 import { sandboxIsArchived, useActiveSandbox } from "../components/SandboxSwitcher";
-import { useIsMobile } from "../hooks/useIsMobile";
 
 type AuthedUser = Extract<MeResponse, { ok: true }>["user"];
 type ProfileTab = "profile" | "access" | "prefs" | "subs" | "security" | "activity";
@@ -113,7 +112,6 @@ function CopyField(props: { label: string; value: string; hint?: string; secret?
 
 export function ProfileView(props: { me: AuthedUser; onNavigate: (page: NavPage) => void }) {
   const qc = useQueryClient();
-  const isMobile = useIsMobile();
   const { list: sandboxes, loading: sandboxesLoading } = useActiveSandbox();
   const [tab, setTab] = useState<ProfileTab>(props.me.mustChangePassword ? "security" : "profile");
   const [activityPane, setActivityPane] = useState<ActivityPane>("edits");
@@ -133,8 +131,8 @@ export function ProfileView(props: { me: AuthedUser; onNavigate: (page: NavPage)
     hasPermission(props.me.permissions, "gantt:read") ||
     hasPermission(props.me.permissions, "hangar:read");
   const homeOptions = useMemo(
-    () => allowedHomePageOptions(props.me.permissions, isMobile).map((o) => ({ id: o.id, label: o.label })),
-    [props.me.permissions, isMobile]
+    () => allowedHomePageOptions(props.me.permissions).map((o) => ({ id: o.id, label: o.label })),
+    [props.me.permissions]
   );
   const mySandboxes = useMemo(
     () =>
@@ -430,7 +428,7 @@ export function ProfileView(props: { me: AuthedUser; onNavigate: (page: NavPage)
 
       {tab === "subs" ? (
         <ProfileSubscriptions
-          canOpenEvents={canNotify && !isMobile}
+          canOpenEvents={canNotify}
           onOpenGantt={() => props.onNavigate("gantt")}
         />
       ) : null}
