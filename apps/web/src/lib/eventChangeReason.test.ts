@@ -37,10 +37,11 @@ test("technical card edits do not require a change reason", () => {
   assert.equal(eventDraftNeedsChangeReason(draft, { ...draft, status: "APPROVED_BY_EXECUTOR" }), false);
 });
 
-test("dates, board, deadline, hangar and cancellation require a change reason", () => {
+test("dates, board, hangar and cancellation require a change reason", () => {
   assert.equal(eventDiffNeedsChangeReason(["startAtLocal"]), true);
   assert.equal(eventDiffNeedsChangeReason(["aircraftId"]), true);
-  assert.equal(eventDiffNeedsChangeReason(["deadlineAtLocal"]), true);
+  assert.equal(eventDiffNeedsChangeReason(["deadlineAtLocal"]), false);
+  assert.equal(eventDraftNeedsChangeReason(draft, { ...draft, deadlineAtLocal: "2026-11-21" }), false);
   assert.equal(eventDiffNeedsChangeReason(["hangarId", "comment"]), true);
   assert.equal(eventDiffNeedsChangeReason([{ field: "status", from: "IN_PROGRESS", to: "CANCELLED" }]), true);
   assert.equal(eventDiffNeedsChangeReason([{ field: "status", from: "CANCELLED", to: "IN_PROGRESS" }]), false);

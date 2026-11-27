@@ -37,7 +37,7 @@ test("technical event fields do not require a change reason", () => {
   assert.equal(requestedEventChangeNeedsReason({ before: base, after: {} }), false);
 });
 
-test("dates, board, deadline, hangar and cancellation require a change reason", () => {
+test("dates, board, hangar and cancellation require a change reason", () => {
   assert.equal(
     requestedEventChangeNeedsReason({
       before: base,
@@ -51,7 +51,7 @@ test("dates, board, deadline, hangar and cancellation require a change reason", 
       before: base,
       after: { deadlineAt: new Date("2026-11-21T10:00:00.000Z") }
     }),
-    true
+    false
   );
   assert.equal(requestedEventChangeNeedsReason({ before: base, after: { hangarId: "hangar-2" } }), true);
   assert.equal(requestedEventChangeNeedsReason({ before: base, after: { status: "CANCELLED" } }), true);

@@ -1389,20 +1389,13 @@ function aircraftAxisSubLabel(
     .join(" • ");
 }
 
-function shortEventName(ev: EventRow) {
-  return ev.eventType?.name || ev.title;
-}
-
-function aircraftBarText(ev: EventRow, width: number, mode: GanttDisplayMode = "CURRENT") {
+function ganttBarText(ev: EventRow, mode: GanttDisplayMode = "CURRENT") {
   const tat = mode === "PLAN_FACT" ? operationalTat(ev) : displayTatForMode(ev, mode);
-  const showFull = width >= 80;
-  return { tat, parts: [showFull ? ev.title : ""].filter(Boolean) };
-}
-
-function hangarBarText(ev: EventRow, width: number, mode: GanttDisplayMode = "CURRENT") {
-  const tat = mode === "PLAN_FACT" ? operationalTat(ev) : displayTatForMode(ev, mode);
-  const fullName = width >= 230 ? ev.title : "";
-  return { tat, parts: [eventAircraftLabel(ev), shortEventName(ev), fullName].filter(Boolean) };
+  const deadline = formatMskDate(ev.deadlineAt);
+  return {
+    tat,
+    parts: [eventAircraftLabel(ev), ev.eventType?.name?.trim() ?? "", ev.title?.trim() ?? "", deadline].filter(Boolean)
+  };
 }
 
 function BarWarnMark(props: { warnings: string[]; onClick?: (event: ReactMouseEvent<HTMLSpanElement>) => void }) {
@@ -8159,7 +8152,7 @@ export function GanttView() {
                                 {displayPeriod.source === "Опер." ? renderPlacementBreaks({ ev, barX: x, barW: w, from, dayWidth, canvasWidth, timeMode: timelineTimeMode }) : null}
                                 {canShowBarTitle(w) ? (
                                   <span style={{ position: "relative", zIndex: 5, pointerEvents: "none" }}>
-                                    <BarLabel {...aircraftBarText(ev, w, ganttDisplayMode)} warnings={warnTexts} onWarnClick={openWarnings} />
+                                    <BarLabel {...ganttBarText(ev, ganttDisplayMode)} warnings={warnTexts} onWarnClick={openWarnings} />
                                   </span>
                                 ) : (
                                   <BarWarnMark warnings={warnTexts} onClick={openWarnings} />
@@ -8386,7 +8379,7 @@ export function GanttView() {
                                 : null}
                               {canShowBarTitle(w) ? (
                                 <span style={{ position: "relative", zIndex: 5, pointerEvents: "none" }}>
-                                  <BarLabel {...hangarBarText(ev, w, ganttDisplayMode)} warnings={warnTexts} onWarnClick={openWarnings} />
+                                  <BarLabel {...ganttBarText(ev, ganttDisplayMode)} warnings={warnTexts} onWarnClick={openWarnings} />
                                 </span>
                               ) : (
                                 <BarWarnMark warnings={warnTexts} onClick={openWarnings} />
@@ -9379,7 +9372,7 @@ export function GanttView() {
                       <ul>
                         <li>Сюда удобно писать контекст, особенности работ и внешние согласования.</li>
                         <li>Текст виден всем, у кого есть доступ к карточке события.</li>
-                        <li>Окно «Причина изменения» открывается только при смене дат, борта, DeadLine, ангара или переводе в «Отменено». В нём выбирают одну или несколько причин из справочника, комментарий можно не заполнять.</li>
+                        <li>Окно «Причина изменения» открывается только при смене дат, борта, ангара или переводе в «Отменено». DeadLine сохраняется без причины. В нём выбирают одну или несколько причин из справочника, комментарий можно не заполнять.</li>
                       </ul>
                     </>
                   }
@@ -9453,7 +9446,7 @@ export function GanttView() {
                       <p>Журнал правок события: кто, когда и что изменил — включая автостатусы.</p>
                       <ul>
                         <li>Записи сгруппированы по дням. В таблице: реквизит, предыдущая версия и текущая. У первичной записи предыдущая версия пустая, комментарий к правке — отдельная строка.</li>
-                        <li>В рабочем контуре причина указывается при смене дат, борта, DeadLine, ангара или переводе в «Отменено».</li>
+                        <li>В рабочем контуре причина указывается при смене дат, борта, ангара или переводе в «Отменено». DeadLine сохраняется без причины.</li>
                         <li>Остальные правки, включая место, статус кроме отмены, примечание, комментарий и трудоёмкость, сохраняются сразу.</li>
                         <li>В песочнице причина не обязательна.</li>
                       </ul>

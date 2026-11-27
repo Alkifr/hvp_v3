@@ -14,9 +14,7 @@ const DATE_FIELDS = new Set([
   "actualStartAt",
   "actualEndAt",
   "actualStartAtLocal",
-  "actualEndAtLocal",
-  "deadlineAt",
-  "deadlineAtLocal"
+  "actualEndAtLocal"
 ]);
 
 const BOARD_FIELDS = new Set(["aircraftId", "virtualAircraft"]);
@@ -110,7 +108,6 @@ export function eventDraftNeedsChangeReason(before: EventReasonDraft, after: Eve
     "budgetEndAtLocal",
     "actualStartAtLocal",
     "actualEndAtLocal",
-    "deadlineAtLocal",
     "hangarId"
   ];
   for (const field of fields) {
