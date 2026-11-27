@@ -627,18 +627,6 @@ const APRON_STAND_LABEL = "МС";
 
 type TowKind = "IN" | "OUT" | "TRANSFER";
 
-type TowSegment = {
-  id: string;
-  eventId: string;
-  startAt: string;
-  endAt: string;
-  updatedAt?: string;
-  fromLabel?: string | null;
-  toLabel?: string | null;
-  placementId?: string | null;
-  placement?: { id: string; hangar?: { name?: string | null; code?: string | null } | null; stand?: { code?: string | null; name?: string | null } | null } | null;
-};
-
 type PendingTowWrite = {
   kind: "add" | "edit";
   towId?: string;
